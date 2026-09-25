@@ -22,6 +22,7 @@ export interface Backend {
   cancelAccountLogin(flowId: string): Promise<void>;
   removeAccount(accountId: string): Promise<void>;
   listChatSessions(): Promise<ChatSession[]>;
+  onChatSessionsChanged?(listener: (sessions: ChatSession[]) => void): Unsubscribe;
   createChatSession(provider: AccountProvider, label?: string): Promise<ChatSession>;
   openChatSession(sessionId: string): Promise<void>;
   engineState(): Promise<EngineState>;

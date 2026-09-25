@@ -114,6 +114,9 @@ are independent of quota refresh and remain visible while offline.
 same workflow to the popup. Creation persists metadata before opening the window;
 if window creation fails, the saved session remains available for retry. A
 `chat-sessions-changed` event targets the popup after creation.
+`TauriBackend.onChatSessionsChanged(listener)` subscribes to that event and
+replays the saved session list after the listener is attached. The capability is
+optional on `Backend` so browser-only implementations may reload on popup show.
 
 Website authentication is separate from quota OAuth. A profile label does not
 verify which website account is signed in, and the app never injects OAuth tokens

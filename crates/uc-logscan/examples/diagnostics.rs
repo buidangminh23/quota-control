@@ -26,6 +26,19 @@ fn main() {
                 .try_fold(TokenUsage::default(), |sum, day| {
                     day.token_usage.map(|usage| sum.saturating_add(usage))
                 });
+            let priced_days = report
+                .usage
+                .series
+                .daily
+                .iter()
+                .filter(|day| day.cost_usd.is_some())
+                .count();
+            let unpriced_models: std::collections::BTreeSet<_> = report
+                .usage
+                .unknown_models_by_day
+                .values()
+                .flat_map(|models| models.iter())
+                .collect();
             println!(
                 "{}",
                 json!({
@@ -36,6 +49,8 @@ fn main() {
                 "bytesRead": report.bytes_read,
                     "records": report.records,
                     "days": report.usage.series.daily.len(),
+                    "pricedDays": priced_days,
+                    "unpricedModels": unpriced_models,
                     "totalTokens": totals,
                     "tokenUsage": tokens,
                     "skippedLines": report.skipped_lines,

@@ -1,0 +1,94 @@
+{
+  "claude-opus-5-5": {
+    "i": 4.0,
+    "o": 20.0,
+    "cr": 0.2,
+    "cw": 5.0,
+    "cwh": 8.0,
+    "fast": 2.0,
+    "verified_on": "2026-09-26",
+    "sources": [
+      "https://platform.claude.com/docs/en/models/opus-5-5/overview",
+      "https://platform.claude.com/docs/en/about-claude/pricing"
+    ]
+  },
+  "claude-opus-5": {
+    "i": 5.0,
+    "o": 25.0,
+    "cr": 0.5,
+    "cw": 6.25,
+    "cwh": 10.0,
+    "fast": 2.0,
+    "verified_on": "2026-09-26",
+    "sources": [
+      "https://platform.claude.com/docs/en/models/opus-5/overview",
+      "https://platform.claude.com/docs/en/about-claude/pricing"
+    ]
+  },
+  "claude-fable-5-1": {
+    "i": 10.0,
+    "o": 50.0,
+    "cr": 0.25,
+    "cw": 12.5,
+    "cwh": 20.0,
+    "verified_on": "2026-09-26",
+    "sources": [
+      "https://platform.claude.com/docs/en/models/fable-5-1/overview",
+      "https://platform.claude.com/docs/en/about-claude/pricing"
+    ]
+  },
+  "gpt-6-astra": {
+    "i": 10.0,
+    "o": 50.0,
+    "cr": 1.0,
+    "cw": 12.5,
+    "ia": 20.0,
+    "oa": 75.0,
+    "cra": 2.0,
+    "cwa": 25.0,
+    "long_context_threshold": 272000,
+    "hour_cache_unsupported": true,
+    "fast": 2.0,
+    "verified_on": "2026-09-26",
+    "sources": [
+      "https://developers.openai.com/api/docs/models/gpt-6-astra",
+      "https://developers.openai.com/api/docs/pricing"
+    ]
+  },
+  "gpt-5.6-luna": {
+    "i": 0.2,
+    "o": 1.2,
+    "cr": 0.02,
+    "cw": 0.25,
+    "ia": 0.4,
+    "oa": 1.8,
+    "cra": 0.04,
+    "cwa": 0.5,
+    "long_context_threshold": 272000,
+    "hour_cache_unsupported": true,
+    "fast": 2.0,
+    "verified_on": "2026-09-26",
+    "sources": [
+      "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+      "https://developers.openai.com/api/docs/pricing"
+    ]
+  },
+  "gpt-6-luna": {
+    "i": 0.1,
+    "o": 0.5,
+    "cr": 0.01,
+    "cw": 0.125,
+    "ia": 0.2,
+    "oa": 0.75,
+    "cra": 0.02,
+    "cwa": 0.25,
+    "long_context_threshold": 272000,
+    "hour_cache_unsupported": true,
+    "fast": 2.0,
+    "verified_on": "2026-09-26",
+    "sources": [
+      "https://developers.openai.com/api/docs/models/gpt-6-luna",
+      "https://developers.openai.com/api/docs/pricing"
+    ]
+  }
+}

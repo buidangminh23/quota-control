@@ -70,6 +70,10 @@ export class TauriBackend implements Backend {
     return invoke("list_chat_sessions");
   }
 
+  onChatSessionsChanged(listener: (sessions: ChatSession[]) => void): Unsubscribe {
+    return subscribe<ChatSession[]>("chat-sessions-changed", listener, () => this.listChatSessions());
+  }
+
   createChatSession(provider: AccountProvider, label?: string): Promise<ChatSession> {
     return invoke("create_chat_session", { provider, label: label ?? null });
   }
