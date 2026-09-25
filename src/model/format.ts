@@ -1,0 +1,156 @@
+/**
+ * The single place a number or a deadline becomes display text. Port of upstream
+ * `Support/MetricFormatter.swift` and `Support/Formatters.swift`, localized: English matches upstream
+ * en_US output, Vietnamese follows vi-VN.
+ */
+import { messagesFor, translate, type Language } from "@/i18n";
+import type { DeadlineVerb, When } from "@/i18n/messages";
+import { compact, compactDollars, decimal, dollars, localeOf } from "@/i18n/numbers";
+import type { MetricKind, MetricValue } from "@/lib/types";
+import { roundHalfAwayFromZero } from "./decimal";
+
+/** `tray` (taskbar strip): shortest. `row` (popup row): abbreviated, money keeps cents. `full`: every digit. */
+export type FormatStyle = "tray" | "row" | "full";
+
+export type ResetDisplayMode = "relative" | "absolute";
+
+export type TimeFormat = "auto" | "12h" | "24h";
+
+export type TotalSpendMetric = "cost" | "costPerMtok" | "tokens";
+
+export function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(Math.max(value, 0), 100);
+}
+
+/** USD with a fixed number of fractional digits, e.g. `$2,059.07` / `2.059,07 $`. */
+export function currency(amount: number, fractionDigits: number, language: Language): string {
+  return dollars(language, amount, fractionDigits);
+}
+
+/** A bare number in the given kind and style (no unit label). */
+export function formatNumber(value: number, kind: MetricKind, style: FormatStyle, language: Language): string {
+  switch (kind) {
+    case "percent":
+      return `${roundHalfAwayFromZero(clampPercent(value))}%`;
+    case "dollars":
+      if (Math.abs(value) >= 1000 && style !== "full") return compactDollars(language, value);
+      return dollars(language, value, style === "tray" ? 0 : 2);
+    case "count":
+      if (style !== "full" && Math.abs(value) >= 1000) return compact(language, value);
+      return decimal(language, value, 0, 1);
+  }
+}
+
+/** A value with its (translated) unit label appended, e.g. `772 credits` / `772 tín dụng`. */
+export function formatValue(value: MetricValue, style: FormatStyle, language: Language): string {
+  const text = formatNumber(value.number, value.kind, style, language);
+  return value.label ? `${text} ${translate(value.label, language)}` : text;
+}
+
+/** Dollars per million tokens, e.g. `$1.37/MTok` / `1,37 $/triệu token`. */
+export function formatCostPerMtok(value: number, style: FormatStyle, language: Language): string {
+  return messagesFor(language).totalSpend.costPerMtok(formatNumber(value, "dollars", style, language));
+}
+
+export interface RingCenter {
+  primary: string;
+  unit: string;
+}
+
+/** The Total Spend ring's two-line center: a short figure over a quiet unit. */
+export function totalSpendRingCenter(value: number, metric: TotalSpendMetric, language: Language): RingCenter {
+  const unit = messagesFor(language).totalSpend.ringUnit;
+  switch (metric) {
+    case "cost":
+      return { primary: formatNumber(value, "dollars", "tray", language), unit: unit("dollars") };
+    case "costPerMtok":
+      return {
+        primary: Math.abs(value) >= 1000 ? compactDollars(language, value) : dollars(language, value, 2),
+        unit: unit("perMtok"),
+      };
+    case "tokens": {
+      const magnitude = Math.abs(value);
+      const scaled = (divisor: number, key: "billion" | "million" | "thousand" | "tokens"): RingCenter => ({
+        primary: decimal(language, value / divisor, 0, 1),
+        unit: unit(key),
+      });
+      if (magnitude >= 1e9) return scaled(1e9, "billion");
+      if (magnitude >= 1e6) return scaled(1e6, "million");
+      if (magnitude >= 1e3) return scaled(1e3, "thousand");
+      return scaled(1, "tokens");
+    }
+  }
+}
+
+/** Compact duration (`1d 6h` / `1 ngày 6 giờ`); `null` for non-finite or non-positive spans. */
+export function compactDuration(seconds: number, language: Language): string | null {
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  const totalMinutes = Math.max(1, Math.ceil(seconds / 60));
+  const days = Math.floor(totalMinutes / (24 * 60));
+  const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+  const minutes = totalMinutes % 60;
+  return messagesFor(language).format.duration(days, hours, minutes);
+}
+
+let systemUses24Hour: boolean | null = null;
+
+/** The operating system's clock preference, reported by the core; `null` uses the language's convention. */
+export function setSystemClockPreference(uses24Hour: boolean | null): void {
+  systemUses24Hour = uses24Hour;
+}
+
+/** Short wall-clock time honoring the Time Format setting (`5:30 PM` / `17:30`). */
+export function shortTime(date: Date, format: TimeFormat, language: Language): string {
+  const uses24Hour = format === "12h" ? false : format === "24h" ? true : systemUses24Hour;
+  const options: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
+  if (uses24Hour !== null) options.hourCycle = uses24Hour ? "h23" : "h12";
+  return date.toLocaleTimeString(localeOf(language), options);
+}
+
+function startOfDay(date: Date): number {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
+/** The structured "when" of a deadline, or `null` when the duration is not finite. */
+export function whenOf(date: Date, mode: ResetDisplayMode, now: Date, timeFormat: TimeFormat, language: Language): When | null {
+  const seconds = (date.getTime() - now.getTime()) / 1000;
+  if (mode === "relative") {
+    if (seconds <= 5 * 60) return { kind: "soon" };
+    const duration = compactDuration(seconds, language);
+    return duration === null ? null : { kind: "in", duration };
+  }
+  if (seconds <= 0) return { kind: "soon" };
+  const dayDiff = Math.round((startOfDay(date) - startOfDay(now)) / 86_400_000);
+  const time = shortTime(date, timeFormat, language);
+  if (dayDiff <= 0) return { kind: "today", time };
+  if (dayDiff === 1) return { kind: "tomorrow", time };
+  return { kind: "on", date: messagesFor(language).format.monthDay(date), time };
+}
+
+/** The verb-less phrase: `2d 6h`, `today at 5:30 PM`, `soon` (and their Vietnamese forms). */
+export function whenLabel(date: Date, mode: ResetDisplayMode, now: Date, timeFormat: TimeFormat, language: Language): string | null {
+  const when = whenOf(date, mode, now, timeFormat, language);
+  return when === null ? null : messagesFor(language).format.when(when);
+}
+
+/** `Resets in 2d 6h`, `Limit today at 5:30 PM`, `Resets soon` (and their Vietnamese forms). */
+export function deadlineLabel(
+  verb: DeadlineVerb,
+  date: Date,
+  mode: ResetDisplayMode,
+  now: Date,
+  timeFormat: TimeFormat,
+  language: Language,
+): string | null {
+  const when = whenOf(date, mode, now, timeFormat, language);
+  return when === null ? null : messagesFor(language).format.deadline(verb, when);
+}
+
+export function resetRelativeLabel(resetsAt: Date, now: Date, timeFormat: TimeFormat, language: Language): string | null {
+  return deadlineLabel("resets", resetsAt, "relative", now, timeFormat, language);
+}
+
+export function resetAbsoluteLabel(resetsAt: Date, now: Date, timeFormat: TimeFormat, language: Language): string | null {
+  return deadlineLabel("resets", resetsAt, "absolute", now, timeFormat, language);
+}

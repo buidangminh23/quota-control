@@ -1,0 +1,115 @@
+/*
+ * Design tokens for the popup. Colors follow the macOS system palette upstream OpenUsage uses
+ * (label hierarchy, system blue/yellow/red meters, the grouped-card fill), lifted slightly where the
+ * upstream values fall under WCAG AA contrast for small text. Sizes follow upstream `DensitySetting`.
+ */
+:root {
+  --uc-font: "Inter Variable", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --uc-popup-width: 320px;
+  --uc-pad-x: 14px;
+  --uc-card-radius: 12px;
+  --uc-control-radius: 6px;
+  --uc-topbar-height: 44px;
+  --uc-footer-pad-y: 12px;
+  --uc-bottom-gap: 12px;
+
+  --uc-label-size: 13px;
+  --uc-support-size: 12px;
+  --uc-header-size: 14px;
+  --uc-header-icon: 16px;
+  --uc-plan-size: 11px;
+  --uc-caption-size: 10px;
+  --uc-bar-row-pad: 10px;
+  --uc-meter-height: 5px;
+  --uc-trend-height: 18px;
+  --uc-text-row-pad: 6px;
+  --uc-condensed-top: 2px;
+  --uc-row-gap: 4px;
+  --uc-section-gap: 14px;
+  --uc-header-card-gap: 4px;
+  --uc-card-gutter: 5px;
+  --uc-control-row-pad: 9px;
+  --uc-content-top: 14px;
+  --uc-grid-gap: 6px;
+
+  --uc-tray: #ffffff;
+  --uc-card: #f4f4f5;
+  --uc-card-solid: #f4f4f5;
+  --uc-card-hover: #ebebed;
+  --uc-quaternary: rgba(0, 0, 0, 0.08);
+  --uc-quinary: rgba(0, 0, 0, 0.05);
+  --uc-label: rgba(0, 0, 0, 0.88);
+  --uc-secondary: rgba(0, 0, 0, 0.62);
+  --uc-tertiary: rgba(0, 0, 0, 0.56);
+  --uc-separator: rgba(0, 0, 0, 0.1);
+  --uc-bar: rgba(255, 255, 255, 0.86);
+  --uc-control: #ffffff;
+  --uc-control-border: rgba(0, 0, 0, 0.14);
+  --uc-menu: #f7f7f8;
+  --uc-menu-border: rgba(0, 0, 0, 0.14);
+  --uc-shadow: 0 8px 24px rgba(0, 0, 0, 0.16), 0 1px 3px rgba(0, 0, 0, 0.12);
+  --uc-accent: #007aff;
+  --uc-on-accent: #ffffff;
+  --uc-blue: #007aff;
+  --uc-yellow: #f5b800;
+  --uc-red: #ff3b30;
+  --uc-orange: #ff9500;
+  --uc-green: #34c759;
+  --uc-notice-text: #b25900;
+  --uc-positive-text: #1d7a35;
+  --uc-pace-tick: rgba(0, 0, 0, 0.5);
+  --uc-switch-off: rgba(0, 0, 0, 0.14);
+  --uc-scrim: rgba(0, 0, 0, 0.24);
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --uc-tray: #1e1e1e;
+  --uc-card: #2a2a2b;
+  --uc-card-solid: #2a2a2b;
+  --uc-card-hover: #333335;
+  --uc-quaternary: rgba(255, 255, 255, 0.12);
+  --uc-quinary: rgba(255, 255, 255, 0.07);
+  --uc-label: rgba(255, 255, 255, 0.9);
+  --uc-secondary: rgba(255, 255, 255, 0.62);
+  --uc-tertiary: rgba(255, 255, 255, 0.5);
+  --uc-separator: rgba(255, 255, 255, 0.1);
+  --uc-bar: rgba(30, 30, 30, 0.86);
+  --uc-control: #3a3a3c;
+  --uc-control-border: rgba(255, 255, 255, 0.12);
+  --uc-menu: #2c2c2e;
+  --uc-menu-border: rgba(255, 255, 255, 0.14);
+  --uc-shadow: 0 10px 28px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
+  --uc-accent: #0a84ff;
+  --uc-blue: #0a84ff;
+  --uc-yellow: #ffd60a;
+  --uc-red: #ff453a;
+  --uc-orange: #ff9f0a;
+  --uc-green: #30d158;
+  --uc-notice-text: #ff9f0a;
+  --uc-positive-text: #30d158;
+  --uc-pace-tick: rgba(255, 255, 255, 0.6);
+  --uc-switch-off: rgba(255, 255, 255, 0.18);
+  --uc-scrim: rgba(0, 0, 0, 0.45);
+  color-scheme: dark;
+}
+
+:root[data-density="compact"] {
+  --uc-label-size: 12px;
+  --uc-support-size: 11px;
+  --uc-header-size: 13px;
+  --uc-header-icon: 14px;
+  --uc-plan-size: 10px;
+  --uc-bar-row-pad: 5px;
+  --uc-meter-height: 4px;
+  --uc-trend-height: 14px;
+  --uc-text-row-pad: 4px;
+  --uc-condensed-top: 1px;
+  --uc-row-gap: 3px;
+  --uc-section-gap: 8px;
+  --uc-header-card-gap: 2px;
+  --uc-card-gutter: 3px;
+  --uc-control-row-pad: 6px;
+  --uc-content-top: 10px;
+  --uc-grid-gap: 4px;
+}

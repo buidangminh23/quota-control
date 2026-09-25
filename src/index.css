@@ -1,26 +1,7 @@
 @import "tailwindcss";
-
-:root {
-  font-family: "Inter Variable", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
-  color-scheme: light dark;
-  -webkit-font-smoothing: antialiased;
-}
-
-html,
-body,
-#root {
-  margin: 0;
-  padding: 0;
-  background: transparent;
-  overflow: hidden;
-  user-select: none;
-}
-
-.popup {
-  width: 320px;
-  padding: 14px;
-  box-sizing: border-box;
-  background: Canvas;
-  color: CanvasText;
-  border-radius: 12px;
-}
+@import "./styles/tokens.css";
+@import "./styles/base.css";
+@import "./styles/chrome.css";
+@import "./styles/dashboard.css";
+@import "./styles/controls.css";
+@import "./styles/screens.css";

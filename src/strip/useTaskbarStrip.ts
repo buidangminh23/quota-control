@@ -1,0 +1,97 @@
+/**
+ * Keeps the taskbar in sync with the starred metrics, live: every engine refresh, layout change or
+ * setting change re-renders the strip (text style, when the core hosts one) or the tray-icon Bars
+ * glyph, and pushes it only when the picture actually changed. The hidden popup keeps running, so the
+ * taskbar updates while the popup is closed.
+ */
+import { useEffect, useMemo, useRef } from "react";
+import { messagesFor } from "@/i18n";
+import { backend } from "@/lib/backend";
+import { pinnedGroups } from "@/model/layout";
+import { buildStripContent, isStripEmpty, stripSummary, type StripContent } from "@/model/menuBar";
+import { providerTitle } from "@/model/providerText";
+import { widgetDataFor } from "@/model/widgetData";
+import { useDisplay, useIsEnabled, useSystemDark } from "@/state/hooks";
+import { useApp } from "@/state/store";
+import { renderBarsGlyph, renderTextStrip, stripText } from "./render";
+import { pushStripFrame, useTaskbarInfo, watchTaskbarInfo } from "./support";
+
+type Output =
+  | { kind: "off"; tooltip: string }
+  | { kind: "bars"; content: StripContent; color: "#000000" | "#ffffff"; tooltip: string }
+  | { kind: "text"; content: StripContent; color: "#000000" | "#ffffff"; height: number; scale: number; tooltip: string };
+
+function outputKey(output: Output): string {
+  if (output.kind === "off") return `off|${output.tooltip}`;
+  const values = output.content.groups.map((group) => `${group.brand}:${group.metrics.map((metric) => `${metric.value}/${metric.fraction.toFixed(3)}`).join(",")}`).join(";");
+  if (output.kind === "bars") return `bars|${output.color}|${values}|${output.tooltip}`;
+  return `text|${output.color}|${output.height}|${output.scale}|${values}|${output.tooltip}`;
+}
+
+async function apply(output: Output, appName: string): Promise<void> {
+  const api = backend();
+  if (output.kind === "off") {
+    await Promise.all([api.setTrayIcon(null, output.tooltip), pushStripFrame(null)]);
+    return;
+  }
+  if (output.kind === "bars") {
+    const png = await renderBarsGlyph(output.content.bars, Math.max(2, Math.ceil(window.devicePixelRatio || 1)), output.color);
+    await Promise.all([api.setTrayIcon(output.content.bars.length > 0 ? png : null, output.tooltip), pushStripFrame(null)]);
+    return;
+  }
+  const frame = await renderTextStrip(output.content, output.height, output.scale, output.color);
+  await Promise.all([
+    api.setTrayIcon(null, appName),
+    pushStripFrame(frame ? { ...frame, text: stripText(output.content), tooltip: output.tooltip } : null),
+  ]);
+}
+
+export function useTaskbarStrip(): void {
+  const ready = useApp((state) => state.ready);
+  const layout = useApp((state) => state.layout);
+  const catalog = useApp((state) => state.catalog);
+  const engine = useApp((state) => state.engine);
+  const info = useApp((state) => state.info);
+  const showStrip = useApp((state) => state.settings.showTaskbarStrip);
+  const iconStyle = useApp((state) => state.settings.iconStyle);
+  const display = useDisplay();
+  const isEnabled = useIsEnabled();
+  const taskbar = useTaskbarInfo();
+  const systemDark = useSystemDark();
+  const lastKey = useRef<string | null>(null);
+  const queue = useRef<Promise<void>>(Promise.resolve());
+
+  useEffect(() => watchTaskbarInfo(), []);
+
+  const content = useMemo(() => {
+    const groups = pinnedGroups(layout, catalog, isEnabled);
+    return buildStripContent(
+      groups,
+      (descriptor) => widgetDataFor(descriptor, engine?.providers[descriptor.providerId]?.snapshot, display),
+      (provider) => providerTitle(provider, display.language),
+    );
+  }, [layout, catalog, isEnabled, engine, display]);
+
+  useEffect(() => {
+    if (!ready) return;
+    const messages = messagesFor(display.language);
+    const appName = info?.name ?? messages.chrome.appName;
+    const dark = taskbar ? taskbar.theme === "dark" : systemDark;
+    const color = dark ? "#ffffff" : "#000000";
+    const empty = isStripEmpty(content);
+    const tooltip = empty ? messages.strip.tooltipEmpty : `${appName}\n${stripSummary(content)}`;
+    let output: Output;
+    if (!showStrip || empty) output = { kind: "off", tooltip: empty ? messages.strip.tooltipEmpty : appName };
+    else if (taskbar?.supported && iconStyle === "text") output = { kind: "text", content, color, height: taskbar.height, scale: taskbar.scale, tooltip };
+    else output = { kind: "bars", content, color, tooltip };
+    const key = outputKey(output);
+    if (key === lastKey.current) return;
+    lastKey.current = key;
+    queue.current = queue.current
+      .then(() => apply(output, appName))
+      .catch((error: unknown) => {
+        lastKey.current = null;
+        console.error("Updating the taskbar failed", error);
+      });
+  }, [ready, content, showStrip, iconStyle, taskbar, systemDark, display.language, info]);
+}
