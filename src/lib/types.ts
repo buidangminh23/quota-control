@@ -1,0 +1,230 @@
+/**
+ * Wire types shared with the Rust core (`crates/uc-core/src/model`). Field names match the serde
+ * output exactly; upstream OpenUsage `Codable` keys are preserved where they differ from camelCase
+ * (`providerID`, `costUSD`, …). Dates arrive as ISO-8601 strings.
+ */
+
+export type MetricKind = "percent" | "dollars" | "count";
+
+export type ProgressFormat = { kind: "percent" } | { kind: "dollars" } | { kind: "count"; suffix: string };
+
+export interface MetricValue {
+  number: number;
+  kind: MetricKind;
+  label?: string;
+  estimated: boolean;
+}
+
+export interface MetricChartPoint {
+  value: number;
+  label: string;
+  valueLabel?: string;
+}
+
+export interface ModelUsageVariant {
+  model: string;
+  totalTokens: number;
+  costUSD?: number;
+}
+
+export interface ModelUsageEntry {
+  model: string;
+  totalTokens: number;
+  costUSD?: number;
+  variants?: ModelUsageVariant[];
+}
+
+export interface ModelUsageBreakdown {
+  totalTokens: number;
+  totalCostUSD?: number;
+  models: ModelUsageEntry[];
+  sourceNote: string;
+}
+
+export interface TextLine {
+  type: "text";
+  label: string;
+  value: string;
+  colorHex?: string;
+  subtitle?: string;
+}
+
+export interface ChartLine {
+  type: "chart";
+  label: string;
+  points: MetricChartPoint[];
+  note?: string;
+}
+
+export interface ValuesLine {
+  type: "values";
+  label: string;
+  values: MetricValue[];
+  colorHex?: string;
+  expiriesAt?: string[];
+  unknownModels?: string[];
+  modelBreakdown?: ModelUsageBreakdown;
+}
+
+export interface ProgressLine {
+  type: "progress";
+  label: string;
+  used: number;
+  limit: number;
+  format: ProgressFormat;
+  resetsAt?: string;
+  periodDurationMs?: number;
+  colorHex?: string;
+}
+
+export interface BadgeLine {
+  type: "badge";
+  label: string;
+  text: string;
+  colorHex?: string;
+  subtitle?: string;
+}
+
+export type MetricLine = TextLine | ChartLine | ValuesLine | ProgressLine | BadgeLine;
+
+export const ERROR_BADGE_LABEL = "Error";
+
+export interface DailyUsageEntry {
+  date: string;
+  totalTokens: number;
+  costUSD?: number;
+}
+
+export interface DailyModelUsageEntry {
+  date: string;
+  models: ModelUsageEntry[];
+}
+
+export interface ProviderUsageHistory {
+  series: { daily: DailyUsageEntry[] };
+  modelUsage?: { daily: DailyModelUsageEntry[] };
+  unknownModelsByDay: Record<string, string[]>;
+  fallbackPricingModelsByDay?: Record<string, string[]>;
+}
+
+export type ErrorCategory =
+  | "not_logged_in"
+  | "auth_expired"
+  | "auth_invalid"
+  | "credential_access"
+  | "network"
+  | "decoding"
+  | "http_4xx"
+  | "http_5xx"
+  | "rate_limited"
+  | "not_available"
+  | "other";
+
+export interface ProviderSnapshot {
+  providerID: string;
+  displayName: string;
+  plan?: string;
+  lines: MetricLine[];
+  refreshedAt: string;
+  usageHistory?: ProviderUsageHistory;
+  warning?: string;
+  errorCategory?: ErrorCategory;
+}
+
+export interface ProviderLink {
+  label: string;
+  url: string;
+}
+
+export interface Provider {
+  id: string;
+  displayName: string;
+  /** Provider family whose mark and brand color the card uses (`claude` for `claude@…`). */
+  icon: string;
+  links?: ProviderLink[];
+}
+
+export type SessionStartSignal = "zeroUsage" | "missingResetDate";
+
+export interface WidgetTemplate {
+  title: string;
+  kind: MetricKind;
+  limit?: number;
+  countSuffix?: string;
+  valuePrefix?: string;
+  limitNoun?: string;
+  unboundedValueWord?: string;
+  /** Which of a `values` row's numbers the widget renders; absent = every value. */
+  selectionKind?: MetricKind;
+  isUsagePeriod?: boolean;
+  traySuffix?: string;
+  showsResetExpiries?: boolean;
+  sessionStartSignal?: SessionStartSignal;
+  isChart?: boolean;
+  valueTooltipNote?: string;
+  infoNote?: string;
+  periodDurationMs?: number;
+}
+
+export type LimitResourceSource =
+  | { type: "progress" }
+  | { type: "value"; kind: MetricKind; label?: string }
+  | { type: "progressOrValue"; kind: MetricKind; label?: string };
+
+export interface LimitResourceDescriptor {
+  key: string;
+  kind: "consumption" | "balance";
+  unit: string;
+  source: LimitResourceSource;
+  estimated: boolean;
+}
+
+export interface UsageHistoryDescriptor {
+  scope: "machineLocal" | "accountWide";
+  estimatedCost: boolean;
+  sourceNote: string;
+}
+
+export interface WidgetDescriptor {
+  id: string;
+  providerId: string;
+  metricLabel: string;
+  template: WidgetTemplate;
+  pinnable: boolean;
+  isSpendTile: boolean;
+  limitResources?: LimitResourceDescriptor[];
+  historyResource?: UsageHistoryDescriptor;
+}
+
+/** One provider the engine knows, with the widgets it can feed in declaration order. */
+export interface ProviderEntry {
+  provider: Provider;
+  descriptors: WidgetDescriptor[];
+}
+
+/** Live refresh state for one provider (stale-while-revalidate). */
+export interface ProviderRuntimeState {
+  /** Last good snapshot; absent until the first cache load or success. */
+  snapshot?: ProviderSnapshot;
+  /** Latest refresh error text, cleared by the next success. The last good snapshot stays on screen. */
+  error?: string;
+  refreshing: boolean;
+}
+
+export interface EngineState {
+  providers: Record<string, ProviderRuntimeState>;
+  /** When the most recent full refresh batch finished; drives "Next update in …". */
+  lastRefreshAt?: string;
+  refreshIntervalMs: number;
+}
+
+export type Platform = "windows" | "linux" | "macos" | "web";
+
+export interface AppInfo {
+  name: string;
+  version: string;
+  platform: Platform;
+  logFile?: string;
+}
+
+export type PopoverScreen = "dashboard" | "customize" | "settings";

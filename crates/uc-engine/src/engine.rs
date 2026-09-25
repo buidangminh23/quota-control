@@ -1,0 +1,588 @@
+//! Refresh orchestration. Port of the refresh half of upstream `WidgetDataStore.swift` (the
+//! presentation half, `data(for:)`, lives in the popup).
+//!
+//! - All enabled providers refresh concurrently: once at launch, then every refresh interval.
+//! - A failed refresh never wipes data: the last good snapshot stays, the error is kept beside it.
+//! - A failing provider is backed off for 60 s so a wake burst can't re-probe it in a tight loop.
+//! - A provider that never returns is abandoned after 120 s and reported as timed out.
+//! - Scheduling compares wall-clock time, so a machine waking from sleep refreshes right away.
+
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use chrono::{DateTime, Utc};
+use parking_lot::Mutex;
+use serde::Serialize;
+use tokio::sync::{Notify, broadcast};
+use uc_core::{
+    Clock, ErrorCategory, Provider, ProviderRuntime, ProviderSnapshot, ProviderUsageHistory, RefreshContext,
+    UsageHistoryDescriptor, WidgetDescriptor, system_clock,
+};
+
+use crate::cache::SnapshotCache;
+
+#[derive(Clone, Debug)]
+pub struct EngineConfig {
+    pub refresh_interval: Duration,
+    pub provider_timeout: Duration,
+    pub failure_backoff: Duration,
+    pub slow_threshold: Duration,
+    /// How often the scheduler checks whether a batch is due.
+    pub tick: Duration,
+}
+
+impl Default for EngineConfig {
+    fn default() -> Self {
+        Self {
+            refresh_interval: Duration::from_secs(5 * 60),
+            provider_timeout: Duration::from_secs(120),
+            failure_backoff: Duration::from_secs(60),
+            slow_threshold: Duration::from_secs(10),
+            tick: Duration::from_secs(15),
+        }
+    }
+}
+
+/// Re-renders a snapshot's spend rows from preserved daily history (upstream
+/// `UsageHistorySnapshotRenderer`). Injected so the engine stays independent of the log scanners.
+pub trait HistoryRenderer: Send + Sync {
+    fn render(
+        &self,
+        snapshot: ProviderSnapshot,
+        history: &ProviderUsageHistory,
+        descriptor: &UsageHistoryDescriptor,
+        now: DateTime<Utc>,
+    ) -> ProviderSnapshot;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefreshOutcome {
+    Refreshed,
+    Failed,
+    CacheHit,
+    Skipped,
+    BackedOff,
+}
+
+/// One provider the engine knows, with its widgets in declaration order.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderEntry {
+    pub provider: Provider,
+    pub descriptors: Vec<WidgetDescriptor>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderRuntimeState {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<ProviderSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub refreshing: bool,
+}
+
+/// What the popup renders from: per-provider state plus the footer's schedule.
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineState {
+    pub providers: BTreeMap<String, ProviderRuntimeState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_refresh_at: Option<DateTime<Utc>>,
+    pub refresh_interval_ms: u64,
+}
+
+#[derive(Default)]
+struct Inner {
+    snapshots: HashMap<String, ProviderSnapshot>,
+    refreshing: HashSet<String>,
+    errors: HashMap<String, String>,
+    retry_after: HashMap<String, DateTime<Utc>>,
+    last_refresh_at: Option<DateTime<Utc>>,
+    enabled: HashSet<String>,
+    batch_in_flight: bool,
+}
+
+/// Outcome hook (for logs and diagnostics): provider id, outcome, error category, manual.
+pub type OutcomeHook = Arc<dyn Fn(&str, RefreshOutcome, Option<ErrorCategory>, bool) + Send + Sync>;
+
+pub struct Engine {
+    runtimes: Vec<Arc<dyn ProviderRuntime>>,
+    by_id: HashMap<String, Arc<dyn ProviderRuntime>>,
+    history_descriptors: HashMap<String, UsageHistoryDescriptor>,
+    identity_keys: HashMap<String, String>,
+    cache: SnapshotCache,
+    config: EngineConfig,
+    renderer: Option<Arc<dyn HistoryRenderer>>,
+    clock: Clock,
+    inner: Mutex<Inner>,
+    events: broadcast::Sender<EngineState>,
+    wake: Notify,
+    outcome_hook: Mutex<Option<OutcomeHook>>,
+}
+
+impl Engine {
+    pub fn new(runtimes: Vec<Arc<dyn ProviderRuntime>>, cache: SnapshotCache, config: EngineConfig) -> Self {
+        Self::with_options(runtimes, cache, config, HashMap::new(), None, system_clock())
+    }
+
+    pub fn with_options(
+        runtimes: Vec<Arc<dyn ProviderRuntime>>,
+        cache: SnapshotCache,
+        config: EngineConfig,
+        identity_keys: HashMap<String, String>,
+        renderer: Option<Arc<dyn HistoryRenderer>>,
+        clock: Clock,
+    ) -> Self {
+        let by_id: HashMap<_, _> = runtimes.iter().map(|r| (r.provider().id.clone(), r.clone())).collect();
+        let history_descriptors = runtimes
+            .iter()
+            .filter_map(|runtime| {
+                runtime
+                    .widget_descriptors()
+                    .into_iter()
+                    .find_map(|d| d.history_resource)
+                    .map(|descriptor| (runtime.provider().id.clone(), descriptor))
+            })
+            .collect();
+        let ids: Vec<String> = runtimes.iter().map(|r| r.provider().id.clone()).collect();
+        let loaded = cache
+            .load_snapshots(&ids)
+            .into_iter()
+            .filter(|(id, _)| {
+                let stale = cache.has_stale_account_stamp(id, identity_keys.get(id).map(String::as_str));
+                if stale {
+                    tracing::info!(target: "cache", "stale account cache discarded for {id}");
+                }
+                !stale
+            })
+            .collect();
+        let (events, _) = broadcast::channel(32);
+        Self {
+            runtimes,
+            by_id,
+            history_descriptors,
+            identity_keys,
+            cache,
+            config,
+            renderer,
+            clock,
+            inner: Mutex::new(Inner { snapshots: loaded, enabled: ids.into_iter().collect(), ..Inner::default() }),
+            events,
+            wake: Notify::new(),
+            outcome_hook: Mutex::new(None),
+        }
+    }
+
+    pub fn config(&self) -> &EngineConfig {
+        &self.config
+    }
+
+    pub fn set_outcome_hook(&self, hook: OutcomeHook) {
+        *self.outcome_hook.lock() = Some(hook);
+    }
+
+    pub fn catalog(&self) -> Vec<ProviderEntry> {
+        self.runtimes
+            .iter()
+            .map(|runtime| ProviderEntry { provider: runtime.provider().clone(), descriptors: runtime.widget_descriptors() })
+            .collect()
+    }
+
+    pub fn provider_ids(&self) -> Vec<String> {
+        self.runtimes.iter().map(|r| r.provider().id.clone()).collect()
+    }
+
+    pub fn runtime(&self, provider_id: &str) -> Option<Arc<dyn ProviderRuntime>> {
+        self.by_id.get(provider_id).cloned()
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<EngineState> {
+        self.events.subscribe()
+    }
+
+    /// The popup's view: snapshots without their raw daily history (only spend rows are rendered).
+    pub fn state(&self) -> EngineState {
+        let inner = self.inner.lock();
+        let providers = self
+            .runtimes
+            .iter()
+            .map(|runtime| {
+                let id = runtime.provider().id.clone();
+                let snapshot = inner.snapshots.get(&id).cloned().map(|mut s| {
+                    s.usage_history = None;
+                    s
+                });
+                let state = ProviderRuntimeState {
+                    snapshot,
+                    error: inner.errors.get(&id).cloned(),
+                    refreshing: inner.refreshing.contains(&id),
+                };
+                (id, state)
+            })
+            .collect();
+        EngineState {
+            providers,
+            last_refresh_at: inner.last_refresh_at,
+            refresh_interval_ms: self.config.refresh_interval.as_millis() as u64,
+        }
+    }
+
+    /// Full snapshots including history, for the local API and CLI.
+    pub fn snapshots(&self) -> HashMap<String, ProviderSnapshot> {
+        self.inner.lock().snapshots.clone()
+    }
+
+    pub fn error_message(&self, provider_id: &str) -> Option<String> {
+        self.inner.lock().errors.get(provider_id).cloned()
+    }
+
+    fn publish(&self) {
+        let _ = self.events.send(self.state());
+    }
+
+    pub fn is_enabled(&self, provider_id: &str) -> bool {
+        self.inner.lock().enabled.contains(provider_id)
+    }
+
+    /// Replace the enabled set. Newly enabled providers lose any stale backoff and fetch promptly.
+    pub fn set_enabled(&self, provider_ids: &[String]) {
+        let newly_enabled = {
+            let mut inner = self.inner.lock();
+            let next: HashSet<String> = provider_ids.iter().filter(|id| self.by_id.contains_key(*id)).cloned().collect();
+            let added: Vec<String> = next.difference(&inner.enabled).cloned().collect();
+            for id in &added {
+                inner.retry_after.remove(id);
+            }
+            inner.enabled = next;
+            !added.is_empty()
+        };
+        if newly_enabled {
+            self.wake.notify_one();
+        }
+        self.publish();
+    }
+
+    /// Refresh every enabled provider concurrently.
+    pub async fn refresh_all(&self, force: bool) -> Vec<RefreshOutcome> {
+        let ids: Vec<String> = {
+            let mut inner = self.inner.lock();
+            inner.batch_in_flight = true;
+            self.runtimes
+                .iter()
+                .map(|r| r.provider().id.clone())
+                .filter(|id| inner.enabled.contains(id))
+                .collect()
+        };
+        let started = Instant::now();
+        tracing::info!(target: "refresh", "batch start ({} providers, force={force})", ids.len());
+        let outcomes = futures::future::join_all(ids.iter().map(|id| self.refresh(id, force))).await;
+        {
+            let mut inner = self.inner.lock();
+            inner.last_refresh_at = Some((self.clock)());
+            inner.batch_in_flight = false;
+        }
+        let count = |outcome: RefreshOutcome| outcomes.iter().filter(|o| **o == outcome).count();
+        tracing::info!(
+            target: "refresh",
+            "batch end ({}ms, {} ok / {} failed / {} cached / {} backed off)",
+            started.elapsed().as_millis(),
+            count(RefreshOutcome::Refreshed),
+            count(RefreshOutcome::Failed),
+            count(RefreshOutcome::CacheHit),
+            count(RefreshOutcome::BackedOff)
+        );
+        self.publish();
+        outcomes
+    }
+
+    /// Refresh one provider. `force` bypasses the cache and the failure backoff.
+    pub async fn refresh(&self, provider_id: &str, force: bool) -> RefreshOutcome {
+        let identity = self.identity_keys.get(provider_id).map(String::as_str);
+        {
+            let mut inner = self.inner.lock();
+            if !inner.enabled.contains(provider_id) {
+                return RefreshOutcome::Skipped;
+            }
+            let stale_stamp = self.cache.has_stale_account_stamp(provider_id, identity);
+            if !force && !stale_stamp {
+                if let Some(cached) = self.cache.fresh_snapshot(provider_id) {
+                    tracing::debug!(target: "refresh", "cache hit {provider_id}");
+                    if inner.snapshots.get(provider_id) != Some(&cached) {
+                        inner.snapshots.insert(provider_id.to_string(), cached);
+                    }
+                    return RefreshOutcome::CacheHit;
+                }
+            }
+            if !force {
+                if let Some(retry_after) = inner.retry_after.get(provider_id) {
+                    if (self.clock)() < *retry_after {
+                        tracing::debug!(target: "refresh", "backoff skip {provider_id}");
+                        return RefreshOutcome::BackedOff;
+                    }
+                }
+            }
+            if !self.by_id.contains_key(provider_id) || inner.refreshing.contains(provider_id) {
+                return RefreshOutcome::Skipped;
+            }
+            inner.refreshing.insert(provider_id.to_string());
+        }
+        self.publish();
+
+        let outcome = self.run_refresh(provider_id, force).await;
+
+        self.inner.lock().refreshing.remove(provider_id);
+        self.publish();
+        outcome
+    }
+
+    async fn run_refresh(&self, provider_id: &str, force: bool) -> RefreshOutcome {
+        let runtime = self.by_id[provider_id].clone();
+        let context = if force { RefreshContext::manual() } else { RefreshContext::scheduled() };
+        let started = Instant::now();
+        let work = tokio::spawn(async move { runtime.refresh(context).await });
+        let abort = work.abort_handle();
+        let result = tokio::time::timeout(self.config.provider_timeout, work).await;
+        let snapshot = match result {
+            Ok(Ok(snapshot)) => snapshot,
+            Ok(Err(join_error)) => {
+                let message = if join_error.is_panic() { "Refresh crashed" } else { "Refresh cancelled" };
+                tracing::error!(target: "refresh", "{provider_id} refresh task failed: {join_error}");
+                return self.record_failure(provider_id, message.to_string(), Some(ErrorCategory::Other), force);
+            }
+            Err(_) => {
+                abort.abort();
+                let seconds = self.config.provider_timeout.as_secs();
+                tracing::warn!(target: "refresh", "{provider_id} timed out after {seconds}s");
+                return self.record_failure(
+                    provider_id,
+                    format!("Refresh timed out after {seconds}s"),
+                    Some(ErrorCategory::Network),
+                    force,
+                );
+            }
+        };
+        let elapsed = started.elapsed();
+        if elapsed >= self.config.slow_threshold {
+            tracing::warn!(
+                target: "refresh",
+                "{provider_id} slow refresh ({}ms, threshold={}ms)",
+                elapsed.as_millis(),
+                self.config.slow_threshold.as_millis()
+            );
+        }
+        if let Some(message) = Self::error_message_in(&snapshot) {
+            return self.record_failure(provider_id, message, snapshot.error_category, force);
+        }
+        self.record_success(provider_id, snapshot, elapsed, force)
+    }
+
+    fn record_failure(
+        &self,
+        provider_id: &str,
+        message: String,
+        category: Option<ErrorCategory>,
+        force: bool,
+    ) -> RefreshOutcome {
+        tracing::warn!(target: "refresh", "{provider_id} failed: {}", uc_core::redact::log_message(&message));
+        {
+            let mut inner = self.inner.lock();
+            inner.errors.insert(provider_id.to_string(), message);
+            let retry = (self.clock)()
+                + chrono::Duration::from_std(self.config.failure_backoff).unwrap_or(chrono::Duration::seconds(60));
+            inner.retry_after.insert(provider_id.to_string(), retry);
+        }
+        self.notify_outcome(provider_id, RefreshOutcome::Failed, category, force);
+        RefreshOutcome::Failed
+    }
+
+    fn record_success(
+        &self,
+        provider_id: &str,
+        mut snapshot: ProviderSnapshot,
+        elapsed: Duration,
+        force: bool,
+    ) -> RefreshOutcome {
+        {
+            let mut inner = self.inner.lock();
+            inner.errors.remove(provider_id);
+            inner.retry_after.remove(provider_id);
+            if snapshot.usage_history.is_none() {
+                let previous = inner.snapshots.get(provider_id).and_then(|s| s.usage_history.clone());
+                if let (Some(history), Some(descriptor), Some(renderer)) =
+                    (previous, self.history_descriptors.get(provider_id), self.renderer.as_ref())
+                {
+                    snapshot.usage_history = Some(history.clone());
+                    snapshot = renderer.render(snapshot, &history, descriptor, (self.clock)());
+                    tracing::debug!(target: "refresh", "preserved last-good history for {provider_id} after scan miss");
+                }
+            }
+            inner.snapshots.insert(provider_id.to_string(), snapshot.clone());
+        }
+        self.cache.store(&snapshot, self.identity_keys.get(provider_id).map(String::as_str));
+        tracing::info!(target: "refresh", "{provider_id} ok ({}ms)", elapsed.as_millis());
+        self.notify_outcome(provider_id, RefreshOutcome::Refreshed, None, force);
+        RefreshOutcome::Refreshed
+    }
+
+    fn notify_outcome(&self, provider_id: &str, outcome: RefreshOutcome, category: Option<ErrorCategory>, force: bool) {
+        let hook = self.outcome_hook.lock().clone();
+        if let Some(hook) = hook {
+            hook(provider_id, outcome, category, force);
+        }
+    }
+
+    /// A snapshot that carries only error lines is a failed refresh; its message comes from the badge.
+    fn error_message_in(snapshot: &ProviderSnapshot) -> Option<String> {
+        if snapshot.lines.is_empty() || !snapshot.lines.iter().all(|line| line.is_error()) {
+            return None;
+        }
+        Some(snapshot.error_text().unwrap_or("Refresh failed").to_string())
+    }
+
+    /// Ask the scheduler to run a pass now (without forcing past the cache).
+    pub fn wake(&self) {
+        self.wake.notify_one();
+    }
+
+    fn batch_due(&self) -> bool {
+        let inner = self.inner.lock();
+        if inner.batch_in_flight {
+            return false;
+        }
+        match inner.last_refresh_at {
+            None => true,
+            Some(last) => {
+                let elapsed = (self.clock)().signed_duration_since(last);
+                elapsed.num_milliseconds() < 0 || elapsed.num_milliseconds() as u128 >= self.config.refresh_interval.as_millis()
+            }
+        }
+    }
+
+    /// The periodic loop: a pass at launch, then whenever one interval of wall-clock time has passed
+    /// since the last batch finished, or when woken (a provider was just enabled).
+    pub async fn run(self: Arc<Self>) {
+        loop {
+            if self.batch_due() {
+                self.refresh_all(false).await;
+            }
+            tokio::select! {
+                () = tokio::time::sleep(self.config.tick) => {}
+                () = self.wake.notified() => {
+                    self.refresh_all(false).await;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use async_trait::async_trait;
+    use uc_core::{MetricLine, ProgressFormat};
+
+    struct FakeProvider {
+        provider: Provider,
+        calls: AtomicUsize,
+        fail: bool,
+        hang: bool,
+    }
+
+    impl FakeProvider {
+        fn new(id: &str, fail: bool, hang: bool) -> Arc<Self> {
+            Arc::new(Self { provider: Provider::new(id, id), calls: AtomicUsize::new(0), fail, hang })
+        }
+    }
+
+    #[async_trait]
+    impl ProviderRuntime for FakeProvider {
+        fn provider(&self) -> &Provider {
+            &self.provider
+        }
+
+        fn widget_descriptors(&self) -> Vec<WidgetDescriptor> {
+            vec![WidgetDescriptor::percent(format!("{}.session", self.provider.id), &self.provider, "Session", None, None)]
+        }
+
+        async fn refresh(&self, _context: RefreshContext) -> ProviderSnapshot {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.hang {
+                tokio::time::sleep(Duration::from_secs(3600)).await;
+            }
+            if self.fail {
+                return ProviderSnapshot::error_message(&self.provider, "Not logged in", Some(ErrorCategory::NotLoggedIn));
+            }
+            let line = MetricLine::progress("Session", 10.0, 100.0, ProgressFormat::Percent).into();
+            ProviderSnapshot::make(&self.provider, Some("Pro".into()), vec![line], Utc::now())
+        }
+
+        async fn has_local_credentials(&self) -> bool {
+            true
+        }
+    }
+
+    fn engine(runtimes: Vec<Arc<dyn ProviderRuntime>>, config: EngineConfig) -> (Engine, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = SnapshotCache::new(dir.path().join("cache.json"), config.refresh_interval);
+        (Engine::new(runtimes, cache, config), dir)
+    }
+
+    #[tokio::test]
+    async fn success_is_cached_for_the_interval() {
+        let fake = FakeProvider::new("claude", false, false);
+        let (engine, _dir) = engine(vec![fake.clone()], EngineConfig::default());
+        assert_eq!(engine.refresh("claude", false).await, RefreshOutcome::Refreshed);
+        assert_eq!(engine.refresh("claude", false).await, RefreshOutcome::CacheHit);
+        assert_eq!(engine.refresh("claude", true).await, RefreshOutcome::Refreshed);
+        assert_eq!(fake.calls.load(Ordering::SeqCst), 2);
+        let state = engine.state();
+        assert_eq!(state.providers["claude"].snapshot.as_ref().unwrap().plan.as_deref(), Some("Pro"));
+    }
+
+    #[tokio::test]
+    async fn failures_keep_last_good_snapshot_and_back_off() {
+        let fake = FakeProvider::new("codex", true, false);
+        let (engine, _dir) = engine(vec![fake.clone()], EngineConfig::default());
+        assert_eq!(engine.refresh("codex", false).await, RefreshOutcome::Failed);
+        assert_eq!(engine.refresh("codex", false).await, RefreshOutcome::BackedOff);
+        assert_eq!(engine.refresh("codex", true).await, RefreshOutcome::Failed);
+        assert_eq!(engine.state().providers["codex"].error.as_deref(), Some("Not logged in"));
+        assert!(engine.state().providers["codex"].snapshot.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn hung_providers_time_out() {
+        let fake = FakeProvider::new("cursor", false, true);
+        let config = EngineConfig { provider_timeout: Duration::from_secs(120), ..EngineConfig::default() };
+        let (engine, _dir) = engine(vec![fake], config);
+        assert_eq!(engine.refresh("cursor", true).await, RefreshOutcome::Failed);
+        let state = engine.state();
+        assert_eq!(state.providers["cursor"].error.as_deref(), Some("Refresh timed out after 120s"));
+        assert!(!state.providers["cursor"].refreshing);
+    }
+
+    #[tokio::test]
+    async fn disabled_providers_are_skipped() {
+        let fake = FakeProvider::new("grok", false, false);
+        let (engine, _dir) = engine(vec![fake.clone()], EngineConfig::default());
+        engine.set_enabled(&[]);
+        assert_eq!(engine.refresh("grok", true).await, RefreshOutcome::Skipped);
+        assert_eq!(fake.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn state_strips_usage_history() {
+        let fake = FakeProvider::new("claude", false, false);
+        let (engine, _dir) = engine(vec![fake], EngineConfig::default());
+        engine.refresh_all(false).await;
+        let state = engine.state();
+        assert!(state.last_refresh_at.is_some());
+        assert!(state.providers["claude"].snapshot.as_ref().unwrap().usage_history.is_none());
+        let json = serde_json::to_value(&state).unwrap();
+        assert_eq!(json["refreshIntervalMs"], 300_000);
+    }
+}

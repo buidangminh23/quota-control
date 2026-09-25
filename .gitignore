@@ -22,3 +22,6 @@ Thumbs.db
 
 # Agent tooling
 .claude/
+
+# Upstream reference checkout (robinebers/openusage), never committed
+.upstream/
