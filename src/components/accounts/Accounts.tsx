@@ -204,10 +204,10 @@ function AddAccount({ messages, language }: { messages: Messages; language: Lang
               <span>{messages.accounts.waitingForBrowser}</span>
             </p>
           )}
+          <Button onClick={() => void backend().openUrl(flow.login.authorizationUrl)} className="is-small is-wide">
+            {messages.accounts.openSignInPage}
+          </Button>
           <div className="uc-settings-actions is-split">
-            <Button onClick={() => void backend().openUrl(flow.login.authorizationUrl)} className="is-small">
-              {messages.accounts.openSignInPage}
-            </Button>
             <Button onClick={cancel} className="is-small">
               {messages.accounts.cancel}
             </Button>

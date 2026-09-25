@@ -224,12 +224,12 @@ export function Settings() {
 
       <Section title={section("advanced")}>
         {info?.logFile ? (
-          <div className="uc-settings-actions is-split">
-            <Button onClick={copyLogPath} className="is-small">
+          <div className="uc-settings-actions is-column">
+            <Button onClick={copyLogPath} className="is-small is-wide">
               {text.copyLogPath}
             </Button>
             {canRevealFiles() ? (
-              <Button onClick={revealLog} className="is-small">
+              <Button onClick={revealLog} className="is-small is-wide">
                 {text.revealLog(platform)}
               </Button>
             ) : null}
