@@ -69,8 +69,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = DocumentStore::new(dir.path().to_path_buf());
         assert!(store.load(DocumentName::Settings).unwrap().is_none());
-        store.save(DocumentName::Settings, &serde_json::json!({"theme": "dark"})).unwrap();
-        assert_eq!(store.load(DocumentName::Settings).unwrap().unwrap()["theme"], "dark");
+        store
+            .save(
+                DocumentName::Settings,
+                &serde_json::json!({"theme": "dark"}),
+            )
+            .unwrap();
+        assert_eq!(
+            store.load(DocumentName::Settings).unwrap().unwrap()["theme"],
+            "dark"
+        );
     }
 
     #[test]
@@ -79,5 +87,27 @@ mod tests {
         std::fs::write(dir.path().join("layout.json"), b"{not json").unwrap();
         let store = DocumentStore::new(dir.path().to_path_buf());
         assert!(store.load(DocumentName::Layout).is_err());
+    }
+
+    #[test]
+    fn concurrent_saves_leave_one_complete_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DocumentStore::new(dir.path().to_path_buf());
+        let barrier = std::sync::Barrier::new(16);
+        std::thread::scope(|scope| {
+            for index in 0..16 {
+                let store = &store;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    let value = serde_json::json!({"writer": index, "values": vec![index; 4096]});
+                    barrier.wait();
+                    store.save(DocumentName::Settings, &value).unwrap();
+                });
+            }
+        });
+        let value = store.load(DocumentName::Settings).unwrap().unwrap();
+        let values = value["values"].as_array().unwrap();
+        assert_eq!(values.len(), 4096);
+        assert!(values.iter().all(|item| *item == value["writer"]));
     }
 }

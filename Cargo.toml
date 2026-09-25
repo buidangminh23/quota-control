@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,6 +12,7 @@ rust-version = "1.90"
 
 [workspace.dependencies]
 uc-core = { path = "crates/uc-core" }
+uc-accounts = { path = "crates/uc-accounts" }
 uc-pricing = { path = "crates/uc-pricing" }
 uc-logscan = { path = "crates/uc-logscan" }
 uc-providers = { path = "crates/uc-providers" }

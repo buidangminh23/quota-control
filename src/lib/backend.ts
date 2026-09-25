@@ -4,7 +4,7 @@
  *
  * Rust command names live in `src-tauri/src/commands.rs`; keep both sides in sync.
  */
-import type { AppInfo, EngineState, PopoverScreen, ProviderEntry } from "./types";
+import type { AccountLogin, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, PopoverScreen, ProviderEntry } from "./types";
 
 export type Unsubscribe = () => void;
 
@@ -14,6 +14,16 @@ export type DocumentName = "settings" | "layout";
 export interface Backend {
   appInfo(): Promise<AppInfo>;
   catalog(): Promise<ProviderEntry[]>;
+  onCatalogChanged(listener: (catalog: ProviderEntry[]) => void): Unsubscribe;
+  listAccounts(): Promise<ConnectedAccount[]>;
+  importCurrentAccount(provider: AccountProvider, label?: string): Promise<ConnectedAccount>;
+  beginAccountLogin(provider: AccountProvider, label?: string): Promise<AccountLogin>;
+  completeAccountLogin(flowId: string, callback?: string): Promise<ConnectedAccount>;
+  cancelAccountLogin(flowId: string): Promise<void>;
+  removeAccount(accountId: string): Promise<void>;
+  listChatSessions(): Promise<ChatSession[]>;
+  createChatSession(provider: AccountProvider, label?: string): Promise<ChatSession>;
+  openChatSession(sessionId: string): Promise<void>;
   engineState(): Promise<EngineState>;
   onEngineState(listener: (state: EngineState) => void): Unsubscribe;
   /** Force-refresh one provider, or every enabled provider when `providerId` is omitted. */

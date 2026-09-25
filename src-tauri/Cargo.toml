@@ -31,7 +31,12 @@ tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"
 uc-core.workspace = true
+uc-accounts.workspace = true
 uc-engine.workspace = true
+uc-providers.workspace = true
+uc-logscan.workspace = true
+url.workspace = true
+uuid.workspace = true
 
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-autostart = "2"
@@ -53,3 +58,8 @@ windows-sys = { version = "0.61", features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni = { version = "0.3", default-features = false, features = ["tokio"] }
+
+[dev-dependencies]
+async-trait.workspace = true
+tempfile.workspace = true
+tauri = { version = "2", features = ["test"] }

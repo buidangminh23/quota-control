@@ -28,7 +28,11 @@ pub fn round_half_even(value: f64, decimals: u32) -> f64 {
     let diff = scaled - floor;
     let epsilon = 1e-9 * scaled.abs().max(1.0);
     let rounded = if (diff - 0.5).abs() <= epsilon {
-        if (floor as i64) % 2 == 0 { floor } else { floor + 1.0 }
+        if (floor as i64) % 2 == 0 {
+            floor
+        } else {
+            floor + 1.0
+        }
     } else {
         scaled.round()
     };
@@ -39,7 +43,7 @@ fn group_thousands(integer: u64) -> String {
     let digits = integer.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, ch) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
             out.push(',');
         }
         out.push(ch);
@@ -53,17 +57,17 @@ pub fn decimal(value: f64, min_fraction: u32, max_fraction: u32) -> String {
     let negative = rounded < 0.0 && rounded != 0.0;
     let magnitude = rounded.abs();
     let mut fixed = format!("{magnitude:.prec$}", prec = max_fraction as usize);
-    if max_fraction > min_fraction {
-        if let Some(dot) = fixed.find('.') {
-            let mut end = fixed.len();
-            while end > dot + 1 + min_fraction as usize && fixed.as_bytes()[end - 1] == b'0' {
-                end -= 1;
-            }
-            if end == dot + 1 {
-                end = dot;
-            }
-            fixed.truncate(end);
+    if max_fraction > min_fraction
+        && let Some(dot) = fixed.find('.')
+    {
+        let mut end = fixed.len();
+        while end > dot + 1 + min_fraction as usize && fixed.as_bytes()[end - 1] == b'0' {
+            end -= 1;
         }
+        if end == dot + 1 {
+            end = dot;
+        }
+        fixed.truncate(end);
     }
     let (integer, fraction) = match fixed.split_once('.') {
         Some((integer, fraction)) => (integer.to_string(), Some(fraction.to_string())),
@@ -89,7 +93,10 @@ pub fn compact(value: f64) -> String {
     if magnitude < 1000.0 {
         return decimal(value, 0, 1);
     }
-    let mut unit_index = UNITS.iter().position(|(threshold, _)| magnitude >= *threshold).unwrap_or(3);
+    let mut unit_index = UNITS
+        .iter()
+        .position(|(threshold, _)| magnitude >= *threshold)
+        .unwrap_or(3);
     loop {
         let (threshold, suffix) = UNITS[unit_index];
         let scaled = round_half_even(magnitude / threshold, 1);
@@ -105,12 +112,20 @@ pub fn compact(value: f64) -> String {
 /// USD currency with a fixed number of fractional digits (`$2,059.07`).
 pub fn currency(amount: f64, fraction_digits: u32) -> String {
     let body = decimal(amount.abs(), fraction_digits, fraction_digits);
-    if round_half_even(amount, fraction_digits) < 0.0 { format!("-${body}") } else { format!("${body}") }
+    if round_half_even(amount, fraction_digits) < 0.0 {
+        format!("-${body}")
+    } else {
+        format!("${body}")
+    }
 }
 
 /// Clamp a percent sample into the bounded 0...100 domain.
 pub fn clamp_percent(value: f64) -> f64 {
-    if value.is_finite() { value.clamp(0.0, 100.0) } else { 0.0 }
+    if value.is_finite() {
+        value.clamp(0.0, 100.0)
+    } else {
+        0.0
+    }
 }
 
 /// A bare number in the given kind and style (no unit label).
@@ -157,13 +172,19 @@ pub fn compact_duration(seconds: f64) -> Option<String> {
     Some(if days > 0 {
         format!("{days}d {hours}h")
     } else if hours > 0 {
-        if minutes > 0 { format!("{hours}h {minutes}m") } else { format!("{hours}h") }
+        if minutes > 0 {
+            format!("{hours}h {minutes}m")
+        } else {
+            format!("{hours}h")
+        }
     } else {
         format!("{minutes}m")
     })
 }
 
-const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 
 /// The compact month/day label, e.g. "Jun 21", in the local time zone.
 pub fn month_day_label<Tz: TimeZone>(date: &DateTime<Tz>) -> String {
@@ -190,7 +211,10 @@ mod tests {
     fn dollars_follow_each_style() {
         assert_eq!(number(49.85, MetricKind::Dollars, Style::Row), "$49.85");
         assert_eq!(number(2_500.0, MetricKind::Dollars, Style::Row), "$2.5K");
-        assert_eq!(number(2_059.07, MetricKind::Dollars, Style::Full), "$2,059.07");
+        assert_eq!(
+            number(2_059.07, MetricKind::Dollars, Style::Full),
+            "$2,059.07"
+        );
         assert_eq!(number(130.4, MetricKind::Dollars, Style::Tray), "$130");
         assert_eq!(number(13_400.0, MetricKind::Dollars, Style::Tray), "$13.4K");
     }
@@ -204,7 +228,10 @@ mod tests {
 
     #[test]
     fn counts_keep_digits_in_full_style() {
-        assert_eq!(number(56_904_995.0, MetricKind::Count, Style::Full), "56,904,995");
+        assert_eq!(
+            number(56_904_995.0, MetricKind::Count, Style::Full),
+            "56,904,995"
+        );
         assert_eq!(number(772.0, MetricKind::Count, Style::Row), "772");
     }
 
@@ -217,8 +244,14 @@ mod tests {
     #[test]
     fn durations_are_compact() {
         assert_eq!(compact_duration(5.0 * 3600.0).as_deref(), Some("5h"));
-        assert_eq!(compact_duration(30.0 * 3600.0 + 60.0).as_deref(), Some("1d 6h"));
-        assert_eq!(compact_duration(3.0 * 3600.0 + 25.0 * 60.0).as_deref(), Some("3h 25m"));
+        assert_eq!(
+            compact_duration(30.0 * 3600.0 + 60.0).as_deref(),
+            Some("1d 6h")
+        );
+        assert_eq!(
+            compact_duration(3.0 * 3600.0 + 25.0 * 60.0).as_deref(),
+            Some("3h 25m")
+        );
         assert_eq!(compact_duration(20.0).as_deref(), Some("1m"));
         assert_eq!(compact_duration(0.0), None);
     }

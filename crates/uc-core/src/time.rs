@@ -9,8 +9,9 @@ use regex::Regex;
 
 static SPACE_SEPARATED: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}").unwrap());
-static WITH_ZONE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})$").unwrap());
+static WITH_ZONE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})$").unwrap()
+});
 static WITHOUT_ZONE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?$").unwrap());
 
@@ -19,11 +20,11 @@ fn normalize(raw: &str) -> String {
     if s.is_empty() {
         return s;
     }
-    if s.contains(' ') {
-        if let Some(found) = SPACE_SEPARATED.find(&s) {
-            let head = found.as_str().replace(' ', "T");
-            s = format!("{head}{}", &s[found.end()..]);
-        }
+    if s.contains(' ')
+        && let Some(found) = SPACE_SEPARATED.find(&s)
+    {
+        let head = found.as_str().replace(' ', "T");
+        s = format!("{head}{}", &s[found.end()..]);
     }
     if let Some(stripped) = s.strip_suffix(" UTC") {
         s = format!("{stripped}Z");
@@ -43,7 +44,11 @@ fn normalize(raw: &str) -> String {
         }
         format!(".{digits}")
     });
-    let zone = if assume_utc { "Z".to_string() } else { captures.get(3).map_or("Z", |m| m.as_str()).to_string() };
+    let zone = if assume_utc {
+        "Z".to_string()
+    } else {
+        captures.get(3).map_or("Z", |m| m.as_str()).to_string()
+    };
     format!("{head}{}{zone}", fraction.unwrap_or_default())
 }
 
@@ -51,7 +56,9 @@ fn normalize(raw: &str) -> String {
 /// digits, missing zone → UTC).
 pub fn parse_iso8601(value: &str) -> Option<DateTime<Utc>> {
     let normalized = normalize(value);
-    DateTime::parse_from_rfc3339(&normalized).ok().map(|date| date.with_timezone(&Utc))
+    DateTime::parse_from_rfc3339(&normalized)
+        .ok()
+        .map(|date| date.with_timezone(&Utc))
 }
 
 /// `yyyy-MM-ddTHH:mm:ss.SSSZ`, the upstream wire format.
@@ -83,7 +90,10 @@ pub const USAGE_HISTORY_PREVIOUS_DAYS: u64 = 30;
 /// Local calendar day keys covered by the history window ending today.
 pub fn usage_window_day_keys<Tz: TimeZone>(now: &DateTime<Tz>) -> BTreeSet<String> {
     let today = now.with_timezone(&Local).date_naive();
-    (0..=USAGE_HISTORY_PREVIOUS_DAYS).filter_map(|offset| today.checked_sub_days(Days::new(offset))).map(day_key_of).collect()
+    (0..=USAGE_HISTORY_PREVIOUS_DAYS)
+        .filter_map(|offset| today.checked_sub_days(Days::new(offset)))
+        .map(day_key_of)
+        .collect()
 }
 
 /// Local midnight at the start of the calendar day containing `date`, as UTC.
@@ -100,7 +110,9 @@ pub fn start_of_local_day<Tz: TimeZone>(date: &DateTime<Tz>) -> DateTime<Utc> {
 /// The earliest instant still inside the history window (local midnight 30 days ago).
 pub fn usage_window_start<Tz: TimeZone>(now: &DateTime<Tz>) -> DateTime<Utc> {
     let start = start_of_local_day(now);
-    start.checked_sub_days(Days::new(USAGE_HISTORY_PREVIOUS_DAYS)).unwrap_or(start)
+    start
+        .checked_sub_days(Days::new(USAGE_HISTORY_PREVIOUS_DAYS))
+        .unwrap_or(start)
 }
 
 #[cfg(test)]

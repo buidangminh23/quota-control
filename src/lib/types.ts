@@ -32,6 +32,7 @@ export interface ModelUsageEntry {
   totalTokens: number;
   costUSD?: number;
   variants?: ModelUsageVariant[];
+  tokenUsage?: TokenUsage;
 }
 
 export interface ModelUsageBreakdown {
@@ -39,6 +40,7 @@ export interface ModelUsageBreakdown {
   totalCostUSD?: number;
   models: ModelUsageEntry[];
   sourceNote: string;
+  tokenUsage?: TokenUsage;
 }
 
 export interface TextLine {
@@ -89,10 +91,18 @@ export type MetricLine = TextLine | ChartLine | ValuesLine | ProgressLine | Badg
 
 export const ERROR_BADGE_LABEL = "Error";
 
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  cacheCreationInputTokens: number;
+}
+
 export interface DailyUsageEntry {
   date: string;
   totalTokens: number;
   costUSD?: number;
+  tokenUsage?: TokenUsage;
 }
 
 export interface DailyModelUsageEntry {
@@ -228,3 +238,28 @@ export interface AppInfo {
 }
 
 export type PopoverScreen = "dashboard" | "customize" | "settings";
+
+export type AccountProvider = "claude" | "codex";
+
+export interface ChatSession {
+  id: string;
+  provider: AccountProvider;
+  label: string;
+  createdAt: string;
+}
+
+export interface ConnectedAccount {
+  id: string;
+  provider: AccountProvider;
+  label: string;
+  connectedAt: string;
+  updatedAt: string;
+  credentialMode: "shared_cli" | "managed_oauth";
+}
+
+export interface AccountLogin {
+  flowId: string;
+  authorizationUrl: string;
+  callbackMode: "manual" | "loopback";
+  expiresInSeconds: number;
+}

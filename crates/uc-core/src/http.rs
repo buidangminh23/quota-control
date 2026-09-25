@@ -79,7 +79,9 @@ pub struct HttpResponse {
 
 impl HttpResponse {
     pub fn header(&self, name: &str) -> Option<&str> {
-        self.headers.get(&name.to_ascii_lowercase()).map(String::as_str)
+        self.headers
+            .get(&name.to_ascii_lowercase())
+            .map(String::as_str)
     }
 
     pub fn is_success(&self) -> bool {
@@ -185,17 +187,28 @@ impl ProxyConfig {
         let host = url.host_str().filter(|host| !host.is_empty())?.to_string();
         let username = (!url.username().is_empty()).then(|| percent_decode(url.username()));
         let password = url.password().map(percent_decode);
-        Some(Self { port: url.port().unwrap_or(scheme.default_port()), scheme, host, username, password })
+        Some(Self {
+            port: url.port().unwrap_or(scheme.default_port()),
+            scheme,
+            host,
+            username,
+            password,
+        })
     }
 
     pub fn load_from(path: &Path) -> Option<Self> {
-        std::fs::read_to_string(path).ok().as_deref().and_then(Self::parse)
+        std::fs::read_to_string(path)
+            .ok()
+            .as_deref()
+            .and_then(Self::parse)
     }
 
     /// The process-wide proxy, read from disk exactly once.
     pub fn current() -> Option<&'static ProxyConfig> {
         static CURRENT: OnceLock<Option<ProxyConfig>> = OnceLock::new();
-        CURRENT.get_or_init(|| Self::load_from(&Self::config_path())).as_ref()
+        CURRENT
+            .get_or_init(|| Self::load_from(&Self::config_path()))
+            .as_ref()
     }
 
     fn proxy_url(&self) -> String {
@@ -216,12 +229,13 @@ fn percent_decode(raw: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            if let (Some(high), Some(low)) = (hex(bytes[index + 1]), hex(bytes[index + 2])) {
-                out.push(high << 4 | low);
-                index += 3;
-                continue;
-            }
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let (Some(high), Some(low)) = (hex(bytes[index + 1]), hex(bytes[index + 2]))
+        {
+            out.push(high << 4 | low);
+            index += 3;
+            continue;
         }
         out.push(bytes[index]);
         index += 1;
@@ -243,7 +257,8 @@ impl ReqwestHttpClient {
             .connect_timeout(Duration::from_secs(15))
             .pool_idle_timeout(Duration::from_secs(90));
         if let Some(proxy) = proxy {
-            let mut rule = reqwest::Proxy::all(proxy.proxy_url()).map_err(|e| HttpError::InvalidRequest(e.to_string()))?;
+            let mut rule = reqwest::Proxy::all(proxy.proxy_url())
+                .map_err(|e| HttpError::InvalidRequest(e.to_string()))?;
             if let (Some(user), Some(password)) = (&proxy.username, &proxy.password) {
                 rule = rule.basic_auth(user, password);
             }
@@ -253,7 +268,9 @@ impl ReqwestHttpClient {
         } else {
             builder = builder.no_proxy();
         }
-        let client = builder.build().map_err(|e| HttpError::Transport(e.to_string()))?;
+        let client = builder
+            .build()
+            .map_err(|e| HttpError::Transport(e.to_string()))?;
         Ok(Self { client })
     }
 
@@ -287,7 +304,10 @@ impl HttpClient for ReqwestHttpClient {
     async fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
         let method = reqwest::Method::from_bytes(request.method.as_bytes())
             .map_err(|e| HttpError::InvalidRequest(e.to_string()))?;
-        let mut builder = self.client.request(method, &request.url).timeout(request.timeout);
+        let mut builder = self
+            .client
+            .request(method, &request.url)
+            .timeout(request.timeout);
         for (name, value) in &request.headers {
             builder = builder.header(name, value);
         }
@@ -305,16 +325,33 @@ impl HttpClient for ReqwestHttpClient {
         let headers = response
             .headers()
             .iter()
-            .map(|(name, value)| (name.as_str().to_ascii_lowercase(), value.to_str().unwrap_or_default().to_string()))
+            .map(|(name, value)| {
+                (
+                    name.as_str().to_ascii_lowercase(),
+                    value.to_str().unwrap_or_default().to_string(),
+                )
+            })
             .collect();
-        let body = response.bytes().await.map_err(|e| HttpError::Transport(e.to_string()))?.to_vec();
-        let line = format!("{} {} -> {status}", request.method, redact::url(&request.url));
+        let body = response
+            .bytes()
+            .await
+            .map_err(|e| HttpError::Transport(e.to_string()))?
+            .to_vec();
+        let line = format!(
+            "{} {} -> {status}",
+            request.method,
+            redact::url(&request.url)
+        );
         if status >= 400 {
             tracing::debug!(target: "http", "{line} body: {}", redact::body_preview(&String::from_utf8_lossy(&body)));
         } else {
             tracing::debug!(target: "http", "{line}");
         }
-        Ok(HttpResponse { status, headers, body })
+        Ok(HttpResponse {
+            status,
+            headers,
+            body,
+        })
     }
 }
 
@@ -324,16 +361,18 @@ mod tests {
 
     #[test]
     fn parses_enabled_socks_proxy_with_default_port() {
-        let config = ProxyConfig::parse(r#"{"proxy":{"enabled":true,"url":"socks5://127.0.0.1"}}"#).unwrap();
+        let config =
+            ProxyConfig::parse(r#"{"proxy":{"enabled":true,"url":"socks5://127.0.0.1"}}"#).unwrap();
         assert_eq!(config.scheme, ProxyScheme::Socks5);
         assert_eq!(config.port, 1080);
     }
 
     #[test]
     fn parses_credentials_embedded_in_url() {
-        let config =
-            ProxyConfig::parse(r#"{"proxy":{"enabled":true,"url":"http://us%40r:p%3Ass@proxy.example.com:8080"}}"#)
-                .unwrap();
+        let config = ProxyConfig::parse(
+            r#"{"proxy":{"enabled":true,"url":"http://us%40r:p%3Ass@proxy.example.com:8080"}}"#,
+        )
+        .unwrap();
         assert_eq!(config.username.as_deref(), Some("us@r"));
         assert_eq!(config.password.as_deref(), Some("p:ss"));
         assert_eq!(config.port, 8080);
@@ -341,7 +380,9 @@ mod tests {
 
     #[test]
     fn disabled_or_invalid_config_turns_proxy_off() {
-        assert!(ProxyConfig::parse(r#"{"proxy":{"enabled":false,"url":"socks5://h:1"}}"#).is_none());
+        assert!(
+            ProxyConfig::parse(r#"{"proxy":{"enabled":false,"url":"socks5://h:1"}}"#).is_none()
+        );
         assert!(ProxyConfig::parse(r#"{"proxy":{"enabled":true,"url":"ftp://h:1"}}"#).is_none());
         assert!(ProxyConfig::parse("not json").is_none());
         assert!(ProxyConfig::parse(r#"{"proxy":{"enabled":true}}"#).is_none());
