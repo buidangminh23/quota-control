@@ -132,3 +132,26 @@ describe("manifest", () => {
     expect(missingTargets(document)).toEqual(["linux-x86_64-deb", "linux-x86_64-appimage", "darwin-aarch64-app"]);
   });
 });
+
+describe("missingTargets", () => {
+  const windowsAndLinux = { "windows-x86_64-nsis": {}, "windows-x86_64": {}, "linux-x86_64-deb": {}, "linux-x86_64-appimage": {}, "linux-x86_64": {} };
+  const macos = { "darwin-aarch64-app": {}, "darwin-aarch64": {} };
+
+  it("asks for macOS only once a published release has served it", () => {
+    const release = { version: "0.1.14", platforms: windowsAndLinux };
+    expect(missingTargets(release, { version: "0.1.13", platforms: windowsAndLinux })).toEqual([]);
+    expect(missingTargets(release, { version: "0.2.0", platforms: { ...windowsAndLinux, ...macos } })).toEqual(["darwin-aarch64-app"]);
+  });
+
+  it("asks for every kind when the current release cannot be read", () => {
+    expect(missingTargets({ version: "0.1.14", platforms: windowsAndLinux }, null)).toEqual(["darwin-aarch64-app"]);
+  });
+
+  it("always asks for Windows and Linux", () => {
+    expect(missingTargets({ version: "0.2.1", platforms: macos }, { version: "0.2.0", platforms: macos })).toEqual([
+      "windows-x86_64-nsis",
+      "linux-x86_64-deb",
+      "linux-x86_64-appimage",
+    ]);
+  });
+});

@@ -346,7 +346,8 @@ WebKitGTK 4.1, GTK 3 and Ayatana AppIndicator, and installs `/usr/bin/quota-cont
 A release is a GitHub release carrying the Windows setup, the `.deb`, the AppImage and the macOS
 app archive with their `.sig` files, the macOS DMG, `latest.json` (the manifest installed apps read)
 and `SHA256SUMS`. Installed apps see it only once it is published as the latest release, and
-publishing refuses a release that lacks any of the four packages.
+publishing refuses a release that lacks the Windows or Linux packages, or the macOS archive once a
+published release has carried one (so the releases before the first macOS one do not wait for it).
 
 1. Set the same version in `package.json`, `src-tauri/tauri.conf.json` and `Cargo.toml`
    (`[workspace.package]`), commit, then push a matching tag: `git tag v0.2.0 && git push origin v0.2.0`.

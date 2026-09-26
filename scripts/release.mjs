@@ -27,7 +27,8 @@
  *
  * Publishing merges with what the release already holds: latest.json keeps the other platforms'
  * entries and SHA256SUMS the other files' lines, so a release can be assembled from several machines.
- * Installed apps only see it once --latest publishes it, and that requires every installer kind.
+ * Installed apps only see it once --latest publishes it, and that requires every installer kind the
+ * current release serves, plus Windows and Linux.
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -47,7 +48,9 @@ const ARCH = { x64: "x86_64", amd64: "x86_64", x86: "i686", i386: "i686", arm64:
 const DARWIN_ARCHES = { aarch64: ["aarch64"], x86_64: ["x86_64"], universal: ["aarch64", "x86_64"] };
 /**
  * Installer kinds, the updater targets each one serves (`{os}-{arch}-{bundle}` first), and the
- * architecture every published release must serve for it.
+ * architecture every published release must serve for it. A kind marked `onceServed` (macOS, which
+ * came after Windows and Linux) is required only once a published release has served it, so the
+ * releases before the first macOS one do not wait for a Mac build.
  */
 const KINDS = [
   { id: "nsis", pattern: /_(x64|x86|arm64)-setup\.exe$/, targets: (arch) => [`windows-${arch}-nsis`, `windows-${arch}`], required: "x86_64" },
@@ -58,6 +61,7 @@ const KINDS = [
     pattern: /_(aarch64|x64|universal)\.app\.tar\.gz$/,
     targets: (arch) => DARWIN_ARCHES[arch].flatMap((darwin) => [`darwin-${darwin}-app`, `darwin-${darwin}`]),
     required: "aarch64",
+    onceServed: true,
   },
 ];
 /** Downloads that are not updater packages: the macOS disk image people open by hand. */
@@ -157,9 +161,16 @@ export function findInstallers(directories, version) {
   return [...found.values()];
 }
 
-/** The updater targets a published release must serve: one per installer kind. */
-export function missingTargets(document) {
-  return KINDS.map((kind) => kind.targets(kind.required)[0]).filter((target) => !document.platforms?.[target]);
+/**
+ * The updater targets a published release must serve: one per installer kind. A kind marked
+ * `onceServed` counts only when `current`, the latest.json installed apps read now, serves it;
+ * without `current` every kind counts.
+ */
+export function missingTargets(document, current) {
+  const serves = (kind) => kind.targets(kind.required).some((target) => current.platforms?.[target]);
+  return KINDS.filter((kind) => !kind.onceServed || !current || serves(kind))
+    .map((kind) => kind.targets(kind.required)[0])
+    .filter((target) => !document.platforms?.[target]);
 }
 
 /** This version's disk images under `directories`, renamed like the installers. */
@@ -284,9 +295,11 @@ async function publish(options) {
     mergeWithRelease(slug, options.tag, dir);
   }
   const document = JSON.parse(readFileSync(join(dir, "latest.json"), "utf8"));
-  const missing = missingTargets(document);
+  const current = await currentManifest(slug);
+  const missing = missingTargets(document, current);
   if (missing.length > 0 && options.latest) {
-    fail(`latest.json has no ${missing.join(", ")}; publishing needs every installer kind (add them, then publish with --latest)`);
+    const unread = current ? "" : "; the current release's latest.json could not be read, so every kind counts";
+    fail(`latest.json has no ${missing.join(", ")}; publishing needs every installer kind the current release serves${unread} (add them, then publish with --latest)`);
   }
   if (missing.length > 0) console.log(`The draft has no ${missing.join(", ")} yet; add them before publishing.`);
   if (!existing.ok) {
@@ -354,6 +367,13 @@ function mergeWithRelease(slug, tag, dir) {
   writeFileSync(join(dir, "latest.json"), `${JSON.stringify(merged, null, 2)}\n`);
   writeFileSync(join(dir, "SHA256SUMS"), mergeSums(read("SHA256SUMS"), readFileSync(join(dir, "SHA256SUMS"), "utf8")));
   rmSync(previous, { recursive: true, force: true });
+}
+
+/** The latest.json installed apps read now, or null when it cannot be read. */
+async function currentManifest(slug) {
+  const url = `https://github.com/${slug}/releases/latest/download/latest.json`;
+  const response = await fetch(url, { headers: { accept: "application/json" } }).catch(() => null);
+  return response?.ok ? await response.json().catch(() => null) : null;
 }
 
 async function verifyPublished(slug, version) {
