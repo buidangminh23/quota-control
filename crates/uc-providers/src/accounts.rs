@@ -1,6 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
@@ -15,6 +16,139 @@ use crate::credentials::{
     CredentialSource, CredentialStore, Credentials, jwt_claims, parse_credentials, read_json_file,
 };
 use crate::{LocalProvider, ProviderKind};
+
+pub struct AccountLabelBackfill {
+    store: Arc<AccountStore>,
+    http: SharedHttpClient,
+    attempted: tokio::sync::Mutex<HashSet<String>>,
+}
+
+impl AccountLabelBackfill {
+    pub fn new(store: Arc<AccountStore>) -> Self {
+        Self {
+            store,
+            http: ReqwestHttpClient::shared(),
+            attempted: Default::default(),
+        }
+    }
+
+    pub fn with_http(mut self, http: SharedHttpClient) -> Self {
+        self.http = http;
+        self
+    }
+
+    pub async fn run(&self) -> Result<bool, SimpleProviderError> {
+        let store = self.store.clone();
+        let records =
+            uc_core::load_blocking(move || store.list().map_err(|_| account_error())).await?;
+        let eligible: Vec<_> = {
+            let mut attempted = self.attempted.lock().await;
+            records
+                .into_iter()
+                .filter(|record| {
+                    record.credential_mode == CredentialMode::ManagedOauth
+                        && record.label == record.provider
+                        && attempted.insert(record.id.clone())
+                })
+                .collect()
+        };
+        let mut changed = false;
+        for record in eligible {
+            if let Ok(updated) = self.update(record).await {
+                changed |= updated;
+            }
+        }
+        Ok(changed)
+    }
+
+    async fn update(&self, record: AccountRecord) -> Result<bool, SimpleProviderError> {
+        let kind = ProviderKind::parse(&record.provider).ok_or_else(account_error)?;
+        let (expected, email) = match kind {
+            ProviderKind::Codex => {
+                let store = self.store.clone();
+                let id = record.id.clone();
+                let document = uc_core::load_blocking(move || {
+                    store.credentials(&id).map_err(|_| account_error())
+                })
+                .await?;
+                (record, crate::oauth::codex_email_label(&document["tokens"]))
+            }
+            ProviderKind::Claude => {
+                let source = CredentialStore::for_account(kind, self.store.clone(), record.clone());
+                let credentials = ready_credentials(
+                    &source,
+                    kind,
+                    &self.http,
+                    Utc::now(),
+                    refresh_url(kind),
+                    None,
+                )
+                .await?;
+                let expected = {
+                    let lock = refresh_lock(&record.id);
+                    let _guard = lock.lock().await;
+                    let current = source.load().await?;
+                    if current.access_token != credentials.access_token {
+                        return Ok(false);
+                    }
+                    let store = self.store.clone();
+                    let id = record.id.clone();
+                    uc_core::load_blocking(move || {
+                        store
+                            .list()
+                            .map_err(|_| account_error())?
+                            .into_iter()
+                            .find(|record| record.id == id)
+                            .ok_or_else(account_error)
+                    })
+                    .await?
+                };
+                if expected.credential_mode != CredentialMode::ManagedOauth
+                    || expected.label != expected.provider
+                {
+                    return Ok(false);
+                }
+                let response = tokio::time::timeout(
+                    Duration::from_secs(10),
+                    self.http.send(
+                        HttpRequest::get("https://api.anthropic.com/api/oauth/profile")
+                            .bearer(&credentials.access_token)
+                            .header("anthropic-beta", "oauth-2025-04-20")
+                            .timeout(Duration::from_secs(10)),
+                    ),
+                )
+                .await
+                .map_err(|_| account_error())?
+                .map_err(|_| account_error())?;
+                if !response.is_success() {
+                    return Ok(false);
+                }
+                let profile: Value = response.json().map_err(|_| account_error())?;
+                let document = json!({"oauthAccount": {
+                    "accountUuid": profile["account"]["uuid"],
+                    "organizationUuid": profile["organization"]["uuid"]
+                }});
+                if account_id(kind, &identity(kind, &document)?) != record.id {
+                    return Ok(false);
+                }
+                (
+                    expected,
+                    crate::oauth::email_label(&profile["account"]["email"]),
+                )
+            }
+        };
+        let Some(email) = email else {
+            return Ok(false);
+        };
+        let store = self.store.clone();
+        uc_core::load_blocking(move || {
+            store
+                .set_label_if_default(&expected, &email)
+                .map_err(|_| account_error())
+        })
+        .await
+    }
+}
 
 pub(crate) const CODEX_CLIENT: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub(crate) const CLAUDE_CLIENT: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";

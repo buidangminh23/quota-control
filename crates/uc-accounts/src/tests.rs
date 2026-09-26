@@ -10,6 +10,214 @@ fn secret(token: &str) -> Value {
 }
 
 #[test]
+fn default_label_update_changes_only_label_and_update_time() {
+    let (store, _dir) = store();
+    let record = store
+        .import(
+            "claude",
+            "claude",
+            "fixture",
+            &secret("fixture"),
+            CredentialMode::ManagedOauth,
+        )
+        .unwrap();
+    let mut registry = store.registry().unwrap();
+    registry
+        .accounts
+        .get_mut(&record.id)
+        .unwrap()
+        .record
+        .updated_at = Utc::now() - chrono::Duration::days(1);
+    store.save_registry(&registry).unwrap();
+    let before = &registry.accounts[&record.id];
+    let secret_path = store.secret_path(&record.id, before.credential_revision);
+    let bytes = std::fs::read(&secret_path).unwrap();
+    let modified = std::fs::metadata(&secret_path).unwrap().modified().unwrap();
+
+    assert!(
+        store
+            .set_label_if_default(&before.record, " fixture@example.test ")
+            .unwrap()
+    );
+
+    let updated = store.registry().unwrap();
+    let after = &updated.accounts[&record.id];
+    assert_eq!(after.record.label, "fixture@example.test");
+    assert!(after.record.updated_at > before.record.updated_at);
+    let mut expected = serde_json::to_value(&registry).unwrap();
+    expected["accounts"][&record.id]["label"] = serde_json::json!(after.record.label);
+    expected["accounts"][&record.id]["updatedAt"] = serde_json::json!(after.record.updated_at);
+    assert_eq!(serde_json::to_value(&updated).unwrap(), expected);
+    assert_eq!(std::fs::read(&secret_path).unwrap(), bytes);
+    assert_eq!(
+        std::fs::metadata(&secret_path).unwrap().modified().unwrap(),
+        modified
+    );
+    assert_eq!(
+        std::fs::read_dir(store.root.join("credentials"))
+            .unwrap()
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn label_update_preserves_custom_shared_invalid_and_noop_records() {
+    let (store, _dir) = store();
+    let original = store
+        .import(
+            "codex",
+            "codex",
+            "managed",
+            &secret("fixture"),
+            CredentialMode::ManagedOauth,
+        )
+        .unwrap();
+    let concurrent = AccountStore::new(store.root.clone());
+    let custom = concurrent
+        .import(
+            "codex",
+            "Custom label",
+            "managed",
+            &secret("replacement"),
+            CredentialMode::ManagedOauth,
+        )
+        .unwrap();
+    let shared = store
+        .import(
+            "claude",
+            "claude",
+            "shared",
+            &secret("fixture"),
+            CredentialMode::SharedCli,
+        )
+        .unwrap();
+    let default = store
+        .import(
+            "codex",
+            "codex",
+            "default",
+            &secret("fixture"),
+            CredentialMode::ManagedOauth,
+        )
+        .unwrap();
+    let registry_path = store.root.join("registry.json");
+    let before = std::fs::read(&registry_path).unwrap();
+
+    assert!(
+        !store
+            .set_label_if_default(&original, "fixture@example.test")
+            .unwrap()
+    );
+    assert!(
+        !store
+            .set_label_if_default(&custom, "fixture@example.test")
+            .unwrap()
+    );
+    assert!(
+        !store
+            .set_label_if_default(&shared, "fixture@example.test")
+            .unwrap()
+    );
+    assert!(!store.set_label_if_default(&default, " codex ").unwrap());
+    for invalid in [
+        "".to_owned(),
+        " ".into(),
+        "line\nbreak".into(),
+        "a".repeat(257),
+    ] {
+        assert!(matches!(
+            store.set_label_if_default(&default, &invalid),
+            Err(AccountError::InvalidAccount)
+        ));
+    }
+    let mut missing = default.clone();
+    missing.id = "codex@missing".into();
+    assert!(matches!(
+        store.set_label_if_default(&missing, "fixture@example.test"),
+        Err(AccountError::NotFound)
+    ));
+    assert_eq!(std::fs::read(registry_path).unwrap(), before);
+}
+
+#[test]
+fn parallel_label_updates_change_a_default_only_once() {
+    let (store, _dir) = store();
+    let record = store
+        .import(
+            "codex",
+            "codex",
+            "fixture",
+            &secret("fixture"),
+            CredentialMode::ManagedOauth,
+        )
+        .unwrap();
+    let barrier = std::sync::Barrier::new(8);
+    let changed = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..8)
+            .map(|index| {
+                let store = AccountStore::new(store.root.clone());
+                let barrier = &barrier;
+                let expected = &record;
+                scope.spawn(move || {
+                    barrier.wait();
+                    store
+                        .set_label_if_default(expected, &format!("fixture-{index}@example.test"))
+                        .unwrap()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .filter(|changed| *changed)
+            .count()
+    });
+    assert_eq!(changed, 1);
+}
+
+#[test]
+fn label_update_skips_a_snapshot_from_before_credentials_changed() {
+    let (store, _dir) = store();
+    let original = store
+        .import(
+            "codex",
+            "codex",
+            "fixture",
+            &secret("old"),
+            CredentialMode::ManagedOauth,
+        )
+        .unwrap();
+    let mut registry = store.registry().unwrap();
+    registry
+        .accounts
+        .get_mut(&original.id)
+        .unwrap()
+        .record
+        .updated_at = Utc::now() - chrono::Duration::days(1);
+    store.save_registry(&registry).unwrap();
+    let stale = store.list().unwrap().pop().unwrap();
+    store
+        .update_credentials(&original.id, &secret("renewed"))
+        .unwrap();
+    let registry_path = store.root.join("registry.json");
+    let before = std::fs::read(&registry_path).unwrap();
+    assert!(
+        !store
+            .set_label_if_default(&stale, "fixture@example.test")
+            .unwrap()
+    );
+    assert_eq!(std::fs::read(registry_path).unwrap(), before);
+    assert_eq!(store.credentials(&original.id).unwrap(), secret("renewed"));
+    let current = store.list().unwrap().pop().unwrap();
+    assert!(
+        store
+            .set_label_if_default(&current, "fixture@example.test")
+            .unwrap()
+    );
+}
+
+#[test]
 fn round_trip_survives_reopening_store() {
     let (store, _dir) = store();
     assert!(store.list().unwrap().is_empty());

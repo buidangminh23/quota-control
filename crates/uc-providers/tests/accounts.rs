@@ -22,6 +22,312 @@ use uc_providers::{
     visible_accounts,
 };
 
+struct LabelHttp {
+    calls: std::sync::atomic::AtomicUsize,
+    refreshes: std::sync::atomic::AtomicUsize,
+    status: u16,
+    profile: Value,
+    entered: tokio::sync::Notify,
+    release: Option<Arc<tokio::sync::Notify>>,
+}
+
+#[async_trait]
+impl HttpClient for LabelHttp {
+    async fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        let (status, body) = if request.method == "POST" {
+            self.refreshes
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            (
+                200,
+                json!({"access_token":"fixture-renewed","refresh_token":"fixture-next","expires_in":3600}),
+            )
+        } else {
+            assert!(request.url.ends_with("/api/oauth/profile"));
+            assert!(request.timeout <= std::time::Duration::from_secs(10));
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.entered.notify_one();
+            if let Some(release) = &self.release {
+                release.notified().await;
+            }
+            (self.status, self.profile.clone())
+        };
+        Ok(HttpResponse {
+            status,
+            headers: HashMap::new(),
+            body: serde_json::to_vec(&body).unwrap(),
+        })
+    }
+}
+
+fn label_http(status: u16, email: Value) -> LabelHttp {
+    LabelHttp {
+        calls: Default::default(),
+        refreshes: Default::default(),
+        status,
+        profile: json!({"account":{"uuid":"account-a","email":email},"organization":{"uuid":"org-a"}}),
+        entered: Default::default(),
+        release: None,
+    }
+}
+
+fn label_store(dir: &tempfile::TempDir) -> Arc<AccountStore> {
+    Arc::new(AccountStore::new(dir.path().join("accounts")))
+}
+
+fn stored_claude(
+    store: &AccountStore,
+    label: &str,
+    mode: CredentialMode,
+    expired: bool,
+) -> uc_accounts::AccountRecord {
+    let expiry = Utc::now().timestamp_millis() + if expired { -1000 } else { 3_600_000 };
+    store
+        .import(
+            "claude",
+            label,
+            "account-a|org-a",
+            &claude_doc(expiry),
+            mode,
+        )
+        .unwrap()
+}
+
+#[tokio::test]
+async fn label_backfill_codex_is_offline_and_preserves_credentials() {
+    for email in [json!("codex@example.com"), Value::Null, json!("invalid")] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = label_store(&dir);
+        let document = json!({"tokens":{"id_token":jwt(json!({"email":email})),"access_token":"fixture","refresh_token":"fixture"}});
+        let record = store
+            .import(
+                "codex",
+                "codex",
+                "workspace|user",
+                &document,
+                CredentialMode::ManagedOauth,
+            )
+            .unwrap();
+        let http = Arc::new(label_http(500, Value::Null));
+        let backfill = uc_providers::accounts::AccountLabelBackfill::new(store.clone())
+            .with_http(http.clone());
+        assert_eq!(
+            backfill.run().await.unwrap(),
+            email == json!("codex@example.com")
+        );
+        assert_eq!(store.credentials(&record.id).unwrap(), document);
+        assert_eq!(http.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(http.refreshes.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(!backfill.run().await.unwrap());
+    }
+}
+
+#[tokio::test]
+async fn label_backfill_skips_custom_and_shared_accounts() {
+    for (label, mode) in [
+        ("My account", CredentialMode::ManagedOauth),
+        ("claude", CredentialMode::SharedCli),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = label_store(&dir);
+        let record = stored_claude(&store, label, mode, false);
+        let http = Arc::new(label_http(200, json!("ignored@example.com")));
+        let backfill = uc_providers::accounts::AccountLabelBackfill::new(store.clone())
+            .with_http(http.clone());
+        assert!(!backfill.run().await.unwrap());
+        assert_eq!(store.list().unwrap(), vec![record]);
+        assert_eq!(http.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
+async fn label_backfill_claude_checks_identity_and_email() {
+    for (identity_matches, email) in [
+        (true, json!("claude@example.com")),
+        (false, json!("wrong@example.com")),
+        (true, Value::Null),
+        (true, json!("bad\n@example.com")),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = label_store(&dir);
+        let record = stored_claude(&store, "claude", CredentialMode::ManagedOauth, false);
+        let original = store.credentials(&record.id).unwrap();
+        let mut client = label_http(200, email.clone());
+        if !identity_matches {
+            client.profile["organization"]["uuid"] = json!("another-org");
+        }
+        let http = Arc::new(client);
+        let backfill = uc_providers::accounts::AccountLabelBackfill::new(store.clone())
+            .with_http(http.clone());
+        let expected = identity_matches && email == json!("claude@example.com");
+        assert_eq!(backfill.run().await.unwrap(), expected);
+        assert_eq!(
+            store.list().unwrap()[0].label,
+            if expected {
+                "claude@example.com"
+            } else {
+                "claude"
+            }
+        );
+        assert_eq!(store.credentials(&record.id).unwrap(), original);
+        assert_eq!(http.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(http.refreshes.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
+async fn label_backfill_failure_is_once_per_instance_and_retries_next_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = label_store(&dir);
+    stored_claude(&store, "claude", CredentialMode::ManagedOauth, false);
+    let failed = Arc::new(label_http(503, Value::Null));
+    let backfill =
+        uc_providers::accounts::AccountLabelBackfill::new(store.clone()).with_http(failed.clone());
+    let (first, second) = tokio::join!(backfill.run(), backfill.run());
+    assert!(!first.unwrap() && !second.unwrap());
+    assert!(!backfill.run().await.unwrap());
+    assert_eq!(failed.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let next = uc_providers::accounts::AccountLabelBackfill::new(store.clone())
+        .with_http(Arc::new(label_http(200, json!("retry@example.com"))));
+    assert!(next.run().await.unwrap());
+    assert_eq!(store.list().unwrap()[0].label, "retry@example.com");
+}
+
+#[tokio::test]
+async fn label_backfill_never_overwrites_changes_during_profile_lookup() {
+    for change in ["custom", "reconnect", "remove", "renew"] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = label_store(&dir);
+        let record = stored_claude(&store, "claude", CredentialMode::ManagedOauth, false);
+        let release = Arc::new(tokio::sync::Notify::new());
+        let mut client = label_http(200, json!("stale@example.com"));
+        client.release = Some(release.clone());
+        let http = Arc::new(client);
+        let backfill = Arc::new(
+            uc_providers::accounts::AccountLabelBackfill::new(store.clone())
+                .with_http(http.clone()),
+        );
+        let running = {
+            let backfill = backfill.clone();
+            tokio::spawn(async move { backfill.run().await })
+        };
+        http.entered.notified().await;
+        match change {
+            "custom" => {
+                store.set_label_if_default(&record, "Custom").unwrap();
+            }
+            "reconnect" => {
+                stored_claude(&store, "claude", CredentialMode::ManagedOauth, false);
+            }
+            "remove" => {
+                store.remove(&record.id).unwrap();
+            }
+            "renew" => {
+                store
+                    .update_credentials(
+                        &record.id,
+                        &claude_doc(Utc::now().timestamp_millis() + 7_200_000),
+                    )
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let expected = store.list().unwrap();
+        release.notify_one();
+        assert!(!running.await.unwrap().unwrap());
+        assert_eq!(store.list().unwrap(), expected);
+    }
+}
+
+#[tokio::test]
+async fn label_backfill_profile_wait_does_not_block_usage_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = label_store(&dir);
+    stored_claude(&store, "claude", CredentialMode::ManagedOauth, false);
+    let release = Arc::new(tokio::sync::Notify::new());
+    let mut client = label_http(200, json!("ready@example.com"));
+    client.release = Some(release.clone());
+    let client = Arc::new(client);
+    let backfill = Arc::new(
+        uc_providers::accounts::AccountLabelBackfill::new(store.clone()).with_http(client.clone()),
+    );
+    let running = {
+        let backfill = backfill.clone();
+        tokio::spawn(async move { backfill.run().await })
+    };
+    client.entered.notified().await;
+    let runtime = runtimes_with_client(store, http(json!({})))
+        .unwrap()
+        .remove(0);
+    let refreshed = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        runtime.refresh(RefreshContext::manual()),
+    )
+    .await;
+    release.notify_one();
+    assert!(running.await.unwrap().unwrap());
+    assert!(
+        refreshed.is_ok(),
+        "profile lookup blocked normal usage refresh"
+    );
+    assert!(refreshed.unwrap().error_category.is_none());
+}
+
+#[tokio::test]
+async fn label_backfill_failed_profile_does_not_skip_later_accounts() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = label_store(&dir);
+    let claude = stored_claude(&store, "claude", CredentialMode::ManagedOauth, false);
+    let document = json!({"tokens":{"id_token":jwt(json!({"email":"later@example.com"}))}});
+    let codex = store
+        .import(
+            "codex",
+            "codex",
+            "workspace|user",
+            &document,
+            CredentialMode::ManagedOauth,
+        )
+        .unwrap();
+    let client = Arc::new(label_http(503, Value::Null));
+    let backfill =
+        uc_providers::accounts::AccountLabelBackfill::new(store.clone()).with_http(client.clone());
+    assert!(backfill.run().await.unwrap());
+    let records = store.list().unwrap();
+    assert_eq!(
+        records
+            .iter()
+            .find(|record| record.id == claude.id)
+            .unwrap()
+            .label,
+        "claude"
+    );
+    assert_eq!(
+        records
+            .iter()
+            .find(|record| record.id == codex.id)
+            .unwrap()
+            .label,
+        "later@example.com"
+    );
+    assert_eq!(client.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn label_backfill_renews_expired_managed_claude_before_profile() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = label_store(&dir);
+    let record = stored_claude(&store, "claude", CredentialMode::ManagedOauth, true);
+    let http = Arc::new(label_http(200, json!("renewed@example.com")));
+    let backfill =
+        uc_providers::accounts::AccountLabelBackfill::new(store.clone()).with_http(http.clone());
+    assert!(backfill.run().await.unwrap());
+    assert_eq!(http.refreshes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(
+        store.credentials(&record.id).unwrap()["claudeAiOauth"]["accessToken"],
+        "fixture-renewed"
+    );
+    assert_eq!(store.list().unwrap()[0].label, "renewed@example.com");
+}
+
 fn jwt(claims: Value) -> String {
     format!(
         "header.{}.signature",

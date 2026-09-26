@@ -201,6 +201,27 @@ impl AccountStore {
         Ok(())
     }
 
+    pub fn set_label_if_default(&self, expected: &AccountRecord, label: &str) -> Result<bool> {
+        let _lock = storage::lock(&self.root)?;
+        let mut registry = self.registry()?;
+        let entry = registry
+            .accounts
+            .get_mut(&expected.id)
+            .ok_or(AccountError::NotFound)?;
+        validate_input(&entry.record.provider, label, "stored")?;
+        if entry.record != *expected
+            || entry.record.credential_mode != CredentialMode::ManagedOauth
+            || entry.record.label != entry.record.provider
+            || entry.record.label == label.trim()
+        {
+            return Ok(false);
+        }
+        entry.record.label = label.trim().into();
+        entry.record.updated_at = Utc::now();
+        self.save_registry(&registry)?;
+        Ok(true)
+    }
+
     pub fn remove(&self, id: &str) -> Result<()> {
         let _lock = storage::lock(&self.root)?;
         let mut registry = self.registry()?;

@@ -14,6 +14,7 @@ use crate::service::{BackendService, safe_error};
 pub struct Accounts {
     pub store: Arc<AccountStore>,
     oauth: OAuthManager,
+    label_backfill: uc_providers::accounts::AccountLabelBackfill,
     changes: tokio::sync::Mutex<()>,
     /// The CLI logins the current cards were built from.
     cli: parking_lot::Mutex<Vec<CliAccount>>,
@@ -23,6 +24,7 @@ impl Accounts {
     pub fn new(store: Arc<AccountStore>) -> Self {
         Self {
             oauth: OAuthManager::new(store.clone()),
+            label_backfill: uc_providers::accounts::AccountLabelBackfill::new(store.clone()),
             store,
             changes: tokio::sync::Mutex::new(()),
             cli: parking_lot::Mutex::new(Vec::new()),
@@ -282,6 +284,18 @@ pub async fn sync_cli_logins(app: &AppHandle) {
     }) {
         tracing::warn!("CLI logins changed, but the cards were not rebuilt: {error}");
     }
+}
+
+pub async fn backfill_account_labels(app: &AppHandle) {
+    let accounts = app.state::<Accounts>();
+    if !matches!(accounts.label_backfill.run().await, Ok(true)) {
+        return;
+    }
+    let _changes = accounts.changes.lock().await;
+    let _ = accounts.runtimes().and_then(|runtimes| {
+        app.state::<BackendService>()
+            .replace_runtimes(runtimes, app)
+    });
 }
 
 #[cfg(test)]

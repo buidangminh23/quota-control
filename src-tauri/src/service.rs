@@ -502,6 +502,38 @@ mod tests {
     }
 
     #[test]
+    fn label_rebuild_preserves_hidden_cards_and_publishes_new_titles() {
+        let directory = tempfile::tempdir().unwrap();
+        let service = fixture_service(directory.path());
+        let _stop = StopTasks(&service);
+        let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+        service.set_enabled(&["codex@retained".into()]).unwrap();
+        let runtimes: Vec<Arc<dyn ProviderRuntime>> = [
+            ("codex@removed", "Codex"),
+            ("codex@retained", "Codex · visible@example.com"),
+            ("claude@disabled", "Claude · hidden@example.com"),
+        ]
+        .into_iter()
+        .map(|(id, name)| Arc::new(FixtureProvider(Provider::new(id, name))) as Arc<dyn ProviderRuntime>)
+        .collect();
+
+        service.replace_runtimes(runtimes, app.handle()).unwrap();
+
+        let engine = service.engine();
+        assert!(engine.is_enabled("codex@retained"));
+        assert!(!engine.is_enabled("claude@disabled"));
+        assert!(!engine.is_enabled("codex@removed"));
+        assert_eq!(
+            engine.runtime("claude@disabled").unwrap().provider().display_name,
+            "Claude · hidden@example.com"
+        );
+        assert_eq!(
+            service.load("settings").unwrap().unwrap()["enabledProviders"],
+            serde_json::json!(["codex@retained"])
+        );
+    }
+
+    #[test]
     fn a_cli_card_hidden_before_the_first_settings_file_stays_hidden() {
         assert_hidden_cli_survives_restart(false);
     }

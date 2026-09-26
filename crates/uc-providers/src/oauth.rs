@@ -512,13 +512,7 @@ impl OAuthManager {
             }
             email_label(&profile["account"]["email"])
         } else {
-            tokens["id_token"]
-                .as_str()
-                .and_then(jwt_claims)
-                .and_then(|claims| {
-                    email_label(&claims["email"])
-                        .or_else(|| email_label(&claims["https://api.openai.com/profile"]["email"]))
-                })
+            codex_email_label(&tokens)
         };
         let key = identity(flow.kind, &document)?;
         let label = if flow.label.trim().is_empty() || flow.label.trim() == flow.kind.cli() {
@@ -561,7 +555,17 @@ impl OAuthManager {
     }
 }
 
-fn email_label(value: &Value) -> Option<String> {
+pub(crate) fn codex_email_label(tokens: &Value) -> Option<String> {
+    tokens["id_token"]
+        .as_str()
+        .and_then(jwt_claims)
+        .and_then(|claims| {
+            email_label(&claims["email"])
+                .or_else(|| email_label(&claims["https://api.openai.com/profile"]["email"]))
+        })
+}
+
+pub(crate) fn email_label(value: &Value) -> Option<String> {
     let raw = value.as_str()?;
     if raw.chars().any(char::is_control) {
         return None;

@@ -227,6 +227,10 @@ pub fn run() -> anyhow::Result<()> {
             }));
             app.state::<BackendService>().start(app.handle());
             app.state::<updates::Updates>().start(app.handle());
+            let label_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                account_commands::backfill_account_labels(&label_app).await;
+            });
             let cli_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let mut ticks = tokio::time::interval(CLI_LOGIN_CHECK);
