@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { setBackend } from "@/lib/backend";
+import { localDay } from "@/lib/days";
 import { MockBackend } from "@/lib/mockBackend";
 import { updateSettings, useApp } from "@/state/store";
 import { App } from "./App";
@@ -83,7 +84,8 @@ describe("popup", () => {
     expect(screen.getByRole("radio", { name: "Hôm nay" })).toBeInTheDocument();
     for (const name of ["Claude", "Codex"]) {
       const source = screen.getByRole("region", { name });
-      for (const row of ["Xu hướng sử dụng", "Hôm nay", "Hôm qua", "30 ngày qua"]) expect(within(source).getByText(row)).toBeInTheDocument();
+      for (const row of ["Xu hướng sử dụng", "Hôm nay", "30 ngày qua"]) expect(within(source).getByText(row)).toBeInTheDocument();
+      expect(within(source).queryByText("Hôm qua")).not.toBeInTheDocument();
       expect(within(source).queryByText("Token đầu vào")).not.toBeInTheDocument();
     }
     expect(screen.queryByRole("region", { name: "Claude · Công ty" })).not.toBeInTheDocument();
@@ -116,17 +118,70 @@ describe("popup", () => {
     expect(screen.getByRole("tab", { name: "Token" })).toHaveFocus();
     fireEvent.keyDown(window, { key: "Tab", ctrlKey: true, shiftKey: true });
     expect(screen.getByRole("tab", { name: "Hạn mức" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Hạn mức" }), { key: "End" });
+    expect(screen.getByRole("tab", { name: "Bảng giá" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(window, { key: "Tab", ctrlKey: true });
+    expect(screen.getByRole("tab", { name: "Hạn mức" })).toHaveAttribute("aria-selected", "true");
   });
 
-  it("drops the tab bar and shows the limits while the Token tab is turned off", async () => {
+  it("walks the Token views: context windows, a past day, the charts and the projects", async () => {
+    await renderApp();
+    fireEvent.click(screen.getByRole("tab", { name: "Token" }));
+    expect(screen.getByRole("radio", { name: "Tổng quan" })).toHaveAttribute("aria-checked", "true");
+    expect(await screen.findByText("478,3 N / 1 Tr")).toBeInTheDocument();
+    expect(screen.getByText("(48%)")).toBeInTheDocument();
+    expect(screen.getByText("(85%)")).toHaveClass("is-warning");
+    expect(screen.getByText("Theo năm")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Lịch sử" }));
+    const today = localDay();
+    const title = `Tháng ${Number(today.slice(5, 7))}, ${today.slice(0, 4)}`;
+    expect(await screen.findByRole("heading", { name: title })).toBeInTheDocument();
+    expect(await screen.findByText("Cả tháng")).toBeInTheDocument();
+    fireEvent.click(document.querySelector<HTMLButtonElement>(".uc-history-day")!);
+    for (const heading of ["Theo nguồn", "Theo model", "Theo project"]) expect(await screen.findByText(heading)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: `Quay lại ${title}` }));
+    expect(await screen.findByText("Cả tháng")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Biểu đồ" }));
+    expect(await screen.findByRole("heading", { name: "30 ngày gần nhất" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: "Model" }));
+    expect(await screen.findByRole("heading", { name: "Xếp hạng model" })).toBeInTheDocument();
+    expect((await screen.findAllByText("gpt-5.6-sol")).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getAllByRole("radio", { name: "Project" })[0]!);
+    expect(await screen.findByText("PCC4SH")).toBeInTheDocument();
+    expect(screen.getByText("Không rõ project")).toBeInTheDocument();
+    expect(useApp.getState().settings.tokenView).toBe("projects");
+  });
+
+  it("shows the official price tables in đồng, then OpenAI's and in dollars", async () => {
+    await renderApp();
+    fireEvent.click(screen.getByRole("tab", { name: "Bảng giá" }));
+    const [base, caching] = screen.getAllByRole("table");
+    expect(within(base!).getByRole("columnheader", { name: "Đầu vào" })).toBeInTheDocument();
+    expect(within(caching!).getByRole("columnheader", { name: "Ghi 1 giờ" })).toBeInTheDocument();
+    const opus = within(base!).getByRole("rowheader", { name: "Claude Opus 5.5" }).closest("tr")!;
+    expect(within(opus).getByText("104.680")).toBeInTheDocument();
+    expect(screen.getByText(/Vietcombank: 26\.170/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: "$" }));
+    const dollars = within(screen.getAllByRole("table")[0]!).getByRole("rowheader", { name: "Claude Opus 5.5" }).closest("tr")!;
+    expect(within(dollars).getByText("20")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: "OpenAI" }));
+    expect(screen.getAllByText("Ngữ cảnh dài").length).toBeGreaterThan(0);
+    expect(screen.getByRole("radio", { name: "Flex" })).toBeInTheDocument();
+    expect(useApp.getState().settings).toMatchObject({ priceProvider: "openai", priceCurrency: "usd" });
+  });
+
+  it("drops only the Token tab and shows the limits while it is turned off", async () => {
     await renderApp();
     fireEvent.click(screen.getByRole("tab", { name: "Token" }));
     act(() => updateSettings({ showTotalSpend: false }));
-    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Token" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Hạn mức" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Bảng giá" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Claude · Công ty" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Chỉ số tổng chi tiêu/ })).not.toBeInTheDocument();
-    fireEvent.keyDown(window, { key: "Tab", ctrlKey: true });
-    expect(screen.getByRole("region", { name: "Claude · Công ty" })).toBeInTheDocument();
     act(() => updateSettings({ showTotalSpend: true }));
     expect(screen.getByRole("tab", { name: "Token" })).toHaveAttribute("aria-selected", "true");
   });
@@ -145,7 +200,7 @@ describe("popup", () => {
 
   it("turns the token sources back on together with the Token tab setting", async () => {
     const api = await renderApp({ settings: (ids) => ({ showTotalSpend: false, enabledProviders: ids.filter((id) => !id.endsWith("-local")) }) });
-    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Token" })).not.toBeInTheDocument();
     expect(useApp.getState().enabledProviders).not.toContain("claude-local");
     act(() => updateSettings({ showTotalSpend: true }));
     expect(screen.getByRole("tab", { name: "Token" })).toBeInTheDocument();

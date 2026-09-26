@@ -3,7 +3,7 @@
  * name, plan and refresh state, then a card of metric rows. On Demand metrics sit behind the caret
  * together with the provider's links. Right-click on the header or a row opens its context menu.
  */
-import { useMemo } from "react";
+import { useMemo, type CSSProperties } from "react";
 import { messagesFor, translate, type Messages } from "@/i18n";
 import { backend } from "@/lib/backend";
 import type { AccountProvider, ProviderRuntimeState, WidgetDescriptor } from "@/lib/types";
@@ -19,6 +19,7 @@ import {
   type ProviderMetrics,
 } from "@/model/layout";
 import { accountEmailOf, accountLabelOf, brandName, headerNotice, providerBrand, providerTitle, stalenessHint } from "@/model/providerText";
+import { knownBrandColor } from "@/model/totalSpend";
 import { condensedTextRowOffsets, widgetDataFor, type DisplayOptions, type WidgetData } from "@/model/widgetData";
 import { navigate, openChatFor, refresh, setProviderEnabled, showNotice, updateLayout, useApp } from "@/state/store";
 import { ChevronDown, ChevronUp, ExternalIcon, Spinner, WarningTriangle } from "../ui/icons";
@@ -87,6 +88,7 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
   const plan = isLocalHistoryCard(providerId) ? undefined : runtime?.snapshot?.plan;
   const chat = chatTarget(group);
   const tokenSource = isLocalHistoryCard(providerId);
+  const seriesColor = tokenSource ? knownBrandColor(providerBrand(group.provider), false) : null;
   const refreshEntry: MenuEntry = { kind: "item", label: messages.dashboard.refreshProvider(title), onSelect: () => refresh(providerId) };
   const customizeEntry: MenuEntry = { kind: "item", label: messages.dashboard.customizeEllipsis, onSelect: () => navigate("customize", providerId) };
 
@@ -143,7 +145,7 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
   );
 
   return (
-    <section className="uc-section" aria-label={title}>
+    <section className="uc-section" aria-label={title} style={seriesColor ? ({ "--uc-series-color": seriesColor } as CSSProperties) : undefined}>
       <header
         className="uc-section-head"
         onContextMenu={(event) => {

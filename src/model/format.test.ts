@@ -7,6 +7,7 @@ import {
   formatValue,
   resetAbsoluteLabel,
   restoreLabel,
+  setDongRate,
   shortTime,
   totalSpendRingCenter,
   type TotalSpendMetric,
@@ -192,5 +193,20 @@ describe("Formatters", () => {
     expect(resetAbsoluteLabel(at, now, "24h", "en")).toBe("Resets today at 18:38");
     expect(plainSpaces(shortTime(at, "12h", "vi"))).toBe("6:38 CH");
     expect(shortTime(at, "24h", "vi")).toBe("18:38");
+  });
+});
+
+describe("money on the Vietnamese UI", () => {
+  afterEach(() => setDongRate(null));
+
+  it("shows đồng at the known rate and keeps dollars in English or without a rate", () => {
+    expect(plainSpaces(formatNumber(12.5, "dollars", "row", "vi"))).toBe("12,50 $");
+    setDongRate(26_170);
+    expect(plainSpaces(formatNumber(12.5, "dollars", "row", "vi"))).toBe("327,1 N ₫");
+    expect(plainSpaces(formatNumber(12.5, "dollars", "full", "vi"))).toBe("327.125 ₫");
+    expect(plainSpaces(formatNumber(0.01, "dollars", "row", "vi"))).toBe("262 ₫");
+    expect(formatNumber(12.5, "dollars", "row", "en")).toBe("$12.50");
+    setDongRate(Number.NaN);
+    expect(plainSpaces(formatNumber(12.5, "dollars", "row", "vi"))).toBe("12,50 $");
   });
 });

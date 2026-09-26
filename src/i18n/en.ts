@@ -1,5 +1,6 @@
 /** English catalog: the upstream OpenUsage copy, adapted for Windows and Linux. */
 import type { Messages, RestoreDay, When } from "./messages";
+import { pricesEn, usageEn } from "./usageEn";
 
 function when(value: When): string {
   switch (value.kind) {
@@ -117,7 +118,7 @@ export const en: Messages = {
     noAccountsShort: "No accounts yet",
     addAccount: "Add Account",
     tabsLabel: "Dashboard view",
-    tab: (key) => ({ quota: "Limits", tokens: "Tokens" })[key],
+    tab: (key) => ({ quota: "Limits", tokens: "Tokens", prices: "Prices" })[key],
     openChat: (product) => `Open ${product} in the App`,
     trendRange: (days, first, last) => `${days} days, ${first} – ${last}`,
     expiryStatus: (severity) =>
@@ -132,7 +133,7 @@ export const en: Messages = {
     metric: (key) => ({ cost: "Cost", costPerMtok: "Cost/MTok", tokens: "Tokens" })[key],
     metricMenuLabel: "Total Spend Metric",
     periodLabel: "Period",
-    period: (key) => ({ today: "Today", yesterday: "Yesterday", last30: "30 Days" })[key],
+    period: (key) => ({ today: "Today", last30: "30 Days", last365: "1 Year", all: "All" })[key],
     empty: (key) =>
       ({
         cost: "No cost data for this period",
@@ -147,6 +148,8 @@ export const en: Messages = {
     totalTokensAria: (value, count) => `Total tokens ${value} across ${count} providers`,
     blendedRateAria: (value, count) => `Blended cost per megatoken ${value} across ${count} providers`,
   },
+  usage: usageEn,
+  prices: pricesEn,
   chrome: {
     appName: "Quota Control",
     identity: (name, version) => `${name} ${version}`,

@@ -234,6 +234,69 @@ export function ExternalIcon(props: IconProps) {
   );
 }
 
+export function GaugeIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M2.6 11.6a5.6 5.6 0 1 1 10.8 0" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M8 10.2l2.6-3.4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <circle cx="8" cy="10.4" r="1.1" fill="currentColor" />
+    </Svg>
+  );
+}
+
+export function ClockIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="8" cy="8" r="6.1" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M8 4.6V8l2.3 1.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
+export function BarChartIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M3.2 13.2V8.6M6.4 13.2V3.6M9.6 13.2V6.6M12.8 13.2V10" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+    </Svg>
+  );
+}
+
+export function FolderIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M2 4.6a1 1 0 0 1 1-1h3.1l1.4 1.5H13a1 1 0 0 1 1 1v6.2a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
+export function WindowIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="2" y="2.8" width="12" height="10.4" rx="1.6" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M2.4 5.8h11.2" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M4.6 9.4h4.2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </Svg>
+  );
+}
+
+export function CalendarIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="2.2" y="3.2" width="11.6" height="10.4" rx="1.6" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M2.6 6.6h10.8M5.4 1.9v2.4M10.6 1.9v2.4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </Svg>
+  );
+}
+
+export function TagIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M8.6 2.2H13a.8.8 0 0 1 .8.8v4.4a.8.8 0 0 1-.23.57l-6 6a.8.8 0 0 1-1.14 0L2.03 9.56a.8.8 0 0 1 0-1.14l6-6A.8.8 0 0 1 8.6 2.2z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <circle cx="10.9" cy="5.1" r="1.1" fill="currentColor" />
+    </Svg>
+  );
+}
+
 export function Spinner({ size = 11 }: { size?: number }) {
   return (
     <svg className="uc-spinner" width={size} height={size} viewBox="0 0 16 16" aria-hidden="true">

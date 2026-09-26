@@ -1,0 +1,726 @@
+/*
+ * The Token views and the price list: tinted capsule segments, icon chips on section headers, stacked
+ * columns, ranked bars, context window bars and price lines. Chart hues come from `palette.ts`; the
+ * surfaces reuse the card and label tokens so both appearances work.
+ */
+
+.uc-capsule-picker.is-fit .uc-capsule-segment {
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+.uc-capsule-picker.is-stacked {
+  border-radius: 12px;
+}
+
+.uc-capsule-picker.is-stacked .uc-capsule-segment {
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 2px 4px;
+  border-radius: 9px;
+  font-size: 10.5px;
+}
+
+.uc-capsule-picker.is-small {
+  flex: none;
+  padding: 2px;
+}
+
+.uc-capsule-picker.is-small .uc-capsule-segment {
+  flex: 0 1 auto;
+  padding: 2px 8px;
+  font-size: 10.5px;
+}
+
+.uc-ring-content.is-usage {
+  gap: 14px;
+}
+
+.uc-ring-content.is-usage .uc-ring {
+  width: 92px;
+  height: 92px;
+}
+
+.uc-ring-content.is-usage .uc-ring-center {
+  inset: 20px;
+}
+
+.uc-ring-content.is-usage .uc-legend-value {
+  font-size: 11px;
+}
+
+.uc-capsule-segment {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.uc-segment-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--uc-segment-accent, currentColor);
+  opacity: 0.75;
+}
+
+.uc-capsule-segment.is-tinted.is-selected {
+  background: color-mix(in srgb, var(--uc-segment-accent) 16%, var(--uc-control));
+  color: color-mix(in srgb, var(--uc-segment-accent) 70%, var(--uc-label));
+  box-shadow:
+    inset 0 0 0 0.5px color-mix(in srgb, var(--uc-segment-accent) 45%, transparent),
+    0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.uc-capsule-segment.is-selected .uc-segment-icon {
+  opacity: 1;
+}
+
+.uc-section-header.is-chip {
+  gap: 7px;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+.uc-chip-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  color: #ffffff;
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+}
+
+.uc-chip-title {
+  flex: 1 1 auto;
+  margin: 0;
+  font-size: var(--uc-header-size);
+  font-weight: 600;
+}
+
+.uc-usage-note {
+  margin: 0;
+  padding: 10px 4px;
+  font-size: var(--uc-support-size);
+  line-height: 1.4;
+  text-align: center;
+  color: var(--uc-secondary);
+}
+
+.uc-usage-note.is-left {
+  padding: 2px 4px 0;
+  font-size: 10.5px;
+  text-align: left;
+}
+
+.uc-spend-by {
+  font-weight: 500;
+  color: var(--uc-secondary);
+}
+
+.uc-link-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--uc-accent);
+}
+
+.uc-link-button:hover {
+  background: color-mix(in srgb, var(--uc-accent) 10%, transparent);
+}
+
+.uc-link-button.is-block {
+  align-self: center;
+  justify-content: center;
+}
+
+.uc-subheading {
+  margin: 4px 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--uc-secondary);
+}
+
+/* Stacked columns (Biểu đồ: days, months, years). */
+
+.uc-chart-card,
+.uc-history-card,
+.uc-years-card,
+.uc-ctx-card,
+.uc-price-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px var(--uc-pad-x);
+}
+
+.uc-columns {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.uc-columns-peak {
+  font-size: 10px;
+  color: var(--uc-tertiary);
+}
+
+.uc-columns-plot {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 118px;
+  border-bottom: 1px solid var(--uc-separator);
+}
+
+.uc-columns-grid {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed var(--uc-quaternary);
+  pointer-events: none;
+}
+
+.uc-columns-grid.is-top {
+  top: 0;
+}
+
+.uc-columns-grid.is-middle {
+  top: 50%;
+}
+
+.uc-column {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  align-items: flex-end;
+  min-width: 0;
+  height: 100%;
+  border-radius: 3px;
+  transition: background 120ms ease-out;
+}
+
+.uc-column:hover {
+  background: var(--uc-quinary);
+}
+
+.uc-column-stack {
+  display: flex;
+  flex-direction: column-reverse;
+  width: 100%;
+  min-height: 2px;
+  overflow: hidden;
+  border-radius: 3px 3px 1px 1px;
+  opacity: 0.88;
+}
+
+.uc-column.is-current .uc-column-stack,
+.uc-column:hover .uc-column-stack {
+  opacity: 1;
+}
+
+.uc-column-part {
+  flex-basis: 0;
+  min-height: 1px;
+}
+
+.uc-columns-axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--uc-secondary);
+}
+
+.uc-source-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 14px;
+  font-size: 11px;
+}
+
+.uc-source-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* Ranked bars (models, projects, a day's split). */
+
+.uc-ranked {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.uc-ranked-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.uc-ranked-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--uc-support-size);
+}
+
+.uc-ranked-label {
+  flex: 1 1 auto;
+}
+
+.uc-ranked-value {
+  flex: none;
+  font-weight: 600;
+}
+
+.uc-ranked-track,
+.uc-split-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--uc-quinary);
+}
+
+.uc-ranked-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+
+.uc-ranked-detail {
+  font-size: 10.5px;
+  color: var(--uc-secondary);
+}
+
+.uc-split-fill {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 999px;
+}
+
+.uc-split-fill > span {
+  flex-basis: 0;
+  height: 100%;
+}
+
+/* Years and the all-time total. */
+
+.uc-years-total {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, color-mix(in srgb, #ff375f 12%, transparent), color-mix(in srgb, #bf5af2 12%, transparent));
+}
+
+.uc-years-caption {
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.uc-years-figure {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.uc-years-cost {
+  margin-bottom: 4px;
+  font-size: var(--uc-support-size);
+  font-weight: 600;
+  color: var(--uc-secondary);
+}
+
+.uc-years-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.uc-years-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.uc-years-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--uc-support-size);
+}
+
+.uc-years-label.is-current {
+  font-weight: 600;
+}
+
+.uc-years-value {
+  font-weight: 600;
+}
+
+/* Lịch sử. */
+
+.uc-month-nav {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.uc-history-total {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 8px;
+  padding-bottom: 8px;
+  border-bottom: 0.5px solid var(--uc-separator);
+  font-size: var(--uc-support-size);
+  font-weight: 600;
+}
+
+.uc-history-days {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 -6px;
+  padding: 0;
+  list-style: none;
+}
+
+.uc-history-day {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 5px 6px;
+  border-radius: 7px;
+  text-align: left;
+}
+
+.uc-history-day:hover {
+  background: var(--uc-card-hover);
+}
+
+.uc-history-day-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--uc-support-size);
+}
+
+.uc-history-day-head svg {
+  color: var(--uc-tertiary);
+}
+
+.uc-history-day-label {
+  flex: 1 1 auto;
+  font-weight: 500;
+}
+
+.uc-history-day-value {
+  font-weight: 600;
+}
+
+/* Cửa sổ ngữ cảnh. */
+
+.uc-ctx-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.uc-ctx-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.uc-ctx-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--uc-label-size);
+}
+
+.uc-ctx-project {
+  flex: 1 1 auto;
+  font-weight: 600;
+}
+
+.uc-ctx-when,
+.uc-ctx-meta {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--uc-secondary);
+}
+
+.uc-ctx-usage {
+  margin-top: 2px;
+  font-size: var(--uc-support-size);
+  font-weight: 500;
+}
+
+.uc-ctx-percent {
+  font-weight: 700;
+  color: var(--uc-secondary);
+}
+
+.uc-ctx-percent.is-warning {
+  color: var(--uc-notice-text);
+}
+
+.uc-ctx-percent.is-critical {
+  color: var(--uc-red);
+}
+
+.uc-ctx-bar {
+  display: flex;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--uc-quaternary);
+}
+
+.uc-ctx-bar > span {
+  height: 100%;
+}
+
+.uc-ctx-bar > span + span {
+  box-shadow: inset 1px 0 0 var(--uc-card);
+}
+
+.uc-ctx-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding-top: 8px;
+  border-top: 0.5px solid var(--uc-separator);
+  font-size: 10.5px;
+  color: var(--uc-secondary);
+}
+
+.uc-ctx-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.uc-legend-dot.is-free {
+  background: var(--uc-quaternary);
+  box-shadow: inset 0 0 0 1px var(--uc-separator);
+}
+
+/* Bảng giá. */
+
+.uc-price-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.uc-price-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.uc-price-card {
+  gap: 14px;
+  padding: 10px 8px 12px;
+}
+
+.uc-price-table-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.uc-price-caption {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+  font-size: 11px;
+  font-weight: 700;
+  color: color-mix(in srgb, var(--uc-price-accent, var(--uc-accent)) 70%, var(--uc-label));
+}
+
+.uc-price-caption::before {
+  content: "";
+  flex: none;
+  width: 3px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--uc-price-accent, var(--uc-accent));
+}
+
+.uc-price-scroll {
+  overflow-x: auto;
+}
+
+.uc-price-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 10.5px;
+  line-height: 1.3;
+}
+
+.uc-price-table th,
+.uc-price-table td {
+  padding: 5px 3px;
+  vertical-align: top;
+}
+
+.uc-price-table th:first-child,
+.uc-price-table td:first-child {
+  padding-left: 6px;
+}
+
+.uc-price-table th:last-child,
+.uc-price-table td:last-child {
+  padding-right: 6px;
+}
+
+.uc-price-table thead th {
+  font-size: 10px;
+  font-weight: 600;
+  text-align: right;
+  vertical-align: bottom;
+  color: var(--uc-secondary);
+  background: color-mix(in srgb, var(--uc-price-accent, var(--uc-accent)) 14%, transparent);
+}
+
+.uc-price-table thead th:first-child {
+  border-radius: 7px 0 0 7px;
+}
+
+.uc-price-table thead th:last-child {
+  border-radius: 0 7px 7px 0;
+}
+
+.uc-price-table thead th.is-label {
+  text-align: left;
+}
+
+.uc-price-table thead th.is-price::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 4px;
+  border-radius: 50%;
+  vertical-align: 1px;
+  background: var(--uc-price-tone);
+}
+
+.uc-price-table th.is-input {
+  --uc-price-tone: #0a84ff;
+}
+
+.uc-price-table th.is-output {
+  --uc-price-tone: #ff9f0a;
+}
+
+.uc-price-table th.is-cacheRead {
+  --uc-price-tone: #30d158;
+}
+
+.uc-price-table th.is-cacheWrite {
+  --uc-price-tone: #bf5af2;
+}
+
+.uc-price-table th.is-other {
+  --uc-price-tone: #ff375f;
+}
+
+.uc-price-table tbody th,
+.uc-price-table tbody td {
+  border-bottom: 0.5px solid var(--uc-separator);
+}
+
+.uc-price-table tbody tr.is-shaded > * {
+  background: var(--uc-quinary);
+}
+
+.uc-price-table tbody tr:not(.is-heading):hover > * {
+  background: color-mix(in srgb, var(--uc-price-accent, var(--uc-accent)) 9%, transparent);
+}
+
+.uc-price-table tbody th {
+  text-align: left;
+}
+
+.uc-price-table tbody th.is-name {
+  min-width: 64px;
+  font-size: 11px;
+  font-weight: 600;
+  overflow-wrap: break-word;
+}
+
+.uc-price-table tbody th.is-label {
+  font-weight: 500;
+  color: var(--uc-secondary);
+}
+
+.uc-price-table td.is-number {
+  font-size: 10px;
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.uc-price-table td.is-text {
+  font-size: 10px;
+  color: var(--uc-label);
+  overflow-wrap: anywhere;
+}
+
+.uc-price-table td.is-missing {
+  text-align: center;
+  font-weight: 400;
+  color: var(--uc-tertiary);
+}
+
+.uc-price-table tr.is-heading td {
+  padding: 9px 5px 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--uc-secondary);
+}
+
+.uc-price-tag {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--uc-notice-text);
+  background: color-mix(in srgb, var(--uc-orange) 14%, transparent);
+}

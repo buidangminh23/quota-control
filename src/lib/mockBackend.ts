@@ -19,6 +19,12 @@ import type {
   UpdateStatus,
 } from "./types";
 import { accountDescriptors, accountProvider, fixtureAccounts, fixtureCatalog, fixtureEngineState } from "./fixtures";
+import { localDay } from "./days";
+import { sampleLedger, summarizeUsage } from "./ledgerFixtures";
+import type { ContextWindowSession, ExchangeRate, UsageGroupRow, UsageLedgerInfo, UsageQuery } from "./types";
+
+/** Vietcombank's USD selling rate on 26/09/2026 16:07, as the core would report it. */
+const SAMPLE_RATE: ExchangeRate = { usdToVnd: 26_170, publishedAt: "2026-09-26T16:07:07+07:00", fetchedAt: "2026-09-26T16:10:00+07:00", stale: false };
 
 const REFRESH_DELAY_MS = 600;
 const LOGIN_EXPIRY_SECONDS = 600;
@@ -327,5 +333,40 @@ export class MockBackend implements Backend {
     mutate(next);
     this.state = next;
     for (const listener of this.engineListeners) listener(next);
+  }
+
+  private readonly ledger = sampleLedger(localDay());
+  private readonly ledgerListeners = new Set<(info: UsageLedgerInfo) => void>();
+  /** Test hook: the rate `exchangeRate` returns; `null` means none was ever fetched. */
+  rate: ExchangeRate | null = SAMPLE_RATE;
+
+  async usageSummary(query: UsageQuery): Promise<UsageGroupRow[]> {
+    return summarizeUsage(this.ledger, query, localDay());
+  }
+
+  async usageLedgerInfo(): Promise<UsageLedgerInfo> {
+    return { firstDay: this.ledger[0]?.day ?? null, updatedAt: new Date().toISOString(), importing: false };
+  }
+
+  onUsageLedgerChanged(listener: (info: UsageLedgerInfo) => void): Unsubscribe {
+    this.ledgerListeners.add(listener);
+    return () => this.ledgerListeners.delete(listener);
+  }
+
+  async exchangeRate(): Promise<ExchangeRate | null> {
+    return this.rate ? { ...this.rate } : null;
+  }
+
+  /** Test hook: the sessions `contextWindows` returns, minutes ago rather than times. */
+  contextSessions: Array<Omit<ContextWindowSession, "updatedAt"> & { minutesAgo: number }> = [
+    { source: "claude", sessionId: "816e6926", project: "quota-control", model: "claude-opus-5-5", usedTokens: 478_300, windowTokens: 1_000_000, baseTokens: 96_400, lastTurnTokens: 18_900, minutesAgo: 0.5 },
+    { source: "codex", sessionId: "01a0dbfe", project: "quota-control", model: "gpt-6-astra", usedTokens: 231_000, windowTokens: 272_000, baseTokens: 21_500, lastTurnTokens: 6_200, minutesAgo: 3 },
+    { source: "claude", sessionId: "5f45e942", project: "PCC4SH", model: "claude-opus-5", usedTokens: 152_000, windowTokens: 1_000_000, baseTokens: 88_000, lastTurnTokens: 4_100, minutesAgo: 26 },
+    { source: "codex", sessionId: "01a0d95e", project: "bot-tele", model: "gpt-5.6-sol", usedTokens: 58_000, windowTokens: 400_000, baseTokens: 19_000, lastTurnTokens: 2_300, minutesAgo: 130 },
+  ];
+
+  async contextWindows(): Promise<ContextWindowSession[]> {
+    const now = Date.now();
+    return this.contextSessions.map(({ minutesAgo, ...session }) => ({ ...session, updatedAt: new Date(now - minutesAgo * 60_000).toISOString() }));
   }
 }

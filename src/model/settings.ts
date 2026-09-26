@@ -17,10 +17,29 @@ export type DensitySetting = "regular" | "compact";
 export type IconStyle = "text" | "bars";
 /** The Taskbar picker: the starred numbers as a strip, the bars glyph in the tray icon, or only the app icon. */
 export type TaskbarDisplay = IconStyle | "icon";
-export type TotalSpendPeriod = "today" | "yesterday" | "last30";
-/** The dashboard's tabs, left to right: account limits, then the total token use. */
-export type DashboardTab = "quota" | "tokens";
-export const DASHBOARD_TABS: readonly DashboardTab[] = ["quota", "tokens"];
+/** A span of the usage history, ending today: one day, 30 days, 365 days or everything recorded. */
+export type TotalSpendPeriod = "today" | "last30" | "last365" | "all";
+export const TOTAL_SPEND_PERIODS: readonly TotalSpendPeriod[] = ["today", "last30", "last365", "all"];
+/** The dashboard's tabs, left to right: account limits, the token use, then the official price list. */
+export type DashboardTab = "quota" | "tokens" | "prices";
+export const DASHBOARD_TABS: readonly DashboardTab[] = ["quota", "tokens", "prices"];
+/** The Token tab's views, left to right. */
+export type TokenView = "overview" | "history" | "charts" | "projects";
+export const TOKEN_VIEWS: readonly TokenView[] = ["overview", "history", "charts", "projects"];
+/** What the Biểu đồ view compares: time buckets (stacked by source) or a ranking of models or projects. */
+export type TokenChart = "day" | "month" | "year" | "model" | "project";
+export const TOKEN_CHARTS: readonly TokenChart[] = ["day", "month", "year", "model", "project"];
+export type TokenChartMetric = "tokens" | "cost";
+export const TOKEN_CHART_METRICS: readonly TokenChartMetric[] = ["tokens", "cost"];
+/** How the Token ring splits the total. */
+export type TokenRingBy = "source" | "model" | "project";
+export const TOKEN_RING_BYS: readonly TokenRingBy[] = ["source", "model", "project"];
+export type PriceProvider = "claude" | "openai";
+export const PRICE_PROVIDERS: readonly PriceProvider[] = ["claude", "openai"];
+/** Processing tiers on the official price pages; each provider lists only some of them. */
+export type PriceTier = "standard" | "batch" | "flex" | "fast";
+export const PRICE_TIERS: readonly PriceTier[] = ["standard", "batch", "flex", "fast"];
+export type PriceCurrency = "vnd" | "usd";
 
 export interface NotificationSettings {
   /** A metric crosses under 10% remaining. */
@@ -45,6 +64,17 @@ export interface AppSettings {
   dashboardTab: DashboardTab;
   totalSpendPeriod: TotalSpendPeriod;
   totalSpendMetric: TotalSpendMetric;
+  tokenView: TokenView;
+  tokenRingBy: TokenRingBy;
+  tokenChart: TokenChart;
+  tokenChartMetric: TokenChartMetric;
+  /** The span the model and project charts rank over. */
+  tokenChartPeriod: TotalSpendPeriod;
+  projectPeriod: TotalSpendPeriod;
+  priceProvider: PriceProvider;
+  priceTier: PriceTier;
+  /** Prices in đồng (Vietnamese only, at the Vietcombank rate) or as published in dollars. */
+  priceCurrency: PriceCurrency;
   displayMode: DisplayMode;
   resetDisplayMode: ResetDisplayMode;
   alwaysShowPacing: boolean;
@@ -68,6 +98,15 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dashboardTab: "quota",
   totalSpendPeriod: "today",
   totalSpendMetric: "tokens",
+  tokenView: "overview",
+  tokenRingBy: "model",
+  tokenChart: "day",
+  tokenChartMetric: "tokens",
+  tokenChartPeriod: "last30",
+  projectPeriod: "last30",
+  priceProvider: "claude",
+  priceTier: "standard",
+  priceCurrency: "vnd",
   displayMode: "remaining",
   resetDisplayMode: "relative",
   alwaysShowPacing: false,
@@ -107,8 +146,17 @@ export function parseSettings(raw: unknown): AppSettings {
     showTaskbarStrip: flag(stored.showTaskbarStrip, defaults.showTaskbarStrip),
     showTotalSpend: flag(stored.showTotalSpend, defaults.showTotalSpend),
     dashboardTab: oneOf(stored.dashboardTab, DASHBOARD_TABS, defaults.dashboardTab),
-    totalSpendPeriod: oneOf(stored.totalSpendPeriod, ["today", "yesterday", "last30"], defaults.totalSpendPeriod),
+    totalSpendPeriod: oneOf(stored.totalSpendPeriod, TOTAL_SPEND_PERIODS, defaults.totalSpendPeriod),
     totalSpendMetric: oneOf(stored.totalSpendMetric, ["cost", "costPerMtok", "tokens"], defaults.totalSpendMetric),
+    tokenView: oneOf(stored.tokenView, TOKEN_VIEWS, defaults.tokenView),
+    tokenRingBy: oneOf(stored.tokenRingBy, TOKEN_RING_BYS, defaults.tokenRingBy),
+    tokenChart: oneOf(stored.tokenChart, TOKEN_CHARTS, defaults.tokenChart),
+    tokenChartMetric: oneOf(stored.tokenChartMetric, TOKEN_CHART_METRICS, defaults.tokenChartMetric),
+    tokenChartPeriod: oneOf(stored.tokenChartPeriod, TOTAL_SPEND_PERIODS, defaults.tokenChartPeriod),
+    projectPeriod: oneOf(stored.projectPeriod, TOTAL_SPEND_PERIODS, defaults.projectPeriod),
+    priceProvider: oneOf(stored.priceProvider, PRICE_PROVIDERS, defaults.priceProvider),
+    priceTier: oneOf(stored.priceTier, PRICE_TIERS, defaults.priceTier),
+    priceCurrency: oneOf(stored.priceCurrency, ["vnd", "usd"], defaults.priceCurrency),
     displayMode: oneOf(stored.displayMode, ["used", "remaining"], defaults.displayMode),
     resetDisplayMode: oneOf(stored.resetDisplayMode, ["relative", "absolute"], defaults.resetDisplayMode),
     alwaysShowPacing: flag(stored.alwaysShowPacing, defaults.alwaysShowPacing),

@@ -5,7 +5,7 @@
  */
 import { messagesFor, translate, type Language } from "@/i18n";
 import type { DeadlineVerb, RestoreDay, When } from "@/i18n/messages";
-import { compact, compactDollars, decimal, dollars, localeOf } from "@/i18n/numbers";
+import { compact, compactDollars, compactDong, decimal, dollars, dong, localeOf } from "@/i18n/numbers";
 import type { MetricKind, MetricValue } from "@/lib/types";
 import { roundHalfAwayFromZero } from "./decimal";
 
@@ -23,9 +23,27 @@ export function clampPercent(value: number): number {
   return Math.min(Math.max(value, 0), 100);
 }
 
-/** USD with a fixed number of fractional digits, e.g. `$2,059.07` / `2.059,07 $`. */
+let dongRate: number | null = null;
+
+/**
+ * The USD→VND rate money shows at on the Vietnamese UI (the core's Vietcombank selling rate), or `null`
+ * to keep dollars. The store sets it whenever the rate changes.
+ */
+export function setDongRate(usdToVnd: number | null): void {
+  dongRate = usdToVnd !== null && Number.isFinite(usdToVnd) && usdToVnd > 0 ? usdToVnd : null;
+}
+
+/** A dollar amount in đồng on the Vietnamese UI when a rate is known, else `null`. */
+function inDong(usd: number, style: FormatStyle, language: Language): string | null {
+  if (language !== "vi" || dongRate === null) return null;
+  const amount = usd * dongRate;
+  if (style === "full") return dong(language, amount, 0);
+  return style === "tray" || Math.abs(amount) >= 1000 ? compactDong(language, amount) : dong(language, amount, 0);
+}
+
+/** USD with a fixed number of fractional digits, e.g. `$2,059.07` / `2.059,07 $` (đồng on the Vietnamese UI). */
 export function currency(amount: number, fractionDigits: number, language: Language): string {
-  return dollars(language, amount, fractionDigits);
+  return inDong(amount, "row", language) ?? dollars(language, amount, fractionDigits);
 }
 
 /** A bare number in the given kind and style (no unit label). */
@@ -33,9 +51,12 @@ export function formatNumber(value: number, kind: MetricKind, style: FormatStyle
   switch (kind) {
     case "percent":
       return `${roundHalfAwayFromZero(clampPercent(value))}%`;
-    case "dollars":
+    case "dollars": {
+      const local = inDong(value, style, language);
+      if (local !== null) return local;
       if (Math.abs(value) >= 1000 && style !== "full") return compactDollars(language, value);
       return dollars(language, value, style === "tray" ? 0 : 2);
+    }
     case "count":
       if (style !== "full" && Math.abs(value) >= 1000) return compact(language, value);
       return decimal(language, value, 0, 1);

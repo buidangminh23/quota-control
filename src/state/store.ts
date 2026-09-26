@@ -13,12 +13,15 @@ import type {
   ChatSession,
   ConnectedAccount,
   EngineState,
+  ExchangeRate,
   LoginBrowser,
   PopoverScreen,
   ProviderEntry,
   UpdateStatus,
+  UsageLedgerInfo,
 } from "@/lib/types";
 import { hasDashboardCard, reconcileLayout, parseLayout, resetAllLayout, sameLayout, type LayoutDocument } from "@/model/layout";
+import { setDongRate } from "@/model/format";
 import { brandName } from "@/model/providerText";
 import { DASHBOARD_TABS, DEFAULT_SETTINGS, enabledProvidersOf, mergeSettingsDocument, parseSettings, type AppSettings, type DashboardTab } from "@/model/settings";
 import { isTransientBanner, updateBannerKey, updateBannerOf } from "@/model/updateBanner";
@@ -75,6 +78,12 @@ export interface AppState {
   update: UpdateStatus | null;
   /** Key of the update card the user closed (`updateBannerKey`). */
   dismissedUpdate: string | null;
+  /** The core's usage ledger status; `null` until first read. */
+  ledgerInfo: UsageLedgerInfo | null;
+  /** Bumped whenever the ledger has new rows, so cached summaries are read again. */
+  ledgerVersion: number;
+  /** The Vietcombank USD selling rate the core keeps; `null` until one was fetched. */
+  exchangeRate: ExchangeRate | null;
 }
 
 /** Undo depth, matching upstream `LayoutUndoHistory`. */
@@ -102,6 +111,9 @@ export const useApp = create<AppState>(() => ({
   notice: null,
   update: null,
   dismissedUpdate: null,
+  ledgerInfo: null,
+  ledgerVersion: 0,
+  exchangeRate: null,
 }));
 
 const get = () => useApp.getState();
@@ -126,9 +138,15 @@ export function hasTokensTab(state: Pick<AppState, "settings" | "catalog">): boo
   return state.settings.showTotalSpend && tokenSourceIds(state.catalog).length > 0;
 }
 
-/** The dashboard tab on screen: the saved one, or Hạn mức while there is no Token tab. */
+/** The dashboard tabs on screen, left to right: the Token tab only while `hasTokensTab`. */
+export function dashboardTabs(state: Pick<AppState, "settings" | "catalog">): DashboardTab[] {
+  const tokens = hasTokensTab(state);
+  return DASHBOARD_TABS.filter((tab) => tab !== "tokens" || tokens);
+}
+
+/** The dashboard tab on screen: the saved one, or Hạn mức when the saved one is not shown. */
 export function visibleDashboardTab(state: Pick<AppState, "settings" | "catalog">): DashboardTab {
-  return hasTokensTab(state) ? state.settings.dashboardTab : "quota";
+  return dashboardTabs(state).includes(state.settings.dashboardTab) ? state.settings.dashboardTab : "quota";
 }
 
 export function displayOptionsOf(settings: AppSettings): DisplayOptions {
@@ -192,8 +210,9 @@ export function selectDashboardTab(tab: DashboardTab): void {
 
 /** The tab after (`step` 1) or before (`step` -1) the one on screen, wrapping around. */
 export function cycleDashboardTab(step: 1 | -1): void {
-  const index = DASHBOARD_TABS.indexOf(visibleDashboardTab(get()));
-  selectDashboardTab(DASHBOARD_TABS[(index + step + DASHBOARD_TABS.length) % DASHBOARD_TABS.length]!);
+  const tabs = dashboardTabs(get());
+  const index = tabs.indexOf(visibleDashboardTab(get()));
+  selectDashboardTab(tabs[(index + step + tabs.length) % tabs.length]!);
 }
 
 /** Apply a layout change; `undoable` records the prior layout (upstream `recordingUndoStep`). */
@@ -414,6 +433,41 @@ function applyCatalog(catalog: ProviderEntry[]): void {
   if (!sameLayout(previous, layout)) persistLayout();
 }
 
+/** How often an import in progress may refresh the Token views. */
+const LEDGER_IMPORT_REFRESH_MS = 10_000;
+let lastLedgerRefresh = 0;
+
+/**
+ * Take the ledger's status. New rows bump `ledgerVersion` so the views read their summaries again: at
+ * once when an import settles, and at most every ten seconds while a long first import runs.
+ */
+function applyLedgerInfo(info: UsageLedgerInfo): void {
+  const previous = get().ledgerInfo;
+  const now = Date.now();
+  const changed = previous === null || previous.updatedAt !== info.updatedAt || previous.importing !== info.importing;
+  const due = changed && (!info.importing || now - lastLedgerRefresh >= LEDGER_IMPORT_REFRESH_MS);
+  if (due) lastLedgerRefresh = now;
+  set(due ? { ledgerInfo: info, ledgerVersion: get().ledgerVersion + 1 } : { ledgerInfo: info });
+}
+
+async function reloadLedgerInfo(): Promise<void> {
+  try {
+    applyLedgerInfo(await backend().usageLedgerInfo());
+  } catch (error) {
+    logFailure("Reading the usage history status")(error);
+  }
+}
+
+export async function reloadExchangeRate(): Promise<void> {
+  try {
+    const rate = await backend().exchangeRate();
+    setDongRate(rate?.usdToVnd ?? null);
+    set({ exchangeRate: rate });
+  } catch (error) {
+    logFailure("Reading the exchange rate")(error);
+  }
+}
+
 function resetTransientState(): void {
   set({ screen: "dashboard", previousScreen: "dashboard", tabMotion: null, customizeProviderId: null });
   clearNotice();
@@ -447,6 +501,8 @@ async function boot(): Promise<Array<() => void>> {
   enableTokenSources();
   void reloadAccounts();
   void reloadChats();
+  void reloadLedgerInfo();
+  void reloadExchangeRate();
   return [
     api.onUpdateStatus?.((next) => set({ update: next })) ?? (() => {}),
     api.onEngineState((state) => set({ engine: state })),
@@ -458,8 +514,12 @@ async function boot(): Promise<Array<() => void>> {
     api.onPopupVisibility((shown) => {
       set({ popupVisible: shown });
       if (!shown) resetTransientState();
-      else void reloadChats();
+      else {
+        void reloadChats();
+        void reloadExchangeRate();
+      }
     }),
+    api.onUsageLedgerChanged(applyLedgerInfo),
     api.onNavigate((screen) => navigate(screen)),
     api.onAccountLogin(applyLoginResult),
   ];

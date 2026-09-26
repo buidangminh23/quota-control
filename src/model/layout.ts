@@ -359,16 +359,19 @@ export function displayGroups(layout: LayoutDocument, catalog: readonly Provider
   });
 }
 
+/** Period rows the Lịch sử view covers day by day, so the overview leaves them out. */
+const HISTORY_ROW_LABELS: ReadonlySet<string> = new Set(["Yesterday"]);
+
 /**
- * The Token tab's sections under the total: each enabled token source with its usage trend and its
- * period rows, in the user's metric order. Customize no longer lists these providers, so the rows
- * ignore `placed` and are all shown, and the per-kind token rows stay out: the tab counts every kind
- * of token together.
+ * The Token overview's sections under the ring: each enabled token source with its usage trend and
+ * its period rows, in the user's metric order. Customize no longer lists these providers, so the rows
+ * ignore `placed` and are all shown; the per-kind token rows stay out (the tab counts every kind of
+ * token together) and so does Yesterday, which Lịch sử shows with every other day.
  */
 export function tokenGroups(layout: LayoutDocument, catalog: readonly ProviderEntry[], isEnabled: IsEnabled): ProviderMetrics[] {
   return orderedEntries(layout, catalog).flatMap((entry) => {
     if (hasDashboardCard(entry.provider.id) || !isEnabled(entry.provider.id)) return [];
-    const always = orderedDescriptors(layout, entry).filter(isTokenMetric);
+    const always = orderedDescriptors(layout, entry).filter((descriptor) => isTokenMetric(descriptor) && !HISTORY_ROW_LABELS.has(descriptor.metricLabel));
     return always.length === 0 ? [] : [{ provider: entry.provider, always, onDemand: [] }];
   });
 }

@@ -4,12 +4,13 @@
  */
 import type { ErrorCategory, UpdateFailureReason, UpdateFailureStage } from "@/lib/types";
 import type { TaskbarDisplay } from "@/model/settings";
+import type { PriceMessages, UsageMessages } from "./usageMessages";
 
 export type DisplayModeKey = "used" | "remaining";
 export type ResetModeKey = "relative" | "absolute";
 export type DeadlineVerb = "resets" | "limit" | "resetExpires";
-export type SpendPeriodKey = "today" | "yesterday" | "last30";
-export type DashboardTabKey = "quota" | "tokens";
+export type SpendPeriodKey = "today" | "last30" | "last365" | "all";
+export type DashboardTabKey = "quota" | "tokens" | "prices";
 export type SpendMetricKey = "cost" | "costPerMtok" | "tokens";
 export type RingUnitKey = "dollars" | "perMtok" | "billion" | "million" | "thousand" | "tokens";
 
@@ -276,6 +277,8 @@ export interface Messages {
   meter: MeterMessages;
   dashboard: DashboardMessages;
   totalSpend: TotalSpendMessages;
+  usage: UsageMessages;
+  prices: PriceMessages;
   chrome: ChromeMessages;
   customize: CustomizeMessages;
   settings: SettingsMessages;

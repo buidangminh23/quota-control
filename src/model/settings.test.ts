@@ -63,3 +63,13 @@ describe("taskbar display", () => {
     expect(taskbarDisplayPatch("bars")).toEqual({ showTaskbarStrip: true, iconStyle: "bars" });
   });
 });
+
+describe("token and price views", () => {
+  it("drops the retired Yesterday period and reads the new view keys", () => {
+    expect(parseSettings({ totalSpendPeriod: "yesterday" }).totalSpendPeriod).toBe("today");
+    expect(parseSettings({ totalSpendPeriod: "last365" }).totalSpendPeriod).toBe("last365");
+    const parsed = parseSettings({ dashboardTab: "prices", tokenView: "history", tokenChart: "project", priceProvider: "openai", priceTier: "flex", priceCurrency: "usd" });
+    expect(parsed).toMatchObject({ dashboardTab: "prices", tokenView: "history", tokenChart: "project", priceProvider: "openai", priceTier: "flex", priceCurrency: "usd" });
+    expect(parseSettings({ tokenView: "tables", tokenRingBy: "account" })).toMatchObject({ tokenView: "overview", tokenRingBy: "model" });
+  });
+});

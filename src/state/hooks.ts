@@ -7,7 +7,7 @@ import { messagesFor, type Language, type Messages } from "@/i18n";
 import type { IsEnabled } from "@/model/layout";
 import type { AppSettings, DashboardTab } from "@/model/settings";
 import type { DisplayOptions } from "@/model/widgetData";
-import { displayOptionsOf, hasTokensTab, isProviderEnabled, useApp } from "./store";
+import { dashboardTabs, displayOptionsOf, isProviderEnabled, useApp, visibleDashboardTab } from "./store";
 
 export function useSettings(): AppSettings {
   return useApp((state) => state.settings);
@@ -21,9 +21,14 @@ export function useMessages(): Messages {
   return messagesFor(useLanguage());
 }
 
+/**
+ * Row display options. The exchange rate is a dependency on purpose: money on the Vietnamese UI
+ * follows it (`setDongRate`), so a new rate hands the rows a new object and they draw again.
+ */
 export function useDisplay(): DisplayOptions {
   const settings = useSettings();
-  return useMemo(() => displayOptionsOf(settings), [settings]);
+  const rate = useApp((state) => state.exchangeRate?.usdToVnd ?? null);
+  return useMemo(() => (rate === null ? displayOptionsOf(settings) : { ...displayOptionsOf(settings) }), [settings, rate]);
 }
 
 export function useIsEnabled(): IsEnabled {
@@ -32,16 +37,21 @@ export function useIsEnabled(): IsEnabled {
 }
 
 export interface DashboardTabState {
-  /** Whether the tab bar shows: only while the dashboard has its Token tab. */
+  /** Whether the tab bar shows: whenever there is more than one tab. */
   tabbed: boolean;
+  /** The tabs on screen, left to right. */
+  tabs: DashboardTab[];
   /** The tab on screen. */
   tab: DashboardTab;
 }
 
 export function useDashboardTabs(): DashboardTabState {
-  const tabbed = useApp(hasTokensTab);
-  const saved = useApp((state) => state.settings.dashboardTab);
-  return useMemo(() => ({ tabbed, tab: tabbed ? saved : "quota" }), [tabbed, saved]);
+  const key = useApp((state) => dashboardTabs(state).join(","));
+  const tab = useApp(visibleDashboardTab);
+  return useMemo(() => {
+    const tabs = key.split(",") as DashboardTab[];
+    return { tabbed: tabs.length > 1, tabs, tab };
+  }, [key, tab]);
 }
 
 /**

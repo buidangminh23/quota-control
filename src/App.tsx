@@ -10,7 +10,7 @@ import { backend } from "@/lib/backend";
 import { useUsageNotifications } from "@/notify/useUsageNotifications";
 import { useTaskbarStrip } from "@/strip/useTaskbarStrip";
 import { useDashboardTabs, useIsDark } from "@/state/hooks";
-import { cycleDashboardTab, hasTokensTab, navigate, refresh, startApp, undoLayout, useApp, type Screen } from "@/state/store";
+import { cycleDashboardTab, dashboardTabs, navigate, refresh, startApp, undoLayout, useApp, type Screen } from "@/state/store";
 import { Accounts } from "./components/accounts/Accounts";
 import { DashboardTabs } from "./components/chrome/DashboardTabs";
 import { Footer } from "./components/chrome/Footer";
@@ -67,7 +67,7 @@ function useKeyboard(): void {
       }
       if (ctrl && event.key === "Tab") {
         const state = useApp.getState();
-        if (state.screen === "dashboard" && hasTokensTab(state)) {
+        if (state.screen === "dashboard" && dashboardTabs(state).length > 1) {
           event.preventDefault();
           cycleDashboardTab(event.shiftKey ? -1 : 1);
         }
@@ -149,7 +149,7 @@ export function App() {
   const previous = useApp((state) => state.previousScreen);
   const tabMotion = useApp((state) => state.tabMotion);
   const detail = useApp((state) => state.customizeProviderId);
-  const { tabbed, tab } = useDashboardTabs();
+  const { tabbed, tabs, tab } = useDashboardTabs();
   const visible = useApp((state) => state.popupVisible);
   const notice = useApp((state) => state.notice);
   const topRef = useRef<HTMLDivElement>(null);
@@ -200,7 +200,7 @@ export function App() {
         </div>
       ) : tabbed ? (
         <div ref={topRef}>
-          <DashboardTabs tab={tab} />
+          <DashboardTabs tabs={tabs} tab={tab} />
         </div>
       ) : null}
       <main ref={scrollRef} className="uc-scroll">

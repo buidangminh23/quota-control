@@ -125,7 +125,7 @@ describe("layout views and edits", () => {
     const hidden = setMetricEnabled(layout, "claude-local.trend", false);
     const groups = tokenGroups(hidden, catalog, all);
     expect(ids(groups)).toEqual(["claude-local", "codex-local"]);
-    expect(groups[0]!.always.map((descriptor) => descriptor.id)).toEqual(["claude-local.trend", "claude-local.today", "claude-local.yesterday", "claude-local.last30"]);
+    expect(groups[0]!.always.map((descriptor) => descriptor.id)).toEqual(["claude-local.trend", "claude-local.today", "claude-local.last30"]);
     expect(groups.every((group) => group.onDemand.length === 0)).toBe(true);
     expect(ids(tokenGroups(layout, catalog, (id) => id !== "codex-local"))).toEqual(["claude-local"]);
   });

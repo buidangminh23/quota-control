@@ -1,21 +1,22 @@
 /**
- * The dashboard screen (upstream `DashboardContentView`), split into two tabs. Hạn mức lists every
+ * The dashboard screen (upstream `DashboardContentView`), split into tabs. Hạn mức lists every
  * connected account's card, with onboarding hints and a way to add an account when none is connected.
- * Token shows the total token use across providers, then each provider's usage trend and period
- * rows. The update card and a sign-in in progress sit on top of both.
+ * Token holds the usage views (overview, history, charts, projects) and Bảng giá the official price
+ * lists. The update card and a sign-in in progress sit on top of every tab.
  */
 import { useMemo } from "react";
 import { messagesFor, type Messages } from "@/i18n";
-import { displayGroups, tokenGroups, type ProviderMetrics } from "@/model/layout";
+import { displayGroups } from "@/model/layout";
 import type { AppSettings } from "@/model/settings";
-import { useDashboardTabs, useDisplay, useIsEnabled, useNow, useSettings } from "@/state/hooks";
+import { useDashboardTabs, useIsEnabled, useSettings } from "@/state/hooks";
 import { navigate, updateSettings, useApp } from "@/state/store";
 import { LoginProgress } from "../accounts/Accounts";
 import { DASHBOARD_PANEL_ID, dashboardTabId } from "../chrome/DashboardTabs";
 import { Button } from "../ui/controls";
 import { CloseIcon } from "../ui/icons";
-import { ProviderSection } from "./ProviderSection";
-import { TotalSpendCard } from "./TotalSpendCard";
+import { PricesTab } from "../prices/PricesTab";
+import { TokensTab } from "../tokens/TokensTab";
+import { ProviderSections } from "./ProviderSections";
 import { UpdateBanner } from "./UpdateBanner";
 
 function HintCard({ title, message, action, onAction, onDismiss, dismissLabel }: { title: string; message: string; action: string; onAction: () => void; onDismiss: () => void; dismissLabel: string }) {
@@ -32,36 +33,6 @@ function HintCard({ title, message, action, onAction, onDismiss, dismissLabel }:
         {action}
       </Button>
     </div>
-  );
-}
-
-function ProviderSections({ groups }: { groups: ProviderMetrics[] }) {
-  const display = useDisplay();
-  const engine = useApp((state) => state.engine);
-  const now = useNow();
-  const interval = engine?.refreshIntervalMs ?? 300_000;
-  return groups.map((group) => (
-    <ProviderSection
-      key={group.provider.id}
-      group={group}
-      runtime={engine?.providers[group.provider.id]}
-      display={display}
-      refreshIntervalMs={interval}
-      now={now}
-    />
-  ));
-}
-
-function TokensTab() {
-  const catalog = useApp((state) => state.catalog);
-  const layout = useApp((state) => state.layout);
-  const isEnabled = useIsEnabled();
-  const groups = useMemo(() => tokenGroups(layout, catalog, isEnabled), [layout, catalog, isEnabled]);
-  return (
-    <>
-      <TotalSpendCard />
-      <ProviderSections groups={groups} />
-    </>
   );
 }
 
@@ -134,7 +105,7 @@ export function Dashboard() {
     <div className="uc-stack" {...panel}>
       <UpdateBanner />
       <LoginProgress messages={messages} />
-      {tab === "tokens" ? <TokensTab /> : <LimitsTab settings={settings} messages={messages} />}
+      {tab === "tokens" ? <TokensTab /> : tab === "prices" ? <PricesTab /> : <LimitsTab settings={settings} messages={messages} />}
     </div>
   );
 }

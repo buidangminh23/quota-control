@@ -45,6 +45,16 @@ export function dollars(language: Language, value: number, fractionDigits: numbe
   }).format(value);
 }
 
+/** Vietnamese đồng with up to `maxFraction` decimals: `6.512.345 ₫`. */
+export function dong(language: Language, value: number, maxFraction: number): string {
+  return formatter(language, { style: "currency", currency: "VND", minimumFractionDigits: 0, maximumFractionDigits: maxFraction }).format(value);
+}
+
+/** Compact đồng with up to one decimal: `6,5 Tr ₫`. */
+export function compactDong(language: Language, value: number): string {
+  return formatter(language, { style: "currency", currency: "VND", notation: "compact", compactDisplay: "short", maximumFractionDigits: 1 }).format(value);
+}
+
 /** Compact US dollars with up to one decimal: `$2.1K` / `2,1 N $`. */
 export function compactDollars(language: Language, value: number): string {
   return formatter(language, {

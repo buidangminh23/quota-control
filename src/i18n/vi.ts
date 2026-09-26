@@ -1,5 +1,6 @@
 /** Vietnamese catalog — the default language. Numbers follow vi-VN (see `numbers.ts`). */
 import type { Messages, RestoreDay, When } from "./messages";
+import { pricesVi, usageVi } from "./usageVi";
 import { viTerm } from "./viTerms";
 
 function when(value: When): string {
@@ -144,7 +145,7 @@ export const vi: Messages = {
     noAccountsShort: "Chưa có tài khoản",
     addAccount: "Thêm tài khoản",
     tabsLabel: "Chế độ xem",
-    tab: (key) => ({ quota: "Hạn mức", tokens: "Token" })[key],
+    tab: (key) => ({ quota: "Hạn mức", tokens: "Token", prices: "Bảng giá" })[key],
     openChat: (product) => `Mở ${product} trong ứng dụng`,
     trendRange: (days, first, last) => `${days} ngày, ${first} – ${last}`,
     expiryStatus: (severity) =>
@@ -159,7 +160,7 @@ export const vi: Messages = {
     metric: (key) => ({ cost: "Chi phí", costPerMtok: "Chi phí mỗi triệu token", tokens: "Token" })[key],
     metricMenuLabel: "Chỉ số tổng chi tiêu",
     periodLabel: "Khoảng thời gian",
-    period: (key) => ({ today: "Hôm nay", yesterday: "Hôm qua", last30: "30 ngày" })[key],
+    period: (key) => ({ today: "Hôm nay", last30: "30 ngày", last365: "1 năm", all: "Tất cả" })[key],
     empty: (key) =>
       ({
         cost: "Không có dữ liệu chi phí trong khoảng này",
@@ -174,6 +175,8 @@ export const vi: Messages = {
     totalTokensAria: (value, count) => `Tổng token ${value} từ ${count} nhà cung cấp`,
     blendedRateAria: (value, count) => `Chi phí bình quân mỗi triệu token ${value} từ ${count} nhà cung cấp`,
   },
+  usage: usageVi,
+  prices: pricesVi,
   chrome: {
     appName: "Quota Control",
     identity: (name, version) => `${name} ${version}`,
