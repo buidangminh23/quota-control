@@ -317,7 +317,7 @@ fn tray_icon(app: &AppHandle) -> Result<tauri::image::Image<'static>, String> {
     #[cfg(not(target_os = "macos"))]
     {
         app.default_window_icon()
-            .cloned()
+            .map(|icon| icon.clone().to_owned())
             .ok_or_else(|| "Missing app icon".to_owned())
     }
 }
