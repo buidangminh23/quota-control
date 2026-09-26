@@ -103,7 +103,7 @@ struct GlanceMetricRow: View {
             if let fraction = metric.fraction {
                 GlanceMeter(fraction: fraction, severity: metric.severity, onDark: onDark, height: compact ? 4 : 5)
             }
-            if showsReset {
+            if showsReset, metric.resetsAt != nil || metric.detail != nil {
                 GlanceResetText(metric: metric, labels: labels, now: now)
                     .font(.system(size: compact ? 9.5 : 10.5))
                     .foregroundStyle(onDark ? Color.white.opacity(0.55) : Color.secondary.opacity(0.9))
