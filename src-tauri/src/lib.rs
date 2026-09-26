@@ -110,10 +110,11 @@ pub fn run() -> anyhow::Result<()> {
             updates::install_update,
         ]))
         .setup(|app| {
-            if !cfg!(debug_assertions) && app.autolaunch().is_enabled().unwrap_or(false) {
-                if let Err(error) = app.autolaunch().enable() {
-                    tracing::warn!("Could not refresh launch-at-login path: {error}");
-                }
+            if !cfg!(debug_assertions)
+                && app.autolaunch().is_enabled().unwrap_or(false)
+                && let Err(error) = app.autolaunch().enable()
+            {
+                tracing::warn!("Could not refresh launch-at-login path: {error}");
             }
             app.manage(integrations::IntegrationStore::default_store());
             let accounts = account_commands::Accounts::new(std::sync::Arc::new(
