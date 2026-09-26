@@ -1,16 +1,32 @@
 /**
  * The Reset tab: whether a Codex reset is announced or hinted at (codex-resets.com, which follows
- * @thsottiaux on X), this app's estimate of the chance of one soon, the history's statistics and
- * the latest resets with links to their posts.
+ * @thsottiaux on X), this app's estimate of the chance of one soon with how long the current wait
+ * is against past gaps, a calendar of the last weeks, when in the week and the day announcements
+ * land, the history's statistics and the latest resets with links to their posts.
  */
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { insightsFor, type InsightsMessages } from "@/i18n/insights";
 import type { Language } from "@/i18n";
-import { shortTime, type TimeFormat } from "@/model/format";
-import { activeWatch, FORECAST_HORIZONS, forecastResets, HALF_LIFE_DAYS, parseResets, parseResetStatus, resetStats, type CodexReset, type ResetSource, type ResetStatus } from "@/model/insights/resets";
+import { compactDuration, shortTime, type TimeFormat } from "@/model/format";
+import {
+  activeWatch,
+  announcementPattern,
+  currentWait,
+  FORECAST_HORIZONS,
+  forecastResets,
+  HOUR_BLOCKS,
+  parseResets,
+  parseResetStatus,
+  resetCalendar,
+  resetStats,
+  type CodexReset,
+  type ResetSource,
+  type ResetStatus,
+} from "@/model/insights/resets";
 import { excerpt } from "@/notify/useResetNotifications";
 import { useNow, useSettings } from "@/state/hooks";
 import { useInsights } from "@/state/insights";
+import { tooltipProps } from "../ui/tooltip";
 import { useFeeds } from "./data";
 import { agoText, dateText, Disclosure, FeedStatus, LinkButton, numberText, percentText, RateBar, SourceLine } from "./parts";
 
@@ -41,12 +57,23 @@ function shortDate(date: Date, now: Date, language: Language): string {
   return language === "vi" ? `${day}/${month}` : `${month}/${day}`;
 }
 
+/** How far an announced time is: a countdown while ahead, an overdue note once it has passed. */
+function dueLine(due: Date, now: Date, language: Language, text: InsightsMessages): string | null {
+  if (due.getTime() > now.getTime()) {
+    const left = compactDuration((due.getTime() - now.getTime()) / 1000, language);
+    return left ? text.scheduledIn(left) : null;
+  }
+  const ago = agoText(due, now, language);
+  return ago ? text.scheduledOverdue(ago) : null;
+}
+
 function StatusCards({ status, resets, language, timeFormat, text }: { status: ResetStatus | null; resets: CodexReset[]; language: Language; timeFormat: TimeFormat; text: InsightsMessages }) {
   const now = useNow();
   const watch = activeWatch(status, now);
   const scheduled = status?.scheduled ?? null;
   const last = resets[0] ?? null;
   const lastAgo = last ? agoText(last.announcedAt, now, language) : null;
+  const due = scheduled?.scheduledFor ? dueLine(scheduled.scheduledFor, now, language, text) : null;
 
   return (
     <>
@@ -60,6 +87,7 @@ function StatusCards({ status, resets, language, timeFormat, text }: { status: R
               scheduled.scheduledFor ? text.scheduledFor(when(scheduled.scheduledFor, timeFormat, language)) : text.scheduledNoTime,
             ].join(" · ")}
           </span>
+          {due ? <span className="uc-reset-meta">{due}</span> : null}
           <PostLink source={scheduled.source} text={text} />
         </article>
       ) : null}
@@ -82,9 +110,10 @@ function StatusCards({ status, resets, language, timeFormat, text }: { status: R
   );
 }
 
-function Forecast({ resets, language, text }: { resets: CodexReset[]; language: Language; text: InsightsMessages }) {
+function Forecast({ resets, language, timeFormat, text }: { resets: CodexReset[]; language: Language; timeFormat: TimeFormat; text: InsightsMessages }) {
   const now = useNow();
   const forecast = forecastResets(resets, now);
+  const wait = currentWait(resets, now);
   return (
     <section className="uc-group">
       <h2 className="uc-group-title">{text.forecastTitle}</h2>
@@ -100,12 +129,114 @@ function Forecast({ resets, language, text }: { resets: CodexReset[]; language: 
                 </div>
               ))}
             </div>
-            <p className="uc-insight-note">{text.forecastNote(numberText(language, forecast.resets), HALF_LIFE_DAYS)}</p>
+            {wait ? (
+              <div className="uc-reset-wait">
+                <span className="uc-reset-wait-line">{text.waitLine(text.days(numberText(language, wait.waitedDays, 1)), percentText(language, wait.shorterShare, 0))}</span>
+                <RateBar rate={wait.shorterShare} low={null} high={null} />
+                <span className="uc-reset-meta">
+                  {(wait.medianMark.getTime() > now.getTime() ? text.medianMark : text.medianMarkPassed)(
+                    text.days(numberText(language, wait.medianGapDays, 1)),
+                    `${shortTime(wait.medianMark, timeFormat, language)} ${shortDate(wait.medianMark, now, language)}`,
+                  )}
+                </span>
+              </div>
+            ) : null}
+            <p className="uc-insight-note">{text.forecastNote(numberText(language, forecast.resets))}</p>
             <p className="uc-insight-note">{text.forecastDisclaimer}</p>
           </>
         ) : (
           <p className="uc-empty">{text.forecastUnavailable}</p>
         )}
+      </div>
+    </section>
+  );
+}
+
+function Calendar({ resets, language, text }: { resets: CodexReset[]; language: Language; text: InsightsMessages }) {
+  const now = useNow();
+  const weeks = useMemo(() => resetCalendar(resets, now), [resets, now]);
+  const title = text.calendarTitle(weeks.length);
+  return (
+    <section className="uc-group">
+      <h2 className="uc-group-title">{title}</h2>
+      <div className="uc-card uc-reset-calendar">
+        <div className="uc-reset-cal-grid" role="img" aria-label={title} style={{ gridTemplateColumns: `auto repeat(${weeks.length}, minmax(0, 1fr))` }}>
+          <span />
+          {weeks.map((week, index) => {
+            const month = week[0]!.date.getMonth();
+            const starts = index === 0 || month !== weeks[index - 1]![0]!.date.getMonth();
+            return (
+              <span key={week[0]!.date.getTime()} className="uc-reset-cal-month">
+                {starts ? text.monthShort(month) : ""}
+              </span>
+            );
+          })}
+          {Array.from({ length: 7 }, (_, weekday) => (
+            <Fragment key={weekday}>
+              <span className="uc-reset-cal-label">{text.weekdayShort[weekday]}</span>
+              {weeks.map((week) => {
+                const day = week[weekday]!;
+                const kind = day.kinds[day.kinds.length - 1];
+                const label = kind ? text.calendarDay(dateText(day.date, language), day.kinds.map((item) => text.kind(item)).join(" + ")) : null;
+                return (
+                  <span
+                    key={day.date.getTime()}
+                    className={`uc-reset-cal-cell${kind ? ` is-${kind}` : ""}${day.isToday ? " is-today" : ""}${day.future ? " is-future" : ""}`}
+                    {...tooltipProps(label)}
+                  />
+                );
+              })}
+            </Fragment>
+          ))}
+        </div>
+        <div className="uc-reset-legend">
+          <span>
+            <i className="uc-reset-cal-cell is-regular" />
+            {text.kind("regular")}
+          </span>
+          <span>
+            <i className="uc-reset-cal-cell is-banked" />
+            {text.kind("banked")}
+          </span>
+          <span>
+            <i className="uc-reset-cal-cell is-today" />
+            {text.calendarToday}
+          </span>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function Bars({ counts, label, title, language }: { counts: number[]; label: (index: number) => string; title: string; language: Language }) {
+  const max = Math.max(1, ...counts);
+  return (
+    <div className="uc-reset-pattern-block">
+      <span className="uc-reset-meta">{title}</span>
+      <div className="uc-reset-bars" role="img" aria-label={`${title}: ${counts.map((count, index) => `${label(index)} ${numberText(language, count)}`).join(", ")}`}>
+        {counts.map((count, index) => (
+          <div key={index} className={`uc-reset-bar${count === max ? " is-peak" : ""}`}>
+            <span className="uc-reset-bar-count uc-num">{count > 0 ? numberText(language, count) : ""}</span>
+            <span className="uc-reset-bar-track">
+              <span className="uc-reset-bar-fill" style={{ height: `${Math.round((count / max) * 100)}%` }} />
+            </span>
+            <span className="uc-reset-bar-label">{label(index)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Pattern({ resets, language, text }: { resets: CodexReset[]; language: Language; text: InsightsMessages }) {
+  const pattern = useMemo(() => announcementPattern(resets), [resets]);
+  return (
+    <section className="uc-group">
+      <h2 className="uc-group-title">{text.patternTitle}</h2>
+      <div className="uc-card uc-reset-pattern">
+        <Bars counts={pattern.weekdays} label={(index) => text.weekdayShort[index] ?? ""} title={text.patternWeekdays} language={language} />
+        <Bars counts={pattern.hours} label={(index) => text.hourBlock(index * (24 / HOUR_BLOCKS))} title={text.patternHours} language={language} />
+        <p className="uc-insight-note">{text.patternNote(numberText(language, pattern.total))}</p>
       </div>
     </section>
   );
@@ -189,7 +320,9 @@ export function ResetsTab() {
       <StatusCards status={status} resets={resets} language={language} timeFormat={timeFormat} text={text} />
       {resets.length > 0 ? (
         <>
-          <Forecast resets={resets} language={language} text={text} />
+          <Forecast resets={resets} language={language} timeFormat={timeFormat} text={text} />
+          <Calendar resets={resets} language={language} text={text} />
+          <Pattern resets={resets} language={language} text={text} />
           <Stats resets={resets} language={language} text={text} />
           <History resets={resets} language={language} timeFormat={timeFormat} text={text} />
         </>

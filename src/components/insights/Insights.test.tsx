@@ -182,8 +182,15 @@ describe("Reset tab", () => {
     openTab("Reset");
     expect(await screen.findByText("Đã hẹn reset")).toBeInTheDocument();
     expect(screen.getByText(/we’ll reset usage limits for all paid users/)).toBeInTheDocument();
-    expect(screen.getByText("Khả năng có reset (ước tính của ứng dụng)")).toBeInTheDocument();
-    for (const horizon of ["24 giờ", "3 ngày", "7 ngày"]) expect(screen.getByText(horizon)).toBeInTheDocument();
+    expect(screen.getByText("Khả năng sắp có reset (ứng dụng tự ước tính)")).toBeInTheDocument();
+    for (const horizon of ["24 giờ tới", "3 ngày tới", "7 ngày tới"]) expect(screen.getByText(horizon)).toBeInTheDocument();
+    expect(screen.getByText(/^Đã .* ngày chưa có reset\. Trước đây, \d+% số lần chờ ngắn hơn thế này\.$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Bình thường cứ .* ngày lại reset một lần, nên (khoảng .* là tới lượt|đã quá lượt từ .*)\.$/)).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Lịch reset 20 tuần qua" })).toBeInTheDocument();
+    expect(screen.getByText("Hôm nay")).toBeInTheDocument();
+    expect(screen.getByText("Thói quen thông báo")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /^Theo thứ: T2 \d+, T3 \d+/ })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /^Theo giờ \(giờ máy này\): 0h \d+, 4h \d+/ })).toBeInTheDocument();
     expect(screen.getByText("Khoảng lặng dài nhất")).toBeInTheDocument();
     expect(screen.getAllByText("Lượt để dành").length).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: "Mở bài trên X" }).length).toBeGreaterThan(0);
@@ -205,5 +212,30 @@ describe("reset notifications", () => {
     act(() => useInsights.setState({ feeds: { ...useInsights.getState().feeds, codexResetStatus: { ...status, body: JSON.stringify(body) } } }));
     expect(notify).toHaveBeenCalledOnce();
     expect(notify).toHaveBeenCalledWith("Codex hẹn reset", expect.stringContaining("reset usage limits"));
+  });
+
+  it("announces a watch once while it is active", async () => {
+    const api = await renderApp();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    const status = await api.publicFeed("codexResetStatus");
+    const body = JSON.parse(status.body!) as { data: { active_watch: unknown } };
+    const observed = new Date(Date.now() - 60_000).toISOString();
+    body.data.active_watch = {
+      level: "strong",
+      reset_chance_percent: 70,
+      forecast_window: "24h",
+      observed_at: observed,
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+      text: "Codex incident is mitigated, you know what comes next",
+      source: { type: "x_post", author: "thsottiaux", url: "https://x.com/thsottiaux/status/1" },
+    };
+    const push = () => act(() => useInsights.setState({ feeds: { ...useInsights.getState().feeds, codexResetStatus: { ...status, body: JSON.stringify(body) } } }));
+    push();
+    expect(notify).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledWith("Codex Resets: dấu hiệu mạnh sắp reset", expect.stringContaining("you know what comes next"));
+    body.data.active_watch = { ...(body.data.active_watch as object), text: "same watch, new wording" };
+    push();
+    expect(notify).toHaveBeenCalledOnce();
+    expect(JSON.parse(window.localStorage.getItem("quota-control.codex-resets-notified") ?? "{}")).toMatchObject({ watch: `strong@${observed}` });
   });
 });

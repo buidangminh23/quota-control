@@ -3,7 +3,7 @@ import { compareCandidates, compareRows, searchCandidates, type CompareInput } f
 import { parseCsv } from "./csv";
 import { benchmarkBoards, benchmarkLabel, benchmarkUrl, BENCHMARKS, parseEpochBenchmarks, parseEpochScores } from "./epoch";
 import { EMPTY_COUNTS, modelQuality } from "./quality";
-import { activeWatch, forecastResets, parseResets, parseResetStatus, resetStats, xUrl, type CodexReset } from "./resets";
+import { activeWatch, announcementPattern, currentWait, forecastResets, parseResets, parseResetStatus, resetCalendar, resetStats, xUrl, type CodexReset } from "./resets";
 
 describe("parseCsv", () => {
   it("reads quoted fields with commas, quotes and line breaks, CRLF and a byte-order mark", () => {
@@ -228,5 +228,49 @@ describe("Codex resets", () => {
     expect(stats.averageGapDays).toBeCloseTo(19.5, 6);
     expect(stats.medianGapDays).toBeCloseTo(19.5, 6);
     expect(stats.longestGap!.days).toBeCloseTo(32, 6);
+  });
+
+  it("compares the current wait with past gaps and marks where a median gap would end", () => {
+    const now = new Date("2026-09-26T00:00:00Z");
+    const wait = currentWait([at(4, now), at(6, now), at(9, now), at(17, now), at(18, now)], now)!;
+    expect(wait.waitedDays).toBeCloseTo(4, 6);
+    expect(wait.gaps).toBe(4);
+    expect(wait.medianGapDays).toBeCloseTo(2.5, 6);
+    expect(wait.shorterShare).toBeCloseTo(0.75, 6);
+    expect(wait.medianMark.toISOString()).toBe("2026-09-24T12:00:00.000Z");
+    expect(currentWait([at(1, now), at(2, now)], now)).toBeNull();
+    expect(currentWait([at(-1, now), at(1, now), at(2, now)], now)).toBeNull();
+  });
+
+  it("counts announcements by local weekday and four-hour block", () => {
+    const local = (year: number, month: number, day: number, hour: number): CodexReset => ({
+      id: `${month}-${day}-${hour}`,
+      kind: "regular",
+      announcedAt: new Date(year, month - 1, day, hour, 30),
+      text: "",
+      source: { kind: "x_post", url: null },
+    });
+    const pattern = announcementPattern([local(2026, 9, 21, 1), local(2026, 9, 22, 5), local(2026, 9, 22, 23), local(2026, 9, 27, 12)]);
+    expect(pattern.weekdays).toEqual([1, 2, 0, 0, 0, 0, 1]);
+    expect(pattern.hours).toEqual([1, 1, 0, 1, 0, 1]);
+    expect(pattern.total).toBe(4);
+  });
+
+  it("lays the last weeks out Monday to Sunday with today and the future marked", () => {
+    const now = new Date(2026, 8, 26, 15);
+    const banked: CodexReset = { id: "b", kind: "banked", announcedAt: new Date(2026, 8, 22, 1), text: "", source: { kind: "x_post", url: null } };
+    const twice: CodexReset[] = [
+      { id: "r1", kind: "regular", announcedAt: new Date(2026, 8, 26, 8), text: "", source: { kind: "x_post", url: null } },
+      { id: "r2", kind: "banked", announcedAt: new Date(2026, 8, 26, 20), text: "", source: { kind: "x_post", url: null } },
+    ];
+    const weeks = resetCalendar([banked, ...twice], now, 3);
+    expect(weeks).toHaveLength(3);
+    expect(weeks[0]![0]!.date.getDay()).toBe(1);
+    expect(weeks[0]![0]!.date.getDate()).toBe(7);
+    const last = weeks[2]!;
+    expect(last.map((day) => day.date.getDate())).toEqual([21, 22, 23, 24, 25, 26, 27]);
+    expect(last[1]!.kinds).toEqual(["banked"]);
+    expect(last[5]).toMatchObject({ kinds: ["regular", "banked"], isToday: true, future: false });
+    expect(last[6]).toMatchObject({ kinds: [], isToday: false, future: true });
   });
 });

@@ -1,6 +1,8 @@
 /**
  * Codex usage resets as codex-resets.com records them from @thsottiaux's posts on X (API v1:
  * `/api/v1/status` and `/api/v1/resets`), and this app's own estimate of how likely the next one is.
+ * The same history also yields how the current wait compares with past gaps, when in the week and
+ * the day announcements tend to land, and a calendar of the last weeks.
  *
  * The estimate is a recency-weighted Poisson rate: each past reset counts with weight 2^(−age/21 days),
  * divided by the same weight integrated over the history, so recent weeks dominate and a quiet spell
@@ -225,4 +227,97 @@ export function forecastResets(resets: readonly CodexReset[], now: Date, halfLif
   const ratePerDay = weightedResets / exposure;
   const chance = Object.fromEntries(FORECAST_HORIZONS.map((days) => [days, 1 - Math.exp(-ratePerDay * days)])) as Record<ForecastHorizon, number>;
   return { ratePerDay, chance, halfLifeDays, resets: ages.length, weightedResets };
+}
+
+export interface CurrentWait {
+  /** Days since the last reset. */
+  waitedDays: number;
+  /** Share of past gaps that were shorter than the current wait, 0..1. */
+  shorterShare: number;
+  /** Past gaps the share is taken over. */
+  gaps: number;
+  medianGapDays: number;
+  /** The last reset plus the median gap: where a typical gap would have ended. */
+  medianMark: Date;
+}
+
+/** How the current wait compares with past gaps; needs at least three resets. */
+export function currentWait(resets: readonly CodexReset[], now: Date): CurrentWait | null {
+  const times = resets
+    .map((item) => item.announcedAt.getTime())
+    .filter((time) => time <= now.getTime())
+    .sort((a, b) => a - b);
+  if (times.length < 3) return null;
+  const gaps = times.slice(1).map((time, index) => (time - times[index]!) / DAY_MS);
+  const last = times[times.length - 1]!;
+  const waitedDays = (now.getTime() - last) / DAY_MS;
+  const sorted = [...gaps].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  const medianGapDays = sorted.length % 2 === 1 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
+  return {
+    waitedDays,
+    shorterShare: gaps.filter((gap) => gap < waitedDays).length / gaps.length,
+    gaps: gaps.length,
+    medianGapDays,
+    medianMark: new Date(last + medianGapDays * DAY_MS),
+  };
+}
+
+/** Four-hour blocks of the local day: 0–4, 4–8, … 20–24. */
+export const HOUR_BLOCKS = 6;
+
+export interface AnnouncementPattern {
+  /** Announcements per local weekday, Monday first. */
+  weekdays: number[];
+  /** Announcements per local four-hour block, midnight first. */
+  hours: number[];
+  total: number;
+}
+
+/** When announcements land, in this machine's time zone. */
+export function announcementPattern(resets: readonly CodexReset[]): AnnouncementPattern {
+  const weekdays = Array.from({ length: 7 }, () => 0);
+  const hours = Array.from({ length: HOUR_BLOCKS }, () => 0);
+  for (const reset of resets) {
+    const weekday = (reset.announcedAt.getDay() + 6) % 7;
+    const block = Math.floor(reset.announcedAt.getHours() / (24 / HOUR_BLOCKS));
+    weekdays[weekday] = (weekdays[weekday] ?? 0) + 1;
+    hours[block] = (hours[block] ?? 0) + 1;
+  }
+  return { weekdays, hours, total: resets.length };
+}
+
+export interface CalendarDay {
+  date: Date;
+  /** Resets announced that local day, in announcement order. */
+  kinds: ResetKind[];
+  isToday: boolean;
+  future: boolean;
+}
+
+export const CALENDAR_WEEKS = 20;
+
+function localDayKey(date: Date): string {
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
+/** The last `weeks` local weeks ending with the current one, each Monday to Sunday. */
+export function resetCalendar(resets: readonly CodexReset[], now: Date, weeks = CALENDAR_WEEKS): CalendarDay[][] {
+  const byDay = new Map<string, ResetKind[]>();
+  for (const reset of [...resets].sort((a, b) => a.announcedAt.getTime() - b.announcedAt.getTime())) {
+    const key = localDayKey(reset.announcedAt);
+    byDay.set(key, [...(byDay.get(key) ?? []), reset.kind]);
+  }
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const monday = new Date(today);
+  monday.setDate(today.getDate() - ((today.getDay() + 6) % 7) - (weeks - 1) * 7);
+  const todayKey = localDayKey(today);
+  return Array.from({ length: weeks }, (_, week) =>
+    Array.from({ length: 7 }, (_, weekday) => {
+      const date = new Date(monday);
+      date.setDate(monday.getDate() + week * 7 + weekday);
+      const key = localDayKey(date);
+      return { date, kinds: byDay.get(key) ?? [], isToday: key === todayKey, future: date.getTime() > today.getTime() };
+    }),
+  );
 }
