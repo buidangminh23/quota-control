@@ -11,6 +11,8 @@ import type { AppSettings } from "@/model/settings";
 import { useDashboardTabs, useIsEnabled, useSettings } from "@/state/hooks";
 import { navigate, updateSettings, useApp } from "@/state/store";
 import { LoginProgress } from "../accounts/Accounts";
+import { BenchmarkTab } from "../insights/BenchmarkTab";
+import { ResetsTab } from "../insights/ResetsTab";
 import { DASHBOARD_PANEL_ID, dashboardTabId } from "../chrome/DashboardTabs";
 import { Button } from "../ui/controls";
 import { CloseIcon } from "../ui/icons";
@@ -105,7 +107,17 @@ export function Dashboard() {
     <div className="uc-stack" {...panel}>
       <UpdateBanner />
       <LoginProgress messages={messages} />
-      {tab === "tokens" ? <TokensTab /> : tab === "prices" ? <PricesTab /> : <LimitsTab settings={settings} messages={messages} />}
+      {tab === "tokens" ? (
+        <TokensTab />
+      ) : tab === "prices" ? (
+        <PricesTab />
+      ) : tab === "benchmark" ? (
+        <BenchmarkTab />
+      ) : tab === "resets" ? (
+        <ResetsTab />
+      ) : (
+        <LimitsTab settings={settings} messages={messages} />
+      )}
     </div>
   );
 }

@@ -138,10 +138,24 @@ export function hasTokensTab(state: Pick<AppState, "settings" | "catalog">): boo
   return state.settings.showTotalSpend && tokenSourceIds(state.catalog).length > 0;
 }
 
-/** The dashboard tabs on screen, left to right: the Token tab only while `hasTokensTab`. */
+/**
+ * The dashboard tabs on screen, left to right: the Token tab only while `hasTokensTab`, Benchmark and
+ * Reset while their settings are on.
+ */
 export function dashboardTabs(state: Pick<AppState, "settings" | "catalog">): DashboardTab[] {
   const tokens = hasTokensTab(state);
-  return DASHBOARD_TABS.filter((tab) => tab !== "tokens" || tokens);
+  return DASHBOARD_TABS.filter((tab) => {
+    switch (tab) {
+      case "tokens":
+        return tokens;
+      case "benchmark":
+        return state.settings.showBenchmarkTab;
+      case "resets":
+        return state.settings.showResetsTab;
+      default:
+        return true;
+    }
+  });
 }
 
 /** The dashboard tab on screen: the saved one, or Hạn mức when the saved one is not shown. */

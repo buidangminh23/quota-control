@@ -122,7 +122,7 @@ export const en: Messages = {
     noAccountsShort: "No accounts yet",
     addAccount: "Add Account",
     tabsLabel: "Dashboard view",
-    tab: (key) => ({ quota: "Limits", tokens: "Tokens", prices: "Prices" })[key],
+    tab: (key) => ({ quota: "Limits", tokens: "Tokens", prices: "Prices", benchmark: "Benchmark", resets: "Resets" })[key],
     openChat: (product) => `Open ${product} in the App`,
     trendRange: (days, first, last) => `${days} days, ${first} – ${last}`,
     expiryStatus: (severity) =>

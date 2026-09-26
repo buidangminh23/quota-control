@@ -122,7 +122,7 @@ describe("popup", () => {
   });
 
   it("moves between tabs with the arrow keys and Ctrl+Tab", async () => {
-    await renderApp();
+    await renderApp({ settings: () => ({ showBenchmarkTab: false, showResetsTab: false }) });
     const limits = screen.getByRole("tab", { name: "Hạn mức" });
     act(() => limits.focus());
     fireEvent.keyDown(limits, { key: "ArrowRight" });

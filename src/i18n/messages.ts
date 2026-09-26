@@ -10,7 +10,7 @@ export type DisplayModeKey = "used" | "remaining";
 export type ResetModeKey = "relative" | "absolute";
 export type DeadlineVerb = "resets" | "limit" | "resetExpires";
 export type SpendPeriodKey = "today" | "last30" | "last365" | "all";
-export type DashboardTabKey = "quota" | "tokens" | "prices";
+export type DashboardTabKey = "quota" | "tokens" | "prices" | "benchmark" | "resets";
 export type SpendMetricKey = "cost" | "costPerMtok" | "tokens";
 export type RingUnitKey = "dollars" | "perMtok" | "billion" | "million" | "thousand" | "tokens";
 

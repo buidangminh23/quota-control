@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { Backend, DocumentName, Unsubscribe } from "./backend";
 import type { ContextWindowSession, ExchangeRate, UsageGroupRow, UsageLedgerInfo, UsageQuery } from "./types";
 import type { LimitResetResult } from "./types";
+import type { PublicFeedName, PublicFeedSnapshot, QualityInfo, QualityQuery, QualitySummary } from "./insightsTypes";
 import type { Language } from "@/i18n/language";
 import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
 
@@ -199,6 +200,30 @@ export class TauriBackend implements Backend {
 
   installUpdate(): Promise<void> {
     return invoke("install_update");
+  }
+
+  modelQuality(query: QualityQuery): Promise<QualitySummary> {
+    return invoke<QualitySummary>("model_quality", { query });
+  }
+
+  rescanModelQuality(): Promise<void> {
+    return invoke("rescan_model_quality");
+  }
+
+  onModelQualityChanged(listener: (info: QualityInfo) => void): Unsubscribe {
+    return subscribe<QualityInfo>("model-quality-changed", listener);
+  }
+
+  publicFeed(name: PublicFeedName): Promise<PublicFeedSnapshot> {
+    return invoke<PublicFeedSnapshot>("public_feed", { name });
+  }
+
+  refreshPublicFeed(name: PublicFeedName): Promise<PublicFeedSnapshot> {
+    return invoke<PublicFeedSnapshot>("refresh_public_feed", { name });
+  }
+
+  onPublicFeedChanged(listener: (name: PublicFeedName) => void): Unsubscribe {
+    return subscribe<PublicFeedName>("public-feed-changed", listener);
   }
 
   quit(): Promise<void> {

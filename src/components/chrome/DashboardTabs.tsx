@@ -1,8 +1,8 @@
 /**
  * The dashboard's tab bar, in the top bar slot the other screens use for their title: Hạn mức (the
- * accounts' limits), Token (the token use) and Bảng giá (the official price lists). Arrow keys, Home
- * and End move between the tabs (WAI-ARIA tabs pattern with automatic activation); Ctrl+Tab cycles
- * them from anywhere.
+ * accounts' limits), Token (the token use), Bảng giá (the official price lists), Benchmark (model
+ * quality) and Reset (Codex resets). Arrow keys, Home and End move between the tabs (WAI-ARIA tabs
+ * pattern with automatic activation); Ctrl+Tab cycles them from anywhere.
  */
 import { useEffect, useRef, type CSSProperties, type KeyboardEvent } from "react";
 import { messagesFor } from "@/i18n";
@@ -53,7 +53,7 @@ export function DashboardTabs({ tabs, tab }: { tabs: readonly DashboardTab[]; ta
 
   return (
     <div className="uc-topbar">
-      <div ref={listRef} className="uc-tabs" role="tablist" aria-label={messages.tabsLabel} onKeyDown={onKeyDown}>
+      <div ref={listRef} className={`uc-tabs${tabs.length > 3 ? " is-many" : ""}`} role="tablist" aria-label={messages.tabsLabel} onKeyDown={onKeyDown}>
         {tabs.map((candidate) => {
           const selected = candidate === tab;
           return (

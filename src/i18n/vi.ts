@@ -149,7 +149,7 @@ export const vi: Messages = {
     noAccountsShort: "Chưa có tài khoản",
     addAccount: "Thêm tài khoản",
     tabsLabel: "Chế độ xem",
-    tab: (key) => ({ quota: "Hạn mức", tokens: "Token", prices: "Bảng giá" })[key],
+    tab: (key) => ({ quota: "Hạn mức", tokens: "Token", prices: "Bảng giá", benchmark: "Benchmark", resets: "Reset" })[key],
     openChat: (product) => `Mở ${product} trong ứng dụng`,
     trendRange: (days, first, last) => `${days} ngày, ${first} – ${last}`,
     expiryStatus: (severity) =>

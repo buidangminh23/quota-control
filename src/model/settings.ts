@@ -20,9 +20,12 @@ export type TaskbarDisplay = IconStyle | "icon";
 /** A span of the usage history, ending today: one day, 30 days, 365 days or everything recorded. */
 export type TotalSpendPeriod = "today" | "last30" | "last365" | "all";
 export const TOTAL_SPEND_PERIODS: readonly TotalSpendPeriod[] = ["today", "last30", "last365", "all"];
-/** The dashboard's tabs, left to right: account limits, the token use, then the official price list. */
-export type DashboardTab = "quota" | "tokens" | "prices";
-export const DASHBOARD_TABS: readonly DashboardTab[] = ["quota", "tokens", "prices"];
+/**
+ * The dashboard's tabs, left to right: account limits, the token use, the official price list, model
+ * quality and benchmarks, then Codex resets.
+ */
+export type DashboardTab = "quota" | "tokens" | "prices" | "benchmark" | "resets";
+export const DASHBOARD_TABS: readonly DashboardTab[] = ["quota", "tokens", "prices", "benchmark", "resets"];
 /** The Token tab's views, left to right. */
 export type TokenView = "overview" | "history" | "charts" | "projects";
 export const TOKEN_VIEWS: readonly TokenView[] = ["overview", "history", "charts", "projects"];
@@ -60,6 +63,12 @@ export interface AppSettings {
   showTaskbarStrip: boolean;
   /** Whether the dashboard has its Token tab (upstream "Show Total Spend"). */
   showTotalSpend: boolean;
+  /** Whether the dashboard has its Benchmark tab (model quality, public leaderboards, comparison). */
+  showBenchmarkTab: boolean;
+  /** Whether the dashboard has its Codex reset tab. */
+  showResetsTab: boolean;
+  /** Notify when a Codex reset is announced or scheduled. */
+  notifyCodexResets: boolean;
   /** The dashboard tab the popup opens on. */
   dashboardTab: DashboardTab;
   totalSpendPeriod: TotalSpendPeriod;
@@ -95,6 +104,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   iconStyle: "text",
   showTaskbarStrip: true,
   showTotalSpend: true,
+  showBenchmarkTab: true,
+  showResetsTab: true,
+  notifyCodexResets: true,
   dashboardTab: "quota",
   totalSpendPeriod: "today",
   totalSpendMetric: "tokens",
@@ -145,6 +157,9 @@ export function parseSettings(raw: unknown): AppSettings {
     iconStyle: oneOf(stored.iconStyle, ["text", "bars"], defaults.iconStyle),
     showTaskbarStrip: flag(stored.showTaskbarStrip, defaults.showTaskbarStrip),
     showTotalSpend: flag(stored.showTotalSpend, defaults.showTotalSpend),
+    showBenchmarkTab: flag(stored.showBenchmarkTab, defaults.showBenchmarkTab),
+    showResetsTab: flag(stored.showResetsTab, defaults.showResetsTab),
+    notifyCodexResets: flag(stored.notifyCodexResets, defaults.notifyCodexResets),
     dashboardTab: oneOf(stored.dashboardTab, DASHBOARD_TABS, defaults.dashboardTab),
     totalSpendPeriod: oneOf(stored.totalSpendPeriod, TOTAL_SPEND_PERIODS, defaults.totalSpendPeriod),
     totalSpendMetric: oneOf(stored.totalSpendMetric, ["cost", "costPerMtok", "tokens"], defaults.totalSpendMetric),

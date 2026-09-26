@@ -6,6 +6,7 @@
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { LANGUAGES, messagesFor, type Language } from "@/i18n";
+import { insightsFor } from "@/i18n/insights";
 import type { NotificationKey, SettingsSectionKey } from "@/i18n/messages";
 import { anyNotificationEnabled, taskbarDisplayOf, taskbarDisplayPatch, type NotificationSettings, type TaskbarDisplay } from "@/model/settings";
 import { autostartEnabled, canRevealFiles, notificationAccess, requestNotificationAccess, revealFile, setAutostart, type NotificationAccess } from "@/platform/system";
@@ -114,9 +115,10 @@ export function Settings() {
   const language = settings.language;
   const messages = messagesFor(language);
   const text = messages.settings;
+  const insights = insightsFor(language);
   const platform = platformKey(info?.platform);
   const [autostart, changeAutostart, autostartError] = useAutostart();
-  const notificationsOn = anyNotificationEnabled(settings);
+  const notificationsOn = anyNotificationEnabled(settings) || settings.notifyCodexResets;
   const [access, requestAccess] = useNotificationAccess(notificationsOn);
   const [logError, setLogError] = useState<string | null>(null);
   const [shortcutError, setShortcutError] = useState<string | null>(null);
@@ -173,6 +175,12 @@ export function Settings() {
         </Row>
         <Row label={text.showTotalSpend}>
           <Switch checked={settings.showTotalSpend} label={text.showTotalSpend} onChange={(on) => updateSettings({ showTotalSpend: on })} />
+        </Row>
+        <Row label={insights.showBenchmarkTab}>
+          <Switch checked={settings.showBenchmarkTab} label={insights.showBenchmarkTab} onChange={(on) => updateSettings({ showBenchmarkTab: on })} />
+        </Row>
+        <Row label={insights.showResetsTab}>
+          <Switch checked={settings.showResetsTab} label={insights.showResetsTab} onChange={(on) => updateSettings({ showResetsTab: on })} />
         </Row>
         {autostart !== null ? (
           <Row label={text.launchAtLogin(platform)}>
@@ -233,6 +241,16 @@ export function Settings() {
             <Switch checked={settings.notifications[key]} label={text.notification(key)} onChange={(on) => setNotification(key, on)} />
           </Row>
         ))}
+        <Row label={insights.notifyCodexResets} note={insights.notifyCodexResetsNote}>
+          <Switch
+            checked={settings.notifyCodexResets}
+            label={insights.notifyCodexResets}
+            onChange={(on) => {
+              updateSettings({ notifyCodexResets: on });
+              if (on && access !== "granted") requestAccess();
+            }}
+          />
+        </Row>
         {notificationsOn && access === "denied" ? (
           <div className="uc-settings-row-group">
             <InlineNotice text={text.notificationsDenied} />

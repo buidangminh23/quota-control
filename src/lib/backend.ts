@@ -9,6 +9,7 @@ import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSe
 
 import type { ContextWindowSession, ExchangeRate, UsageGroupRow, UsageLedgerInfo, UsageQuery } from "./types";
 import type { LimitResetResult } from "./types";
+import type { PublicFeedName, PublicFeedSnapshot, QualityInfo, QualityQuery, QualitySummary } from "./insightsTypes";
 
 export type Unsubscribe = () => void;
 
@@ -82,6 +83,18 @@ export interface Backend {
   /** Download, verify and install the newest release, checking first when none is pending. The app
    * then exits (Windows, relaunched by the installer) or restarts (Linux); a rejection means it stayed. */
   installUpdate?(): Promise<void>;
+  /** Model quality counted from the local transcripts, per model and project, within the query's days. */
+  modelQuality(query: QualityQuery): Promise<QualitySummary>;
+  /** Rescan the transcripts now instead of at the next 10-minute pass. */
+  rescanModelQuality(): Promise<void>;
+  /** Fires when a scan starts (`scanning: true`) and when it finishes. */
+  onModelQualityChanged(listener: (info: QualityInfo) => void): Unsubscribe;
+  /** The cached copy of a public feed; the core refreshes each on its own schedule. */
+  publicFeed(name: PublicFeedName): Promise<PublicFeedSnapshot>;
+  /** Ask the source now (at most once a minute per feed); resolves to the resulting snapshot. */
+  refreshPublicFeed(name: PublicFeedName): Promise<PublicFeedSnapshot>;
+  /** Fires with the feed's name when its body changes. */
+  onPublicFeedChanged(listener: (name: PublicFeedName) => void): Unsubscribe;
   quit(): Promise<void>;
 }
 

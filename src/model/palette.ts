@@ -34,6 +34,8 @@ export const TAB_COLORS = {
   quota: "#0A84FF",
   tokens: "#BF5AF2",
   prices: "#FF9F0A",
+  benchmark: "#30D158",
+  resets: "#64D2FF",
 } as const;
 
 /** The Token views' own accents, used for their picker and card icons. */

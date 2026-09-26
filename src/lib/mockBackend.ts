@@ -20,6 +20,9 @@ import type {
   UpdateStatus,
 } from "./types";
 import { accountDescriptors, accountProvider, fixtureAccounts, fixtureCatalog, fixtureEngineState } from "./fixtures";
+import { FEED_FIXTURES } from "./insightsFeedFixtures";
+import { mockQualityHistory, mockQualitySummary } from "./insightsMock";
+import type { PublicFeedName, PublicFeedSnapshot, QualityInfo, QualityQuery, QualitySummary } from "./insightsTypes";
 import { localDay } from "./days";
 import { sampleLedger, summarizeUsage } from "./ledgerFixtures";
 import type { ContextWindowSession, ExchangeRate, UsageGroupRow, UsageLedgerInfo, UsageQuery } from "./types";
@@ -32,6 +35,8 @@ const LOGIN_EXPIRY_SECONDS = 600;
 const LOGIN_DELAY_MS = 2_500;
 const UPDATE_STEP_MS = 120;
 const UPDATE_SIZE_BYTES = 12_000_000;
+const SCAN_DELAY_MS = 900;
+const FEED_DELAY_MS = 500;
 
 const ACCOUNT_LABELS: Record<AccountProvider, string> = { claude: "Claude", codex: "Codex" };
 
@@ -59,6 +64,17 @@ export class MockBackend implements Backend {
   private version = "0.1.0";
   private updateState: UpdateStatus = { supported: true, currentVersion: "0.1.0", phase: "idle", manual: false, downloaded: 0 };
   private readonly updateListeners = new Set<(status: UpdateStatus) => void>();
+  private readonly qualityHistory = mockQualityHistory(new Date());
+  private qualityInfo: QualityInfo = {
+    scannedAt: new Date(Date.now() - 4 * 60_000).toISOString(),
+    scanning: false,
+    files: 1_284,
+    firstDay: this.qualityHistory[0]?.day ?? null,
+    lastDay: this.qualityHistory.at(-1)?.day ?? null,
+  };
+  private readonly qualityListeners = new Set<(info: QualityInfo) => void>();
+  private readonly feedChecks = new Map<PublicFeedName, string>();
+  private readonly feedListeners = new Set<(name: PublicFeedName) => void>();
   /** Test hook: how long the simulated browser takes to finish a sign-in; `null` waits for `finishLogin`. */
   loginDelayMs: number | null = LOGIN_DELAY_MS;
   /** Test hook: the release the next check finds; `null` means the running version is the newest. */
@@ -287,7 +303,42 @@ export class MockBackend implements Backend {
     for (const listener of this.updateListeners) listener(snapshot);
   }
 
+  async modelQuality(query: QualityQuery): Promise<QualitySummary> {
+    return structuredClone(mockQualitySummary(this.qualityHistory, query, this.qualityInfo));
+  }
+
+  async rescanModelQuality(): Promise<void> {
+    this.setQualityInfo({ ...this.qualityInfo, scanning: true });
+    setTimeout(() => this.setQualityInfo({ ...this.qualityInfo, scanning: false, scannedAt: new Date().toISOString() }), SCAN_DELAY_MS);
+  }
+
+  onModelQualityChanged(listener: (info: QualityInfo) => void): Unsubscribe {
+    this.qualityListeners.add(listener);
+    return () => this.qualityListeners.delete(listener);
+  }
+
+  async publicFeed(name: PublicFeedName): Promise<PublicFeedSnapshot> {
+    const fetchedAt = new Date(Date.now() - 2 * 3_600_000).toISOString();
+    return { name, body: FEED_FIXTURES[name], fetchedAt, checkedAt: this.feedChecks.get(name) ?? fetchedAt, error: null, stale: false };
+  }
+
+  async refreshPublicFeed(name: PublicFeedName): Promise<PublicFeedSnapshot> {
+    await wait(FEED_DELAY_MS);
+    this.feedChecks.set(name, new Date().toISOString());
+    return this.publicFeed(name);
+  }
+
+  onPublicFeedChanged(listener: (name: PublicFeedName) => void): Unsubscribe {
+    this.feedListeners.add(listener);
+    return () => this.feedListeners.delete(listener);
+  }
+
   async quit(): Promise<void> {}
+
+  private setQualityInfo(info: QualityInfo): void {
+    this.qualityInfo = info;
+    for (const listener of this.qualityListeners) listener({ ...info });
+  }
 
   private setUpdate(patch: Partial<UpdateStatus>): void {
     this.setUpdateStatus({ ...this.updateState, ...patch });

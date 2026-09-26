@@ -11,6 +11,8 @@ import { useUsageNotifications } from "@/notify/useUsageNotifications";
 import { useTaskbarStrip } from "@/strip/useTaskbarStrip";
 import { useDashboardTabs, useIsDark } from "@/state/hooks";
 import { cycleDashboardTab, dashboardTabs, navigate, refresh, startApp, undoLayout, useApp, type Screen } from "@/state/store";
+import { startInsights } from "@/state/insights";
+import { useResetNotifications } from "@/notify/useResetNotifications";
 import { Accounts } from "./components/accounts/Accounts";
 import { DashboardTabs } from "./components/chrome/DashboardTabs";
 import { Footer } from "./components/chrome/Footer";
@@ -157,6 +159,8 @@ export function App() {
   const footerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLElement>(null);
 
+  useEffect(() => startInsights(), []);
+
   useEffect(() => {
     const release = startApp();
     const blockContextMenu = (event: MouseEvent) => {
@@ -190,6 +194,7 @@ export function App() {
   usePopupHeight(topRef, contentRef, footerRef, view);
   useTaskbarStrip();
   useUsageNotifications();
+  useResetNotifications();
 
   const direction = tabMotion ?? (screen === "dashboard" && previous !== "dashboard" ? "back" : "forward");
   return (
