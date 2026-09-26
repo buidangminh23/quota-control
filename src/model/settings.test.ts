@@ -1,4 +1,4 @@
-import { anyNotificationEnabled, DEFAULT_SETTINGS, enabledProvidersOf, mergeSettingsDocument, parseSettings } from "./settings";
+import { anyNotificationEnabled, DEFAULT_SETTINGS, enabledProvidersOf, mergeSettingsDocument, parseSettings, taskbarDisplayOf, taskbarDisplayPatch } from "./settings";
 
 describe("parseSettings", () => {
   it("defaults to Vietnamese and every documented default", () => {
@@ -46,5 +46,20 @@ describe("helpers", () => {
   it("detects whether any pace notification is on", () => {
     expect(anyNotificationEnabled(DEFAULT_SETTINGS)).toBe(false);
     expect(anyNotificationEnabled({ notifications: { almostOut: false, cuttingItClose: true, willRunOut: false } })).toBe(true);
+  });
+});
+
+describe("taskbar display", () => {
+  it("reads the picker value from the stored strip switch and style", () => {
+    expect(taskbarDisplayOf({ showTaskbarStrip: true, iconStyle: "text" }, true)).toBe("text");
+    expect(taskbarDisplayOf({ showTaskbarStrip: true, iconStyle: "bars" }, true)).toBe("bars");
+    expect(taskbarDisplayOf({ showTaskbarStrip: false, iconStyle: "text" }, true)).toBe("icon");
+    expect(taskbarDisplayOf({ showTaskbarStrip: true, iconStyle: "text" }, false)).toBe("bars");
+  });
+
+  it("stores a choice without losing the style behind App Icon Only", () => {
+    expect(taskbarDisplayPatch("icon")).toEqual({ showTaskbarStrip: false });
+    expect(taskbarDisplayPatch("text")).toEqual({ showTaskbarStrip: true, iconStyle: "text" });
+    expect(taskbarDisplayPatch("bars")).toEqual({ showTaskbarStrip: true, iconStyle: "bars" });
   });
 });

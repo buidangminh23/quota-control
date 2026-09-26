@@ -15,6 +15,8 @@ export type ThemeSetting = "system" | "light" | "dark";
 export type DensitySetting = "regular" | "compact";
 /** How starred metrics render on the taskbar: provider mark plus values, or the compact bars glyph. */
 export type IconStyle = "text" | "bars";
+/** The Taskbar picker: the starred numbers as a strip, the bars glyph in the tray icon, or only the app icon. */
+export type TaskbarDisplay = IconStyle | "icon";
 export type TotalSpendPeriod = "today" | "yesterday" | "last30";
 /** The dashboard's tabs, left to right: account limits, then the total token use. */
 export type DashboardTab = "quota" | "tokens";
@@ -149,4 +151,15 @@ export function enabledProvidersOf(raw: unknown): string[] | null {
 export function anyNotificationEnabled(settings: Pick<AppSettings, "notifications">): boolean {
   const { almostOut, cuttingItClose, willRunOut } = settings.notifications;
   return almostOut || cuttingItClose || willRunOut;
+}
+
+/** The Taskbar picker's value. Where the core hosts no strip, numbers fall back to the bars glyph. */
+export function taskbarDisplayOf(settings: Pick<AppSettings, "showTaskbarStrip" | "iconStyle">, stripSupported: boolean): TaskbarDisplay {
+  if (!settings.showTaskbarStrip) return "icon";
+  return stripSupported ? settings.iconStyle : "bars";
+}
+
+/** What a Taskbar picker choice stores: "icon" turns the strip off and keeps the last style. */
+export function taskbarDisplayPatch(display: TaskbarDisplay): Partial<Pick<AppSettings, "showTaskbarStrip" | "iconStyle">> {
+  return display === "icon" ? { showTaskbarStrip: false } : { showTaskbarStrip: true, iconStyle: display };
 }

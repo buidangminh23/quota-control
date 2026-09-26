@@ -223,8 +223,6 @@ export const en: Messages = {
     },
     cliFailed: "Couldn't change the terminal helper.",
     localApiNote: (url) => `While Quota Control runs, other apps on this computer can read the same limits at ${url}.`,
-    iconStyle: "Icon Style",
-    iconStyleOption: (style) => (style === "text" ? "Text" : "Bars"),
     theme: "Theme",
     themeOption: (theme) => ({ system: "System", light: "Light", dark: "Dark" })[theme],
     density: "Density",
@@ -237,11 +235,14 @@ export const en: Messages = {
     resetTimesOption: (mode) => (mode === "relative" ? "Countdown" : "Exact time"),
     alwaysShowPacing: "Always Show Pacing",
     alwaysShowPacingNote: "Show how you're pacing on every metric with a reset window, not just ones near their limit.",
-    showOnTaskbar: "Show Usage on Taskbar",
-    taskbarNote: (supported) =>
-      supported
-        ? "Starred metrics show right on the taskbar and update live."
-        : "The tray icon shows usage bars for starred metrics and updates live; hover it for the numbers.",
+    taskbarDisplay: "Taskbar Display",
+    taskbarDisplayOption: (display) => ({ text: "Usage", bars: "Bars", icon: "App Icon Only" })[display],
+    taskbarNote: (display) =>
+      ({
+        text: "Starred metrics show as a live strip next to the notification area.",
+        bars: "The tray icon shows usage bars for starred metrics and updates live; hover it for the numbers.",
+        icon: "The taskbar shows only the Quota Control icon; click it to open the popup.",
+      })[display],
     notification: (key) => ({ almostOut: "Almost Out", cuttingItClose: "Cutting It Close", willRunOut: "Will Run Out" })[key],
     notificationNote: (key) =>
       ({

@@ -7,7 +7,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { LANGUAGES, messagesFor, type Language } from "@/i18n";
 import type { NotificationKey, SettingsSectionKey } from "@/i18n/messages";
-import { anyNotificationEnabled, type NotificationSettings } from "@/model/settings";
+import { anyNotificationEnabled, taskbarDisplayOf, taskbarDisplayPatch, type NotificationSettings, type TaskbarDisplay } from "@/model/settings";
 import { autostartEnabled, canRevealFiles, notificationAccess, requestNotificationAccess, revealFile, setAutostart, type NotificationAccess } from "@/platform/system";
 import { backend } from "@/lib/backend";
 import { useSettings } from "@/state/hooks";
@@ -105,6 +105,9 @@ function useNotificationAccess(active: boolean): [NotificationAccess, () => void
 }
 
 const NOTIFICATION_KEYS: readonly NotificationKey[] = ["almostOut", "cuttingItClose", "willRunOut"];
+/** Without a core-hosted strip the numbers have nowhere to go but the tray icon's bars. */
+const TASKBAR_DISPLAYS: readonly TaskbarDisplay[] = ["text", "bars", "icon"];
+const TRAY_DISPLAYS: readonly TaskbarDisplay[] = ["bars", "icon"];
 
 export function Settings() {
   const settings = useSettings();
@@ -123,6 +126,7 @@ export function Settings() {
   const shortcutSupported = typeof backend().setGlobalShortcut === "function";
   const cliSupported = typeof backend().cliStatus === "function";
   const updatesSupported = typeof backend().updateStatus === "function";
+  const taskbarDisplay = taskbarDisplayOf(settings, stripSupported);
   const section = (key: SettingsSectionKey) => text.section(key);
 
   const setNotification = (key: NotificationKey, on: boolean) => {
@@ -214,14 +218,15 @@ export function Settings() {
       </Section>
 
       <Section title={section("taskbar")}>
-        <Row label={text.showOnTaskbar} note={text.taskbarNote(stripSupported)}>
-          <Switch checked={settings.showTaskbarStrip} label={text.showOnTaskbar} onChange={(on) => updateSettings({ showTaskbarStrip: on })} />
+        <Row label={text.taskbarDisplay} note={text.taskbarNote(taskbarDisplay)}>
+          <Picker
+            value={taskbarDisplay}
+            options={stripSupported ? TASKBAR_DISPLAYS : TRAY_DISPLAYS}
+            label={text.taskbarDisplayOption}
+            onChange={(value) => updateSettings(taskbarDisplayPatch(value))}
+            ariaLabel={text.taskbarDisplay}
+          />
         </Row>
-        {stripSupported ? (
-          <Row label={text.iconStyle}>
-            <Picker value={settings.iconStyle} options={["text", "bars"] as const} label={text.iconStyleOption} onChange={(value) => updateSettings({ iconStyle: value })} ariaLabel={text.iconStyle} disabled={!settings.showTaskbarStrip} />
-          </Row>
-        ) : null}
       </Section>
 
       <Section title={section("notifications")} warning={notificationsOn && access === "denied"}>

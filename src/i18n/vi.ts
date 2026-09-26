@@ -245,8 +245,6 @@ export const vi: Messages = {
     },
     cliFailed: "Không thay đổi được lệnh cho terminal.",
     localApiNote: (url) => `Khi Quota Control đang chạy, ứng dụng khác trên máy này đọc được cùng số liệu hạn mức tại ${url}.`,
-    iconStyle: "Kiểu hiển thị",
-    iconStyleOption: (style) => (style === "text" ? "Chữ số" : "Thanh"),
     theme: "Chủ đề",
     themeOption: (theme) => ({ system: "Theo hệ thống", light: "Sáng", dark: "Tối" })[theme],
     density: "Mật độ",
@@ -260,11 +258,14 @@ export const vi: Messages = {
     alwaysShowPacing: "Luôn hiện nhịp dùng",
     alwaysShowPacingNote:
       "Hiện dự báo và vạch nhịp đều trên mọi chỉ số có thời điểm đặt lại, không chỉ những chỉ số gần chạm hạn mức.",
-    showOnTaskbar: "Hiện số liệu trên thanh tác vụ",
-    taskbarNote: (supported) =>
-      supported
-        ? "Các chỉ số gắn sao hiện ngay trên thanh tác vụ và cập nhật trực tiếp."
-        : "Biểu tượng khay hiện thanh mức dùng của các chỉ số gắn sao và cập nhật trực tiếp; di chuột lên biểu tượng để xem số liệu.",
+    taskbarDisplay: "Hiển thị trên thanh tác vụ",
+    taskbarDisplayOption: (display) => ({ text: "Số liệu", bars: "Thanh", icon: "Chỉ icon app" })[display],
+    taskbarNote: (display) =>
+      ({
+        text: "Các chỉ số gắn sao hiện thành dải số liệu cạnh khay hệ thống và cập nhật trực tiếp.",
+        bars: "Biểu tượng khay hiện thanh mức dùng của các chỉ số gắn sao và cập nhật trực tiếp; di chuột lên biểu tượng để xem số liệu.",
+        icon: "Thanh tác vụ chỉ hiện biểu tượng Quota Control; bấm vào để mở bảng hạn mức.",
+      })[display],
     notification: (key) => ({ almostOut: "Sắp hết", cuttingItClose: "Sát hạn mức", willRunOut: "Sẽ hết trước khi đặt lại" })[key],
     notificationNote: (key) =>
       ({

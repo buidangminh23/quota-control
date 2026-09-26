@@ -3,6 +3,7 @@
  * controls word order (English "95% left" vs Vietnamese "Còn 95%").
  */
 import type { CliState, ErrorCategory, UpdateFailureReason, UpdateFailureStage } from "@/lib/types";
+import type { TaskbarDisplay } from "@/model/settings";
 
 export type DisplayModeKey = "used" | "remaining";
 export type ResetModeKey = "relative" | "absolute";
@@ -173,8 +174,6 @@ export interface SettingsMessages {
   cliStatus(state: CliState, location: string | undefined): string | null;
   cliFailed: string;
   localApiNote(url: string): string;
-  iconStyle: string;
-  iconStyleOption(style: "text" | "bars"): string;
   theme: string;
   themeOption(theme: "system" | "light" | "dark"): string;
   density: string;
@@ -187,8 +186,9 @@ export interface SettingsMessages {
   resetTimesOption(mode: "relative" | "absolute"): string;
   alwaysShowPacing: string;
   alwaysShowPacingNote: string;
-  showOnTaskbar: string;
-  taskbarNote(supported: boolean): string;
+  taskbarDisplay: string;
+  taskbarDisplayOption(display: TaskbarDisplay): string;
+  taskbarNote(display: TaskbarDisplay): string;
   notification(key: NotificationKey): string;
   notificationNote(key: NotificationKey): string;
   notificationsDenied: string;

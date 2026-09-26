@@ -176,7 +176,7 @@ describe("popup", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     fireEvent.keyDown(window, { key: ",", ctrlKey: true });
     expect(await screen.findByRole("heading", { name: "Cài đặt" })).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "Hiện số liệu trên thanh tác vụ" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Hiển thị trên thanh tác vụ: Thanh" })).toBeInTheDocument();
   });
 
   it("shows an account's email on its own line under the name and plan", async () => {

@@ -112,6 +112,20 @@ describe("app updates", () => {
   });
 });
 
+describe("taskbar", () => {
+  it("picks the tray icon's bars or the app icon alone", async () => {
+    await openSettings();
+    fireEvent.click(screen.getByRole("button", { name: "Hiển thị trên thanh tác vụ: Thanh" }));
+    expect(screen.queryByRole("menuitemcheckbox", { name: "Số liệu" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Chỉ icon app" }));
+    expect(useApp.getState().settings.showTaskbarStrip).toBe(false);
+    expect(screen.getByText("Thanh tác vụ chỉ hiện biểu tượng Quota Control; bấm vào để mở bảng hạn mức.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Hiển thị trên thanh tác vụ: Chỉ icon app" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Thanh" }));
+    expect(useApp.getState().settings).toMatchObject({ showTaskbarStrip: true, iconStyle: "bars" });
+  });
+});
+
 describe("command line", () => {
   it("installs and removes the terminal helper and names the local API", async () => {
     await openSettings();
