@@ -241,6 +241,43 @@ export type PopoverScreen = "dashboard" | "customize" | "settings";
 
 export type AccountProvider = "claude" | "codex";
 
+export type UsageSource = "claude" | "codex";
+export type UsageGrouping = "day" | "month" | "year" | "model" | "project";
+
+export interface UsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  cacheCreationInputTokens: number;
+  totalTokens: number;
+  costUSD?: number;
+}
+
+export interface UsageQuery {
+  from?: string;
+  to?: string;
+  groupBy: UsageGrouping;
+}
+
+export interface UsageGroupRow {
+  key: string;
+  source: UsageSource;
+  totals: UsageTotals;
+}
+
+export interface UsageLedgerInfo {
+  firstDay: string | null;
+  updatedAt: string | null;
+  importing: boolean;
+}
+
+export interface ExchangeRate {
+  usdToVnd: number;
+  publishedAt: string;
+  fetchedAt: string;
+  stale: boolean;
+}
+
 export interface ChatSession {
   id: string;
   provider: AccountProvider;

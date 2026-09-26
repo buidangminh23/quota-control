@@ -7,12 +7,18 @@
 import type { Language } from "@/i18n/language";
 import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, CliStatus, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
 
+import type { ExchangeRate, UsageGroupRow, UsageLedgerInfo, UsageQuery } from "./types";
+
 export type Unsubscribe = () => void;
 
 /** Named JSON documents the core persists atomically in the app config directory. */
 export type DocumentName = "settings" | "layout";
 
 export interface Backend {
+  usageSummary(query: UsageQuery): Promise<UsageGroupRow[]>;
+  usageLedgerInfo(): Promise<UsageLedgerInfo>;
+  onUsageLedgerChanged(listener: (info: UsageLedgerInfo) => void): Unsubscribe;
+  exchangeRate(): Promise<ExchangeRate | null>;
   appInfo(): Promise<AppInfo>;
   catalog(): Promise<ProviderEntry[]>;
   onCatalogChanged(listener: (catalog: ProviderEntry[]) => void): Unsubscribe;

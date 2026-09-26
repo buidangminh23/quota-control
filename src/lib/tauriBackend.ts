@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Backend, DocumentName, Unsubscribe } from "./backend";
+import type { ExchangeRate, UsageGroupRow, UsageLedgerInfo, UsageQuery } from "./types";
 import type { Language } from "@/i18n/language";
 import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, CliStatus, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
 
@@ -31,6 +32,22 @@ function subscribe<T>(event: string, listener: (payload: T) => void, replay?: ()
 }
 
 export class TauriBackend implements Backend {
+  usageSummary(query: UsageQuery): Promise<UsageGroupRow[]> {
+    return invoke<UsageGroupRow[]>("usage_summary", { query });
+  }
+
+  usageLedgerInfo(): Promise<UsageLedgerInfo> {
+    return invoke<UsageLedgerInfo>("usage_ledger_info");
+  }
+
+  onUsageLedgerChanged(listener: (info: UsageLedgerInfo) => void): Unsubscribe {
+    return subscribe<UsageLedgerInfo>("usage-ledger-changed", listener, () => this.usageLedgerInfo());
+  }
+
+  exchangeRate(): Promise<ExchangeRate | null> {
+    return invoke<ExchangeRate | null>("exchange_rate");
+  }
+
   appInfo(): Promise<AppInfo> {
     return invoke<AppInfo>("app_info");
   }
