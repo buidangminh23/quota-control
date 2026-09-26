@@ -58,7 +58,7 @@ fn fake(status: u16, body: Value) -> Arc<FakeHttp> {
 fn setup(
     kind: ProviderKind,
     credentials: Value,
-    http: Arc<FakeHttp>,
+    http: Arc<dyn HttpClient>,
 ) -> (tempfile::TempDir, LocalProvider) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("credentials.json");
@@ -66,6 +66,219 @@ fn setup(
     let provider = LocalProvider::new(kind, CredentialStore::new(kind, path), http)
         .with_clock(fixed_clock(now()));
     (directory, provider)
+}
+
+enum ResetReply {
+    Response(HttpResponse),
+    Timeout,
+    Transport,
+    Pending,
+}
+
+struct ResetHttp {
+    usage: HttpResponse,
+    reset: ResetReply,
+    requests: Mutex<Vec<HttpRequest>>,
+}
+
+#[async_trait]
+impl HttpClient for ResetHttp {
+    async fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        assert_eq!(request.method, "GET");
+        let url = request.url.clone();
+        self.requests.lock().unwrap().push(request);
+        match url.as_str() {
+            "https://chatgpt.com/backend-api/wham/usage"
+            | "https://api.anthropic.com/api/oauth/usage" => Ok(self.usage.clone()),
+            "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits" => match &self.reset {
+                ResetReply::Response(reply) => Ok(reply.clone()),
+                ResetReply::Timeout => Err(HttpError::Timeout),
+                ResetReply::Transport => {
+                    Err(HttpError::Transport("private-transport-detail".into()))
+                }
+                ResetReply::Pending => std::future::pending().await,
+            },
+            _ => panic!("unexpected endpoint: {url}"),
+        }
+    }
+}
+
+fn reset_http(usage: HttpResponse, reset: ResetReply) -> Arc<ResetHttp> {
+    Arc::new(ResetHttp {
+        usage,
+        reset,
+        requests: Default::default(),
+    })
+}
+
+fn reset_usage() -> HttpResponse {
+    response(
+        200,
+        json!({
+            "rate_limit":{"primary_window":{"used_percent":23}},
+            "rate_limit_reset_credits":{"available_count":7}
+        }),
+    )
+}
+
+fn reset_credentials() -> Value {
+    json!({"tokens":{"access_token":"fixture-token","account_id":"fixture-account"}})
+}
+
+fn reset_line(snapshot: &uc_core::ProviderSnapshot) -> &uc_core::ValuesLine {
+    snapshot
+        .lines
+        .iter()
+        .find_map(|line| match line {
+            MetricLine::Values(line) if line.label == "Rate Limit Resets" => Some(line),
+            _ => None,
+        })
+        .unwrap()
+}
+
+#[tokio::test]
+async fn codex_reset_credit_expiries_enrich_count_using_available_credits_only() {
+    let first = now() + chrono::Duration::days(1);
+    let second = now() + chrono::Duration::days(2);
+    let http = reset_http(
+        reset_usage(),
+        ResetReply::Response(response(
+            200,
+            json!({"credits":[
+                {"status":"available","expires_at":first.to_rfc3339()},
+                {"status":"used","expires_at":"not-a-date"},
+                {"status":"available","expires_at":second.timestamp()}
+            ]}),
+        )),
+    );
+    let (_directory, provider) = setup(ProviderKind::Codex, reset_credentials(), http.clone());
+    let snapshot = provider.refresh(RefreshContext::manual()).await;
+    assert!(!snapshot.is_error());
+    let line = reset_line(&snapshot);
+    assert_eq!(
+        line.values,
+        vec![uc_core::MetricValue::count(7.0, "available")]
+    );
+    assert_eq!(line.expiries_at, vec![first, second]);
+    assert_eq!(progress(&snapshot.lines, "Session").used, 23.0);
+    let requests = http.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].url,
+        "https://chatgpt.com/backend-api/wham/usage"
+    );
+    assert_eq!(
+        requests[1].url,
+        "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
+    );
+    assert_eq!(requests[0].headers, requests[1].headers);
+    for header in [
+        ("Authorization", "Bearer fixture-token"),
+        ("ChatGPT-Account-Id", "fixture-account"),
+        ("Accept", "application/json"),
+    ] {
+        assert!(
+            requests[1]
+                .headers
+                .contains(&(header.0.into(), header.1.into()))
+        );
+    }
+    assert!(requests[1].timeout <= std::time::Duration::from_secs(3));
+}
+
+#[tokio::test]
+async fn codex_reset_credit_failures_preserve_the_successful_usage_snapshot() {
+    let mut cases: Vec<_> = [401, 429, 500]
+        .into_iter()
+        .map(|status| ResetReply::Response(response(status, json!({"error":"private-response"}))))
+        .collect();
+    cases.extend([
+        ResetReply::Timeout,
+        ResetReply::Transport,
+        ResetReply::Response(HttpResponse {
+            status: 200,
+            headers: HashMap::new(),
+            body: b"private-malformed-json".to_vec(),
+        }),
+    ]);
+    for body in [
+        json!(null),
+        json!([]),
+        json!({}),
+        json!({"credits":"bad"}),
+        json!({"credits":[{"status":"available","expires_at":true}]}),
+        json!({"credits":[{"status":"available","expires_at":"2026-09-26T12:00:00Z"},{"status":"available","expires_at":"bad-date"}]}),
+    ] {
+        cases.push(ResetReply::Response(response(200, body)));
+    }
+    for reset in cases {
+        let http = reset_http(reset_usage(), reset);
+        let (_directory, provider) = setup(ProviderKind::Codex, reset_credentials(), http.clone());
+        let snapshot = provider.refresh(RefreshContext::manual()).await;
+        assert!(!snapshot.is_error());
+        assert_eq!(reset_line(&snapshot).values[0].number, 7.0);
+        assert!(reset_line(&snapshot).expiries_at.is_empty());
+        assert_eq!(progress(&snapshot.lines, "Session").used, 23.0);
+        assert_eq!(http.requests.lock().unwrap().len(), 2);
+        assert!(
+            !serde_json::to_string(&snapshot)
+                .unwrap()
+                .contains("private-")
+        );
+    }
+}
+
+#[tokio::test]
+async fn codex_reset_credit_request_is_bounded_when_transport_never_completes() {
+    let http = reset_http(reset_usage(), ResetReply::Pending);
+    let (_directory, provider) = setup(ProviderKind::Codex, reset_credentials(), http.clone());
+    let snapshot = tokio::time::timeout(
+        std::time::Duration::from_secs(4),
+        provider.refresh(RefreshContext::manual()),
+    )
+    .await
+    .expect("optional request must not block usage indefinitely");
+    assert!(!snapshot.is_error());
+    assert_eq!(reset_line(&snapshot).values[0].number, 7.0);
+    assert!(reset_line(&snapshot).expiries_at.is_empty());
+    assert_eq!(http.requests.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn reset_credit_lookup_is_skipped_without_successful_codex_count() {
+    for (kind, usage) in [
+        (ProviderKind::Codex, response(401, json!({}))),
+        (ProviderKind::Codex, response(429, json!({}))),
+        (ProviderKind::Codex, response(500, json!({}))),
+        (
+            ProviderKind::Codex,
+            response(200, json!({"rate_limit":"invalid"})),
+        ),
+        (
+            ProviderKind::Codex,
+            response(
+                200,
+                json!({"rate_limit":{"primary_window":{"used_percent":1}}}),
+            ),
+        ),
+        (
+            ProviderKind::Claude,
+            response(
+                200,
+                json!({"five_hour":{"utilization":1},"rate_limit_reset_credits":{"available_count":4}}),
+            ),
+        ),
+    ] {
+        let http = reset_http(usage, ResetReply::Pending);
+        let credentials = if kind == ProviderKind::Codex {
+            reset_credentials()
+        } else {
+            json!({"claudeAiOauth":{"accessToken":"fixture-token"}})
+        };
+        let (_directory, provider) = setup(kind, credentials, http.clone());
+        provider.refresh(RefreshContext::manual()).await;
+        assert_eq!(http.requests.lock().unwrap().len(), 1);
+    }
 }
 
 #[test]

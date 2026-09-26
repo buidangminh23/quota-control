@@ -14,6 +14,20 @@ pub struct MappedUsage {
     pub lines: Vec<MetricLine>,
 }
 
+pub(crate) fn reset_credit_expiries(
+    response: &HttpResponse,
+) -> Result<Vec<DateTime<Utc>>, SimpleProviderError> {
+    let body: Value = response.json().map_err(|_| invalid())?;
+    let credits = body["credits"].as_array().ok_or_else(invalid)?;
+    let mut expiries = Vec::new();
+    for credit in credits {
+        if credit["status"].as_str().ok_or_else(invalid)? == "available" {
+            expiries.push(timestamp(&credit["expires_at"])?.ok_or_else(invalid)?);
+        }
+    }
+    Ok(expiries)
+}
+
 fn invalid() -> SimpleProviderError {
     SimpleProviderError::new(
         ErrorCategory::Decoding,

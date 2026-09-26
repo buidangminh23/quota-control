@@ -275,7 +275,16 @@ impl LocalProvider {
             }
         }
         self.record_cooldown(&response, now).await;
-        let mapped = mapping::map_response(self.kind, &response, now)?;
+        let mut mapped = mapping::map_response(self.kind, &response, now)?;
+        if self.kind == ProviderKind::Codex
+            && let Some(uc_core::MetricLine::Values(line)) = mapped
+                .lines
+                .iter_mut()
+                .find(|line| line.label() == "Rate Limit Resets")
+            && let Some(expiries) = self.reset_credit_expiries(&credentials).await
+        {
+            line.expiries_at = expiries;
+        }
         Ok(ProviderSnapshot::make(
             &self.provider,
             mapped.plan.or(credentials.plan),
@@ -284,15 +293,34 @@ impl LocalProvider {
         ))
     }
 
-    async fn request_usage(
+    async fn reset_credit_expiries(
         &self,
         credentials: &credentials::Credentials,
-    ) -> Result<uc_core::HttpResponse, SimpleProviderError> {
-        self.verify_cli_identity(credentials).await?;
-        let mut request = HttpRequest::get(&self.endpoint)
+    ) -> Option<Vec<chrono::DateTime<chrono::Utc>>> {
+        let base = self.endpoint.strip_suffix("/usage")?;
+        let endpoint = format!("{base}/rate-limit-reset-credits");
+        let timeout = Duration::from_secs(3);
+        let request = self.authenticated_request(&endpoint, credentials, timeout);
+        let response = tokio::time::timeout(timeout, self.http.send(request))
+            .await
+            .ok()?
+            .ok()?;
+        if !response.is_success() {
+            return None;
+        }
+        mapping::reset_credit_expiries(&response).ok()
+    }
+
+    fn authenticated_request(
+        &self,
+        endpoint: &str,
+        credentials: &credentials::Credentials,
+        timeout: Duration,
+    ) -> HttpRequest {
+        let mut request = HttpRequest::get(endpoint)
             .bearer(&credentials.access_token)
             .header("Accept", "application/json")
-            .timeout(Duration::from_secs(15));
+            .timeout(timeout);
         match self.kind {
             ProviderKind::Claude => {
                 request = request.header("anthropic-beta", "oauth-2025-04-20");
@@ -303,6 +331,16 @@ impl LocalProvider {
                 }
             }
         }
+        request
+    }
+
+    async fn request_usage(
+        &self,
+        credentials: &credentials::Credentials,
+    ) -> Result<uc_core::HttpResponse, SimpleProviderError> {
+        self.verify_cli_identity(credentials).await?;
+        let request =
+            self.authenticated_request(&self.endpoint, credentials, Duration::from_secs(15));
         self.http.send(request).await.map_err(|_| {
             SimpleProviderError::new(
                 ErrorCategory::Network,
