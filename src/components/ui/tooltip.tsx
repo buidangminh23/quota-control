@@ -66,6 +66,20 @@ export interface TooltipProps {
 
 const NO_TOOLTIP: Partial<TooltipProps> = {};
 
+/** Like `tooltipProps`, but only while the element's own text is cut off by an ellipsis. */
+export function truncatedTooltipProps(text: string): Partial<TooltipProps> {
+  return {
+    onPointerEnter: (event) => {
+      const element = event.currentTarget;
+      if ((event.pointerType === "mouse" || event.pointerType === "pen") && element.scrollWidth > element.clientWidth) {
+        showTooltip(text, element.getBoundingClientRect());
+      }
+    },
+    onPointerLeave: hideTooltip,
+    onPointerDown: hideTooltip,
+  };
+}
+
 /** Event props that show `text` over the element; nothing when `text` is empty. */
 export function tooltipProps(text: string | null | undefined): Partial<TooltipProps> {
   if (!text) return NO_TOOLTIP;

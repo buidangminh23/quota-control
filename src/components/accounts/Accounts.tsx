@@ -15,7 +15,7 @@ import { Button } from "../ui/controls";
 import { confirmAction } from "../ui/dialog";
 import { ChatIcon, CloseIcon, PlusIcon, Spinner } from "../ui/icons";
 import { ProviderMark } from "../ui/ProviderMark";
-import { tooltipProps } from "../ui/tooltip";
+import { tooltipProps, truncatedTooltipProps } from "../ui/tooltip";
 
 const PROVIDERS: readonly AccountProvider[] = ["claude", "codex"];
 const CHAT_PRODUCTS: Record<AccountProvider, string> = { claude: "Claude", codex: "ChatGPT" };
@@ -73,7 +73,9 @@ function AccountRow({ account, runtime, messages, language }: { account: Connect
         <ProviderMark brand={account.provider} size={18} />
       </span>
       <span className="uc-list-text">
-        <span className="uc-list-title uc-truncate">{title}</span>
+        <span className="uc-list-title uc-truncate" {...truncatedTooltipProps(title)}>
+          {title}
+        </span>
         <span className="uc-list-subtitle uc-truncate">{messages.accounts.mode(account.credentialMode, CLI_PRODUCTS[account.provider])}</span>
         <span className={`uc-account-status is-${status}`} {...tooltipProps(notice)}>
           {status === "refreshing" ? <Spinner size={9} /> : <span className="uc-status-dot" />}

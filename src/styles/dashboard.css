@@ -54,15 +54,18 @@
 }
 
 .uc-section-name {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: var(--uc-header-size);
   font-weight: 600;
   white-space: nowrap;
 }
 
 .uc-section-plan {
-  flex: 0 1 auto;
-  min-width: 0;
+  flex: none;
+  max-width: 9em;
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: var(--uc-plan-size);

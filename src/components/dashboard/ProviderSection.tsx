@@ -25,7 +25,7 @@ import { navigate, openChatFor, refresh, setProviderEnabled, showNotice, updateL
 import { ChevronDown, ChevronUp, ExternalIcon, ShareIcon, Spinner, WarningTriangle } from "../ui/icons";
 import { openMenu, type MenuEntry } from "../ui/menu";
 import { ProviderMark } from "../ui/ProviderMark";
-import { tooltipProps } from "../ui/tooltip";
+import { tooltipProps, truncatedTooltipProps } from "../ui/tooltip";
 import { MetricRow } from "./MetricRow";
 
 const CHAT_PRODUCTS: Record<AccountProvider, string> = { claude: "Claude", codex: "ChatGPT" };
@@ -154,7 +154,9 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
           <ProviderMark brand={providerBrand(group.provider)} size={16} />
         </span>
         <span className="uc-section-titles">
-          <span className="uc-section-name">{title}</span>
+          <span className="uc-section-name" {...truncatedTooltipProps(title)}>
+            {title}
+          </span>
           {plan ? <span className="uc-section-plan">{translate(plan, language)}</span> : null}
           {stale && !refreshing ? (
             <span className="uc-section-stale" {...tooltipProps(stale.tooltip)}>
