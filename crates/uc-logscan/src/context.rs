@@ -152,9 +152,7 @@ impl ContextWindows {
 }
 
 fn safe_path(path: &Path) -> bool {
-    !path.ancestors().any(|ancestor| {
-        fs::symlink_metadata(ancestor).is_ok_and(|metadata| crate::linked(&metadata))
-    })
+    !crate::linked_ancestry(path)
 }
 
 fn discover(

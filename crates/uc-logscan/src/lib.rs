@@ -117,10 +117,7 @@ impl LogScanner {
         let mut files = Vec::new();
         let mut entries_budget = self.options.max_files.saturating_mul(20).max(1);
         for root in &self.options.roots {
-            if root
-                .ancestors()
-                .any(|p| fs::symlink_metadata(p).is_ok_and(|m| linked(&m)))
-            {
+            if linked_ancestry(root) {
                 report.incomplete = true;
                 continue;
             }
@@ -161,10 +158,7 @@ impl LogScanner {
                 report.incomplete = true;
                 break;
             }
-            if path
-                .ancestors()
-                .any(|p| fs::symlink_metadata(p).is_ok_and(|m| linked(&m)))
-            {
+            if linked_ancestry(&path) {
                 cache.remove(&path);
                 report.incomplete = true;
                 continue;
@@ -275,6 +269,29 @@ fn day(timestamp: DateTime<Utc>, offset: Option<FixedOffset>) -> NaiveDate {
     match offset {
         Some(offset) => timestamp.with_timezone(&offset).date_naive(),
         None => timestamp.with_timezone(&Local).date_naive(),
+    }
+}
+
+/// Whether a link the user's processes could have planted sits anywhere in `path`, itself
+/// included. Links root owns, such as macOS's `/var` -> `private/var`, belong to the system and do
+/// not count.
+pub(crate) fn linked_ancestry(path: &Path) -> bool {
+    path.ancestors().any(|ancestor| {
+        fs::symlink_metadata(ancestor)
+            .is_ok_and(|metadata| linked(&metadata) && !system_owned(&metadata))
+    })
+}
+
+fn system_owned(metadata: &Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        metadata.uid() == 0
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        false
     }
 }
 

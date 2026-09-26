@@ -275,10 +275,7 @@ impl QualityStore {
         let mut candidates = Vec::new();
         for scanner in scanners {
             for root in &scanner.options.roots {
-                if root
-                    .ancestors()
-                    .any(|path| fs::symlink_metadata(path).is_ok_and(|metadata| linked(&metadata)))
-                {
+                if crate::linked_ancestry(root) {
                     continue;
                 }
                 walk(root, 0, scanner, &mut candidates);
