@@ -71,7 +71,6 @@ export function UpdateBanner() {
         <Card
           title={text.downloading(banner.version)}
           trailing={percent === null ? <Spinner size={10} /> : <span className="uc-update-percent uc-num">{percent}%</span>}
-         
         >
           <div
             className="uc-meter uc-update-meter"
