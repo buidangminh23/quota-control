@@ -7,7 +7,7 @@
 pub(crate) mod checks;
 mod transcript;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -23,7 +23,7 @@ use serde_json::Value;
 use crate::{LogScanner, LogSource, linked};
 use transcript::{ClaudeTranscript, CodexTranscript, Tally};
 
-const CACHE_VERSION: u32 = 1;
+const CACHE_VERSION: u32 = 2;
 const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_FILES: usize = 50_000;
 const MAX_DEPTH: usize = 32;
@@ -134,6 +134,8 @@ struct CachedRow {
     day: NaiveDate,
     model: String,
     project: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    unresolved: bool,
     counts: QualityCounts,
 }
 
@@ -143,6 +145,9 @@ struct CachedFile {
     length: u64,
     modified: i64,
     rows: Vec<CachedRow>,
+    /// Working directories in the file that are checkouts on this machine.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    local_cwds: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -150,6 +155,11 @@ struct CacheDocument {
     version: u32,
     scanned_at: Option<String>,
     files: BTreeMap<String, CachedFile>,
+    /// A checkout's folder name mapped to its repository's name, where the two differ and the
+    /// folder name points at a single repository: the ledger's rule for projects whose folder is
+    /// not a checkout on this machine.
+    #[serde(default)]
+    aliases: BTreeMap<String, String>,
 }
 
 struct Candidate {
@@ -220,8 +230,13 @@ impl QualityStore {
                     {
                         continue;
                     }
+                    let project = row
+                        .unresolved
+                        .then(|| cache.aliases.get(&row.project))
+                        .flatten()
+                        .unwrap_or(&row.project);
                     grouped
-                        .entry((rank(file.source), row.model.clone(), row.project.clone()))
+                        .entry((rank(file.source), row.model.clone(), project.clone()))
                         .or_insert_with(|| (file.source, QualityCounts::default()))
                         .1
                         .add(&row.counts);
@@ -301,6 +316,7 @@ impl QualityStore {
                             length: candidate.length,
                             modified: candidate.modified,
                             rows: parsed.rows,
+                            local_cwds: parsed.local_cwds,
                         },
                     );
                 }
@@ -315,6 +331,7 @@ impl QualityStore {
         let document = CacheDocument {
             version: CACHE_VERSION,
             scanned_at: Some(Utc::now().to_rfc3339()),
+            aliases: repository_aliases(&files),
             files,
         };
         let bytes =
@@ -391,7 +408,31 @@ fn walk(path: &Path, depth: usize, scanner: &LogScanner, out: &mut Vec<Candidate
 
 struct ParsedFile {
     rows: Vec<CachedRow>,
+    local_cwds: Vec<String>,
     skipped_lines: usize,
+}
+
+/// The ledger's alias rule: a checkout's folder name stands for its repository's name when every
+/// checkout with that folder name belongs to the same repository.
+fn repository_aliases(files: &BTreeMap<String, CachedFile>) -> BTreeMap<String, String> {
+    let cwds: BTreeSet<&str> = files
+        .values()
+        .flat_map(|file| file.local_cwds.iter().map(String::as_str))
+        .collect();
+    let mut names: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for cwd in cwds {
+        if let Some((alias, canonical)) = crate::project::repository_alias(cwd) {
+            names.entry(alias).or_default().insert(canonical);
+        }
+    }
+    names
+        .into_iter()
+        .filter_map(|(alias, canonical)| {
+            let mut canonical = canonical.into_iter();
+            let only = canonical.next()?;
+            (canonical.next().is_none() && only != alias).then_some((alias, only))
+        })
+        .collect()
 }
 
 fn parse_all(stale: &[(String, Candidate)]) -> Vec<Result<ParsedFile>> {
@@ -475,11 +516,13 @@ fn parse_file(candidate: &Candidate) -> Result<ParsedFile> {
             day: key.day,
             model: key.model,
             project: key.project,
+            unresolved: key.unresolved,
             counts,
         })
         .collect();
     Ok(ParsedFile {
         rows,
+        local_cwds: tally.local_cwds.into_iter().collect(),
         skipped_lines,
     })
 }

@@ -1,6 +1,7 @@
 //! The Benchmark and Reset tabs' data: quality counted from this machine's Claude Code and Codex
 //! transcripts, and the public feeds (Codex resets, Epoch AI, Arena, 3D Arena). Both refresh in
-//! the background and announce changes to the popup, which asks for the data it shows.
+//! the background and announce changes to the popup, which asks for the data it shows. Background
+//! work follows the popup's settings: nothing is scanned or fetched for a tab that is turned off.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,10 +11,35 @@ use uc_logscan::quality::{QualityInfo, QualityQuery, QualityStore, QualitySummar
 use uc_logscan::{LogScanner, LogSource};
 
 use crate::public_feeds::{FeedName, FeedSnapshot, PublicFeeds};
+use crate::service::BackendService;
 
 const FIRST_SCAN_DELAY: Duration = Duration::from_secs(20);
 const SCAN_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const FEED_TICK: Duration = Duration::from_secs(60);
+
+/// A popup setting from the shared settings document; a missing key means on, like its default.
+fn setting(app: &AppHandle, key: &str) -> bool {
+    app.state::<BackendService>()
+        .load("settings")
+        .ok()
+        .flatten()
+        .and_then(|settings| settings.get(key).and_then(serde_json::Value::as_bool))
+        .unwrap_or(true)
+}
+
+/// Whether anything on screen still uses the feed: Epoch AI and Arena feed the Benchmark tab, the
+/// reset list the Reset tab, and the reset status also the reset notification.
+fn feed_wanted(app: &AppHandle, name: FeedName) -> bool {
+    match name {
+        FeedName::CodexResetStatus => {
+            setting(app, "showResetsTab") || setting(app, "notifyCodexResets")
+        }
+        FeedName::CodexResets => setting(app, "showResetsTab"),
+        FeedName::EpochScores | FeedName::EpochBenchmarks | FeedName::Arena | FeedName::Arena3d => {
+            setting(app, "showBenchmarkTab")
+        }
+    }
+}
 
 pub struct InsightsService {
     quality: Arc<QualityStore>,
@@ -38,7 +64,16 @@ impl InsightsService {
         let handle = app.clone();
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(FIRST_SCAN_DELAY).await;
+            let mut requested = false;
             loop {
+                if !requested && !setting(&handle, "showBenchmarkTab") {
+                    tokio::select! {
+                        _ = tokio::time::sleep(SCAN_INTERVAL) => {}
+                        _ = scan_now.notified() => requested = true,
+                    }
+                    continue;
+                }
+                requested = false;
                 let store = quality.clone();
                 let emitter = handle.clone();
                 let _ = tauri::async_runtime::spawn_blocking(move || {
@@ -73,7 +108,7 @@ impl InsightsService {
                 .await;
                 tokio::select! {
                     _ = tokio::time::sleep(SCAN_INTERVAL) => {}
-                    _ = scan_now.notified() => {}
+                    _ = scan_now.notified() => requested = true,
                 }
             }
         });
@@ -82,7 +117,7 @@ impl InsightsService {
         tauri::async_runtime::spawn(async move {
             loop {
                 for name in FeedName::ALL {
-                    if !feeds.due(name).await {
+                    if !feed_wanted(&handle, name) || !feeds.due(name).await {
                         continue;
                     }
                     let (_, changed) = feeds.refresh(name, false).await;

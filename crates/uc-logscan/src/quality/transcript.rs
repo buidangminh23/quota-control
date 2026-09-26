@@ -2,7 +2,7 @@
 //! project. A turn is one request: a prompt and the work that answers it. File edits, shell
 //! commands and check runs count against the model that issued them, on the day their turn began.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use chrono::{DateTime, FixedOffset, NaiveDate, Utc};
@@ -44,10 +44,22 @@ pub(crate) struct DayKey {
     pub day: NaiveDate,
     pub model: String,
     pub project: String,
+    /// The name came from a folder that is not a checkout on this machine, so it may be a local
+    /// alias of a repository (the ledger's rule); see `QualityStore::scan`.
+    pub unresolved: bool,
+}
+
+/// A turn's project name and whether it could be an alias to resolve later.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ProjectName {
+    pub name: String,
+    pub unresolved: bool,
 }
 
 pub(crate) struct Tally {
     pub rows: BTreeMap<DayKey, QualityCounts>,
+    /// Working directories that are checkouts on this machine, for the repository aliases.
+    pub local_cwds: BTreeSet<String>,
     offset: Option<FixedOffset>,
 }
 
@@ -55,16 +67,23 @@ impl Tally {
     pub fn new(offset: Option<FixedOffset>) -> Self {
         Self {
             rows: BTreeMap::new(),
+            local_cwds: BTreeSet::new(),
             offset,
         }
     }
 
-    fn counts(&mut self, at: DateTime<Utc>, model: &str, project: &str) -> &mut QualityCounts {
+    fn counts(
+        &mut self,
+        at: DateTime<Utc>,
+        model: &str,
+        project: &ProjectName,
+    ) -> &mut QualityCounts {
         self.rows
             .entry(DayKey {
                 day: day(at, self.offset),
                 model: model.to_owned(),
-                project: project.to_owned(),
+                project: project.name.clone(),
+                unresolved: project.unresolved,
             })
             .or_default()
     }
@@ -120,21 +139,21 @@ struct Turn {
     human: bool,
     interrupted: bool,
     model: Option<String>,
-    project: String,
+    project: ProjectName,
     last_check: Option<bool>,
     output_tokens: u64,
     millis: Option<u64>,
 }
 
 impl Turn {
-    fn new(started: DateTime<Utc>, human: bool, project: &str) -> Self {
+    fn new(started: DateTime<Utc>, human: bool, project: &ProjectName) -> Self {
         Self {
             started,
             last_at: started,
             human,
             interrupted: false,
             model: None,
-            project: project.to_owned(),
+            project: project.clone(),
             last_check: None,
             output_tokens: 0,
             millis: None,
@@ -154,11 +173,11 @@ impl Turn {
 struct Project {
     cwd: String,
     repository: Option<String>,
-    name: String,
+    name: ProjectName,
 }
 
 impl Project {
-    fn update(&mut self, cwd: Option<&str>, repository: Option<&str>) {
+    fn update(&mut self, cwd: Option<&str>, repository: Option<&str>, tally: &mut Tally) {
         let mut changed = false;
         if let Some(cwd) =
             cwd.filter(|value| value.len() <= 32768 && !value.chars().any(char::is_control))
@@ -174,7 +193,13 @@ impl Project {
             changed = true;
         }
         if changed {
-            self.name = crate::project::resolve(&self.cwd, self.repository.as_deref());
+            let name = crate::project::resolve(&self.cwd, self.repository.as_deref());
+            let local = crate::project::local_root(&self.cwd).is_some();
+            if local && !tally.local_cwds.contains(&self.cwd) {
+                tally.local_cwds.insert(self.cwd.clone());
+            }
+            let unresolved = !local && name == crate::project::resolve(&self.cwd, None);
+            self.name = ProjectName { name, unresolved };
         }
     }
 }
@@ -267,7 +292,7 @@ impl ClaudeTranscript {
     }
 
     pub fn line(&mut self, root: &Value, tally: &mut Tally) {
-        self.project.update(root["cwd"].as_str(), None);
+        self.project.update(root["cwd"].as_str(), None, tally);
         let Some(at) = timestamp(root) else {
             return;
         };
@@ -492,9 +517,9 @@ impl CodexTranscript {
         let payload = &root["payload"];
         let at = timestamp(root);
         match root["type"].as_str() {
-            Some("session_meta") => self.meta(payload),
+            Some("session_meta") => self.meta(payload, tally),
             Some("turn_context") => {
-                self.project.update(payload["cwd"].as_str(), None);
+                self.project.update(payload["cwd"].as_str(), None, tally);
                 if let Some(model) = model(payload) {
                     if let Some(turn) = &mut self.turn {
                         turn.model = Some(model.clone());
@@ -513,7 +538,7 @@ impl CodexTranscript {
         self.close(tally);
     }
 
-    fn meta(&mut self, payload: &Value) {
+    fn meta(&mut self, payload: &Value, tally: &mut Tally) {
         if self.saw_meta {
             return;
         }
@@ -521,6 +546,7 @@ impl CodexTranscript {
         self.project.update(
             payload["cwd"].as_str(),
             text(&payload["git"], "repository_url"),
+            tally,
         );
         let present =
             |value: &Value| !value.is_null() && value.as_str().is_none_or(|s| !s.trim().is_empty());

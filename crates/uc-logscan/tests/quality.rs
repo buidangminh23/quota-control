@@ -544,3 +544,59 @@ fn rescans_only_changed_transcripts_and_survives_reopening() {
     let rows = reopened.summary(&QualityQuery::default()).unwrap().rows;
     assert!(rows.iter().all(|row| row.model != "claude-sonnet-5"));
 }
+
+fn prompt_and_reply(cwd: &str, at: &str, id: &str) -> Vec<Value> {
+    vec![
+        json!({"type":"user","timestamp":at,"cwd":cwd,"message":{"role":"user","content":"ship it"}}),
+        json!({"type":"assistant","timestamp":at,"cwd":cwd,"message":{"id":id,"model":"claude-opus-5","role":"assistant","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"done"}]}}),
+    ]
+}
+
+#[test]
+fn a_checkout_folder_name_counts_as_its_repository_like_in_the_ledger() {
+    let temp = tempfile::tempdir().unwrap();
+    let checkout = temp.path().join("renamed checkout");
+    std::fs::create_dir_all(checkout.join(".git")).unwrap();
+    std::fs::write(
+        checkout.join(".git").join("config"),
+        "[remote \"origin\"]\nurl = https://github.com/team/canonical-name.git\n",
+    )
+    .unwrap();
+    let claude = temp.path().join("claude");
+    let local = checkout.to_string_lossy().into_owned();
+    write_lines(
+        &claude.join("a").join("local.jsonl"),
+        &prompt_and_reply(&local, "2026-09-01T10:00:00Z", "m1"),
+    );
+    write_lines(
+        &claude.join("b").join("elsewhere.jsonl"),
+        &prompt_and_reply(
+            r"Z:\elsewhere\renamed checkout",
+            "2026-09-02T10:00:00Z",
+            "m2",
+        ),
+    );
+    write_lines(
+        &claude.join("c").join("unrelated.jsonl"),
+        &prompt_and_reply(r"Z:\elsewhere\other folder", "2026-09-03T10:00:00Z", "m3"),
+    );
+    let store = QualityStore::open(temp.path().join("cache").join("quality.json"));
+    store
+        .scan(&[scanner(LogSource::Claude, vec![claude])])
+        .unwrap();
+    let mut projects: Vec<(String, u64)> = store
+        .summary(&QualityQuery::default())
+        .unwrap()
+        .rows
+        .into_iter()
+        .map(|row| (row.project, row.counts.turns))
+        .collect();
+    projects.sort();
+    assert_eq!(
+        projects,
+        vec![
+            ("canonical-name".to_owned(), 2),
+            ("other folder".to_owned(), 1)
+        ]
+    );
+}

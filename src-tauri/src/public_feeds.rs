@@ -451,12 +451,11 @@ mod tests {
         let (second, changed) = store.refresh(FeedName::CodexResetStatus, false).await;
         assert!(!changed);
         assert_eq!(second.body.as_deref(), Some(STATUS));
-        let sent = http.seen.lock().unwrap();
+        let revalidation = http.seen.lock().unwrap()[1].headers.clone();
         assert_eq!(
-            sent[1].headers,
+            revalidation,
             vec![("If-None-Match".to_owned(), "\"v1\"".to_owned())]
         );
-        drop(sent);
         let reopened = feeds(root.path(), Script::new(Vec::<(String, _)>::new()), seconds);
         assert_eq!(
             reopened
