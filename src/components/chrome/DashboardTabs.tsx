@@ -4,8 +4,9 @@
  * and End move between the tabs (WAI-ARIA tabs pattern with automatic activation); Ctrl+Tab cycles
  * them from anywhere.
  */
-import { useEffect, useRef, type KeyboardEvent } from "react";
+import { useEffect, useRef, type CSSProperties, type KeyboardEvent } from "react";
 import { messagesFor } from "@/i18n";
+import { TAB_COLORS } from "@/model/palette";
 import type { DashboardTab } from "@/model/settings";
 import { useLanguage } from "@/state/hooks";
 import { selectDashboardTab } from "@/state/store";
@@ -65,6 +66,7 @@ export function DashboardTabs({ tabs, tab }: { tabs: readonly DashboardTab[]; ta
               aria-controls={DASHBOARD_PANEL_ID}
               tabIndex={selected ? 0 : -1}
               className={`uc-tab${selected ? " is-selected" : ""}`}
+              style={{ "--uc-tab-accent": TAB_COLORS[candidate] } as CSSProperties}
               onClick={() => selectDashboardTab(candidate)}
             >
               {messages.tab(candidate)}

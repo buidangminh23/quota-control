@@ -29,6 +29,13 @@ const COOL = ["#10A37F", "#0A84FF", "#5E5CE6", "#64D2FF", "#30D158", "#2EC4B6"] 
 /** The "other" slice and anything without a ranking. */
 export const OTHER_COLOR = "#8E8E93";
 
+/** Each dashboard tab's accent in the tab bar. */
+export const TAB_COLORS = {
+  quota: "#0A84FF",
+  tokens: "#BF5AF2",
+  prices: "#FF9F0A",
+} as const;
+
 /** The Token views' own accents, used for their picker and card icons. */
 export const VIEW_COLORS = {
   overview: "#0A84FF",
