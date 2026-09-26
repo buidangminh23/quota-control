@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use credentials::CredentialStore;
+use sha2::{Digest, Sha256};
 use uc_core::{
     Clock, ErrorCategory, HttpRequest, LimitResourceKind, LimitResourceSource, MetricKind,
     Provider, ProviderLink, ProviderRuntime, ProviderSnapshot, RefreshContext, ReqwestHttpClient,
@@ -64,6 +65,7 @@ struct CliBinding {
     id: String,
     path: PathBuf,
     profile: Option<PathBuf>,
+    verified_token: tokio::sync::Mutex<Option<[u8; 32]>>,
 }
 
 impl LocalProvider {
@@ -105,17 +107,30 @@ impl LocalProvider {
             id: account.id.clone(),
             path: account.path.clone(),
             profile: account.profile.clone(),
+            verified_token: tokio::sync::Mutex::new(None),
         });
         self
     }
 
-    async fn check_cli_account(&self) -> Result<(), SimpleProviderError> {
+    async fn ready_credentials(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        rejected_token: Option<&str>,
+    ) -> Result<credentials::Credentials, SimpleProviderError> {
         let Some(binding) = &self.cli else {
-            return Ok(());
+            return accounts::ready_credentials(
+                &self.credentials,
+                self.kind,
+                &self.http,
+                now,
+                &self.refresh_endpoint,
+                rejected_token,
+            )
+            .await;
         };
         let (kind, path, profile) = (self.kind, binding.path.clone(), binding.profile.clone());
-        let current =
-            uc_core::load_blocking(move || accounts::cli_account_from(kind, path, profile)).await?;
+        let (current, credentials) =
+            uc_core::load_blocking(move || accounts::read_cli_account(kind, path, profile)).await?;
         if current.id != binding.id {
             return Err(SimpleProviderError::new(
                 ErrorCategory::NotAvailable,
@@ -125,7 +140,84 @@ impl LocalProvider {
                 ),
             ));
         }
+        Ok(credentials)
+    }
+
+    async fn verify_cli_identity(
+        &self,
+        credentials: &credentials::Credentials,
+    ) -> Result<(), SimpleProviderError> {
+        let Some(binding) = &self.cli else {
+            return Ok(());
+        };
+        if self.kind != ProviderKind::Claude {
+            return Ok(());
+        }
+        let fingerprint: [u8; 32] = Sha256::digest(credentials.access_token.as_bytes()).into();
+        let mut verified = binding.verified_token.lock().await;
+        if verified.as_ref() == Some(&fingerprint) {
+            return Ok(());
+        }
+        *verified = None;
+        let profile = self
+            .http
+            .send(
+                HttpRequest::get("https://api.anthropic.com/api/oauth/profile")
+                    .bearer(&credentials.access_token)
+                    .header("anthropic-beta", "oauth-2025-04-20")
+                    .timeout(Duration::from_secs(15)),
+            )
+            .await
+            .map_err(|_| {
+                SimpleProviderError::new(
+                    ErrorCategory::Network,
+                    "Cannot verify the Claude CLI account. Try again later.",
+                )
+            })?;
+        if !profile.is_success() {
+            self.record_cooldown(&profile, (self.clock)()).await;
+            return Err(SimpleProviderError::new(
+                if matches!(profile.status, 401 | 403) {
+                    ErrorCategory::AuthExpired
+                } else {
+                    ErrorCategory::http(profile.status)
+                },
+                "The Claude CLI account could not be verified. Sign in with claude again if the problem persists.",
+            ));
+        }
+        let profile: serde_json::Value = profile
+            .json()
+            .map_err(|_| accounts::auth_error("The Claude CLI account profile is invalid."))?;
+        let document = serde_json::json!({"oauthAccount": {
+            "accountUuid": profile["account"]["uuid"],
+            "organizationUuid": profile["organization"]["uuid"]
+        }});
+        let identity = accounts::identity(self.kind, &document)?;
+        if accounts::account_id(self.kind, &identity) != binding.id {
+            return Err(SimpleProviderError::new(
+                ErrorCategory::NotAvailable,
+                "The Claude CLI session belongs to another account. Waiting for its account metadata to update.",
+            ));
+        }
+        *verified = Some(fingerprint);
         Ok(())
+    }
+
+    async fn record_cooldown(
+        &self,
+        response: &uc_core::HttpResponse,
+        now: chrono::DateTime<chrono::Utc>,
+    ) {
+        if response.status == 429 {
+            let seconds = response
+                .header("retry-after")
+                .and_then(|value| value.parse::<i64>().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(300)
+                .min(86400);
+            *self.cooldown.lock().await =
+                now.checked_add_signed(chrono::Duration::seconds(seconds));
+        }
     }
 
     pub fn with_refresh_endpoint(mut self, endpoint: impl Into<String>) -> Self {
@@ -138,18 +230,11 @@ impl LocalProvider {
         self
     }
 
-    async fn fetch(&self) -> Result<ProviderSnapshot, SimpleProviderError> {
-        let now = (self.clock)();
-        self.check_cli_account().await?;
-        let mut credentials = accounts::ready_credentials(
-            &self.credentials,
-            self.kind,
-            &self.http,
-            now,
-            &self.refresh_endpoint,
-            None,
-        )
-        .await?;
+    fn validate_credentials(
+        &self,
+        credentials: &credentials::Credentials,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), SimpleProviderError> {
         if credentials.expires_at.is_some_and(|expires| expires <= now) {
             return Err(SimpleProviderError::new(
                 ErrorCategory::AuthExpired,
@@ -162,6 +247,13 @@ impl LocalProvider {
                 "Sign in with claude again to grant access to live usage.",
             ));
         }
+        Ok(())
+    }
+
+    async fn fetch(&self) -> Result<ProviderSnapshot, SimpleProviderError> {
+        let now = (self.clock)();
+        let mut credentials = self.ready_credentials(now, None).await?;
+        self.validate_credentials(&credentials, now)?;
         if self.cooldown.lock().await.is_some_and(|until| until > now) {
             return Err(SimpleProviderError::new(
                 ErrorCategory::RateLimited,
@@ -170,30 +262,16 @@ impl LocalProvider {
         }
         let mut response = self.request_usage(&credentials).await?;
         if response.status == 401 {
-            let renewed = accounts::ready_credentials(
-                &self.credentials,
-                self.kind,
-                &self.http,
-                now,
-                &self.refresh_endpoint,
-                Some(&credentials.access_token),
-            )
-            .await?;
+            let renewed = self
+                .ready_credentials(now, Some(&credentials.access_token))
+                .await?;
             if renewed.access_token != credentials.access_token {
                 credentials = renewed;
+                self.validate_credentials(&credentials, now)?;
                 response = self.request_usage(&credentials).await?;
             }
         }
-        if response.status == 429 {
-            let seconds = response
-                .header("retry-after")
-                .and_then(|value| value.parse::<i64>().ok())
-                .filter(|value| *value > 0)
-                .unwrap_or(300)
-                .min(86400);
-            *self.cooldown.lock().await =
-                now.checked_add_signed(chrono::Duration::seconds(seconds));
-        }
+        self.record_cooldown(&response, now).await;
         let mapped = mapping::map_response(self.kind, &response, now)?;
         Ok(ProviderSnapshot::make(
             &self.provider,
@@ -207,6 +285,7 @@ impl LocalProvider {
         &self,
         credentials: &credentials::Credentials,
     ) -> Result<uc_core::HttpResponse, SimpleProviderError> {
+        self.verify_cli_identity(credentials).await?;
         let mut request = HttpRequest::get(&self.endpoint)
             .bearer(&credentials.access_token)
             .header("Accept", "application/json")

@@ -623,6 +623,57 @@ fn a_claude_cli_without_a_token_is_not_a_login() {
     assert_eq!(login.id, imported.id);
 }
 
+#[tokio::test]
+async fn cli_login_switch_during_unauthorized_request_never_retries_as_another_account() {
+    struct SwitchingHttp {
+        path: std::path::PathBuf,
+        replacement: Value,
+        requests: Mutex<Vec<HttpRequest>>,
+    }
+
+    #[async_trait]
+    impl HttpClient for SwitchingHttp {
+        async fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+            let mut requests = self.requests.lock().unwrap();
+            requests.push(request);
+            let first = requests.len() == 1;
+            if first {
+                std::fs::write(&self.path, serde_json::to_vec(&self.replacement).unwrap()).unwrap();
+            }
+            Ok(HttpResponse {
+                status: if first { 401 } else { 200 },
+                headers: HashMap::new(),
+                body: serde_json::to_vec(
+                    &json!({"rate_limit":{"primary_window":{"used_percent":75}}}),
+                )
+                .unwrap(),
+            })
+        }
+    }
+
+    let (dir, store) = store();
+    let path = write_codex_login(dir.path(), "account-one");
+    let login = cli_account_from(ProviderKind::Codex, path.clone(), None).unwrap();
+    let replacement = json!({"tokens":{
+        "access_token": jwt(json!({"exp":2000000000,"https://api.openai.com/auth":{"chatgpt_user_id":"another-user"}})),
+        "account_id":"account-two"
+    }});
+    let client = Arc::new(SwitchingHttp {
+        path: path.clone(),
+        replacement: replacement.clone(),
+        requests: Mutex::new(Vec::new()),
+    });
+    let runtimes = account_runtimes_with(store, &[login], client.clone()).unwrap();
+    let result = runtimes[0].refresh(RefreshContext::scheduled()).await;
+
+    assert_eq!(result.error_category, Some(ErrorCategory::NotAvailable));
+    assert_eq!(client.requests.lock().unwrap().len(), 1);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&std::fs::read(path).unwrap()).unwrap(),
+        replacement
+    );
+}
+
 #[test]
 fn a_browser_session_wins_over_the_cli_and_the_cli_wins_over_an_imported_copy() {
     let (dir, store) = store();
@@ -664,4 +715,214 @@ fn a_browser_session_wins_over_the_cli_and_the_cli_wins_over_an_imported_copy() 
     assert!(shown.contains(&(managed.id.clone(), false)));
     assert!(shown.contains(&(copied.id.clone(), true)));
     assert!(shown.contains(&("codex@other".to_string(), true)));
+}
+
+struct CliProfileHttp {
+    requests: Mutex<Vec<HttpRequest>>,
+    profile_status: u16,
+    malformed_profile: bool,
+    rotation: Mutex<Option<std::path::PathBuf>>,
+}
+
+#[async_trait]
+impl HttpClient for CliProfileHttp {
+    async fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        let profile = request.url.ends_with("/profile");
+        let foreign = request
+            .headers
+            .iter()
+            .any(|(key, value)| key == "Authorization" && value == "Bearer fixture-foreign");
+        self.requests.lock().unwrap().push(request);
+        if profile && self.profile_status == 0 {
+            return Err(HttpError::Timeout);
+        }
+        let mut status = if profile { self.profile_status } else { 200 };
+        if !profile && let Some(path) = self.rotation.lock().unwrap().take() {
+            write_claude_token(&path, "fixture-renewed");
+            status = 401;
+        }
+        let body = if profile {
+            if self.malformed_profile {
+                json!({})
+            } else {
+                json!({"account":{"uuid": if foreign { "account-b" } else { "account-a" }},"organization":{"uuid":"org-a"}})
+            }
+        } else {
+            json!({"five_hour":{"utilization":15}})
+        };
+        Ok(HttpResponse {
+            status,
+            headers: HashMap::from([("retry-after".into(), "60".into())]),
+            body: serde_json::to_vec(&body).unwrap(),
+        })
+    }
+}
+
+fn write_claude_token(path: &std::path::Path, token: &str) {
+    let mut document = claude_doc(4_000_000_000_000);
+    document["claudeAiOauth"]["accessToken"] = json!(token);
+    std::fs::write(path, serde_json::to_vec(&document).unwrap()).unwrap();
+}
+
+fn claude_cli_fixture(
+    directory: &std::path::Path,
+    token: &str,
+    client: Arc<CliProfileHttp>,
+) -> (LocalProvider, std::path::PathBuf) {
+    let path = directory.join(".credentials.json");
+    let profile = directory.join(".claude.json");
+    write_claude_token(&path, token);
+    std::fs::write(&profile, serde_json::to_vec(&claude_doc(1)).unwrap()).unwrap();
+    let login = cli_account_from(ProviderKind::Claude, path.clone(), Some(profile)).unwrap();
+    (
+        LocalProvider::new(
+            ProviderKind::Claude,
+            CredentialStore::new(ProviderKind::Claude, path.clone()),
+            client,
+        )
+        .with_cli_login(&login),
+        path,
+    )
+}
+
+fn cli_profile_http(status: u16, malformed: bool) -> Arc<CliProfileHttp> {
+    Arc::new(CliProfileHttp {
+        requests: Mutex::new(Vec::new()),
+        profile_status: status,
+        malformed_profile: malformed,
+        rotation: Mutex::new(None),
+    })
+}
+
+#[tokio::test]
+async fn claude_cli_token_must_match_the_separate_metadata_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = cli_profile_http(200, false);
+    let (runtime, _) = claude_cli_fixture(directory.path(), "fixture-foreign", client.clone());
+    let snapshot = runtime.refresh(RefreshContext::scheduled()).await;
+    assert_eq!(snapshot.error_category, Some(ErrorCategory::NotAvailable));
+    let requests = client.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].url.ends_with("/profile"));
+}
+
+#[tokio::test]
+async fn claude_cli_verification_is_cached_only_for_the_current_token() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = cli_profile_http(200, false);
+    let (runtime, path) = claude_cli_fixture(directory.path(), "fixture-old", client.clone());
+    for token in [
+        "fixture-old",
+        "fixture-old",
+        "fixture-renewed",
+        "fixture-old",
+    ] {
+        write_claude_token(&path, token);
+        assert_eq!(
+            runtime
+                .refresh(RefreshContext::scheduled())
+                .await
+                .error_category,
+            None
+        );
+    }
+    let requests = client.requests.lock().unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.url.ends_with("/profile"))
+            .count(),
+        3
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.url.ends_with("/usage"))
+            .count(),
+        4
+    );
+}
+
+#[tokio::test]
+async fn claude_cli_verifies_a_rotated_token_before_retrying_usage() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = cli_profile_http(200, false);
+    let (runtime, path) = claude_cli_fixture(directory.path(), "fixture-old", client.clone());
+    *client.rotation.lock().unwrap() = Some(path);
+    assert_eq!(
+        runtime
+            .refresh(RefreshContext::scheduled())
+            .await
+            .error_category,
+        None
+    );
+    let requests = client.requests.lock().unwrap();
+    let endpoints: Vec<_> = requests
+        .iter()
+        .map(|request| request.url.rsplit('/').next().unwrap())
+        .collect();
+    assert_eq!(endpoints, ["profile", "usage", "profile", "usage"]);
+}
+
+#[tokio::test]
+async fn claude_cli_does_not_fetch_usage_when_profile_verification_fails() {
+    for (status, malformed) in [
+        (0, false),
+        (401, false),
+        (503, false),
+        (200, true),
+        (429, false),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let client = cli_profile_http(status, malformed);
+        let (runtime, _) = claude_cli_fixture(directory.path(), "fixture-old", client.clone());
+        assert!(
+            runtime
+                .refresh(RefreshContext::scheduled())
+                .await
+                .error_category
+                .is_some()
+        );
+        assert!(
+            runtime
+                .refresh(RefreshContext::scheduled())
+                .await
+                .error_category
+                .is_some()
+        );
+        let requests = client.requests.lock().unwrap();
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.url.ends_with("/profile"))
+        );
+        assert_eq!(requests.len(), if status == 429 { 1 } else { 2 });
+    }
+}
+
+#[tokio::test]
+async fn claude_cli_invalid_session_does_not_attempt_profile_verification() {
+    for (expiry, scopes, category) in [
+        (1, json!(["user:profile"]), ErrorCategory::AuthExpired),
+        (
+            4_000_000_000_000,
+            json!(["user:inference"]),
+            ErrorCategory::NotAvailable,
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let client = cli_profile_http(200, false);
+        let (runtime, path) = claude_cli_fixture(directory.path(), "fixture-old", client.clone());
+        let mut document = claude_doc(expiry);
+        document["claudeAiOauth"]["scopes"] = scopes;
+        std::fs::write(path, serde_json::to_vec(&document).unwrap()).unwrap();
+        assert_eq!(
+            runtime
+                .refresh(RefreshContext::scheduled())
+                .await
+                .error_category,
+            Some(category)
+        );
+        assert!(client.requests.lock().unwrap().is_empty());
+    }
 }

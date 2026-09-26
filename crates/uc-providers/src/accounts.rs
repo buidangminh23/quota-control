@@ -108,8 +108,16 @@ pub fn cli_account_from(
     path: PathBuf,
     profile: Option<PathBuf>,
 ) -> Result<CliAccount, SimpleProviderError> {
+    read_cli_account(kind, path, profile).map(|(account, _)| account)
+}
+
+pub(crate) fn read_cli_account(
+    kind: ProviderKind,
+    path: PathBuf,
+    profile: Option<PathBuf>,
+) -> Result<(CliAccount, Credentials), SimpleProviderError> {
     let mut document = read_json_file(&path, kind)?;
-    parse_credentials(kind, &document)?;
+    let credentials = parse_credentials(kind, &document)?;
     if kind == ProviderKind::Claude {
         let profile = profile.as_deref().ok_or_else(|| {
             auth_error("Claude account metadata is unavailable. Connect through the browser.")
@@ -121,13 +129,16 @@ pub fn cli_account_from(
         .and_then(|metadata| metadata.modified())
         .map(DateTime::<Utc>::from)
         .unwrap_or_else(|_| Utc::now());
-    Ok(CliAccount {
-        kind,
-        id: account_id(kind, &key),
-        updated_at,
-        path,
-        profile,
-    })
+    Ok((
+        CliAccount {
+            kind,
+            id: account_id(kind, &key),
+            updated_at,
+            path,
+            profile,
+        },
+        credentials,
+    ))
 }
 
 pub async fn import_account_from_file(
