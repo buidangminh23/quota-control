@@ -213,6 +213,13 @@ export interface ProviderEntry {
 }
 
 /** Live refresh state for one provider (stale-while-revalidate). */
+/** What spending one banked limit reset came to (`limit_resets.rs`). */
+export type LimitResetResult =
+  | { status: "reset"; resetType: string | null }
+  | { status: "rejected"; code: string }
+  | { status: "failed"; category: ErrorCategory }
+  | { status: "inFlight" };
+
 export interface ProviderRuntimeState {
   /** Last good snapshot; absent until the first cache load or success. */
   snapshot?: ProviderSnapshot;

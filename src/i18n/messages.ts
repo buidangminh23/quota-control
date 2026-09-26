@@ -2,7 +2,7 @@
  * The shape every language catalog implements. Parameterized entries are functions so each language
  * controls word order (English "95% left" vs Vietnamese "Còn 95%").
  */
-import type { ErrorCategory, UpdateFailureReason, UpdateFailureStage } from "@/lib/types";
+import type { ErrorCategory, LimitResetResult, UpdateFailureReason, UpdateFailureStage } from "@/lib/types";
 import type { TaskbarDisplay } from "@/model/settings";
 import type { PriceMessages, UsageMessages } from "./usageMessages";
 
@@ -271,6 +271,17 @@ export interface NotifyMessages {
   willRunOut(eta: string | null): string;
 }
 
+export interface LimitResetMessages {
+  redeem: string;
+  redeeming: string;
+  confirmTitle: string;
+  /** `expiry` is when the reset about to be spent expires, e.g. `18:37 ngày mai`. */
+  confirmMessage(expiry: string | null): string;
+  confirm: string;
+  result(result: LimitResetResult, errors: Record<ErrorCategory, string>): string;
+  failed: string;
+}
+
 export interface Messages {
   language: string;
   format: FormatMessages;
@@ -286,6 +297,7 @@ export interface Messages {
   strip: StripMessages;
   update: UpdateMessages;
   notify: NotifyMessages;
+  limitReset: LimitResetMessages;
   /** Backend English text → this language; `undefined` keeps the source text. */
   term(text: string): string | undefined;
 }

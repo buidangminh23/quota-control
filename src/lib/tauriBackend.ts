@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Backend, DocumentName, Unsubscribe } from "./backend";
 import type { ContextWindowSession, ExchangeRate, UsageGroupRow, UsageLedgerInfo, UsageQuery } from "./types";
+import type { LimitResetResult } from "./types";
 import type { Language } from "@/i18n/language";
 import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
 
@@ -114,6 +115,10 @@ export class TauriBackend implements Backend {
 
   refresh(providerId?: string): Promise<void> {
     return invoke("refresh", { providerId: providerId ?? null });
+  }
+
+  redeemLimitReset(providerId: string): Promise<LimitResetResult> {
+    return invoke<LimitResetResult>("redeem_limit_reset", { providerId });
   }
 
   setEnabledProviders(providerIds: string[]): Promise<void> {

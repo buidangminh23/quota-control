@@ -41,6 +41,10 @@ const VERBS = {
   resetExpires: { lead: "Hết hạn", soon: "Sắp hết hạn" },
 } as const;
 
+function lowerFirst(text: string): string {
+  return text.charAt(0).toLocaleLowerCase("vi-VN") + text.slice(1);
+}
+
 function capitalize(text: string): string {
   return text.charAt(0).toLocaleUpperCase("vi-VN") + text.slice(1);
 }
@@ -364,6 +368,36 @@ export const vi: Messages = {
     cuttingItClose: (percent) => `Với nhịp hiện tại, bạn sẽ dùng khoảng ${percent}% hạn mức trước khi đặt lại.`,
     willRunOut: (eta) =>
       eta ? `Với nhịp hiện tại, bạn sẽ hết hạn mức trước khi đặt lại (${eta.charAt(0).toLocaleLowerCase("vi-VN")}${eta.slice(1)}).` : "Với nhịp hiện tại, bạn sẽ hết hạn mức trước khi đặt lại.",
+  },
+  limitReset: {
+    redeem: "Dùng 1 lượt",
+    redeeming: "Đang dùng…",
+    confirmTitle: "Dùng 1 lượt đặt lại?",
+    confirmMessage: (expiry) =>
+      `Codex sẽ hồi hạn mức ngay: giới hạn 5 giờ, giới hạn tuần hoặc cả hai, do OpenAI chọn. App dùng lượt hết hạn sớm nhất${expiry ? ` (hết hạn lúc ${expiry})` : ""}. Dùng rồi không lấy lại được.`,
+    confirm: "Dùng 1 lượt",
+    result(result, errors) {
+      switch (result.status) {
+        case "reset":
+          return "Đã dùng 1 lượt đặt lại. Hạn mức Codex đã hồi.";
+        case "inFlight":
+          return "Lượt đặt lại đang được dùng, chờ chút.";
+        case "failed":
+          return `Chưa xác nhận được lượt đã dùng hay chưa (${lowerFirst(errors[result.category])}). Bấm lại sẽ gửi đúng yêu cầu cũ nên không bị trừ hai lượt.`;
+        case "rejected":
+          switch (result.code) {
+            case "no_credit":
+              return "Không còn lượt đặt lại nào.";
+            case "nothing_to_reset":
+              return "Hạn mức chưa dùng nên chưa cần đặt lại; lượt vẫn còn nguyên.";
+            case "already_redeemed":
+              return "Lượt này đã được dùng ở nơi khác.";
+            default:
+              return `OpenAI không cho dùng lượt này (${result.code}).`;
+          }
+      }
+    },
+    failed: "Không dùng được lượt đặt lại. Thử lại sau.",
   },
   term: viTerm,
 };

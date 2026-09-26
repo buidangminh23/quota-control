@@ -13,10 +13,14 @@ use async_trait::async_trait;
 use credentials::CredentialStore;
 use sha2::{Digest, Sha256};
 use uc_core::{
-    Clock, ErrorCategory, HttpRequest, LimitResourceKind, LimitResourceSource, MetricKind,
-    Provider, ProviderLink, ProviderRuntime, ProviderSnapshot, RefreshContext, ReqwestHttpClient,
-    SessionStartSignal, SharedHttpClient, SimpleProviderError, WidgetDescriptor, system_clock,
+    Clock, ErrorCategory, HttpRequest, LimitResetCredit, LimitResetReply, LimitResourceKind,
+    LimitResourceSource, MetricKind, Provider, ProviderLink, ProviderRuntime, ProviderSnapshot,
+    RefreshContext, ReqwestHttpClient, SessionStartSignal, SharedHttpClient, SimpleProviderError,
+    WidgetDescriptor, no_limit_resets, system_clock,
 };
+
+/// How long listing or spending a limit reset may take.
+const RESET_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProviderKind {
@@ -293,12 +297,20 @@ impl LocalProvider {
         ))
     }
 
+    /// Codex's banked resets live next to its usage endpoint; Claude banks none.
+    fn reset_credits_endpoint(&self) -> Option<String> {
+        if self.kind != ProviderKind::Codex {
+            return None;
+        }
+        let base = self.endpoint.strip_suffix("/usage")?;
+        Some(format!("{base}/rate-limit-reset-credits"))
+    }
+
     async fn reset_credit_expiries(
         &self,
         credentials: &credentials::Credentials,
     ) -> Option<Vec<chrono::DateTime<chrono::Utc>>> {
-        let base = self.endpoint.strip_suffix("/usage")?;
-        let endpoint = format!("{base}/rate-limit-reset-credits");
+        let endpoint = self.reset_credits_endpoint()?;
         let timeout = Duration::from_secs(3);
         let request = self.authenticated_request(&endpoint, credentials, timeout);
         let response = tokio::time::timeout(timeout, self.http.send(request))
@@ -317,10 +329,17 @@ impl LocalProvider {
         credentials: &credentials::Credentials,
         timeout: Duration,
     ) -> HttpRequest {
-        let mut request = HttpRequest::get(endpoint)
+        self.authenticated(HttpRequest::get(endpoint).timeout(timeout), credentials)
+    }
+
+    fn authenticated(
+        &self,
+        request: HttpRequest,
+        credentials: &credentials::Credentials,
+    ) -> HttpRequest {
+        let mut request = request
             .bearer(&credentials.access_token)
-            .header("Accept", "application/json")
-            .timeout(timeout);
+            .header("Accept", "application/json");
         match self.kind {
             ProviderKind::Claude => {
                 request = request.header("anthropic-beta", "oauth-2025-04-20");
@@ -332,6 +351,57 @@ impl LocalProvider {
             }
         }
         request
+    }
+
+    /// Send the request `build` makes with ready credentials, renewing them once on a 401.
+    async fn send_with_renewal(
+        &self,
+        build: &(dyn Fn(&credentials::Credentials) -> HttpRequest + Sync),
+    ) -> Result<uc_core::HttpResponse, SimpleProviderError> {
+        let now = (self.clock)();
+        let mut credentials = self.ready_credentials(now, None).await?;
+        self.validate_credentials(&credentials, now)?;
+        if self.cooldown.lock().await.is_some_and(|until| until > now) {
+            return Err(SimpleProviderError::new(
+                ErrorCategory::RateLimited,
+                "Requests are rate limited. Waiting before retrying.",
+            ));
+        }
+        let mut response = self.send_reset_request(build(&credentials)).await?;
+        if response.status == 401 {
+            let renewed = self
+                .ready_credentials(now, Some(&credentials.access_token))
+                .await?;
+            if renewed.access_token != credentials.access_token {
+                credentials = renewed;
+                self.validate_credentials(&credentials, now)?;
+                response = self.send_reset_request(build(&credentials)).await?;
+            }
+        }
+        self.record_cooldown(&response, now).await;
+        if !response.is_success() {
+            return Err(SimpleProviderError::new(
+                if matches!(response.status, 401 | 403) {
+                    ErrorCategory::AuthExpired
+                } else {
+                    ErrorCategory::http(response.status)
+                },
+                "The limit reset service refused the request.",
+            ));
+        }
+        Ok(response)
+    }
+
+    async fn send_reset_request(
+        &self,
+        request: HttpRequest,
+    ) -> Result<uc_core::HttpResponse, SimpleProviderError> {
+        self.http.send(request).await.map_err(|_| {
+            SimpleProviderError::new(
+                ErrorCategory::Network,
+                "Cannot connect to the limit reset service.",
+            )
+        })
     }
 
     async fn request_usage(
@@ -354,6 +424,39 @@ impl LocalProvider {
 impl ProviderRuntime for LocalProvider {
     fn provider(&self) -> &Provider {
         &self.provider
+    }
+
+    async fn limit_reset_credits(&self) -> Result<Vec<LimitResetCredit>, SimpleProviderError> {
+        let endpoint = self.reset_credits_endpoint().ok_or_else(no_limit_resets)?;
+        let response = self
+            .send_with_renewal(&|credentials| {
+                self.authenticated_request(&endpoint, credentials, RESET_TIMEOUT)
+            })
+            .await?;
+        mapping::reset_credits(&response)
+    }
+
+    async fn redeem_limit_reset(
+        &self,
+        credit_id: &str,
+        request_id: &str,
+    ) -> Result<LimitResetReply, SimpleProviderError> {
+        let endpoint = format!(
+            "{}/consume",
+            self.reset_credits_endpoint().ok_or_else(no_limit_resets)?
+        );
+        let body = serde_json::json!({"credit_id": credit_id, "redeem_request_id": request_id});
+        let response = self
+            .send_with_renewal(&|credentials| {
+                self.authenticated(
+                    HttpRequest::post(&endpoint)
+                        .json_body(&body)
+                        .timeout(RESET_TIMEOUT),
+                    credentials,
+                )
+            })
+            .await?;
+        mapping::limit_reset_reply(&response)
     }
 
     fn widget_descriptors(&self) -> Vec<WidgetDescriptor> {

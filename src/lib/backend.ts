@@ -8,6 +8,7 @@ import type { Language } from "@/i18n/language";
 import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
 
 import type { ContextWindowSession, ExchangeRate, UsageGroupRow, UsageLedgerInfo, UsageQuery } from "./types";
+import type { LimitResetResult } from "./types";
 
 export type Unsubscribe = () => void;
 
@@ -43,6 +44,11 @@ export interface Backend {
   onEngineState(listener: (state: EngineState) => void): Unsubscribe;
   /** Force-refresh one provider, or every enabled provider when `providerId` is omitted. */
   refresh(providerId?: string): Promise<void>;
+  /**
+   * Spend the account's banked limit reset that expires first (Codex only). Only when the user
+   * asks; the regular limits keep resetting on the provider's own schedule.
+   */
+  redeemLimitReset?(providerId: string): Promise<LimitResetResult>;
   /** Which providers the engine refreshes; the popup owns enablement (Customize). */
   setEnabledProviders(providerIds: string[]): Promise<void>;
   loadDocument<T>(name: DocumentName): Promise<T | null>;

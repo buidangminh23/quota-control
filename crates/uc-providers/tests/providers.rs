@@ -564,3 +564,170 @@ async fn missing_unreadable_and_malformed_credentials_are_distinct() {
     assert_eq!(error.category, ErrorCategory::AuthInvalid);
     assert!(!error.message.contains("malformed-private-content"));
 }
+
+struct RedeemHttp {
+    replies: Mutex<HashMap<String, HttpResponse>>,
+    requests: Mutex<Vec<HttpRequest>>,
+}
+
+#[async_trait]
+impl HttpClient for RedeemHttp {
+    async fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        let reply = self.replies.lock().unwrap().get(&request.url).cloned();
+        self.requests.lock().unwrap().push(request);
+        reply.ok_or(HttpError::Transport("unexpected endpoint".into()))
+    }
+}
+
+fn redeem_http(replies: &[(&str, HttpResponse)]) -> Arc<RedeemHttp> {
+    Arc::new(RedeemHttp {
+        replies: Mutex::new(
+            replies
+                .iter()
+                .map(|(url, reply)| (url.to_string(), reply.clone()))
+                .collect(),
+        ),
+        requests: Default::default(),
+    })
+}
+
+const CREDITS_URL: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
+const CONSUME_URL: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
+
+#[tokio::test]
+async fn codex_lists_spendable_reset_credits_soonest_first() {
+    let later = now() + chrono::Duration::days(9);
+    let sooner = now() + chrono::Duration::days(1);
+    let http = redeem_http(&[(
+        CREDITS_URL,
+        response(
+            200,
+            json!({"credits":[
+                {"id":"credit-later","status":"available","expires_at":later.to_rfc3339()},
+                {"id":"credit-used","status":"used","expires_at":sooner.to_rfc3339()},
+                {"id":"credit-sooner","status":"available","expires_at":sooner.timestamp()},
+                {"id":"credit-open","status":"available","expires_at":null}
+            ]}),
+        ),
+    )]);
+    let (_directory, provider) = setup(ProviderKind::Codex, reset_credentials(), http.clone());
+    let credits = provider.limit_reset_credits().await.unwrap();
+    let ids: Vec<_> = credits.iter().map(|credit| credit.id.as_str()).collect();
+    assert_eq!(ids, ["credit-sooner", "credit-later", "credit-open"]);
+    assert_eq!(credits[0].expires_at, Some(sooner));
+    let requests = http.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    assert!(
+        requests[0]
+            .headers
+            .contains(&("ChatGPT-Account-Id".into(), "fixture-account".into()))
+    );
+}
+
+#[tokio::test]
+async fn codex_spends_the_chosen_credit_with_its_request_id() {
+    let http = redeem_http(&[(
+        CONSUME_URL,
+        response(
+            200,
+            json!({"code":"reset","credit":{"id":"credit-sooner","reset_type":"weekly"}}),
+        ),
+    )]);
+    let (_directory, provider) = setup(ProviderKind::Codex, reset_credentials(), http.clone());
+    let reply = provider
+        .redeem_limit_reset("credit-sooner", "request-1")
+        .await
+        .unwrap();
+    assert_eq!(reply.code, "reset");
+    assert_eq!(reply.reset_type.as_deref(), Some("weekly"));
+    let requests = http.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    let body: Value = serde_json::from_slice(requests[0].body.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        body,
+        json!({"credit_id":"credit-sooner","redeem_request_id":"request-1"})
+    );
+    for header in [
+        ("Authorization", "Bearer fixture-token"),
+        ("ChatGPT-Account-Id", "fixture-account"),
+        ("Content-Type", "application/json"),
+    ] {
+        assert!(
+            requests[0]
+                .headers
+                .contains(&(header.0.into(), header.1.into()))
+        );
+    }
+}
+
+#[tokio::test]
+async fn codex_reports_refusals_and_failures_without_leaking_the_response() {
+    let http = redeem_http(&[(
+        CONSUME_URL,
+        response(
+            200,
+            json!({"code":"nothing_to_reset","detail":"private-detail"}),
+        ),
+    )]);
+    let (_directory, provider) = setup(ProviderKind::Codex, reset_credentials(), http);
+    let reply = provider
+        .redeem_limit_reset("credit", "request")
+        .await
+        .unwrap();
+    assert_eq!(reply.code, "nothing_to_reset");
+    assert_eq!(reply.reset_type, None);
+
+    for (status, category) in [
+        (403, ErrorCategory::AuthExpired),
+        (429, ErrorCategory::RateLimited),
+        (500, ErrorCategory::Http5xx),
+    ] {
+        let http = redeem_http(&[(
+            CONSUME_URL,
+            response(status, json!({"error":"private-body"})),
+        )]);
+        let (_directory, provider) = setup(ProviderKind::Codex, reset_credentials(), http);
+        let error = provider
+            .redeem_limit_reset("credit", "request")
+            .await
+            .unwrap_err();
+        assert_eq!(error.category, category);
+        assert!(!error.message.contains("private-"));
+    }
+
+    let offline = redeem_http(&[]);
+    let (_directory, provider) = setup(ProviderKind::Codex, reset_credentials(), offline);
+    assert_eq!(
+        provider
+            .redeem_limit_reset("credit", "request")
+            .await
+            .unwrap_err()
+            .category,
+        ErrorCategory::Network
+    );
+}
+
+#[tokio::test]
+async fn claude_has_no_limit_resets_and_sends_nothing() {
+    let http = redeem_http(&[]);
+    let (_directory, provider) = setup(
+        ProviderKind::Claude,
+        json!({"claudeAiOauth":{"accessToken":"fixture-token"}}),
+        http.clone(),
+    );
+    assert_eq!(
+        provider.limit_reset_credits().await.unwrap_err().category,
+        ErrorCategory::NotAvailable
+    );
+    assert_eq!(
+        provider
+            .redeem_limit_reset("credit", "request")
+            .await
+            .unwrap_err()
+            .category,
+        ErrorCategory::NotAvailable
+    );
+    assert!(http.requests.lock().unwrap().is_empty());
+}

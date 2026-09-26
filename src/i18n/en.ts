@@ -30,6 +30,10 @@ function restoreDay(day: RestoreDay): string {
 
 const VERBS = { resets: "Resets", limit: "Limit", resetExpires: "Reset expires" } as const;
 
+function lowerFirst(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1);
+}
+
 export const en: Messages = {
   language: "English",
   format: {
@@ -335,6 +339,36 @@ export const en: Messages = {
     cuttingItClose: (percent) => `At this pace you'll use about ${percent}% of this limit before it resets.`,
     willRunOut: (eta) =>
       eta ? `At this pace you'll hit the limit before it resets (${eta.charAt(0).toLowerCase()}${eta.slice(1)}).` : "At this pace you'll hit the limit before it resets.",
+  },
+  limitReset: {
+    redeem: "Use 1 Reset",
+    redeeming: "Using…",
+    confirmTitle: "Use 1 Limit Reset?",
+    confirmMessage: (expiry) =>
+      `Codex restores your limit now: the 5-hour limit, the weekly limit or both, as OpenAI decides. The reset that expires first is used${expiry ? ` (it expires ${expiry})` : ""}. This can't be undone.`,
+    confirm: "Use 1 Reset",
+    result(result, errors) {
+      switch (result.status) {
+        case "reset":
+          return "Used 1 limit reset. Your Codex limit is back.";
+        case "inFlight":
+          return "A limit reset is already in progress.";
+        case "failed":
+          return `Couldn't confirm the reset (${lowerFirst(errors[result.category])}). Pressing again repeats the same request, so it can't use two.`;
+        case "rejected":
+          switch (result.code) {
+            case "no_credit":
+              return "No limit resets are left.";
+            case "nothing_to_reset":
+              return "There is nothing to reset yet, so the reset was kept.";
+            case "already_redeemed":
+              return "This reset was already used elsewhere.";
+            default:
+              return `OpenAI refused the reset (${result.code}).`;
+          }
+      }
+    },
+    failed: "Couldn't use the limit reset. Try again later.",
   },
   term: () => undefined,
 };

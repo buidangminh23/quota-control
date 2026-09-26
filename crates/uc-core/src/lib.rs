@@ -17,7 +17,10 @@ pub mod time;
 pub use error::{ErrorCategory, ProviderError, SimpleProviderError};
 pub use http::{HttpClient, HttpError, HttpRequest, HttpResponse, ProxyConfig, ReqwestHttpClient, SharedHttpClient};
 pub use model::*;
-pub use runtime::{Clock, ProviderRuntime, RefreshContext, fixed_clock, load_blocking, system_clock, with_deadline};
+pub use runtime::{
+    Clock, LimitResetCredit, LimitResetReply, ProviderRuntime, RefreshContext, fixed_clock,
+    load_blocking, no_limit_resets, system_clock, with_deadline,
+};
 
 /// The app's display name.
 pub const APP_NAME: &str = "Quota Control";

@@ -27,6 +27,7 @@ import { openMenu, type MenuEntry } from "../ui/menu";
 import { ProviderMark } from "../ui/ProviderMark";
 import { tooltipProps, truncatedTooltipProps } from "../ui/tooltip";
 import { MetricRow } from "./MetricRow";
+import { RedeemResetButton, canRedeemReset } from "./RedeemResetButton";
 
 const CHAT_PRODUCTS: Record<AccountProvider, string> = { claude: "Claude", codex: "ChatGPT" };
 
@@ -141,6 +142,7 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
       }}
     >
       <MetricRow data={data} now={now} condensedTop={condensed.has(descriptor.id)} />
+      {!tokenSource && canRedeemReset(data) ? <RedeemResetButton providerId={providerId} data={data} now={now} /> : null}
     </div>
   );
 

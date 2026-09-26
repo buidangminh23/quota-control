@@ -75,6 +75,24 @@ describe("popup", () => {
     expect(titles).toEqual(["Phiên", "Tuần", "Lượt đặt lại hạn mức"]);
   });
 
+  it("uses a Codex limit reset only after the user confirms, one per press", async () => {
+    await renderApp();
+    const codex = screen.getByRole("region", { name: "Codex" });
+    expect(within(codex).getByText("2 khả dụng")).toBeInTheDocument();
+    fireEvent.click(within(codex).getByRole("button", { name: "Dùng 1 lượt" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(/Dùng rồi không lấy lại được/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Hủy" }));
+    expect(within(codex).getByText("2 khả dụng")).toBeInTheDocument();
+    for (const left of ["1 khả dụng", "0 khả dụng"]) {
+      fireEvent.click(within(codex).getByRole("button", { name: "Dùng 1 lượt" }));
+      fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Dùng 1 lượt" }));
+      expect(await within(codex).findByText(left)).toBeInTheDocument();
+    }
+    expect(screen.getByText("Đã dùng 1 lượt đặt lại. Hạn mức Codex đã hồi.")).toBeInTheDocument();
+    expect(within(codex).queryByRole("button", { name: "Dùng 1 lượt" })).not.toBeInTheDocument();
+  });
+
   it("shows the token total, then each source's trend and periods, on the Token tab and remembers the choice", async () => {
     await renderApp();
     fireEvent.click(screen.getByRole("tab", { name: "Token" }));

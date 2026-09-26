@@ -1,7 +1,8 @@
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{Map, Value};
 use uc_core::{
-    ErrorCategory, HttpResponse, MetricLine, MetricValue, ProgressFormat, SimpleProviderError,
+    ErrorCategory, HttpResponse, LimitResetCredit, LimitResetReply, MetricLine, MetricValue,
+    ProgressFormat, SimpleProviderError,
 };
 
 use crate::ProviderKind;
@@ -26,6 +27,45 @@ pub(crate) fn reset_credit_expiries(
         }
     }
     Ok(expiries)
+}
+
+/// The credits Codex lists as spendable, soonest to expire first; one without an expiry goes last.
+pub(crate) fn reset_credits(
+    response: &HttpResponse,
+) -> Result<Vec<LimitResetCredit>, SimpleProviderError> {
+    let body: Value = response.json().map_err(|_| invalid())?;
+    let credits = body["credits"].as_array().ok_or_else(invalid)?;
+    let mut available = Vec::new();
+    for credit in credits {
+        if credit["status"].as_str().ok_or_else(invalid)? != "available" {
+            continue;
+        }
+        let id = credit["id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(invalid)?;
+        available.push(LimitResetCredit {
+            id: id.to_string(),
+            expires_at: timestamp(&credit["expires_at"])?,
+        });
+    }
+    available.sort_by_key(|credit| credit.expires_at.unwrap_or(DateTime::<Utc>::MAX_UTC));
+    Ok(available)
+}
+
+/// Codex's answer to `consume`: its `code` and, on success, which limit came back.
+pub(crate) fn limit_reset_reply(
+    response: &HttpResponse,
+) -> Result<LimitResetReply, SimpleProviderError> {
+    let body: Value = response.json().map_err(|_| invalid())?;
+    let code = body["code"]
+        .as_str()
+        .filter(|code| !code.is_empty())
+        .ok_or_else(invalid)?;
+    Ok(LimitResetReply {
+        code: code.to_string(),
+        reset_type: body["credit"]["reset_type"].as_str().map(str::to_string),
+    })
 }
 
 fn invalid() -> SimpleProviderError {

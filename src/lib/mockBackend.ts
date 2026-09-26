@@ -13,6 +13,7 @@ import type {
   ChatSession,
   ConnectedAccount,
   EngineState,
+  LimitResetResult,
   LoginBrowser,
   PopoverScreen,
   ProviderEntry,
@@ -173,6 +174,20 @@ export class MockBackend implements Backend {
       }
       state.lastRefreshAt = new Date().toISOString();
     });
+  }
+
+  async redeemLimitReset(providerId: string): Promise<LimitResetResult> {
+    const resets = (state: EngineState) =>
+      state.providers[providerId]?.snapshot?.lines.find((line) => line.type === "values" && line.label === "Rate Limit Resets");
+    const line = resets(this.state);
+    if (line?.type !== "values" || !((line.values[0]?.number ?? 0) >= 1)) return { status: "rejected", code: "no_credit" };
+    this.update((state) => {
+      const target = resets(state);
+      if (target?.type !== "values" || !target.values[0]) return;
+      target.values[0].number -= 1;
+      target.expiriesAt = [...(target.expiriesAt ?? [])].sort().slice(1);
+    });
+    return { status: "reset", resetType: null };
   }
 
   async setEnabledProviders(providerIds: string[]): Promise<void> {

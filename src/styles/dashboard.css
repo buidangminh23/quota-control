@@ -243,6 +243,12 @@ button.uc-row-warning:hover {
   font-size: var(--uc-support-size);
 }
 
+.uc-row-action {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 var(--uc-pad-x) var(--uc-text-row-pad);
+}
+
 .uc-row.is-text.is-condensed {
   padding-top: var(--uc-condensed-top);
 }

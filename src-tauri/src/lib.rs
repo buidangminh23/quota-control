@@ -7,6 +7,7 @@ mod commands;
 pub mod exchange_rate;
 mod integrations;
 mod ipc_guard;
+mod limit_resets;
 mod service;
 mod shortcut;
 mod taskbar_strip;
@@ -85,6 +86,7 @@ pub fn run() -> anyhow::Result<()> {
             commands::catalog,
             commands::engine_state,
             commands::refresh,
+            limit_resets::redeem_limit_reset,
             commands::set_enabled_providers,
             commands::load_document,
             commands::save_document,
@@ -130,6 +132,7 @@ pub fn run() -> anyhow::Result<()> {
             app.manage(chat_store::ChatStore::default_store());
             app.manage(chat_commands::ChatWindows::default());
             app.manage(PopupAnchor::default());
+            app.manage(limit_resets::Redemptions::default());
             app.manage(updates::Updates::new(app.handle()));
             let window =
                 WebviewWindowBuilder::new(app, "popup", WebviewUrl::App("index.html".into()))
