@@ -1,0 +1,93 @@
+# Builds signed installers for a version tag and drafts the GitHub release that the in-app updater
+# reads (latest.json). Publishing the draft is left to a person: installed apps only see a release
+# once it is published as the latest. A manual run builds the installers without releasing them.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: windows
+            os: windows-latest
+            bundles: nsis
+          - name: linux
+            os: ubuntu-24.04
+            bundles: deb,appimage
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf
+      - run: pnpm install --frozen-lockfile
+      - name: Check the tag against the app version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: node scripts/release.mjs version --tag "${{ github.ref_name }}"
+      - name: Build installers
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            pnpm tauri build --ci --bundles "${{ matrix.bundles }}" --config src-tauri/tauri.updater.conf.json
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "::error::The TAURI_SIGNING_PRIVATE_KEY secret is not set; a release needs signed installers."
+            exit 1
+          else
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set; building unsigned installers that cannot be released."
+            pnpm tauri build --ci --bundles "${{ matrix.bundles }}"
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bundle-${{ matrix.name }}
+          path: |
+            target/release/bundle/nsis/*-setup.exe*
+            target/release/bundle/deb/*.deb*
+            target/release/bundle/appimage/*.AppImage*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Draft the release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v8
+        with:
+          path: bundles
+      - name: Assemble installers and latest.json
+        run: node scripts/release.mjs assemble --tag "${{ github.ref_name }}" --out release bundles
+      - name: Upload to a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release.mjs publish --tag "${{ github.ref_name }}" --dir release

@@ -24,6 +24,7 @@ Under active development. The port follows the upstream Swift edition (v0.7.12) 
 | 5 | Copilot, Antigravity, Devin, Ollama, OpenRouter, Z.ai |
 | 6 | CLI, local HTTP API, proxy, quota notifications, global shortcut, launch at login |
 | 7 | Windows installer, Linux `.deb` and `.AppImage` |
+| 8 | Signed in-app updates and the release workflow |
 
 ## Stack
 
@@ -180,6 +181,28 @@ from any app. It needs at least one of Ctrl, Alt, Shift or the Windows key, unle
 key (F1–F24). A combination another app already holds is refused with a message, and ✕ clears it.
 The shortcut is released while it is being recorded and registered again when the app starts.
 
+## Updates
+
+Installed copies update themselves from this repository's GitHub releases.
+
+- About 20 seconds after launch, and then every six hours while **Settings → App Updates → Check
+  for Updates Automatically** is on, the app reads `latest.json` from the latest release. A newer
+  version shows a card at the top of the popup with **Install Update** and **What's New**, and the
+  tray menu offers **Install Update X…**. A failed background check stays silent; **Check Now** in
+  Settings and **Check for Updates…** in the tray menu always report their result.
+- **Install Update** downloads the package that matches how the app was installed, verifies its
+  signature, installs it and reopens the app, which confirms the new version with a notification.
+  Windows runs the NSIS setup in passive mode: a progress window, no questions, no administrator
+  rights. A `.deb` asks for an administrator password (through `pkexec`, or a zenity or kdialog
+  prompt). An AppImage replaces its own file.
+- Every package must carry a minisign signature from the release key whose public half is built
+  into the app (`plugins.updater.pubkey` in `src-tauri/tauri.conf.json`), and the signature must
+  name the version being installed, so an older signed package cannot be passed off as an update.
+  This is separate from Windows code signing: SmartScreen still warns about a new setup file.
+- Downloads use the proxy in `~/.usage-control/config.json` when one is set, like provider
+  requests, and the system proxy otherwise.
+- A development build (`pnpm tauri dev`) cannot update itself; Settings links to the releases page.
+
 ## Installers
 
 Build on the platform you are packaging for. The installers are not code-signed, so Windows
@@ -216,6 +239,39 @@ WebKitGTK 4.1, GTK 3 and Ayatana AppIndicator, and installs `/usr/bin/quota-cont
 `/usr/bin/usagectl`. The AppImage carries its own libraries and does not need libfuse2; run
 `Quota Control_0.1.0_amd64.AppImage --cli` for the command line. Where FUSE is unavailable,
 `APPIMAGE_EXTRACT_AND_RUN=1` runs it without mounting.
+
+## Releases
+
+A release is a GitHub release carrying the three installers, their `.sig` files, `latest.json`
+(the manifest installed apps read) and `SHA256SUMS`. Installed apps see it only once it is
+published as the latest release.
+
+1. Set the same version in `package.json`, `src-tauri/tauri.conf.json` and `Cargo.toml`
+   (`[workspace.package]`), commit, then push a matching tag: `git tag v0.2.0 && git push origin v0.2.0`.
+2. The **Release** workflow checks the tag against the three versions, builds and signs the Windows
+   and Linux installers, and uploads everything to a **draft** release.
+3. Publish the draft on GitHub, or run `gh release edit v0.2.0 --draft=false --latest`. From then
+   on, installed apps offer the update.
+
+Without GitHub Actions, `node scripts/release.mjs local` releases from Windows: it builds the NSIS
+setup here and the `.deb` and AppImage in WSL from the committed tree, then assembles them into
+`target/release-assets/v0.2.0`. `--publish` uploads that folder to a draft release, and `--latest`
+publishes it, then reads `latest.json` back from GitHub and checks every download link.
+`--skip-linux` builds only the Windows setup; such a partial build cannot be published.
+
+### Signing key
+
+Releases are signed with a minisign key made by `pnpm tauri signer generate`. The private key is
+kept outside the repository, in `%USERPROFILE%\.tauri\quota-control.key`, where `release.mjs local`
+reads it. The workflow reads it from the `TAURI_SIGNING_PRIVATE_KEY` secret:
+
+```powershell
+Get-Content "$env:USERPROFILE\.tauri\quota-control.key" -Raw | gh secret set TAURI_SIGNING_PRIVATE_KEY -R buidangminh23/quota-control
+```
+
+Keep a backup of the key. Without it, no further update can be signed: a new key needs a new public
+key in `tauri.conf.json`, and installed apps only receive that through a manual reinstall. The key
+has no password; if one is added, also set the `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secret.
 
 ## Upgrade compatibility
 
