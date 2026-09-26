@@ -164,11 +164,6 @@ main() {
 
   say "Installed Quota Control $version in $destination."
   say "Add a widget: right-click the desktop, choose Edit Widgets and search for Quota Control."
-  case ":$PATH:" in
-    *":$HOME/.local/bin:"*) ;;
-    *) say "The usagectl command goes in ~/.local/bin, which your PATH lacks. To use it, run:"
-       say "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zprofile" ;;
-  esac
   if [ "$launch" -eq 1 ]; then
     open "$destination"
   fi

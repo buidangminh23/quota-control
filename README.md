@@ -88,7 +88,9 @@ After that the app updates itself like the Windows and Linux versions (see [Upda
   fallback. Codex keeps using `~/.codex/auth.json`.
 - **Files.** Settings, accounts and the widget file live in `~/Library/Application Support/usage-control`,
   caches in `~/Library/Caches/usage-control`, the log in `~/Library/Logs/usage-control`, and
-  `usagectl` is linked into `~/.local/bin` (add that folder to `PATH` if your shell lacks it).
+  `usagectl` is linked into `~/.local/bin`. When no shell profile names that folder, the app adds
+  it to `~/.zprofile` (or `~/.bash_profile` for bash) in a block marked "Quota Control: usagectl",
+  which uninstalling removes.
 ## Stack
 
 - [Tauri 2](https://tauri.app/): a Rust core and the operating system's own web view.
