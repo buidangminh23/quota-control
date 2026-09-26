@@ -4,10 +4,11 @@
  * pace notifications; app updates; and the log file plus a full reset. Changes apply live and
  * persist to the shared settings document.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { LANGUAGES, messagesFor, type Language } from "@/i18n";
 import { insightsFor } from "@/i18n/insights";
 import type { NotificationKey, SettingsSectionKey } from "@/i18n/messages";
+import { barKind, platformKey } from "@/model/platform";
 import { anyNotificationEnabled, taskbarDisplayOf, taskbarDisplayPatch, type NotificationSettings, type TaskbarDisplay } from "@/model/settings";
 import { autostartEnabled, canRevealFiles, notificationAccess, requestNotificationAccess, revealFile, setAutostart, type NotificationAccess } from "@/platform/system";
 import { backend } from "@/lib/backend";
@@ -15,47 +16,13 @@ import { useSettings } from "@/state/hooks";
 import { navigate, resetAllSettings, showNotice, updateSettings, useApp } from "@/state/store";
 import { useTaskbarInfo } from "@/strip/support";
 import { CrossLink } from "../customize/Customize";
+import { IslandSection, StripRows, WidgetSection } from "./GlanceSettings";
+import { InlineNotice, Row, Section } from "./parts";
 import { ShortcutRecorder } from "./ShortcutRecorder";
 import { UpdateRows } from "./UpdateRows";
 import { Button, Picker, Switch } from "../ui/controls";
 import { confirmAction } from "../ui/dialog";
-import { SlidersIcon, WarningTriangle } from "../ui/icons";
-
-function Section({ title, children, warning }: { title: string; children: ReactNode; warning?: boolean }) {
-  return (
-    <section className="uc-group">
-      <h2 className="uc-group-title">
-        {title}
-        {warning ? (
-          <span className="uc-inline-icon" style={{ color: "var(--uc-orange)" }}>
-            <WarningTriangle size={10} />
-          </span>
-        ) : null}
-      </h2>
-      <div className="uc-card uc-settings-card">{children}</div>
-    </section>
-  );
-}
-
-function Row({ label, children, note }: { label: string; children: ReactNode; note?: string }) {
-  return (
-    <div className="uc-settings-row-group">
-      <div className="uc-settings-row">
-        <span className="uc-settings-label">{label}</span>
-        {children}
-      </div>
-      {note ? <p className="uc-settings-note">{note}</p> : null}
-    </div>
-  );
-}
-
-function InlineNotice({ text }: { text: string }) {
-  return <p className="uc-settings-notice">{text}</p>;
-}
-
-function platformKey(platform: string | undefined): "windows" | "linux" | "other" {
-  return platform === "windows" || platform === "linux" ? platform : "other";
-}
+import { SlidersIcon } from "../ui/icons";
 
 function useAutostart(): [boolean | null, (enabled: boolean) => void, string | null] {
   const [enabled, setEnabled] = useState<boolean | null>(null);
@@ -117,6 +84,7 @@ export function Settings() {
   const text = messages.settings;
   const insights = insightsFor(language);
   const platform = platformKey(info?.platform);
+  const bar = barKind(info?.platform);
   const [autostart, changeAutostart, autostartError] = useAutostart();
   const notificationsOn = anyNotificationEnabled(settings) || settings.notifyCodexResets;
   const [access, requestAccess] = useNotificationAccess(notificationsOn);
@@ -223,17 +191,21 @@ export function Settings() {
         </Row>
       </Section>
 
-      <Section title={section("taskbar")}>
-        <Row label={text.taskbarDisplay} note={text.taskbarNote(taskbarDisplay)}>
+      <Section title={section(bar)}>
+        <Row label={text.barDisplay(bar)} note={text.barNote(taskbarDisplay, bar)}>
           <Picker
             value={taskbarDisplay}
             options={stripSupported ? TASKBAR_DISPLAYS : TRAY_DISPLAYS}
             label={text.taskbarDisplayOption}
             onChange={(value) => updateSettings(taskbarDisplayPatch(value))}
-            ariaLabel={text.taskbarDisplay}
+            ariaLabel={text.barDisplay(bar)}
           />
         </Row>
+        <StripRows display={taskbarDisplay} />
       </Section>
+
+      {platform === "macos" ? <IslandSection /> : null}
+      {platform === "macos" ? <WidgetSection /> : null}
 
       <Section title={section("notifications")} warning={notificationsOn && access === "denied"}>
         {NOTIFICATION_KEYS.map((key) => (

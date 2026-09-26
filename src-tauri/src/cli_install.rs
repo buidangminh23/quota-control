@@ -6,6 +6,8 @@
 //!   which must never become a command. The copy is refreshed at launch after an update.
 //! - Linux packages already install `/usr/bin/usagectl`. Other builds link it into `~/.local/bin`;
 //!   an AppImage gets a small script that runs the AppImage with `--cli`.
+//! - macOS links `~/.local/bin/usagectl` to the copy inside `Quota Control.app/Contents/MacOS`, so it
+//!   follows every in-place update; a moved app relinks at its next launch.
 
 use crate::service::safe_error;
 
@@ -16,12 +18,12 @@ pub enum CliState {
     /// This build ships no `usagectl` (a development run or an unsupported platform).
     Unavailable,
     /// A package manager already put it on PATH.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(unix), allow(dead_code))]
     Managed,
     Installed,
     NotInstalled,
     /// Something Quota Control did not create already holds the command's name.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(unix), allow(dead_code))]
     Conflict,
 }
 
@@ -379,7 +381,7 @@ mod platform {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 mod platform {
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
@@ -561,7 +563,7 @@ mod platform {
     }
 }
 
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(not(any(windows, unix)))]
 mod platform {
     use super::CliState;
 

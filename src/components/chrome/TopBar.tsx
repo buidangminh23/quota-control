@@ -5,7 +5,7 @@
 import { messagesFor } from "@/i18n";
 import { resetProvider } from "@/model/layout";
 import { providerTitle } from "@/model/providerText";
-import { useLanguage } from "@/state/hooks";
+import { useLanguage, usePlatformKey } from "@/state/hooks";
 import { navigate, openCustomizeDetail, resetAllCustomization, undoLayout, updateLayout, useApp, type Screen } from "@/state/store";
 import { confirmAction } from "../ui/dialog";
 import { ChevronLeft, ResetIcon, UndoIcon } from "../ui/icons";
@@ -20,6 +20,7 @@ export function goBack(): void {
 export function TopBar({ screen }: { screen: Screen }) {
   const language = useLanguage();
   const messages = messagesFor(language);
+  const platform = usePlatformKey();
   const catalog = useApp((state) => state.catalog);
   const providerId = useApp((state) => state.customizeProviderId);
   const canUndo = useApp((state) => state.undoStack.length > 0);
@@ -48,7 +49,7 @@ export function TopBar({ screen }: { screen: Screen }) {
       <div className="uc-topbar-trailing">
         {screen === "customize" ? (
           <>
-            <button type="button" className="uc-circle-button" aria-label={messages.customize.undo} disabled={!canUndo} onClick={() => undoLayout()} {...tooltipProps(messages.customize.undo)}>
+            <button type="button" className="uc-circle-button" aria-label={messages.customize.undo(platform)} disabled={!canUndo} onClick={() => undoLayout()} {...tooltipProps(messages.customize.undo(platform))}>
               <UndoIcon size={12} />
             </button>
             {provider ? (

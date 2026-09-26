@@ -44,6 +44,46 @@ export type PriceTier = "standard" | "batch" | "flex" | "fast";
 export const PRICE_TIERS: readonly PriceTier[] = ["standard", "batch", "flex", "fast"];
 export type PriceCurrency = "vnd" | "usd";
 
+/** What a macOS glance surface lists: the Hạn mức cards, the starred metrics, or a hand-picked set. */
+export type GlanceContent = "dashboard" | "starred" | "custom";
+export const GLANCE_CONTENTS: readonly GlanceContent[] = ["dashboard", "starred", "custom"];
+/** How the closed Dynamic Island shows a reading beside the notch. */
+export type IslandStyle = "percent" | "ring" | "bar";
+export const ISLAND_STYLES: readonly IslandStyle[] = ["percent", "ring", "bar"];
+/** At most this many metrics can be picked by hand; more would not fit any surface. */
+export const MAX_GLANCE_METRICS = 64;
+
+/** What the desktop widget (and the open Dynamic Island) lists, and how each account reads. */
+export interface GlanceSurfaceSettings {
+  content: GlanceContent;
+  /** Metric ids shown when `content` is `custom`. */
+  metrics: string[];
+  showAccount: boolean;
+  showPlan: boolean;
+  showResets: boolean;
+  /** Accounts without readings (signed out, session expired) still get a line saying why. */
+  showProblems: boolean;
+}
+
+/** What the taskbar strip (the macOS menu bar item) lists. */
+export interface StripSettings {
+  content: GlanceContent;
+  /** Metric ids shown when `content` is `custom`. */
+  metrics: string[];
+  /** Readings per account: two stacked, like upstream's menu bar, or one. */
+  values: 1 | 2;
+}
+
+export interface IslandSettings extends GlanceSurfaceSettings {
+  style: IslandStyle;
+  /** The metrics beside the notch, left then right; an empty slot takes the content's next reading. */
+  wings: [string, string];
+  /** Open the details when the pointer rests on the island; otherwise a click opens them. */
+  expandOnHover: boolean;
+  /** Open the island for a few seconds when a limit runs low or comes back. */
+  alerts: boolean;
+}
+
 export interface NotificationSettings {
   /** A metric crosses under 10% remaining. */
   almostOut: boolean;
@@ -61,6 +101,12 @@ export interface AppSettings {
   timeFormat: TimeFormat;
   iconStyle: IconStyle;
   showTaskbarStrip: boolean;
+  strip: StripSettings;
+  /** macOS: readings around the notch (a pill in the menu bar on screens without one). */
+  dynamicIsland: boolean;
+  island: IslandSettings;
+  /** macOS: what the desktop widgets list. */
+  widget: GlanceSurfaceSettings;
   /** Whether the dashboard has its Token tab (upstream "Show Total Spend"). */
   showTotalSpend: boolean;
   /** Whether the dashboard has its Benchmark tab (model quality, public leaderboards, comparison). */
@@ -103,6 +149,28 @@ export const DEFAULT_SETTINGS: AppSettings = {
   timeFormat: "auto",
   iconStyle: "text",
   showTaskbarStrip: true,
+  strip: { content: "dashboard", metrics: [], values: 2 },
+  dynamicIsland: true,
+  island: {
+    content: "dashboard",
+    metrics: [],
+    showAccount: true,
+    showPlan: false,
+    showResets: true,
+    showProblems: true,
+    style: "percent",
+    wings: ["", ""],
+    expandOnHover: true,
+    alerts: true,
+  },
+  widget: {
+    content: "dashboard",
+    metrics: [],
+    showAccount: true,
+    showPlan: true,
+    showResets: true,
+    showProblems: true,
+  },
   showTotalSpend: true,
   showBenchmarkTab: true,
   showResetsTab: true,
@@ -143,6 +211,46 @@ function flag(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
+function metricIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const ids = value.filter((id): id is string => typeof id === "string" && id.length > 0 && id.length <= 512);
+  return [...new Set(ids)].slice(0, MAX_GLANCE_METRICS);
+}
+
+function parseSurface(value: unknown, defaults: GlanceSurfaceSettings): GlanceSurfaceSettings {
+  const stored = asRecord(value);
+  return {
+    content: oneOf(stored.content, GLANCE_CONTENTS, defaults.content),
+    metrics: metricIds(stored.metrics),
+    showAccount: flag(stored.showAccount, defaults.showAccount),
+    showPlan: flag(stored.showPlan, defaults.showPlan),
+    showResets: flag(stored.showResets, defaults.showResets),
+    showProblems: flag(stored.showProblems, defaults.showProblems),
+  };
+}
+
+function parseStrip(value: unknown, defaults: StripSettings): StripSettings {
+  const stored = asRecord(value);
+  return {
+    content: oneOf(stored.content, GLANCE_CONTENTS, defaults.content),
+    metrics: metricIds(stored.metrics),
+    values: stored.values === 1 || stored.values === 2 ? stored.values : defaults.values,
+  };
+}
+
+function parseIsland(value: unknown, defaults: IslandSettings): IslandSettings {
+  const stored = asRecord(value);
+  const wings = Array.isArray(stored.wings) ? stored.wings : [];
+  const wing = (index: number) => (typeof wings[index] === "string" && wings[index].length <= 512 ? (wings[index] as string) : "");
+  return {
+    ...parseSurface(value, defaults),
+    style: oneOf(stored.style, ISLAND_STYLES, defaults.style),
+    wings: [wing(0), wing(1)],
+    expandOnHover: flag(stored.expandOnHover, defaults.expandOnHover),
+    alerts: flag(stored.alerts, defaults.alerts),
+  };
+}
+
 /** Read the stored document; every missing or invalid key falls back to its default on its own. */
 export function parseSettings(raw: unknown): AppSettings {
   const stored = asRecord(raw);
@@ -156,6 +264,10 @@ export function parseSettings(raw: unknown): AppSettings {
     timeFormat: oneOf(stored.timeFormat, ["auto", "12h", "24h"], defaults.timeFormat),
     iconStyle: oneOf(stored.iconStyle, ["text", "bars"], defaults.iconStyle),
     showTaskbarStrip: flag(stored.showTaskbarStrip, defaults.showTaskbarStrip),
+    strip: parseStrip(stored.strip, defaults.strip),
+    dynamicIsland: flag(stored.dynamicIsland, defaults.dynamicIsland),
+    island: parseIsland(stored.island, defaults.island),
+    widget: parseSurface(stored.widget, defaults.widget),
     showTotalSpend: flag(stored.showTotalSpend, defaults.showTotalSpend),
     showBenchmarkTab: flag(stored.showBenchmarkTab, defaults.showBenchmarkTab),
     showResetsTab: flag(stored.showResetsTab, defaults.showResetsTab),
@@ -202,7 +314,14 @@ export function mergeSettingsDocument(
     const ids = base[key];
     if (Array.isArray(ids)) base[key] = ids.filter((id): id is string => typeof id === "string" && knownProviderIds.has(id));
   }
-  return { ...base, ...settings, notifications: { ...settings.notifications } };
+  return {
+    ...base,
+    ...settings,
+    notifications: { ...settings.notifications },
+    strip: { ...settings.strip, metrics: [...settings.strip.metrics] },
+    island: { ...settings.island, metrics: [...settings.island.metrics], wings: [...settings.island.wings] },
+    widget: { ...settings.widget, metrics: [...settings.widget.metrics] },
+  };
 }
 
 /** The providers the core refreshes, or `null` when the document leaves them at the default (all). */

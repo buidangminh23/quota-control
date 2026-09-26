@@ -4,10 +4,22 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { messagesFor, type Language, type Messages } from "@/i18n";
+import type { BarKind, PlatformKey } from "@/i18n/messages";
 import type { IsEnabled } from "@/model/layout";
+import { barKind, platformKey } from "@/model/platform";
 import type { AppSettings, DashboardTab } from "@/model/settings";
 import type { DisplayOptions } from "@/model/widgetData";
 import { dashboardTabs, displayOptionsOf, isProviderEnabled, useApp, visibleDashboardTab } from "./store";
+
+/** The platform key the interface words itself by (Finder vs File Explorer, ⌘ vs Win). */
+export function usePlatformKey(): PlatformKey {
+  return platformKey(useApp((state) => state.info?.platform));
+}
+
+/** Where starred metrics show: the macOS menu bar or the taskbar. */
+export function useBarKind(): BarKind {
+  return barKind(useApp((state) => state.info?.platform));
+}
 
 export function useSettings(): AppSettings {
   return useApp((state) => state.settings);
@@ -67,6 +79,19 @@ export function useNow(intervalMs = 30_000): Date {
     const timer = setInterval(() => setNow(new Date()), intervalMs);
     return () => clearInterval(timer);
   }, [visible, intervalMs]);
+  return now;
+}
+
+/**
+ * The current time, re-read every `intervalMs` whether or not the popup is visible: for surfaces
+ * that stay on screen while it is closed (the menu bar, the Dynamic Island, the desktop widget).
+ */
+export function useWallClock(intervalMs = 60_000): Date {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), intervalMs);
+    return () => clearInterval(timer);
+  }, [intervalMs]);
   return now;
 }
 

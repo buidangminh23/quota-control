@@ -410,6 +410,35 @@ export function pinnedGroups(layout: LayoutDocument, catalog: readonly ProviderE
   });
 }
 
+/**
+ * What a hand-picked glance can choose from: each enabled account card with every metric it
+ * supports, hidden ones included, in the user's order.
+ */
+export function glanceCandidates(layout: LayoutDocument, catalog: readonly ProviderEntry[], isEnabled: IsEnabled): ProviderMetrics[] {
+  return orderedEntries(layout, catalog).flatMap((entry) => {
+    if (!isEnabled(entry.provider.id) || !hasDashboardCard(entry.provider.id)) return [];
+    const always = cardDescriptors(layout, entry);
+    return always.length === 0 ? [] : [{ provider: entry.provider, always, onDemand: [] }];
+  });
+}
+
+/** The account cards and metrics a glance surface lists for its content choice. */
+export function glanceGroups(
+  content: "dashboard" | "starred" | "custom",
+  chosen: readonly string[],
+  layout: LayoutDocument,
+  catalog: readonly ProviderEntry[],
+  isEnabled: IsEnabled,
+): ProviderMetrics[] {
+  if (content === "dashboard") return displayGroups(layout, catalog, isEnabled);
+  if (content === "starred") return pinnedGroups(layout, catalog, isEnabled);
+  const picked = new Set(chosen);
+  return glanceCandidates(layout, catalog, isEnabled).flatMap((group) => {
+    const always = group.always.filter((descriptor) => picked.has(descriptor.id));
+    return always.length === 0 ? [] : [{ ...group, always }];
+  });
+}
+
 /** Enabled providers that ship spend tiles: exactly what the Total Spend card aggregates. */
 export function spendCapableProviders(layout: LayoutDocument, catalog: readonly ProviderEntry[], isEnabled: IsEnabled): Provider[] {
   return orderedEntries(layout, catalog)

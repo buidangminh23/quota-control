@@ -1,12 +1,12 @@
 //! Where Quota Control keeps its files on each platform.
 //!
-//! | Purpose | Windows | Linux |
-//! |---|---|---|
-//! | settings, layout | `%APPDATA%\UsageControl` | `$XDG_CONFIG_HOME/usage-control` |
-//! | caches (snapshots, log scans, pricing) | `%LOCALAPPDATA%\UsageControl\Cache` | `$XDG_CACHE_HOME/usage-control` |
-//! | log file | `%LOCALAPPDATA%\UsageControl\Logs` | `$XDG_STATE_HOME/usage-control` |
-//! | user config (proxy) | `~/.usage-control/config.json` | `~/.usage-control/config.json` |
-//! | `usagectl` on PATH | `%LOCALAPPDATA%\UsageControl\bin` | `~/.local/bin` |
+//! | Purpose | Windows | Linux | macOS |
+//! |---|---|---|---|
+//! | settings, layout | `%APPDATA%\UsageControl` | `$XDG_CONFIG_HOME/usage-control` | `~/Library/Application Support/usage-control` |
+//! | caches (snapshots, log scans, pricing) | `%LOCALAPPDATA%\UsageControl\Cache` | `$XDG_CACHE_HOME/usage-control` | `~/Library/Caches/usage-control` |
+//! | log file | `%LOCALAPPDATA%\UsageControl\Logs` | `$XDG_STATE_HOME/usage-control` | `~/Library/Logs/usage-control` |
+//! | user config (proxy) | `~/.usage-control/config.json` | `~/.usage-control/config.json` | `~/.usage-control/config.json` |
+//! | `usagectl` on PATH | `%LOCALAPPDATA%\UsageControl\bin` | `~/.local/bin` | `~/.local/bin` |
 //!
 //! `USAGE_CONTROL_HOME` redirects everything under one directory (tests, portable installs).
 
@@ -67,6 +67,8 @@ pub fn log_dir() -> PathBuf {
             .unwrap_or_else(home_dir)
             .join(APP_DIR_WINDOWS)
             .join("Logs")
+    } else if cfg!(target_os = "macos") {
+        home_dir().join("Library").join("Logs").join(APP_DIR_UNIX)
     } else {
         dirs::state_dir()
             .unwrap_or_else(|| home_dir().join(".local").join("state"))

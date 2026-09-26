@@ -31,9 +31,11 @@ impl Accounts {
         }
     }
 
-    /// Every card's runtime, with the CLI logins read afresh.
+    /// Every card's runtime, with the CLI logins read afresh. A login the keychain refuses to read
+    /// keeps its card, which then shows the keychain error.
     pub fn runtimes(&self) -> Result<Vec<Arc<dyn ProviderRuntime>>, String> {
-        let cli = uc_providers::cli_accounts();
+        let previous = self.cli.lock().clone();
+        let cli = uc_providers::cli_accounts_keeping(&previous);
         let runtimes =
             uc_api::provider_runtimes_with(self.store.clone(), &cli).map_err(safe_error)?;
         *self.cli.lock() = cli;
@@ -61,12 +63,10 @@ impl Accounts {
             .collect())
     }
 
-    fn cli_ids(&self) -> Vec<String> {
-        self.cli
-            .lock()
-            .iter()
-            .map(|login| login.id.clone())
-            .collect()
+    /// Each CLI card's account and where its login is read from: a card is rebuilt when either
+    /// changes, so a login that moved from the file into the keychain is followed.
+    fn cli_bindings(&self) -> Vec<(String, uc_providers::CliLocation)> {
+        bindings(&self.cli.lock())
     }
 }
 
@@ -263,18 +263,26 @@ pub async fn remove_account(
     service.replace_runtimes(accounts.runtimes()?, &app)
 }
 
-/// Rebuild the cards when a CLI signed in, out, or into another account since they were built.
+fn bindings(logins: &[CliAccount]) -> Vec<(String, uc_providers::CliLocation)> {
+    logins
+        .iter()
+        .map(|login| (login.id.clone(), login.location.clone()))
+        .collect()
+}
+
+/// Rebuild the cards when a CLI signed in, out, into another account, or moved its login since
+/// they were built.
 pub async fn sync_cli_logins(app: &AppHandle) {
     let accounts = app.state::<Accounts>();
-    let detected = tauri::async_runtime::spawn_blocking(|| {
-        uc_providers::cli_accounts()
-            .into_iter()
-            .map(|login| login.id)
-            .collect::<Vec<_>>()
+    let previous = accounts.cli.lock().clone();
+    let Ok(detected) = tauri::async_runtime::spawn_blocking(move || {
+        bindings(&uc_providers::cli_accounts_keeping(&previous))
     })
     .await
-    .unwrap_or_default();
-    if detected == accounts.cli_ids() {
+    else {
+        return;
+    };
+    if detected == accounts.cli_bindings() {
         return;
     }
     let _changes = accounts.changes.lock().await;
@@ -316,7 +324,7 @@ mod tests {
             id: "codex@aa".into(),
             email: None,
             updated_at: Utc::now(),
-            path: "auth.json".into(),
+            location: uc_providers::CliLocation::File("auth.json".into()),
             profile: None,
         };
         let entry = serde_json::to_value(AccountEntry::from(VisibleAccount::Cli(&login))).unwrap();

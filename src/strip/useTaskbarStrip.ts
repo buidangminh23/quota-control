@@ -7,25 +7,25 @@
 import { useEffect, useMemo, useRef } from "react";
 import { messagesFor } from "@/i18n";
 import { backend } from "@/lib/backend";
-import { pinnedGroups } from "@/model/layout";
+import { glanceGroups } from "@/model/layout";
 import { buildStripContent, isStripEmpty, stripSummary, type StripContent } from "@/model/menuBar";
 import { providerTitle } from "@/model/providerText";
 import { widgetDataFor } from "@/model/widgetData";
 import { useDisplay, useIsEnabled, useSystemDark } from "@/state/hooks";
 import { useApp } from "@/state/store";
-import { renderBarsGlyph, renderTextStrip, stripText } from "./render";
+import { MENU_BAR_GLYPH_SIDE, GLYPH_SIDE, renderBarsGlyph, renderTextStrip, stripText, type StripStyle } from "./render";
 import { pushStripFrame, useTaskbarInfo, watchTaskbarInfo } from "./support";
 
 type Output =
   | { kind: "off"; tooltip: string }
-  | { kind: "bars"; content: StripContent; color: "#000000" | "#ffffff"; tooltip: string }
-  | { kind: "text"; content: StripContent; color: "#000000" | "#ffffff"; height: number; scale: number; tooltip: string };
+  | { kind: "bars"; content: StripContent; color: "#000000" | "#ffffff"; style: StripStyle; tooltip: string }
+  | { kind: "text"; content: StripContent; color: "#000000" | "#ffffff"; style: StripStyle; height: number; scale: number; tooltip: string };
 
 function outputKey(output: Output): string {
   if (output.kind === "off") return `off|${output.tooltip}`;
   const values = output.content.groups.map((group) => `${group.brand}:${group.metrics.map((metric) => `${metric.value}/${metric.fraction.toFixed(3)}`).join(",")}`).join(";");
-  if (output.kind === "bars") return `bars|${output.color}|${values}|${output.tooltip}`;
-  return `text|${output.color}|${output.height}|${output.scale}|${values}|${output.tooltip}`;
+  if (output.kind === "bars") return `bars|${output.color}|${output.style}|${values}|${output.tooltip}`;
+  return `text|${output.color}|${output.style}|${output.height}|${output.scale}|${values}|${output.tooltip}`;
 }
 
 async function apply(output: Output, appName: string): Promise<void> {
@@ -35,11 +35,12 @@ async function apply(output: Output, appName: string): Promise<void> {
     return;
   }
   if (output.kind === "bars") {
-    const png = await renderBarsGlyph(output.content.bars, Math.max(2, Math.ceil(window.devicePixelRatio || 1)), output.color);
+    const side = output.style === "menuBar" ? MENU_BAR_GLYPH_SIDE : GLYPH_SIDE;
+    const png = await renderBarsGlyph(output.content.bars, Math.max(2, Math.ceil(window.devicePixelRatio || 1)), output.color, side);
     await Promise.all([api.setTrayIcon(output.content.bars.length > 0 ? png : null, output.tooltip), pushStripFrame(null)]);
     return;
   }
-  const frame = await renderTextStrip(output.content, output.height, output.scale, output.color);
+  const frame = await renderTextStrip(output.content, output.height, output.scale, output.color, output.style);
   await Promise.all([
     api.setTrayIcon(null, appName),
     pushStripFrame(frame ? { ...frame, text: stripText(output.content), tooltip: output.tooltip } : null),
@@ -54,6 +55,7 @@ export function useTaskbarStrip(): void {
   const info = useApp((state) => state.info);
   const showStrip = useApp((state) => state.settings.showTaskbarStrip);
   const iconStyle = useApp((state) => state.settings.iconStyle);
+  const strip = useApp((state) => state.settings.strip);
   const display = useDisplay();
   const isEnabled = useIsEnabled();
   const taskbar = useTaskbarInfo();
@@ -64,13 +66,14 @@ export function useTaskbarStrip(): void {
   useEffect(() => watchTaskbarInfo(), []);
 
   const content = useMemo(() => {
-    const groups = pinnedGroups(layout, catalog, isEnabled);
+    const groups = glanceGroups(strip.content, strip.metrics, layout, catalog, isEnabled);
     return buildStripContent(
       groups,
       (descriptor) => widgetDataFor(descriptor, engine?.providers[descriptor.providerId]?.snapshot, display),
       (provider) => providerTitle(provider, display.language),
+      strip.values,
     );
-  }, [layout, catalog, isEnabled, engine, display]);
+  }, [layout, catalog, isEnabled, engine, display, strip]);
 
   useEffect(() => {
     if (!ready) return;
@@ -78,12 +81,13 @@ export function useTaskbarStrip(): void {
     const appName = info?.name ?? messages.chrome.appName;
     const dark = taskbar ? taskbar.theme === "dark" : systemDark;
     const color = dark ? "#ffffff" : "#000000";
+    const style: StripStyle = info?.platform === "macos" ? "menuBar" : "taskbar";
     const empty = isStripEmpty(content);
     const tooltip = empty ? messages.strip.tooltipEmpty : `${appName}\n${stripSummary(content)}`;
     let output: Output;
     if (!showStrip || empty) output = { kind: "off", tooltip: empty ? messages.strip.tooltipEmpty : appName };
-    else if (taskbar?.supported && iconStyle === "text") output = { kind: "text", content, color, height: taskbar.height, scale: taskbar.scale, tooltip };
-    else output = { kind: "bars", content, color, tooltip };
+    else if (taskbar?.supported && iconStyle === "text") output = { kind: "text", content, color, style, height: taskbar.height, scale: taskbar.scale, tooltip };
+    else output = { kind: "bars", content, color, style, tooltip };
     const key = outputKey(output);
     if (key === lastKey.current) return;
     lastKey.current = key;

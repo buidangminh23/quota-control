@@ -21,6 +21,7 @@ import {
 import { accountEmailOf, accountLabelOf, brandName, headerNotice, providerBrand, providerTitle, stalenessHint } from "@/model/providerText";
 import { knownBrandColor } from "@/model/totalSpend";
 import { condensedTextRowOffsets, widgetDataFor, type DisplayOptions, type WidgetData } from "@/model/widgetData";
+import { useBarKind } from "@/state/hooks";
 import { navigate, openChatFor, refresh, setProviderEnabled, showNotice, updateLayout, useApp } from "@/state/store";
 import { ChevronDown, ChevronUp, ExternalIcon, Spinner, WarningTriangle } from "../ui/icons";
 import { openMenu, type MenuEntry } from "../ui/menu";
@@ -71,6 +72,7 @@ function openChat(target: { provider: AccountProvider; label: string }, messages
 export function ProviderSection({ group, runtime, display, refreshIntervalMs, now }: ProviderSectionProps) {
   const language = display.language;
   const messages = messagesFor(language);
+  const bar = useBarKind();
   const providerId = group.provider.id;
   const title = providerTitle(group.provider, language);
   const email = isLocalHistoryCard(providerId) ? null : accountEmailOf(group.provider);
@@ -110,7 +112,7 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
       ? [
           {
             kind: "item",
-            label: pinned ? messages.dashboard.unstar : messages.dashboard.starForTaskbar,
+            label: pinned ? messages.dashboard.unstar : messages.dashboard.starFor(bar),
             onSelect: () => {
               if (!pinned && !canPin(layout, catalog, descriptor.id)) {
                 showNotice(messages.dashboard.pinLimit(MAX_PINS_PER_PROVIDER), "notice");

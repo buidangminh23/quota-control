@@ -23,6 +23,33 @@ describe("parseSettings", () => {
   });
 });
 
+describe("glance surfaces", () => {
+  it("default to the Hạn mức cards with every part shown", () => {
+    expect(DEFAULT_SETTINGS.strip).toEqual({ content: "dashboard", metrics: [], values: 2 });
+    expect(DEFAULT_SETTINGS.widget.content).toBe("dashboard");
+    expect(DEFAULT_SETTINGS.island).toMatchObject({ content: "dashboard", style: "percent", wings: ["", ""], expandOnHover: true, alerts: true });
+  });
+
+  it("keeps valid choices, drops invalid ones and de-duplicates picked metrics", () => {
+    const parsed = parseSettings({
+      strip: { content: "custom", metrics: ["a", "a", 3, "b"], values: 1 },
+      island: { content: "sideways", style: "ring", wings: ["x", 7], expandOnHover: false, showPlan: true },
+      widget: { content: "starred", showAccount: false, metrics: "a" },
+    });
+    expect(parsed.strip).toEqual({ content: "custom", metrics: ["a", "b"], values: 1 });
+    expect(parsed.island).toMatchObject({ content: "dashboard", style: "ring", wings: ["x", ""], expandOnHover: false, showPlan: true });
+    expect(parsed.widget).toMatchObject({ content: "starred", showAccount: false, metrics: [] });
+    expect(parseSettings({ strip: { values: 3 } }).strip.values).toBe(2);
+  });
+
+  it("saves copies, so later edits to the in-memory settings do not leak into the document", () => {
+    const settings = parseSettings({ widget: { content: "custom", metrics: ["a"] } });
+    const merged = mergeSettingsDocument({}, settings, new Set()) as { widget: { metrics: string[] } };
+    settings.widget.metrics.push("b");
+    expect(merged.widget.metrics).toEqual(["a"]);
+  });
+});
+
 describe("mergeSettingsDocument", () => {
   it("preserves keys the popup does not own and narrows the core's provider list", () => {
     const stored = { enabledProviders: ["claude@1", "gone@2"], futureKey: 7, language: "vi" };

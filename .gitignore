@@ -5,6 +5,7 @@ node_modules/
 dist/
 target/
 src-tauri/gen/schemas/
+src-tauri/gen/macos/
 *.tsbuildinfo
 
 # Logs and local state

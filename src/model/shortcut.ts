@@ -3,6 +3,7 @@
  * make a combo and how a saved accelerator reads. Accelerators use the browser's
  * `KeyboardEvent.code` names (`Ctrl+Alt+KeyU`), which the core's shortcut parser also accepts.
  */
+import type { PlatformKey } from "@/i18n/messages";
 
 export interface KeyPress {
   code: string;
@@ -80,8 +81,8 @@ export function recordKey(press: KeyPress): RecordedKey {
   return { kind: "combo", accelerator: [...modifiers, press.code].join("+") };
 }
 
-/** The keys of a saved accelerator as the user reads them: `Ctrl+Alt+KeyU` → Ctrl, Alt, U. */
-export function shortcutKeys(accelerator: string, platform: "windows" | "linux" | "other"): string[] {
+/** The keys of a saved accelerator as the user reads them: `Ctrl+Alt+KeyU` → Ctrl, Alt, U (⌃, ⌥, U on macOS). */
+export function shortcutKeys(accelerator: string, platform: PlatformKey): string[] {
   return accelerator
     .split("+")
     .map((token) => token.trim())
@@ -89,23 +90,25 @@ export function shortcutKeys(accelerator: string, platform: "windows" | "linux" 
     .map((token) => keyLabel(token, platform));
 }
 
-function keyLabel(token: string, platform: "windows" | "linux" | "other"): string {
+function keyLabel(token: string, platform: PlatformKey): string {
+  const mac = platform === "macos";
   switch (token.toLowerCase()) {
     case "ctrl":
     case "control":
+      return mac ? "⌃" : "Ctrl";
     case "commandorcontrol":
     case "cmdorctrl":
-      return "Ctrl";
+      return mac ? "⌘" : "Ctrl";
     case "alt":
     case "option":
-      return "Alt";
+      return mac ? "⌥" : "Alt";
     case "shift":
-      return "Shift";
+      return mac ? "⇧" : "Shift";
     case "super":
     case "meta":
     case "cmd":
     case "command":
-      return platform === "windows" ? "Win" : "Super";
+      return mac ? "⌘" : platform === "windows" ? "Win" : "Super";
   }
   if (/^key[a-z]$/i.test(token)) return token.slice(3).toUpperCase();
   if (/^digit\d$/i.test(token)) return token.slice(5);

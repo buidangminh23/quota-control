@@ -12,14 +12,12 @@ import { checkForUpdates, dismissUpdate, installUpdate, useApp } from "@/state/s
 import { REPOSITORY_URL } from "../chrome/about";
 import { Button } from "../ui/controls";
 import { CloseIcon, Spinner } from "../ui/icons";
+import { platformKey } from "@/model/platform";
 
 export function releaseNotesUrl(version: string): string {
   return `${REPOSITORY_URL}/releases/tag/v${version}`;
 }
 
-function platformKey(platform: string | undefined): "windows" | "linux" | "other" {
-  return platform === "windows" || platform === "linux" ? platform : "other";
-}
 
 function Card({ title, trailing, dismiss, children }: { title: string; trailing?: ReactNode; dismiss?: { label: string; onClick: () => void }; children?: ReactNode }) {
   return (

@@ -3,7 +3,7 @@
  * controls word order (English "95% left" vs Vietnamese "Còn 95%").
  */
 import type { ErrorCategory, LimitResetResult, UpdateFailureReason, UpdateFailureStage } from "@/lib/types";
-import type { TaskbarDisplay } from "@/model/settings";
+import type { GlanceContent, IslandStyle, TaskbarDisplay } from "@/model/settings";
 import type { PriceMessages, UsageMessages } from "./usageMessages";
 
 export type DisplayModeKey = "used" | "remaining";
@@ -69,7 +69,7 @@ export interface DashboardMessages {
   refreshing: string;
   hide: string;
   hideProvider(name: string): string;
-  starForTaskbar: string;
+  starFor(bar: BarKind): string;
   unstar: string;
   refreshProvider(name: string): string;
   customizeEllipsis: string;
@@ -143,9 +143,9 @@ export interface CustomizeMessages {
   onDemand: string;
   dragHere: string;
   metricCount(count: number): string;
-  starred: string;
-  unstarred: string;
-  star: string;
+  starred(bar: BarKind): string;
+  unstarred(bar: BarKind): string;
+  star(bar: BarKind): string;
   unstar: string;
   enable(name: string): string;
   reorder: string;
@@ -153,24 +153,38 @@ export interface CustomizeMessages {
   settingsLinkSubtitle: string;
   customizeLinkTitle: string;
   customizeLinkSubtitle: string;
-  undo: string;
+  undo(platform: PlatformKey): string;
 }
 
-export type SettingsSectionKey = "general" | "appearance" | "usageDisplay" | "taskbar" | "notifications" | "updates" | "advanced";
+export type SettingsSectionKey =
+  | "general"
+  | "appearance"
+  | "usageDisplay"
+  | "taskbar"
+  | "menuBar"
+  | "island"
+  | "widget"
+  | "notifications"
+  | "updates"
+  | "advanced";
+/** The operating system a string is phrased for. */
+export type PlatformKey = "windows" | "linux" | "macos" | "other";
+/** Where starred metrics show: the taskbar (Windows, Linux) or the macOS menu bar. */
+export type BarKind = "taskbar" | "menuBar";
 export type NotificationKey = "almostOut" | "cuttingItClose" | "willRunOut";
 
 export interface SettingsMessages {
   section(key: SettingsSectionKey): string;
   language: string;
   showTotalSpend: string;
-  launchAtLogin(platform: "windows" | "linux" | "other"): string;
+  launchAtLogin(platform: PlatformKey): string;
   launchAtLoginError: string;
   globalShortcut: string;
   globalShortcutTooltip: string;
   recordShortcut: string;
   pressShortcut: string;
   clearShortcut: string;
-  shortcutNeedsModifier(platform: "windows" | "linux" | "other"): string;
+  shortcutNeedsModifier(platform: PlatformKey): string;
   shortcutUnsupported: string;
   shortcutUnavailable: string;
   theme: string;
@@ -185,15 +199,40 @@ export interface SettingsMessages {
   resetTimesOption(mode: "relative" | "absolute"): string;
   alwaysShowPacing: string;
   alwaysShowPacingNote: string;
-  taskbarDisplay: string;
+  barDisplay(bar: BarKind): string;
   taskbarDisplayOption(display: TaskbarDisplay): string;
-  taskbarNote(display: TaskbarDisplay): string;
+  barNote(display: TaskbarDisplay, bar: BarKind): string;
+  dynamicIsland: string;
+  dynamicIslandNote: string;
+  desktopWidget: string;
+  desktopWidgetNote: string;
+  glanceContent: string;
+  glanceContentOption(content: GlanceContent): string;
+  glanceContentNote(content: GlanceContent): string;
+  glanceMetrics: string;
+  glanceMetricsNote: string;
+  glanceMetricsNone: string;
+  glanceShowAccount: string;
+  glanceShowPlan: string;
+  glanceShowResets: string;
+  glanceShowProblems: string;
+  glanceShowProblemsNote: string;
+  stripValues: string;
+  stripValuesOption(count: 1 | 2): string;
+  islandStyle: string;
+  islandStyleOption(style: IslandStyle): string;
+  islandWing(side: "left" | "right"): string;
+  islandWingAuto: string;
+  islandExpandOnHover: string;
+  islandExpandOnHoverNote: string;
+  islandAlerts: string;
+  islandAlertsNote: string;
   notification(key: NotificationKey): string;
   notificationNote(key: NotificationKey): string;
   notificationsDenied: string;
   allowNotifications: string;
   copyLogPath: string;
-  revealLog(platform: "windows" | "linux" | "other"): string;
+  revealLog(platform: PlatformKey): string;
   logActionFailed: string;
   copied: string;
   resetAllSettings: string;
@@ -239,6 +278,23 @@ export interface StripMessages {
   tooltipEmpty: string;
 }
 
+/** What the macOS Dynamic Island and desktop widget say around the readings. */
+export interface GlanceMessages {
+  /** What an empty island or widget says, worded for its content choice. */
+  empty: Record<GlanceContent, string>;
+  /** An account whose card has no readings and no error to explain it. */
+  noData: string;
+  /** After a count of accounts left out: `+2 tài khoản khác`, `+2 more`. */
+  more: string;
+  updated: string;
+  resetsIn: string;
+  resetting: string;
+  open: string;
+  notRunning: string;
+  /** Unit suffixes the island's countdowns use, written like `format.duration` (`4 ngày 3 giờ`, `4d 3h`). */
+  units: { day: string; hour: string; minute: string };
+}
+
 /** The dashboard's update card and the Settings "App Updates" section. */
 export interface UpdateMessages {
   availableTitle: string;
@@ -250,7 +306,7 @@ export interface UpdateMessages {
   upToDateMessage(name: string, version: string): string;
   downloading(version: string): string;
   installing(version: string): string;
-  installingNote(platform: "windows" | "linux" | "other"): string;
+  installingNote(platform: PlatformKey): string;
   failedTitle(stage: UpdateFailureStage): string;
   failure(reason: UpdateFailureReason): string;
   retry: string;
@@ -295,6 +351,7 @@ export interface Messages {
   settings: SettingsMessages;
   accounts: AccountsMessages;
   strip: StripMessages;
+  glance: GlanceMessages;
   update: UpdateMessages;
   notify: NotifyMessages;
   limitReset: LimitResetMessages;

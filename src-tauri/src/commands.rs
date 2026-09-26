@@ -79,7 +79,10 @@ pub fn resize_popup(app: AppHandle, height: f64) -> Result<(), String> {
     window
         .set_size(tauri::LogicalSize::new(320.0, height.clamp(80.0, maximum)))
         .map_err(safe_error)?;
-    crate::position_popup(&app)
+    crate::position_popup(&app)?;
+    #[cfg(target_os = "macos")]
+    crate::macos::refresh_popup_shadow(&window);
+    Ok(())
 }
 
 #[tauri::command]
@@ -106,9 +109,32 @@ pub fn set_tray_icon(app: AppHandle, png: Option<Vec<u8>>, tooltip: String) -> R
     if tooltip.len() > 512 {
         return Err("Tooltip is too long".into());
     }
+    let glyph = png.as_deref().map(decode_image).transpose()?;
+    set_tray_glyph(&app, glyph, tooltip)
+}
+
+/// macOS draws the glyph, the strip and the app icon into the one menu bar image, so the strip
+/// decides which of them shows.
+#[cfg(target_os = "macos")]
+fn set_tray_glyph(
+    app: &AppHandle,
+    glyph: Option<tauri::image::Image<'static>>,
+    tooltip: String,
+) -> Result<(), String> {
+    app.state::<crate::taskbar_strip::TaskbarStrip>()
+        .set_glyph(glyph, tooltip);
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_tray_glyph(
+    app: &AppHandle,
+    glyph: Option<tauri::image::Image<'static>>,
+    tooltip: String,
+) -> Result<(), String> {
     let tray = app.tray_by_id("main").ok_or("Tray is unavailable")?;
-    let image = match png {
-        Some(bytes) => decode_image(&bytes)?,
+    let image = match glyph {
+        Some(image) => image,
         None => app
             .default_window_icon()
             .cloned()

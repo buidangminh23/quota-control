@@ -238,6 +238,23 @@
   color: var(--uc-notice-text);
 }
 
+.uc-settings-row.is-nested {
+  padding-left: 36px;
+}
+
+.uc-settings-note.is-nested {
+  margin-left: 36px;
+}
+
+.uc-settings-note.is-lead {
+  margin: 4px 12px 2px;
+}
+
+.uc-list-row.is-glance-account {
+  padding-top: 8px;
+  padding-bottom: 2px;
+}
+
 .uc-settings-note.is-flush,
 .uc-settings-notice.is-flush {
   margin: 0;

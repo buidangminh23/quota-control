@@ -1,12 +1,23 @@
-/** Runs the pace notifier on every engine update while any notification toggle is on. */
+/**
+ * Runs the pace notifier on every engine update while any notification toggle is on. Each alert
+ * also opens the macOS Dynamic Island for a moment.
+ */
 import { useEffect, useRef } from "react";
+import { announceOnIsland } from "@/glance/alerts";
 import { messagesFor } from "@/i18n";
+import { brandOf, descriptorProviderId } from "@/model/layout";
 import { providerTitle } from "@/model/providerText";
 import { anyNotificationEnabled } from "@/model/settings";
 import { notify } from "@/platform/system";
 import { useDisplay, useIsEnabled } from "@/state/hooks";
 import { useApp } from "@/state/store";
-import { PaceNotifier } from "./paceNotifications";
+import { PaceNotifier, type Milestone } from "./paceNotifications";
+
+const ISLAND_SEVERITY: Readonly<Record<Milestone, "warning" | "critical">> = {
+  almostOut: "critical",
+  cuttingItClose: "warning",
+  willRunOut: "critical",
+};
 
 export function useUsageNotifications(): void {
   const engine = useApp((state) => state.engine);
@@ -33,6 +44,8 @@ export function useUsageNotifications(): void {
     if (!settingsOn) return;
     for (const alert of alerts) {
       notify(alert.title, alert.body).catch((error: unknown) => console.error("Sending notification failed", error));
+      const descriptorId = alert.key.split("|")[0] ?? "";
+      announceOnIsland({ title: alert.title, body: alert.body, brand: brandOf(descriptorProviderId(descriptorId)), severity: ISLAND_SEVERITY[alert.milestone] });
     }
   }, [engine, catalog, layout.placed, toggles, display, isEnabled]);
 }

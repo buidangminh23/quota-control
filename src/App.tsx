@@ -9,6 +9,7 @@ import { messagesFor } from "@/i18n";
 import { backend } from "@/lib/backend";
 import { useUsageNotifications } from "@/notify/useUsageNotifications";
 import { useTaskbarStrip } from "@/strip/useTaskbarStrip";
+import { useGlance } from "@/glance/useGlance";
 import { useDashboardTabs, useIsDark } from "@/state/hooks";
 import { cycleDashboardTab, dashboardTabs, navigate, refresh, startApp, undoLayout, useApp, type Screen } from "@/state/store";
 import { startInsights } from "@/state/insights";
@@ -193,6 +194,7 @@ export function App() {
   useKeyboard();
   usePopupHeight(topRef, contentRef, footerRef, view);
   useTaskbarStrip();
+  useGlance();
   useUsageNotifications();
   useResetNotifications();
 

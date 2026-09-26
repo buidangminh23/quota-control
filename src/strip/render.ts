@@ -1,22 +1,53 @@
 /**
  * Canvas renderers for the taskbar: the Bars glyph pushed into the tray icon (upstream
  * `MenuBarBars`, with the same pad/gap/radius rules and fill geometry) and the text strip of provider
- * marks with their values stacked two high (upstream `MenuBarTextStrip`, scaled to the Windows
- * taskbar the way the system clock stacks time over date).
+ * marks with their values stacked two high (upstream `MenuBarTextStrip`). The taskbar style is
+ * scaled to the Windows taskbar the way the system clock stacks time over date; the menu bar style
+ * keeps upstream's own macOS metrics, drawn black so macOS tints the template for the menu bar.
  */
 import { PROVIDER_MARKS } from "@/assets/providerMarks";
 import { barFill, type StripContent, type StripMetric } from "@/model/menuBar";
 
+export type StripStyle = "taskbar" | "menuBar";
+
 export const GLYPH_SIDE = 16;
-const STRIP_FONT = '"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif';
-const SINGLE_VALUE_SIZE = 14;
-const STACKED_VALUE_SIZE = 12;
-const STACKED_LINE_HEIGHT = 14;
-const MARK_SIDE = 18;
-const MARK_GAP = 5;
-const GROUP_GAP = 14;
-const SIDE_PADDING = 6;
+/** Upstream draws the Bars glyph 18 points square in the macOS menu bar. */
+export const MENU_BAR_GLYPH_SIDE = 18;
 const MARK_INSET = 0.04;
+
+interface StripMetrics {
+  font: string;
+  singleSize: number;
+  stackedSize: number;
+  stackedLineHeight: number;
+  markSide: number;
+  markGap: number;
+  groupGap: number;
+  sidePadding: number;
+}
+
+const STRIP_METRICS: Readonly<Record<StripStyle, StripMetrics>> = {
+  taskbar: {
+    font: '"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif',
+    singleSize: 14,
+    stackedSize: 12,
+    stackedLineHeight: 14,
+    markSide: 18,
+    markGap: 5,
+    groupGap: 14,
+    sidePadding: 6,
+  },
+  menuBar: {
+    font: '-apple-system, "SF Pro Text", system-ui, sans-serif',
+    singleSize: 12,
+    stackedSize: 9,
+    stackedLineHeight: 9,
+    markSide: 16,
+    markGap: 4,
+    groupGap: 11,
+    sidePadding: 2,
+  },
+};
 
 function canvas(width: number, height: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
   const element = document.createElement("canvas");
@@ -43,9 +74,9 @@ function withAlpha(color: string, alpha: number): string {
   return color === "#ffffff" ? `rgba(255,255,255,${alpha})` : `rgba(0,0,0,${alpha})`;
 }
 
-/** The Bars glyph at `scale` device pixels per point, drawn in `color` (black or white). */
-export async function renderBarsGlyph(bars: readonly StripMetric[], scale: number, color: "#000000" | "#ffffff"): Promise<Uint8Array> {
-  const side = GLYPH_SIDE * scale;
+/** The Bars glyph `sidePoints` square at `scale` device pixels per point, drawn in `color` (black or white). */
+export async function renderBarsGlyph(bars: readonly StripMetric[], scale: number, color: "#000000" | "#ffffff", sidePoints = GLYPH_SIDE): Promise<Uint8Array> {
+  const side = sidePoints * scale;
   const [element, context] = canvas(side, side);
   const n = Math.max(1, Math.min(4, bars.length));
   const pad = Math.max(1, Math.round(side * 0.08));
@@ -100,36 +131,45 @@ interface MeasuredGroup {
 }
 
 /** The text strip for a band `height` device pixels tall, or `null` when there is nothing to show. */
-export async function renderTextStrip(content: StripContent, height: number, scale: number, color: "#000000" | "#ffffff"): Promise<{ png: Uint8Array; width: number; height: number } | null> {
+export async function renderTextStrip(
+  content: StripContent,
+  height: number,
+  scale: number,
+  color: "#000000" | "#ffffff",
+  style: StripStyle = "taskbar",
+): Promise<{ png: Uint8Array; width: number; height: number } | null> {
   if (content.groups.length === 0) return null;
+  const metrics = STRIP_METRICS[style];
   const [, measure] = canvas(1, 1);
-  const font = (size: number, weight: number) => `${weight} ${size * scale}px ${STRIP_FONT}`;
+  const font = (size: number, weight: number) => `${weight} ${size * scale}px ${metrics.font}`;
   const groups: MeasuredGroup[] = content.groups.map((group) => {
     const values = group.metrics.slice(0, 2).map((metric) => metric.value);
-    measure.font = values.length > 1 ? font(STACKED_VALUE_SIZE, 600) : font(SINGLE_VALUE_SIZE, 700);
+    measure.font = values.length > 1 ? font(metrics.stackedSize, 600) : font(metrics.singleSize, 700);
     const textWidth = Math.max(...values.map((value) => measure.measureText(value).width));
-    return { brand: group.brand, values, width: (MARK_SIDE + MARK_GAP) * scale + Math.ceil(textWidth) };
+    return { brand: group.brand, values, width: (metrics.markSide + metrics.markGap) * scale + Math.ceil(textWidth) };
   });
-  const width = Math.ceil(SIDE_PADDING * 2 * scale + groups.reduce((sum, group) => sum + group.width, 0) + GROUP_GAP * scale * (groups.length - 1));
+  const width = Math.ceil(
+    metrics.sidePadding * 2 * scale + groups.reduce((sum, group) => sum + group.width, 0) + metrics.groupGap * scale * (groups.length - 1),
+  );
   const [element, context] = canvas(width, height);
   context.textBaseline = "middle";
   context.textAlign = "right";
-  let x = SIDE_PADDING * scale;
+  let x = metrics.sidePadding * scale;
   const middle = height / 2;
   for (const group of groups) {
-    drawMark(context, group.brand, x, middle - (MARK_SIDE * scale) / 2, MARK_SIDE * scale, color);
+    drawMark(context, group.brand, x, middle - (metrics.markSide * scale) / 2, metrics.markSide * scale, color);
     const right = x + group.width;
     context.fillStyle = color;
     if (group.values.length > 1) {
-      context.font = font(STACKED_VALUE_SIZE, 600);
-      const offset = (STACKED_LINE_HEIGHT * scale) / 2;
+      context.font = font(metrics.stackedSize, 600);
+      const offset = (metrics.stackedLineHeight * scale) / 2;
       context.fillText(group.values[0]!, right, middle - offset + scale);
       context.fillText(group.values[1]!, right, middle + offset);
     } else {
-      context.font = font(SINGLE_VALUE_SIZE, 700);
+      context.font = font(metrics.singleSize, 700);
       context.fillText(group.values[0] ?? "", right, middle + scale);
     }
-    x = right + GROUP_GAP * scale;
+    x = right + metrics.groupGap * scale;
   }
   return { png: await toPng(element), width, height };
 }
