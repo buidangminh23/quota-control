@@ -1,0 +1,4 @@
+[env]
+# The macOS host links Swift built for macOS 14 (desktop widgets, SwiftUI animations), and the app's
+# Info.plist requires 14 as well, so Rust targets the same minimum.
+MACOSX_DEPLOYMENT_TARGET = "14.0"

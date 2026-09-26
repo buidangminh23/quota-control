@@ -65,6 +65,8 @@ const EXACT: Readonly<Record<string, string>> = {
   "Cannot connect to the usage service.": "Không kết nối được dịch vụ hạn mức.",
   "The usage service returned an invalid response.": "Dịch vụ hạn mức trả về dữ liệu không hợp lệ.",
   "Cannot read local credentials.": "Không đọc được thông tin đăng nhập trên máy.",
+  "Cannot read the login from the macOS keychain. Unlock the keychain and try again.":
+    "Không đọc được thông tin đăng nhập trong Keychain của macOS. Hãy mở khóa Keychain rồi thử lại.",
   "Usage limits require a ChatGPT login; API keys do not provide subscription limits.":
     "Hạn mức cần đăng nhập bằng tài khoản ChatGPT; khóa API không có hạn mức gói đăng ký.",
   "Sign in with claude again to grant access to live usage.": "Hãy đăng nhập lại claude để cấp quyền xem hạn mức trực tiếp.",

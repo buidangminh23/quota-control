@@ -13,7 +13,8 @@ use uc_core::{
 };
 
 use crate::credentials::{
-    CredentialSource, CredentialStore, Credentials, jwt_claims, parse_credentials, read_json_file,
+    CliLocation, CredentialSource, CredentialStore, Credentials, jwt_claims, parse_credentials,
+    read_json_file, read_location,
 };
 use crate::{LocalProvider, ProviderKind};
 
@@ -213,29 +214,55 @@ pub(crate) fn claude_profile_path() -> PathBuf {
 }
 
 /// A login that the Claude Code or Codex CLI on this computer holds right now. Quota Control reads
-/// its file on every refresh and never renews it, so the CLI stays the only owner of the session.
+/// it on every refresh and never renews it, so the CLI stays the only owner of the session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CliAccount {
     pub kind: ProviderKind,
     pub id: String,
     pub email: Option<String>,
     pub updated_at: DateTime<Utc>,
-    pub path: PathBuf,
+    pub location: CliLocation,
     pub profile: Option<PathBuf>,
 }
 
 /// The CLI logins on this computer that can show live limits. A CLI that is signed out, or whose
-/// file holds no token (Claude Code inside Claude Desktop keeps its sign-in elsewhere), is left out.
-/// Reads files, so keep it off the async runtime's worker threads where that matters.
+/// login holds no token (Claude Code inside Claude Desktop keeps its sign-in elsewhere), is left
+/// out. Reads files and the macOS keychain, so keep it off the async runtime's worker threads where
+/// that matters.
 pub fn cli_accounts() -> Vec<CliAccount> {
+    cli_accounts_keeping(&[])
+}
+
+/// `cli_accounts`, except that a login the keychain refused to read (locked, denied) keeps the
+/// account `previous` knew for that CLI: its card stays and shows the keychain error instead of
+/// disappearing until the keychain opens again.
+pub fn cli_accounts_keeping(previous: &[CliAccount]) -> Vec<CliAccount> {
     [ProviderKind::Claude, ProviderKind::Codex]
         .into_iter()
         .filter_map(|kind| {
-            let path = CredentialStore::discover(kind).path()?.to_path_buf();
+            let location = CliLocation::discover(kind);
             let profile = (kind == ProviderKind::Claude).then(claude_profile_path);
-            cli_account_from(kind, path, profile).ok()
+            match cli_account_at(kind, location, profile) {
+                Ok(account) => Some(account),
+                Err(error) => kept_through(&error, kind, previous),
+            }
         })
         .collect()
+}
+
+fn kept_through(
+    error: &SimpleProviderError,
+    kind: ProviderKind,
+    previous: &[CliAccount],
+) -> Option<CliAccount> {
+    (error.category == ErrorCategory::CredentialAccess)
+        .then(|| {
+            previous
+                .iter()
+                .find(|account| account.kind == kind)
+                .cloned()
+        })
+        .flatten()
 }
 
 pub fn cli_account_from(
@@ -243,15 +270,23 @@ pub fn cli_account_from(
     path: PathBuf,
     profile: Option<PathBuf>,
 ) -> Result<CliAccount, SimpleProviderError> {
-    read_cli_account(kind, path, profile).map(|(account, _)| account)
+    cli_account_at(kind, CliLocation::File(path), profile)
+}
+
+pub fn cli_account_at(
+    kind: ProviderKind,
+    location: CliLocation,
+    profile: Option<PathBuf>,
+) -> Result<CliAccount, SimpleProviderError> {
+    read_cli_account(kind, location, profile).map(|(account, _)| account)
 }
 
 pub(crate) fn read_cli_account(
     kind: ProviderKind,
-    path: PathBuf,
+    location: CliLocation,
     profile: Option<PathBuf>,
 ) -> Result<(CliAccount, Credentials), SimpleProviderError> {
-    let mut document = read_json_file(&path, kind)?;
+    let mut document = read_location(&location, kind)?;
     let credentials = parse_credentials(kind, &document)?;
     if kind == ProviderKind::Claude {
         let profile = profile.as_deref().ok_or_else(|| {
@@ -266,21 +301,35 @@ pub(crate) fn read_cli_account(
             crate::oauth::email_label(&document["oauthAccount"]["emailAddress"])
         }
     };
-    let updated_at = std::fs::metadata(&path)
-        .and_then(|metadata| metadata.modified())
-        .map(DateTime::<Utc>::from)
-        .unwrap_or_else(|_| Utc::now());
+    let updated_at = login_updated_at(&location, profile.as_deref());
     Ok((
         CliAccount {
             kind,
             id: account_id(kind, &key),
             email,
             updated_at,
-            path,
+            location,
             profile,
         },
         credentials,
     ))
+}
+
+/// When the login last changed: the file's modification time, or the keychain item's.
+fn login_updated_at(location: &CliLocation, profile: Option<&std::path::Path>) -> DateTime<Utc> {
+    let modified = |path: &std::path::Path| {
+        std::fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .map(DateTime::<Utc>::from)
+            .ok()
+    };
+    match location {
+        CliLocation::File(path) => modified(path),
+        CliLocation::Keychain(item) => {
+            crate::keychain::modified_at(item).or_else(|| profile.and_then(modified))
+        }
+    }
+    .unwrap_or_else(Utc::now)
 }
 
 pub async fn import_account_from_file(
@@ -390,7 +439,7 @@ pub fn account_runtimes_with(
                 ) as Arc<dyn ProviderRuntime>)
             }
             VisibleAccount::Cli(login) => {
-                let credentials = CredentialStore::new(login.kind, login.path.clone());
+                let credentials = CredentialStore::at(login.kind, login.location.clone());
                 Ok(Arc::new(
                     LocalProvider::new(login.kind, credentials, http.clone()).with_cli_login(login),
                 ) as Arc<dyn ProviderRuntime>)

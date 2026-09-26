@@ -1,10 +1,11 @@
 /**
- * What the taskbar strip shows: the starred metrics with real data, per provider, plus the first four
- * bounded ones for the Bars glyph. Port of upstream `Models/MenuBarContent.swift` and the pure fill
- * geometry of `Support/MenuBarStripRenderer.swift` (`MenuBarBarGeometry`).
+ * What the taskbar strip shows: the chosen metrics with real data (the Hạn mức cards, the starred
+ * metrics or a hand-picked set), per provider, plus the first four bounded ones for the Bars glyph.
+ * Port of upstream `Models/MenuBarContent.swift` and the pure fill geometry of
+ * `Support/MenuBarStripRenderer.swift` (`MenuBarBarGeometry`).
  *
- * The strip is dynamic: a starred metric without data is dropped, and a provider whose stars all lack
- * data contributes nothing (no orphan mark). Nothing left means the app icon.
+ * The strip is dynamic: a metric without data is dropped, and a provider whose metrics all lack data
+ * contributes nothing (no orphan mark). Nothing left means the app icon.
  */
 import type { Provider, WidgetDescriptor } from "@/lib/types";
 import type { ProviderMetrics } from "./layout";
@@ -40,13 +41,14 @@ export function buildStripContent(
   groups: readonly ProviderMetrics[],
   dataFor: (descriptor: WidgetDescriptor) => WidgetData,
   displayName: (provider: Provider) => string,
+  perGroup = 2,
 ): StripContent {
   const resolved = groups.flatMap((group) => {
     const metrics = [...group.always, ...group.onDemand].flatMap((descriptor): StripMetric[] => {
       const data = dataFor(descriptor);
       if (!data.hasData) return [];
       return [{ id: descriptor.id, label: data.title, value: menuBarValue(data), fraction: fraction(data), bounded: isBounded(data) }];
-    });
+    }).slice(0, Math.max(1, perGroup));
     if (metrics.length === 0) return [];
     return [{ providerId: group.provider.id, displayName: displayName(group.provider), brand: brandOf(group.provider.icon || group.provider.id), metrics }];
   });

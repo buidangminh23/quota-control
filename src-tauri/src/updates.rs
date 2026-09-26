@@ -9,7 +9,8 @@
 //!
 //! Installing hands Windows over to the NSIS installer in passive `/UPDATE` mode, which keeps the
 //! shortcuts and launch at login and relaunches the app. On Linux the AppImage is replaced in place
-//! or the .deb goes through pkexec, then the app restarts itself. A marker written before the
+//! or the .deb goes through pkexec, and on macOS the `.app` bundle is replaced in place (asking for
+//! an administrator password only when its folder is not writable); then the app restarts itself. A marker written before the
 //! handover lets the next launch confirm the new version or report an install that never finished.
 //! Builds the updater cannot replace (development runs, other packages) report `supported: false`,
 //! and the popup links to the releases page instead.
@@ -96,6 +97,9 @@ impl FailureReason {
             | Error::SignedVersionMismatch { .. }
             | Error::MissingSignedVersion => Self::Signature,
             Error::AuthenticationFailed => Self::Permission,
+            Error::Io(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                Self::Permission
+            }
             _ => Self::Other,
         }
     }
@@ -136,7 +140,7 @@ impl AvailableUpdate {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateStatus {
-    /// This installation can replace itself (an installed NSIS, deb or AppImage release build).
+    /// This installation can replace itself (an installed NSIS, deb, AppImage or .app release build).
     pub supported: bool,
     pub current_version: String,
     pub phase: UpdatePhase,
@@ -229,7 +233,7 @@ impl Updates {
                 tracing::info!(target: "updates", "self-update enabled ({kind})");
             }
             _ => {
-                tracing::info!(target: "updates", "self-update off: not an installed NSIS, deb or AppImage release");
+                tracing::info!(target: "updates", "self-update off: not an installed NSIS, deb, AppImage or .app release");
                 return;
             }
         }
@@ -456,8 +460,28 @@ fn installer(app: &AppHandle) -> Option<&'static str> {
         BundleType::Nsis => Some("nsis"),
         BundleType::Deb => Some("deb"),
         BundleType::AppImage if running_appimage(app) => Some("appimage"),
+        BundleType::App if running_app_bundle() => Some("app"),
         _ => None,
     }
+}
+
+/// macOS reports every build as an `.app`; only a release build running from inside a bundle can
+/// replace itself.
+fn running_app_bundle() -> bool {
+    cfg!(target_os = "macos")
+        && !cfg!(debug_assertions)
+        && std::env::current_exe()
+            .ok()
+            .and_then(|path| path.to_str().map(replaceable_bundle))
+            .unwrap_or(false)
+}
+
+/// Whether the updater can replace the bundle the app runs from: one inside an `.app`, not on the
+/// mounted DMG (read-only) or a Gatekeeper translocation (a read-only copy in a random folder).
+fn replaceable_bundle(executable: &str) -> bool {
+    executable.contains(".app/Contents/MacOS/")
+        && !executable.starts_with("/Volumes/")
+        && !executable.contains("/AppTranslocation/")
 }
 
 #[cfg(target_os = "linux")]
@@ -624,6 +648,34 @@ pub async fn install_update(app: AppHandle, updates: State<'_, Updates>) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_an_installed_bundle_can_be_replaced() {
+        assert!(replaceable_bundle(
+            "/Applications/Quota Control.app/Contents/MacOS/quota-control"
+        ));
+        assert!(replaceable_bundle(
+            "/Users/a/Applications/Quota Control.app/Contents/MacOS/quota-control"
+        ));
+        assert!(!replaceable_bundle(
+            "/Volumes/Quota Control/Quota Control.app/Contents/MacOS/quota-control"
+        ));
+        assert!(!replaceable_bundle(
+            "/private/var/folders/x/T/AppTranslocation/1A2B/d/Quota Control.app/Contents/MacOS/quota-control"
+        ));
+        assert!(!replaceable_bundle("/usr/local/bin/quota-control"));
+    }
+
+    #[test]
+    fn a_refused_file_operation_reads_as_missing_permission() {
+        let denied = tauri_plugin_updater::Error::Io(std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied,
+        ));
+        assert_eq!(FailureReason::of(&denied), FailureReason::Permission);
+        let missing =
+            tauri_plugin_updater::Error::Io(std::io::Error::from(std::io::ErrorKind::NotFound));
+        assert_eq!(FailureReason::of(&missing), FailureReason::Other);
+    }
 
     fn marker(to: &str, minutes_ago: i64) -> PendingInstall {
         PendingInstall {

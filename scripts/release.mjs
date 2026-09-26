@@ -17,6 +17,18 @@
  *       Windows only: build the NSIS installer here and the deb and AppImage in WSL from the committed
  *       tree, signed with %USERPROFILE%\.tauri\quota-control.key (or TAURI_SIGNING_PRIVATE_KEY),
  *       then assemble into target/release-assets/vX.Y.Z (and publish).
+ *   node scripts/release.mjs stage-macos [--dir BUNDLE_DIR]
+ *       Copy the macOS updater archive `tauri build` writes (`Quota Control.app.tar.gz`) to a name
+ *       with the version and architecture, as the other installers have, so assemble can find it.
+ *   node scripts/release.mjs mac [--allow-dirty] [--publish] [--latest]
+ *       macOS only: build the app bundle and DMG here, signed with ~/.tauri/quota-control.key (or
+ *       TAURI_SIGNING_PRIVATE_KEY), and assemble them into target/release-assets/vX.Y.Z-macos.
+ *       --publish adds them to the release, which may already hold the Windows and Linux installers.
+ *
+ * Publishing merges with what the release already holds: latest.json keeps the other platforms'
+ * entries and SHA256SUMS the other files' lines, so a release can be assembled from several machines.
+ * Installed apps only see it once --latest publishes it, and that requires every installer kind the
+ * current release serves, plus Windows and Linux.
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -30,13 +42,30 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ASSET_PREFIX = "Quota-Control";
 const UPDATER_CONFIG = "src-tauri/tauri.updater.conf.json";
 const DEFAULT_KEY = join(homedir(), ".tauri", "quota-control.key");
-const ARCH = { x64: "x86_64", amd64: "x86_64", x86: "i686", i386: "i686", arm64: "aarch64", aarch64: "aarch64" };
-/** Installer kinds, the updater targets each one serves (`{os}-{arch}-{bundle}` first), and whether a release needs it. */
+const PRODUCT = "Quota Control";
+const ARCH = { x64: "x86_64", amd64: "x86_64", x86: "i686", i386: "i686", arm64: "aarch64", aarch64: "aarch64", universal: "universal" };
+/** The macOS architectures an updater archive built for `arch` serves. */
+const DARWIN_ARCHES = { aarch64: ["aarch64"], x86_64: ["x86_64"], universal: ["aarch64", "x86_64"] };
+/**
+ * Installer kinds, the updater targets each one serves (`{os}-{arch}-{bundle}` first), and the
+ * architecture every published release must serve for it. A kind marked `onceServed` (macOS, which
+ * came after Windows and Linux) is required only once a published release has served it, so the
+ * releases before the first macOS one do not wait for a Mac build.
+ */
 const KINDS = [
-  { id: "nsis", pattern: /_(x64|x86|arm64)-setup\.exe$/, targets: (arch) => [`windows-${arch}-nsis`, `windows-${arch}`] },
-  { id: "deb", pattern: /_(amd64|arm64|i386)\.deb$/, targets: (arch) => [`linux-${arch}-deb`] },
-  { id: "appimage", pattern: /_(amd64|aarch64|i386)\.AppImage$/, targets: (arch) => [`linux-${arch}-appimage`, `linux-${arch}`] },
+  { id: "nsis", pattern: /_(x64|x86|arm64)-setup\.exe$/, targets: (arch) => [`windows-${arch}-nsis`, `windows-${arch}`], required: "x86_64" },
+  { id: "deb", pattern: /_(amd64|arm64|i386)\.deb$/, targets: (arch) => [`linux-${arch}-deb`], required: "x86_64" },
+  { id: "appimage", pattern: /_(amd64|aarch64|i386)\.AppImage$/, targets: (arch) => [`linux-${arch}-appimage`, `linux-${arch}`], required: "x86_64" },
+  {
+    id: "app",
+    pattern: /_(aarch64|x64|universal)\.app\.tar\.gz$/,
+    targets: (arch) => DARWIN_ARCHES[arch].flatMap((darwin) => [`darwin-${darwin}-app`, `darwin-${darwin}`]),
+    required: "aarch64",
+    onceServed: true,
+  },
 ];
+/** Downloads that are not updater packages: the macOS disk image people open by hand. */
+const DOWNLOADS = [{ id: "dmg", pattern: /_(aarch64|x64|universal)\.dmg$/ }];
 const PUBLISHED_POLL_ATTEMPTS = 12;
 const PUBLISHED_POLL_DELAY_MS = 5000;
 
@@ -132,9 +161,62 @@ export function findInstallers(directories, version) {
   return [...found.values()];
 }
 
-/** The updater targets a published release must serve: one per installer kind on x86_64. */
-export function missingTargets(document) {
-  return KINDS.map((kind) => kind.targets("x86_64")[0]).filter((target) => !document.platforms?.[target]);
+/**
+ * The updater targets a published release must serve: one per installer kind. A kind marked
+ * `onceServed` counts only when `current`, the latest.json installed apps read now, serves it;
+ * without `current` every kind counts.
+ */
+export function missingTargets(document, current) {
+  const serves = (kind) => kind.targets(kind.required).some((target) => current.platforms?.[target]);
+  return KINDS.filter((kind) => !kind.onceServed || !current || serves(kind))
+    .map((kind) => kind.targets(kind.required)[0])
+    .filter((target) => !document.platforms?.[target]);
+}
+
+/** This version's disk images under `directories`, renamed like the installers. */
+export function findDownloads(directories, version) {
+  const found = new Map();
+  for (const path of directories.flatMap(walk)) {
+    const name = basename(path);
+    if (!name.includes(`_${version}_`)) continue;
+    const kind = DOWNLOADS.find((candidate) => candidate.pattern.test(name));
+    if (!kind) continue;
+    const assetName = `${ASSET_PREFIX}_${version}_${name.slice(name.indexOf(`_${version}_`) + version.length + 2)}`;
+    if (found.has(assetName)) fail(`two ${assetName} downloads found: ${found.get(assetName).path} and ${path}`);
+    found.set(assetName, { kind: kind.id, path, assetName });
+  }
+  return [...found.values()];
+}
+
+/** `incoming` with the other platforms `existing` already serves for the same version. */
+export function mergeManifest(existing, incoming) {
+  if (!existing || existing.version !== incoming.version) return incoming;
+  return { ...incoming, notes: incoming.notes || existing.notes || "", platforms: { ...existing.platforms, ...incoming.platforms } };
+}
+
+/** SHA256SUMS lines of both, one per file, `incoming` winning for a file in both. */
+export function mergeSums(existing, incoming) {
+  const lines = new Map();
+  for (const line of `${existing ?? ""}\n${incoming}`.split(/\r?\n/)) {
+    const match = /^([0-9a-f]{64})\s+\*?(.+)$/.exec(line.trim());
+    if (match) lines.set(match[2], `${match[1]}  ${match[2]}`);
+  }
+  return `${[...lines.values()].join("\n")}\n`;
+}
+
+/**
+ * Copy `Quota Control.app.tar.gz` (and its signature) under BUNDLE_DIR/macos to a name carrying the
+ * version and architecture. The minisign signature covers the file's bytes and version, not its name.
+ */
+export function stageMacos(bundleDir, version, arch = process.arch) {
+  const folder = join(bundleDir, "macos");
+  const archive = join(folder, `${PRODUCT}.app.tar.gz`);
+  if (!existsSync(archive)) fail(`${archive} is missing; build the app bundle with ${UPDATER_CONFIG}`);
+  const suffix = arch === "arm64" || arch === "aarch64" ? "aarch64" : arch === "universal" ? "universal" : "x64";
+  const staged = join(folder, `${PRODUCT}_${version}_${suffix}.app.tar.gz`);
+  copyFileSync(archive, staged);
+  if (existsSync(`${archive}.sig`)) copyFileSync(`${archive}.sig`, `${staged}.sig`);
+  return staged;
 }
 
 export function manifest({ version, notes, pubDate, installers, baseUrl }) {
@@ -157,8 +239,10 @@ function assemble(options, bundleDirs) {
   if (!options.out) fail("assemble needs --out DIR");
   if (bundleDirs.length === 0) fail("assemble needs at least one bundle folder");
   const installers = findInstallers(bundleDirs.map((dir) => resolve(dir)), version);
+  const downloads = findDownloads(bundleDirs.map((dir) => resolve(dir)), version);
   const kinds = new Set(installers.map((installer) => installer.kind));
-  const missing = KINDS.map((kind) => kind.id).filter((id) => !kinds.has(id));
+  const expected = options.expect ?? KINDS.map((kind) => kind.id);
+  const missing = expected.filter((id) => !kinds.has(id));
   if (installers.length === 0) fail(`no signed ${version} installers under ${bundleDirs.join(", ")}`);
   if (missing.length > 0 && !options["allow-missing"]) {
     fail(`missing ${missing.join(", ")}: installed apps of that kind could not update from this release (pass --allow-missing for a partial test build)`);
@@ -173,6 +257,11 @@ function assemble(options, bundleDirs) {
     writeFileSync(`${target}.sig`, `${installer.signature}\n`);
     sums.push(`${sha256(target)}  ${installer.assetName}`);
   }
+  for (const download of downloads) {
+    const target = join(out, download.assetName);
+    copyFileSync(download.path, target);
+    sums.push(`${sha256(target)}  ${download.assetName}`);
+  }
   const baseUrl = options["base-url"] ?? `https://github.com/${repositorySlug()}/releases/download/${tag}/`;
   const notes = options["notes-file"] ? readFileSync(resolve(options["notes-file"]), "utf8").trim() : "";
   const pubDate = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -183,6 +272,9 @@ function assemble(options, bundleDirs) {
   for (const installer of installers) {
     console.log(`  ${installer.assetName}  ${(statSync(installer.path).size / 1_048_576).toFixed(1)} MiB  ${installer.targets.join(", ")}`);
   }
+  for (const download of downloads) {
+    console.log(`  ${download.assetName}  ${(statSync(download.path).size / 1_048_576).toFixed(1)} MiB  download`);
+  }
   if (missing.length > 0) console.log(`  (partial build: no ${missing.join(", ")})`);
   return { out, tag, version };
 }
@@ -192,14 +284,24 @@ async function publish(options) {
   const version = appVersion(options.tag);
   const slug = repositorySlug();
   const dir = resolve(options.dir);
-  const files = readdirSync(dir).map((name) => join(dir, name));
-  if (!files.some((file) => basename(file) === "latest.json")) fail(`${dir} has no latest.json; run assemble first`);
-  const document = JSON.parse(readFileSync(join(dir, "latest.json"), "utf8"));
-  if (document.version !== version) fail(`${dir} holds ${document.version}, not ${version}`);
-  const missing = missingTargets(document);
-  if (missing.length > 0) fail(`latest.json has no ${missing.join(", ")}; a release must serve every installer kind`);
+  const listed = () => readdirSync(dir).filter((name) => !name.startsWith(".")).map((name) => join(dir, name));
+  if (!listed().some((file) => basename(file) === "latest.json")) fail(`${dir} has no latest.json; run assemble first`);
+  const incoming = JSON.parse(readFileSync(join(dir, "latest.json"), "utf8"));
+  if (incoming.version !== version) fail(`${dir} holds ${incoming.version}, not ${version}`);
   const existing = capture("gh", ["release", "view", options.tag, "-R", slug, "--json", "isDraft"]);
   if (existing.ok && !JSON.parse(existing.stdout).isDraft) fail(`${options.tag} is already published; bump the version for a new release`);
+  if (existing.ok) {
+    checkDraftTarget(slug, options.tag);
+    mergeWithRelease(slug, options.tag, dir);
+  }
+  const document = JSON.parse(readFileSync(join(dir, "latest.json"), "utf8"));
+  const current = await currentManifest(slug);
+  const missing = missingTargets(document, current);
+  if (missing.length > 0 && options.latest) {
+    const unread = current ? "" : "; the current release's latest.json could not be read, so every kind counts";
+    fail(`latest.json has no ${missing.join(", ")}; publishing needs every installer kind the current release serves${unread} (add them, then publish with --latest)`);
+  }
+  if (missing.length > 0) console.log(`The draft has no ${missing.join(", ")} yet; add them before publishing.`);
   if (!existing.ok) {
     const create = ["release", "create", options.tag, "-R", slug, "--draft", "--title", `Quota Control ${version}`];
     create.push(...(options["notes-file"] ? ["--notes-file", resolve(options["notes-file"])] : ["--generate-notes"]));
@@ -211,13 +313,67 @@ async function publish(options) {
     }
     run("gh", create);
   }
-  run("gh", ["release", "upload", options.tag, "-R", slug, "--clobber", ...files]);
+  run("gh", ["release", "upload", options.tag, "-R", slug, "--clobber", ...listed()]);
   if (!options.latest) {
-    console.log(`Draft ${options.tag} is ready. Publish it with: gh release edit ${options.tag} -R ${slug} --draft=false --latest`);
+    if (missing.length > 0) {
+      console.log(`Draft ${options.tag} still lacks ${missing.join(", ")}. Build them from the same commit with \`node scripts/release.mjs local --publish\` (Windows) or \`node scripts/release.mjs mac --publish\` (macOS), then publish with --latest.`);
+    } else {
+      console.log(`Draft ${options.tag} is ready. Publish it with: gh release edit ${options.tag} -R ${slug} --draft=false --latest`);
+    }
     return;
   }
   run("gh", ["release", "edit", options.tag, "-R", slug, "--draft=false", "--latest"]);
   await verifyPublished(slug, version);
+}
+
+/**
+ * Stop when the draft was started from another commit: its tag (or target) is what gets released,
+ * so installers built here from different sources would ship under the wrong tag.
+ */
+function checkDraftTarget(slug, tag) {
+  const head = capture("git", ["rev-parse", "HEAD"]).stdout;
+  const remote = capture("git", ["ls-remote", "--tags", "origin", `refs/tags/${tag}`, `refs/tags/${tag}^{}`]).stdout;
+  const lines = remote.split("\n").filter(Boolean).map((line) => line.split(/\s+/));
+  const tagged = (lines.find(([, ref]) => ref.endsWith("^{}")) ?? lines[0])?.[0];
+  let expected = tagged ?? "";
+  if (!expected) {
+    const view = capture("gh", ["release", "view", tag, "-R", slug, "--json", "targetCommitish"]);
+    const target = view.ok ? JSON.parse(view.stdout).targetCommitish ?? "" : "";
+    expected = /^[0-9a-f]{40}$/.test(target) ? target : target ? capture("git", ["rev-parse", `origin/${target}`]).stdout : "";
+  }
+  if (expected && head && expected !== head) {
+    fail(`the draft ${tag} targets ${expected.slice(0, 7)}, but this checkout is at ${head.slice(0, 7)}; build from that commit`);
+  }
+}
+
+/** Fold the draft's latest.json and SHA256SUMS into DIR's, so uploading keeps the other platforms. */
+function mergeWithRelease(slug, tag, dir) {
+  const view = capture("gh", ["release", "view", tag, "-R", slug, "--json", "assets"]);
+  if (!view.ok) fail(`cannot list the assets of ${tag}: ${view.stderr}`);
+  const names = new Set(JSON.parse(view.stdout).assets.map((asset) => asset.name));
+  const wanted = ["latest.json", "SHA256SUMS"].filter((name) => names.has(name));
+  if (wanted.length === 0) return;
+  const previous = join(dir, ".release");
+  rmSync(previous, { recursive: true, force: true });
+  mkdirSync(previous, { recursive: true });
+  const download = capture("gh", ["release", "download", tag, "-R", slug, "-D", previous, ...wanted.flatMap((name) => ["-p", name]), "--clobber"]);
+  if (!download.ok) {
+    rmSync(previous, { recursive: true, force: true });
+    fail(`cannot download ${wanted.join(" and ")} from ${tag}, so nothing was uploaded: ${download.stderr}`);
+  }
+  const read = (name) => (existsSync(join(previous, name)) ? readFileSync(join(previous, name), "utf8") : null);
+  const manifestText = read("latest.json");
+  const merged = mergeManifest(manifestText ? JSON.parse(manifestText) : null, JSON.parse(readFileSync(join(dir, "latest.json"), "utf8")));
+  writeFileSync(join(dir, "latest.json"), `${JSON.stringify(merged, null, 2)}\n`);
+  writeFileSync(join(dir, "SHA256SUMS"), mergeSums(read("SHA256SUMS"), readFileSync(join(dir, "SHA256SUMS"), "utf8")));
+  rmSync(previous, { recursive: true, force: true });
+}
+
+/** The latest.json installed apps read now, or null when it cannot be read. */
+async function currentManifest(slug) {
+  const url = `https://github.com/${slug}/releases/latest/download/latest.json`;
+  const response = await fetch(url, { headers: { accept: "application/json" } }).catch(() => null);
+  return response?.ok ? await response.json().catch(() => null) : null;
 }
 
 async function verifyPublished(slug, version) {
@@ -291,7 +447,44 @@ async function local(options) {
   run("pnpm", ["tauri", "build", "--ci", "--bundles", "nsis", "--config", UPDATER_CONFIG], { env });
   if (!options["skip-linux"]) bundles.push(buildLinux(env, options.distro ?? process.env.QUOTA_CONTROL_WSL_DISTRO, target));
   const tag = `v${version}`;
-  const assembled = assemble({ ...options, tag, out: join(target, "release-assets", tag), "allow-missing": options["skip-linux"] }, bundles);
+  const expect = options["skip-linux"] ? ["nsis"] : ["nsis", "deb", "appimage"];
+  const assembled = assemble({ ...options, tag, out: join(target, "release-assets", tag), expect }, bundles);
+  if (options.publish) await publish({ ...options, tag, dir: assembled.out });
+}
+
+/**
+ * Apple's tools first on PATH: the bundler runs `xattr -crs`, which the `xattr` a pip install can put
+ * ahead of /usr/bin does not understand. CI skips the DMG's Finder styling, which would otherwise ask
+ * for permission to control Finder.
+ */
+function macBuildEnv() {
+  return {
+    ...process.env,
+    PATH: ["/usr/bin", "/bin", "/usr/sbin", "/sbin", process.env.PATH ?? ""].join(":"),
+    CI: "true",
+    TAURI_SIGNING_PRIVATE_KEY_PASSWORD: process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?? "",
+  };
+}
+
+async function mac(options) {
+  if (process.platform !== "darwin") fail("mac releases run on macOS");
+  const version = appVersion();
+  if (!options["allow-dirty"] && capture("git", ["status", "--porcelain"]).stdout) {
+    fail("commit your changes first: a release is built from the committed tree");
+  }
+  const env = macBuildEnv();
+  if (!env.TAURI_SIGNING_PRIVATE_KEY) {
+    if (!existsSync(DEFAULT_KEY)) fail(`no signing key: set TAURI_SIGNING_PRIVATE_KEY or create ${DEFAULT_KEY}`);
+    env.TAURI_SIGNING_PRIVATE_KEY = readFileSync(DEFAULT_KEY, "utf8").trim();
+  }
+  const bundle = join(targetDir(), "release", "bundle");
+  rmSync(join(bundle, "macos"), { recursive: true, force: true });
+  rmSync(join(bundle, "dmg"), { recursive: true, force: true });
+  run("pnpm", ["tauri", "build", "--ci", "--bundles", "app,dmg", "--config", UPDATER_CONFIG], { env });
+  stageMacos(bundle, version);
+  const tag = `v${version}`;
+  const out = join(targetDir(), "release-assets", `${tag}-macos`);
+  const assembled = assemble({ ...options, tag, out, expect: ["app"] }, [join(bundle, "macos"), join(bundle, "dmg")]);
   if (options.publish) await publish({ ...options, tag, dir: assembled.out });
 }
 
@@ -326,8 +519,14 @@ async function main() {
     case "local":
       await local(values);
       return;
+    case "stage-macos":
+      console.log(stageMacos(resolve(values.dir ?? join(targetDir(), "release", "bundle")), appVersion(values.tag)));
+      return;
+    case "mac":
+      await mac(values);
+      return;
     default:
-      fail("usage: node scripts/release.mjs version|assemble|publish|local [options] (see the header of this file)");
+      fail("usage: node scripts/release.mjs version|assemble|publish|local|stage-macos|mac [options] (see the header of this file)");
   }
 }
 

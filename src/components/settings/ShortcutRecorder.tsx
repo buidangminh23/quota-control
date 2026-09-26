@@ -10,8 +10,9 @@ import { recordKey, shortcutKeys } from "@/model/shortcut";
 import { useApp } from "@/state/store";
 import { CloseIcon } from "../ui/icons";
 import { tooltipProps } from "../ui/tooltip";
+import type { PlatformKey } from "@/i18n/messages";
 
-type Platform = "windows" | "linux" | "other";
+type Platform = PlatformKey;
 
 export function ShortcutRecorder({ platform, onError }: { platform: Platform; onError: (message: string | null) => void }) {
   const language = useApp((state) => state.settings.language);

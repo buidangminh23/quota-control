@@ -575,3 +575,25 @@ fn directory_symlinks_are_not_followed() {
         0
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn roots_behind_user_symlinks_are_refused_while_system_links_are_not() {
+    let real = tempfile::tempdir().unwrap();
+    write(
+        real.path(),
+        "session.jsonl",
+        &[claude("m1", "2026-09-25T18:00:00Z", 50)],
+    );
+    assert_eq!(
+        scanner(LogSource::Claude, real.path()).scan(now()).records,
+        1
+    );
+
+    let links = tempfile::tempdir().unwrap();
+    let link = links.path().join("projects");
+    std::os::unix::fs::symlink(real.path(), &link).unwrap();
+    let through_link = scanner(LogSource::Claude, &link).scan(now());
+    assert_eq!(through_link.records, 0);
+    assert!(through_link.incomplete);
+}

@@ -149,13 +149,30 @@ fn reject_links(path: &Path) -> Result<()> {
         }
         prefix.push(component);
         match std::fs::symlink_metadata(&prefix) {
-            Ok(metadata) if is_link(&metadata) => return Err(AccountError::UnsafePath),
+            Ok(metadata) if is_link(&metadata) && !system_link(&metadata) => {
+                return Err(AccountError::UnsafePath);
+            }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(_) => return Err(AccountError::Storage),
         }
     }
     Ok(())
+}
+
+/// A link root owns, such as macOS's `/var` -> `private/var`, cannot be planted by the user's
+/// processes, so it does not make the path unsafe.
+fn system_link(metadata: &Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        metadata.uid() == 0
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        false
+    }
 }
 
 fn is_link(metadata: &Metadata) -> bool {

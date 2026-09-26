@@ -1,7 +1,7 @@
 import { fixtureCatalog, fixtureSnapshots } from "@/lib/fixtures";
 import type { ProviderSnapshot } from "@/lib/types";
 import { stripText } from "@/strip/render";
-import { pinnedGroups, reconcileLayout } from "./layout";
+import { glanceGroups, pinnedGroups, reconcileLayout } from "./layout";
 import { barFill, buildStripContent, isStripEmpty, MAX_BARS, stripSummary, visualFraction } from "./menuBar";
 import { providerTitle } from "./providerText";
 import { DEFAULT_DISPLAY, widgetDataFor } from "./widgetData";
@@ -31,6 +31,19 @@ describe("taskbar strip content", () => {
     const strip = content({ ...DEFAULT_DISPLAY, displayMode: "used" });
     expect(strip.groups[0]!.metrics[0]!.value).toBe("12%");
     expect(strip.bars.length).toBe(MAX_BARS);
+  });
+
+  it("lists every Hạn mức card with one or two readings each when asked", () => {
+    const dataFor = (descriptor: Parameters<typeof widgetDataFor>[0]) => widgetDataFor(descriptor, snapshots[descriptor.providerId], DEFAULT_DISPLAY);
+    const name = (provider: Parameters<typeof providerTitle>[0]) => providerTitle(provider, "vi");
+    const dashboard = glanceGroups("dashboard", [], layout, catalog, () => true);
+    const two = buildStripContent(dashboard, dataFor, name, 2);
+    expect(two.groups.map((group) => group.providerId)).toEqual(["claude@7c1e", "claude@a93f", "codex@52d0"]);
+    expect(two.groups.every((group) => group.metrics.length === 2)).toBe(true);
+    const one = buildStripContent(dashboard, dataFor, name, 1);
+    expect(one.groups.map((group) => group.metrics.map((metric) => metric.value))).toEqual([["88%"], ["100%"], ["18%"]]);
+    const picked = buildStripContent(glanceGroups("custom", ["codex@52d0.weekly"], layout, catalog, () => true), dataFor, name);
+    expect(picked.groups.map((group) => group.metrics.map((metric) => metric.id))).toEqual([["codex@52d0.weekly"]]);
   });
 
   it("drops a provider whose stars have no data", () => {

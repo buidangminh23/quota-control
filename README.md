@@ -1,12 +1,14 @@
 # Quota Control
 
-Track your AI coding subscriptions from the Windows and Linux system tray.
+Track your AI coding subscriptions from the macOS menu bar and the Windows and Linux system tray.
 
 Quota Control shows how much of your AI coding plans you have used: session and weekly limits,
-credits, and local spend, all in one popup that opens when you click the tray icon.
+credits, and local spend, all in one popup that opens when you click the tray icon. On macOS the
+starred metrics also sit around the notch as a Dynamic Island and on the desktop as a widget.
 
-> **Unofficial port.** Quota Control is an independent Windows and Linux port of
-> [OpenUsage](https://github.com/robinebers/openusage) by Robin Ebers, which is a native macOS app.
+> **Unofficial port.** Quota Control is an independent port of
+> [OpenUsage](https://github.com/robinebers/openusage) by Robin Ebers, which is a native macOS app,
+> to Windows and Linux, and back to macOS with a Dynamic Island and a desktop widget.
 > It is not the official OpenUsage, and it is not affiliated with or endorsed by its author.
 > The source code is reused under the MIT license; the OpenUsage name and logo are not used,
 > following the upstream [trademark policy](https://github.com/robinebers/openusage/blob/main/TRADEMARK.md).
@@ -25,7 +27,70 @@ Under active development. The port follows the upstream Swift edition (v0.7.12) 
 | 6 | CLI, local HTTP API, proxy, quota notifications, global shortcut, launch at login |
 | 7 | Windows installer, Linux `.deb` and `.AppImage` |
 | 8 | Signed in-app updates and the release workflow |
+| 9 | macOS: menu bar strip, Dynamic Island, desktop widgets in three styles, DMG, one-line installer and Homebrew cask |
 
+## Install on macOS
+
+Apple Silicon, macOS 14 (Sonoma) or later.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/buidangminh23/quota-control/main/scripts/install-macos.sh | bash
+```
+
+The script downloads the latest release, checks it against the release's `SHA256SUMS`, installs
+`Quota Control.app` into `/Applications` (or `~/Applications`), registers its widgets and opens it.
+Run it again to reinstall; `--uninstall` moves the app to the Trash, removes its login item and
+`usagectl` link, and keeps accounts and settings.
+
+With Homebrew, from the [buidangminh23/tap](https://github.com/buidangminh23/homebrew-tap):
+
+```sh
+brew tap buidangminh23/tap
+brew trust --tap buidangminh23/tap
+brew install --cask quota-control
+```
+
+Or download `Quota-Control_<version>_aarch64.dmg` from the
+[latest release](https://github.com/buidangminh23/quota-control/releases/latest) and drag the app to
+Applications. The app is signed ad hoc, not notarized by Apple, so the first launch of a copy
+downloaded with a browser is blocked: open **System Settings → Privacy & Security** and choose
+**Open Anyway**. The script and the Homebrew cask avoid that step, and in-app updates never hit it.
+
+After that the app updates itself like the Windows and Linux versions (see [Updates](#updates)).
+
+### macOS specifics
+
+- **Menu bar.** The app has no Dock icon. Each account shows its mark with its readings, as upstream
+  draws them (marks at 16 points, one value at 12 points or two stacked at 9), or the Bars glyph,
+  always as template images that turn white on a dark menu bar and black on a light one.
+  **Settings → Menu Bar** picks what it lists (the Limits tab's accounts, the starred metrics, or a
+  hand-picked set) and whether each account shows one reading or two stacked.
+- **Dynamic Island.** On a MacBook with a notch, a black island hugs the notch and its two wings
+  carry a reading each, as a percentage, a ring or a bar. Hovering opens the details (or a click,
+  when **Expand on Hover** is off): the accounts the island lists, with their meters, plans, emails
+  and reset countdowns, and a line for an account that is signed out. A click on the open island
+  opens the popup right below it. It also opens by itself for a few seconds when a limit is about to
+  run out or a Codex reset is announced. Screens without a notch get the same island as a pill in
+  the middle of the menu bar. **Settings → Dynamic Island** chooses the style, the metric beside
+  each side of the notch, what the details list and which parts of an account they show.
+- **Desktop widgets.** Right-click the desktop, choose **Edit Widgets** and search for Quota Control.
+  There are three styles, each in small, medium, large and extra large: **Details** (meters,
+  headlines and live reset countdowns), **Rings** (a percentage ring per metric) and **Compact**
+  (one line per metric, the most accounts at once). Each fits as many accounts as its size holds and
+  says how many it left out. **Settings → Desktop Widget** picks what they list and which parts of an
+  account they show. The app writes the readings to
+  `~/Library/Application Support/usage-control/widget/glance.json` and asks WidgetKit to reload
+  when a reading changes; the sandboxed widgets may read only that folder, not the accounts beside it. While the app is closed the
+  widgets keep their last readings and mark them once they are over 20 minutes old.
+- **Claude Code login.** Claude Code on macOS keeps its login in the login keychain, not in
+  `~/.claude/.credentials.json`. Quota Control reads the `Claude Code-credentials` item through
+  `/usr/bin/security`, the tool Claude Code writes it with, so macOS asks nothing; the file is only a
+  fallback. Codex keeps using `~/.codex/auth.json`.
+- **Files.** Settings, accounts and the widget file live in `~/Library/Application Support/usage-control`,
+  caches in `~/Library/Caches/usage-control`, the log in `~/Library/Logs/usage-control`, and
+  `usagectl` is linked into `~/.local/bin`. When no shell profile names that folder, the app adds
+  it to `~/.zprofile` (or `~/.bash_profile` for bash) in a block marked "Quota Control: usagectl",
+  which uninstalling removes.
 ## Stack
 
 - [Tauri 2](https://tauri.app/): a Rust core and the operating system's own web view.
@@ -79,7 +144,8 @@ pnpm build
 ```
 
 The native host requires the platform prerequisites for Tauri 2 (Windows C++
-build tools/WebView2, or Linux GTK/WebKit development libraries). To inspect the
+build tools/WebView2, Linux GTK/WebKit development libraries, or Xcode on macOS, whose Swift
+compiler builds the Dynamic Island and the widget). To inspect the
 local credential/API/log adapters without opening the UI, run:
 
 ```sh
@@ -211,7 +277,8 @@ Installed copies update themselves from this repository's GitHub releases.
   signature, installs it and reopens the app, which confirms the new version with a notification.
   Windows runs the NSIS setup in passive mode: a progress window, no questions, no administrator
   rights. A `.deb` asks for an administrator password (through `pkexec`, or a zenity or kdialog
-  prompt). An AppImage replaces its own file.
+  prompt). An AppImage replaces its own file. On macOS the `.app` bundle is replaced in place,
+  asking for an administrator password only when its folder is not writable.
 - Every package must carry a minisign signature from the release key whose public half is built
   into the app (`plugins.updater.pubkey` in `src-tauri/tauri.conf.json`), and the signature must
   name the version being installed, so an older signed package cannot be passed off as an update.
@@ -240,6 +307,23 @@ and the launch-at-login entry when it points at this installation. Accounts and 
 application data** is ticked, because that option only clears the web view data; delete those
 folders to remove them.
 
+**macOS** (Apple Silicon, Xcode 15 or newer):
+
+```sh
+pnpm install
+pnpm tauri build
+```
+
+`src-tauri/tauri.macos.conf.json` switches the bundles to `app` and `dmg`. `build.rs` compiles the
+Swift in `src-tauri/macos/Shared` and `src-tauri/macos/Host` (Dynamic Island, popup window style,
+widget reload) into a static library linked into the app, and the bundle step first runs
+`node scripts/macos-widget.mjs build`, which builds the WidgetKit extension from
+`src-tauri/macos/Shared` and `src-tauri/macos/Widget` and signs it with its sandbox entitlements.
+Tauri copies it into `Contents/PlugIns`. The results are
+`target/release/bundle/macos/Quota Control.app` and
+`target/release/bundle/dmg/Quota Control_<version>_aarch64.dmg`, signed ad hoc
+(`APPLE_SIGNING_IDENTITY` switches both the app and the widget to a real identity).
+
 **Linux** (Ubuntu 24.04 or newer, including WSL):
 
 ```sh
@@ -259,14 +343,16 @@ WebKitGTK 4.1, GTK 3 and Ayatana AppIndicator, and installs `/usr/bin/quota-cont
 
 ## Releases
 
-A release is a GitHub release carrying the three installers, their `.sig` files, `latest.json`
-(the manifest installed apps read) and `SHA256SUMS`. Installed apps see it only once it is
-published as the latest release.
+A release is a GitHub release carrying the Windows setup, the `.deb`, the AppImage and the macOS
+app archive with their `.sig` files, the macOS DMG, `latest.json` (the manifest installed apps read)
+and `SHA256SUMS`. Installed apps see it only once it is published as the latest release, and
+publishing refuses a release that lacks the Windows or Linux packages, or the macOS archive once a
+published release has carried one (so the releases before the first macOS one do not wait for it).
 
 1. Set the same version in `package.json`, `src-tauri/tauri.conf.json` and `Cargo.toml`
    (`[workspace.package]`), commit, then push a matching tag: `git tag v0.2.0 && git push origin v0.2.0`.
-2. The **Release** workflow checks the tag against the three versions, builds and signs the Windows
-   and Linux installers, and uploads everything to a **draft** release.
+2. The **Release** workflow checks the tag against the three versions, builds and signs the Windows,
+   Linux and macOS packages, and uploads everything to a **draft** release.
 3. Publish the draft on GitHub, or run `gh release edit v0.2.0 --draft=false --latest`. From then
    on, installed apps offer the update.
 
@@ -276,6 +362,12 @@ setup here and the `.deb` and AppImage in WSL from the committed tree, then asse
 publishes it, then reads `latest.json` back from GitHub and checks every download link.
 Publishing creates the tag, and the Release workflow then finds the release published and builds
 nothing. `--skip-linux` builds only the Windows setup; such a partial build cannot be published.
+
+On a Mac, `node scripts/release.mjs mac` builds the app bundle and the DMG (signed with
+`~/.tauri/quota-control.key` or `TAURI_SIGNING_PRIVATE_KEY`) into `target/release-assets/v0.2.0-macos`;
+`--publish` adds them to the draft the other machine uploaded and `--latest` then publishes it.
+Every upload merges with the release: `latest.json` keeps the other platforms and `SHA256SUMS` the
+other files, so the packages can come from different machines.
 
 ### Signing key
 

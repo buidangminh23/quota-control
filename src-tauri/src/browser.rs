@@ -23,7 +23,7 @@ pub fn open_login_page<R: tauri::Runtime>(
 ) -> Result<LoginBrowser, String> {
     validate_url(url)?;
     if let Some(chrome) = chrome_path() {
-        match Command::new(&chrome).arg(url).spawn() {
+        match chrome_command(&chrome, url).spawn() {
             Ok(child) => {
                 reap(child);
                 return Ok(LoginBrowser::Chrome);
@@ -129,7 +129,34 @@ fn chrome_path() -> Option<PathBuf> {
         })
 }
 
-#[cfg(not(any(windows, target_os = "linux")))]
+/// macOS starts Chrome through LaunchServices, so it runs as its own app rather than as a child of
+/// Quota Control.
+#[cfg(target_os = "macos")]
+fn chrome_path() -> Option<PathBuf> {
+    let application = std::path::Path::new("Applications").join("Google Chrome.app");
+    [
+        PathBuf::from("/").join(&application),
+        uc_core::paths::home_dir().join(&application),
+    ]
+    .into_iter()
+    .find(|path| path.join("Contents").join("Info.plist").is_file())
+}
+
+#[cfg(target_os = "macos")]
+fn chrome_command(chrome: &std::path::Path, url: &str) -> Command {
+    let mut command = Command::new("/usr/bin/open");
+    command.arg("-a").arg(chrome).arg(url);
+    command
+}
+
+#[cfg(not(target_os = "macos"))]
+fn chrome_command(chrome: &std::path::Path, url: &str) -> Command {
+    let mut command = Command::new(chrome);
+    command.arg(url);
+    command
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 fn chrome_path() -> Option<PathBuf> {
     None
 }

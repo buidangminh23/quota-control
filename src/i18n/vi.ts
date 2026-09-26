@@ -128,7 +128,7 @@ export const vi: Messages = {
     refreshing: "Đang làm mới",
     hide: "Ẩn",
     hideProvider: (name) => `Ẩn ${name}`,
-    starForTaskbar: "Gắn sao lên thanh tác vụ",
+    starFor: (bar) => (bar === "menuBar" ? "Gắn sao lên thanh menu" : "Gắn sao lên thanh tác vụ"),
     unstar: "Bỏ gắn sao",
     refreshProvider: (name) => `Làm mới ${name}`,
     customizeEllipsis: "Tùy chỉnh…",
@@ -214,9 +214,9 @@ export const vi: Messages = {
     onDemand: "Khi mở rộng",
     dragHere: "Kéo chỉ số vào đây",
     metricCount: (count) => `${count} chỉ số`,
-    starred: "Đã gắn sao lên thanh tác vụ",
-    unstarred: "Đã bỏ khỏi thanh tác vụ",
-    star: "Gắn sao lên thanh tác vụ",
+    starred: (bar) => (bar === "menuBar" ? "Đã gắn sao lên thanh menu" : "Đã gắn sao lên thanh tác vụ"),
+    unstarred: (bar) => (bar === "menuBar" ? "Đã bỏ khỏi thanh menu" : "Đã bỏ khỏi thanh tác vụ"),
+    star: (bar) => (bar === "menuBar" ? "Gắn sao lên thanh menu" : "Gắn sao lên thanh tác vụ"),
     unstar: "Bỏ gắn sao",
     enable: (name) => `Bật ${name}`,
     reorder: "Kéo để sắp xếp",
@@ -224,7 +224,7 @@ export const vi: Messages = {
     settingsLinkSubtitle: "Thông báo, giao diện và các tùy chọn khác",
     customizeLinkTitle: "Tùy chỉnh",
     customizeLinkSubtitle: "Chọn nội dung hiển thị và vị trí",
-    undo: "Hoàn tác (Ctrl+Z)",
+    undo: (platform) => (platform === "macos" ? "Hoàn tác (⌘Z)" : "Hoàn tác (Ctrl+Z)"),
   },
   settings: {
     section: (key) =>
@@ -233,6 +233,9 @@ export const vi: Messages = {
         appearance: "Giao diện",
         usageDisplay: "Hiển thị mức dùng",
         taskbar: "Thanh tác vụ",
+        menuBar: "Thanh menu",
+        island: "Dynamic Island",
+        widget: "Widget màn hình",
         notifications: "Thông báo",
         updates: "Cập nhật ứng dụng",
         advanced: "Nâng cao",
@@ -246,7 +249,8 @@ export const vi: Messages = {
     recordShortcut: "Ghi phím tắt",
     pressShortcut: "Nhấn tổ hợp phím…",
     clearShortcut: "Xóa phím tắt",
-    shortcutNeedsModifier: (platform) => `Hãy nhấn kèm Ctrl, Alt, Shift hoặc ${platform === "windows" ? "Win" : "Super"}.`,
+    shortcutNeedsModifier: (platform) =>
+      platform === "macos" ? "Hãy nhấn kèm ⌘, ⌥, ⌃ hoặc ⇧." : `Hãy nhấn kèm Ctrl, Alt, Shift hoặc ${platform === "windows" ? "Win" : "Super"}.`,
     shortcutUnsupported: "Không dùng được phím này cho phím tắt.",
     shortcutUnavailable: "Không đặt được phím tắt này. Có thể một ứng dụng khác đang dùng nó.",
     theme: "Chủ đề",
@@ -262,14 +266,52 @@ export const vi: Messages = {
     alwaysShowPacing: "Luôn hiện nhịp dùng",
     alwaysShowPacingNote:
       "Hiện dự báo và vạch nhịp đều trên mọi chỉ số có thời điểm đặt lại, không chỉ những chỉ số gần chạm hạn mức.",
-    taskbarDisplay: "Hiển thị trên thanh tác vụ",
+    barDisplay: (bar) => (bar === "menuBar" ? "Hiển thị trên thanh menu" : "Hiển thị trên thanh tác vụ"),
     taskbarDisplayOption: (display) => ({ text: "Số liệu", bars: "Thanh", icon: "Chỉ icon app" })[display],
-    taskbarNote: (display) =>
+    barNote: (display, bar) =>
+      bar === "menuBar"
+        ? {
+            text: "Mỗi tài khoản hiện biểu tượng kèm số liệu ngay trên thanh menu và cập nhật trực tiếp.",
+            bars: "Biểu tượng trên thanh menu hiện thanh mức dùng và cập nhật trực tiếp; di chuột lên để xem số liệu.",
+            icon: "Thanh menu chỉ hiện biểu tượng Quota Control; bấm vào để mở bảng hạn mức.",
+          }[display]
+        : {
+            text: "Mỗi tài khoản hiện biểu tượng kèm số liệu thành dải cạnh khay hệ thống và cập nhật trực tiếp.",
+            bars: "Biểu tượng khay hiện thanh mức dùng và cập nhật trực tiếp; di chuột lên biểu tượng để xem số liệu.",
+            icon: "Thanh tác vụ chỉ hiện biểu tượng Quota Control; bấm vào để mở bảng hạn mức.",
+          }[display],
+    dynamicIsland: "Hiện Dynamic Island",
+    dynamicIslandNote:
+      "Số liệu nằm hai bên tai thỏ, hoặc trong một viên nhộng trên thanh menu ở màn hình không có tai thỏ. Mở rộng để xem đủ các tài khoản, bấm để mở Quota Control.",
+    desktopWidget: "Thêm widget",
+    desktopWidgetNote:
+      "Bấm chuột phải lên màn hình nền, chọn Sửa tiện ích rồi tìm Quota Control. Có ba kiểu: Chi tiết (thanh mức dùng và giờ đặt lại), Vòng tròn (đồng hồ phần trăm) và Gọn (mỗi chỉ số một dòng), mỗi kiểu có bốn cỡ.",
+    glanceContent: "Nội dung",
+    glanceContentOption: (content) => ({ dashboard: "Như tab Hạn mức", starred: "Chỉ số gắn sao", custom: "Tự chọn" })[content],
+    glanceContentNote: (content) =>
       ({
-        text: "Các chỉ số gắn sao hiện thành dải số liệu cạnh khay hệ thống và cập nhật trực tiếp.",
-        bars: "Biểu tượng khay hiện thanh mức dùng của các chỉ số gắn sao và cập nhật trực tiếp; di chuột lên biểu tượng để xem số liệu.",
-        icon: "Thanh tác vụ chỉ hiện biểu tượng Quota Control; bấm vào để mở bảng hạn mức.",
-      })[display],
+        dashboard: "Mọi tài khoản và chỉ số đang hiện ở tab Hạn mức, theo đúng thứ tự ở đó.",
+        starred: "Chỉ các chỉ số đã gắn sao trong tab Hạn mức.",
+        custom: "Chỉ những chỉ số được bật trong danh sách dưới đây.",
+      })[content],
+    glanceMetrics: "Chỉ số được chọn",
+    glanceMetricsNote: "Bật những chỉ số muốn hiện. Thứ tự theo tab Hạn mức.",
+    glanceMetricsNone: "Chưa có tài khoản nào đang bật.",
+    glanceShowAccount: "Hiện email tài khoản",
+    glanceShowPlan: "Hiện gói (Pro, Plus…)",
+    glanceShowResets: "Hiện thời gian đặt lại",
+    glanceShowProblems: "Hiện tài khoản cần chú ý",
+    glanceShowProblemsNote: "Tài khoản hết phiên đăng nhập hoặc chưa có số liệu vẫn có một dòng báo lý do, thay vì biến mất.",
+    stripValues: "Số liệu mỗi tài khoản",
+    stripValuesOption: (count) => (count === 2 ? "Hai số xếp chồng" : "Một số"),
+    islandStyle: "Kiểu thu gọn",
+    islandStyleOption: (style) => ({ percent: "Phần trăm", ring: "Vòng tròn", bar: "Thanh" })[style],
+    islandWing: (side) => (side === "left" ? "Bên trái tai thỏ" : "Bên phải tai thỏ"),
+    islandWingAuto: "Tự động",
+    islandExpandOnHover: "Mở rộng khi rê chuột",
+    islandExpandOnHoverNote: "Tắt đi thì bấm một lần để mở rộng, bấm lần nữa để mở Quota Control.",
+    islandAlerts: "Tự mở khi có cảnh báo",
+    islandAlertsNote: "Island mở ra vài giây khi một hạn mức sắp hết hoặc vừa được đặt lại.",
     notification: (key) => ({ almostOut: "Sắp hết", cuttingItClose: "Sát hạn mức", willRunOut: "Sẽ hết trước khi đặt lại" })[key],
     notificationNote: (key) =>
       ({
@@ -280,7 +322,7 @@ export const vi: Messages = {
     notificationsDenied: "Thông báo đang bị tắt cho Quota Control. Hãy bật lại trong cài đặt hệ thống.",
     allowNotifications: "Cho phép thông báo",
     copyLogPath: "Sao chép đường dẫn nhật ký",
-    revealLog: (platform) => (platform === "windows" ? "Mở trong File Explorer" : "Mở thư mục nhật ký"),
+    revealLog: (platform) => ({ windows: "Mở trong File Explorer", macos: "Mở trong Finder", linux: "Mở thư mục nhật ký", other: "Mở thư mục nhật ký" })[platform],
     logActionFailed: "Không thực hiện được thao tác với tệp nhật ký.",
     copied: "Đã sao chép",
     resetAllSettings: "Đặt lại toàn bộ cài đặt…",
@@ -328,7 +370,22 @@ export const vi: Messages = {
     createdOn: (date) => `Tạo ngày ${date}`,
   },
   strip: {
-    tooltipEmpty: "Quota Control — chưa có chỉ số gắn sao nào có dữ liệu",
+    tooltipEmpty: "Quota Control — chưa có chỉ số nào có dữ liệu",
+  },
+  glance: {
+    empty: {
+      dashboard: "Kết nối tài khoản trong Quota Control để hiện hạn mức ở đây.",
+      starred: "Gắn sao chỉ số trong Quota Control để hiện ở đây.",
+      custom: "Chọn chỉ số trong Cài đặt của Quota Control để hiện ở đây.",
+    },
+    noData: "Chưa có số liệu",
+    more: "tài khoản khác",
+    updated: "Cập nhật",
+    resetsIn: "Đặt lại sau",
+    resetting: "Đang đặt lại…",
+    open: "Bấm để mở Quota Control",
+    notRunning: "Mở Quota Control để hiện hạn mức ở đây.",
+    units: { day: " ngày", hour: " giờ", minute: " phút" },
   },
   update: {
     availableTitle: "Có phiên bản mới",

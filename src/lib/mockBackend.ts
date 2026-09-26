@@ -9,6 +9,7 @@ import type {
   AccountLoginResult,
   AccountProvider,
   AppInfo,
+  Platform,
   AvailableUpdate,
   ChatSession,
   ConnectedAccount,
@@ -48,6 +49,12 @@ function mockId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `mock-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+/** `?platform=macos` (or `windows`, `linux`) previews that platform's settings in `pnpm dev`. */
+function previewPlatform(): Platform {
+  const requested = typeof location === "undefined" ? null : new URLSearchParams(location.search).get("platform");
+  return requested === "macos" || requested === "windows" || requested === "linux" ? requested : "web";
+}
+
 export class MockBackend implements Backend {
   private state: EngineState = fixtureEngineState();
   private entries: ProviderEntry[] = fixtureCatalog();
@@ -81,7 +88,7 @@ export class MockBackend implements Backend {
   nextRelease: AvailableUpdate | null = { version: "0.2.0", notes: "Faster refresh and a new update card." };
 
   async appInfo(): Promise<AppInfo> {
-    return { name: "Quota Control", version: this.version, platform: "web" };
+    return { name: "Quota Control", version: this.version, platform: previewPlatform() };
   }
 
   async catalog(): Promise<ProviderEntry[]> {

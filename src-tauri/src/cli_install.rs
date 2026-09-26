@@ -6,6 +6,8 @@
 //!   which must never become a command. The copy is refreshed at launch after an update.
 //! - Linux packages already install `/usr/bin/usagectl`. Other builds link it into `~/.local/bin`;
 //!   an AppImage gets a small script that runs the AppImage with `--cli`.
+//! - macOS links `~/.local/bin/usagectl` to the copy inside `Quota Control.app/Contents/MacOS`, so it
+//!   follows every in-place update; a moved app relinks at its next launch.
 
 use crate::service::safe_error;
 
@@ -16,12 +18,12 @@ pub enum CliState {
     /// This build ships no `usagectl` (a development run or an unsupported platform).
     Unavailable,
     /// A package manager already put it on PATH.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(unix), allow(dead_code))]
     Managed,
     Installed,
     NotInstalled,
     /// Something Quota Control did not create already holds the command's name.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(unix), allow(dead_code))]
     Conflict,
 }
 
@@ -379,7 +381,7 @@ mod platform {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 mod platform {
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
@@ -473,7 +475,7 @@ mod platform {
         match existing(&link) {
             Link::Missing => CliState::NotInstalled,
             Link::Foreign => CliState::Conflict,
-            Link::Ours if current(&link) => CliState::Installed,
+            Link::Ours if current(&link) && profile::reaches(&link) => CliState::Installed,
             Link::Ours => CliState::NotInstalled,
         }
     }
@@ -510,7 +512,7 @@ mod platform {
                 std::os::unix::fs::symlink(source, &link).map_err(super::safe_error)?;
             }
         }
-        Ok(())
+        profile::add(&link)
     }
 
     pub fn uninstall() -> Result<(), String> {
@@ -518,7 +520,143 @@ mod platform {
         if matches!(existing(&link), Link::Ours) {
             std::fs::remove_file(&link).map_err(super::safe_error)?;
         }
-        Ok(())
+        profile::remove()
+    }
+
+    /// A Mac's shells start from `/etc/paths`, which does not list `~/.local/bin`, so the link
+    /// would sit where no terminal looks. Unless a shell profile already names that folder, the
+    /// install adds it to the login profile (`~/.zprofile` for zsh, the default, or
+    /// `~/.bash_profile`) in a marked block, and uninstalling removes exactly that block. Linux
+    /// distributions put `~/.local/bin` on PATH themselves, so there this does nothing.
+    #[cfg(target_os = "macos")]
+    mod profile {
+        use std::path::{Path, PathBuf};
+
+        const BEGIN: &str = "# >>> Quota Control: usagectl >>>";
+        const END: &str = "# <<< Quota Control: usagectl <<<";
+        const READ_BY_SHELLS: [&str; 7] = [
+            ".zprofile",
+            ".zshenv",
+            ".zshrc",
+            ".zlogin",
+            ".bash_profile",
+            ".bashrc",
+            ".profile",
+        ];
+
+        fn home() -> PathBuf {
+            uc_core::paths::home_dir()
+        }
+
+        /// The login profile of `shell`: zsh's, or bash's; `None` for any other shell.
+        pub(super) fn file(home: &Path, shell: Option<&str>) -> Option<PathBuf> {
+            match shell.and_then(|shell| Path::new(shell).file_name()?.to_str()) {
+                None | Some("zsh") => Some(home.join(".zprofile")),
+                Some("bash") => Some(home.join(".bash_profile")),
+                Some(_) => None,
+            }
+        }
+
+        fn profile_file() -> Option<PathBuf> {
+            file(&home(), std::env::var("SHELL").ok().as_deref())
+        }
+
+        /// Whether a terminal will find `link`: some profile names its folder, or the shell is one
+        /// whose profile this does not edit.
+        pub(super) fn reaches(link: &Path) -> bool {
+            let Some(folder) = link.parent() else {
+                return true;
+            };
+            profile_file().is_none() || mentions(&home(), folder)
+        }
+
+        fn mentions(home: &Path, folder: &Path) -> bool {
+            let relative = folder
+                .strip_prefix(home)
+                .map(|path| path.to_string_lossy().into_owned())
+                .ok();
+            READ_BY_SHELLS.iter().any(|name| {
+                std::fs::read_to_string(home.join(name)).is_ok_and(|text| {
+                    text.contains(folder.to_string_lossy().as_ref())
+                        || relative
+                            .as_deref()
+                            .is_some_and(|relative| text.contains(relative))
+                })
+            })
+        }
+
+        pub(super) fn add(link: &Path) -> Result<(), String> {
+            if reaches(link) {
+                return Ok(());
+            }
+            let Some(file) = profile_file() else {
+                return Ok(());
+            };
+            let text = match std::fs::read_to_string(&file) {
+                Ok(text) => text,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(error) => return Err(super::super::safe_error(error)),
+            };
+            match with_block(&text) {
+                Some(updated) => uc_core::paths::write_atomic(&file, updated.as_bytes())
+                    .map_err(super::super::safe_error),
+                None => Ok(()),
+            }
+        }
+
+        pub(super) fn remove() -> Result<(), String> {
+            let Some(file) = profile_file() else {
+                return Ok(());
+            };
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                return Ok(());
+            };
+            match without_block(&text) {
+                Some(updated) => uc_core::paths::write_atomic(&file, updated.as_bytes())
+                    .map_err(super::super::safe_error),
+                None => Ok(()),
+            }
+        }
+
+        /// `text` with the block after a blank line, or `None` when it already has the block.
+        pub(super) fn with_block(text: &str) -> Option<String> {
+            if text.contains(BEGIN) {
+                return None;
+            }
+            let block = format!("{BEGIN}\nexport PATH=\"$HOME/.local/bin:$PATH\"\n{END}\n");
+            if text.is_empty() {
+                return Some(block);
+            }
+            let separator = if text.ends_with('\n') { "\n" } else { "\n\n" };
+            Some(format!("{text}{separator}{block}"))
+        }
+
+        /// `text` without the block and the blank line before it, or `None` when it has none.
+        pub(super) fn without_block(text: &str) -> Option<String> {
+            let start = text.find(BEGIN)?;
+            let end = start + text[start..].find(END)? + END.len();
+            let head = &text[..start];
+            let head = head
+                .strip_suffix("\n\n")
+                .map_or(head, |trimmed| &head[..trimmed.len() + 1]);
+            let tail = text[end..].strip_prefix('\n').unwrap_or(&text[end..]);
+            Some(format!("{head}{tail}"))
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    mod profile {
+        pub(super) fn reaches(_link: &std::path::Path) -> bool {
+            true
+        }
+
+        pub(super) fn add(_link: &std::path::Path) -> Result<(), String> {
+            Ok(())
+        }
+
+        pub(super) fn remove() -> Result<(), String> {
+            Ok(())
+        }
     }
 
     #[cfg(test)]
@@ -526,6 +664,32 @@ mod platform {
         use std::os::unix::fs::PermissionsExt;
 
         use super::{Link, existing, wrapper};
+
+        #[cfg(target_os = "macos")]
+        #[test]
+        fn the_profile_block_goes_in_once_and_comes_out_cleanly() {
+            use super::profile::{file, with_block, without_block};
+            let home = std::path::Path::new("/Users/a");
+            assert_eq!(file(home, None), Some(home.join(".zprofile")));
+            assert_eq!(
+                file(home, Some("/bin/bash")),
+                Some(home.join(".bash_profile"))
+            );
+            assert_eq!(file(home, Some("/opt/homebrew/bin/fish")), None);
+
+            let original = "eval \"$(/opt/homebrew/bin/brew shellenv)\"\n";
+            let added = with_block(original).unwrap();
+            assert!(added.starts_with(original));
+            assert!(added.contains("export PATH=\"$HOME/.local/bin:$PATH\""));
+            assert_eq!(with_block(&added), None);
+            assert_eq!(without_block(&added).unwrap(), original);
+            assert_eq!(without_block(original), None);
+
+            let fresh = with_block("").unwrap();
+            assert_eq!(without_block(&fresh).unwrap(), "");
+            let unterminated = with_block("export A=1").unwrap();
+            assert_eq!(without_block(&unterminated).unwrap(), "export A=1\n");
+        }
 
         fn executable(path: &std::path::Path, text: &str) {
             std::fs::write(path, text).unwrap();
@@ -561,7 +725,7 @@ mod platform {
     }
 }
 
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(not(any(windows, unix)))]
 mod platform {
     use super::CliState;
 

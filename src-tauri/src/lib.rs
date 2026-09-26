@@ -5,10 +5,13 @@ mod chat_store;
 mod cli_install;
 mod commands;
 pub mod exchange_rate;
+mod glance;
 mod insights_commands;
 mod integrations;
 mod ipc_guard;
 mod limit_resets;
+#[cfg(target_os = "macos")]
+mod macos;
 pub mod public_feeds;
 mod service;
 mod shortcut;
@@ -112,6 +115,7 @@ pub fn run() -> anyhow::Result<()> {
             chat_commands::open_chat_session,
             taskbar_strip::taskbar_info,
             taskbar_strip::set_taskbar_strip,
+            glance::set_glance,
             shortcut::global_shortcut,
             shortcut::set_global_shortcut,
             shortcut::pause_global_shortcut,
@@ -120,6 +124,8 @@ pub fn run() -> anyhow::Result<()> {
             updates::install_update,
         ]))
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             if !cfg!(debug_assertions)
                 && app.autolaunch().is_enabled().unwrap_or(false)
                 && let Err(error) = app.autolaunch().enable()
@@ -142,6 +148,7 @@ pub fn run() -> anyhow::Result<()> {
             app.manage(commands::TrayImage::default());
             app.manage(limit_resets::Redemptions::default());
             app.manage(updates::Updates::new(app.handle()));
+            app.manage(glance::Glance::default());
             let window =
                 WebviewWindowBuilder::new(app, "popup", WebviewUrl::App("index.html".into()))
                     .title("Quota Control")
@@ -152,6 +159,8 @@ pub fn run() -> anyhow::Result<()> {
                     .always_on_top(true)
                     .visible(false)
                     .build()?;
+            #[cfg(target_os = "macos")]
+            macos::configure_popup(&window);
             let handle = app.handle().clone();
             window.on_window_event(move |event| match event {
                 WindowEvent::CloseRequested { api, .. } => {
@@ -165,11 +174,8 @@ pub fn run() -> anyhow::Result<()> {
             });
             let menu = tray_menu(app.handle()).map_err(anyhow::Error::msg)?;
             TrayIconBuilder::with_id("main")
-                .icon(
-                    app.default_window_icon()
-                        .cloned()
-                        .ok_or("Missing app icon")?,
-                )
+                .icon(tray_icon(app.handle())?)
+                .icon_as_template(cfg!(target_os = "macos"))
                 .tooltip("Quota Control")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
@@ -248,6 +254,8 @@ pub fn run() -> anyhow::Result<()> {
                         .set_covered(&cover_app, covered);
                 },
             ));
+            #[cfg(target_os = "macos")]
+            macos::start_island(app.handle());
             app.state::<BackendService>().start(app.handle());
             app.state::<updates::Updates>().start(app.handle());
             usage_commands::start(app.handle());
@@ -285,8 +293,38 @@ pub fn run() -> anyhow::Result<()> {
             });
             Ok(())
         })
-        .run(tauri::generate_context!())?;
+        .build(tauri::generate_context!())?
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event
+                && let Err(error) = show_popup(app)
+            {
+                tracing::warn!("{error}");
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
     Ok(())
+}
+
+/// The tray's resting icon: the app icon, or on macOS a monochrome gauge that the menu bar tints.
+fn tray_icon(app: &AppHandle) -> Result<tauri::image::Image<'static>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app;
+        menu_bar_icon().map_err(safe_error)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        app.default_window_icon()
+            .map(|icon| icon.clone().to_owned())
+            .ok_or_else(|| "Missing app icon".to_owned())
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn menu_bar_icon() -> tauri::Result<tauri::image::Image<'static>> {
+    tauri::image::Image::from_bytes(include_bytes!("../icons/menubar-template.png"))
 }
 
 /// Whether native text (menus, notifications) should be English; the popup's language setting.
@@ -436,6 +474,15 @@ pub(crate) fn show_popup(app: &AppHandle) -> Result<(), String> {
     show_popup_at(app, None)
 }
 
+/// Show the popup under `anchor`: the Dynamic Island's rectangle, in global points on macOS.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn show_popup_anchored(
+    app: &AppHandle,
+    anchor: PhysicalRect<i32, u32>,
+) -> Result<(), String> {
+    show_popup_at(app, Some(anchor))
+}
+
 /// Show the popup against `anchor` (a screen rectangle in physical pixels, such as the taskbar
 /// strip), or against the tray icon when there is none.
 fn show_popup_at(app: &AppHandle, anchor: Option<PhysicalRect<i32, u32>>) -> Result<(), String> {
@@ -444,6 +491,8 @@ fn show_popup_at(app: &AppHandle, anchor: Option<PhysicalRect<i32, u32>>) -> Res
         .ok_or("Popup is unavailable")?;
     *app.state::<PopupAnchor>().0.lock() = anchor;
     position_popup(app)?;
+    #[cfg(target_os = "macos")]
+    macos::set_popup_visible(true);
     if let Some(strip) = app.try_state::<taskbar_strip::TaskbarStrip>() {
         strip.set_popup_visible(true);
     }
@@ -461,6 +510,8 @@ fn hide_popup(app: &AppHandle) -> Result<(), String> {
         .get_webview_window("popup")
         .ok_or("Popup is unavailable")?;
     window.hide().map_err(safe_error)?;
+    #[cfg(target_os = "macos")]
+    macos::set_popup_visible(false);
     if let Some(strip) = app.try_state::<taskbar_strip::TaskbarStrip>() {
         strip.set_popup_visible(false);
     }
@@ -470,7 +521,8 @@ fn hide_popup(app: &AppHandle) -> Result<(), String> {
 /// Gap, in physical pixels, between the popup and the rectangle it opens against.
 const POPUP_GAP: i32 = 8;
 
-/// What the popup was last opened against (`None`: the tray icon), so resizes keep it there.
+/// What the popup was last opened against (`None`: the tray icon), so resizes keep it there. On
+/// macOS the rectangle is in global points, elsewhere in physical pixels.
 #[derive(Default)]
 struct PopupAnchor(parking_lot::Mutex<Option<PhysicalRect<i32, u32>>>);
 
@@ -483,6 +535,7 @@ fn rect_center(rect: PhysicalRect<i32, u32>) -> PhysicalPosition<i32> {
 
 /// Center the popup on its anchor (falling back to the tray icon), opening away from the screen
 /// edge the anchor sits on and staying inside that monitor's work area.
+#[cfg(not(target_os = "macos"))]
 fn position_popup(app: &AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("popup")
@@ -513,6 +566,103 @@ fn position_popup(app: &AppHandle) -> Result<(), String> {
             .map_err(safe_error)?;
     }
     Ok(())
+}
+
+/// macOS works in global points throughout: displays may mix backing scales, tao reads a monitor
+/// lookup point as points, and a logical position is placed exactly. Each monitor's physical
+/// frame is turned back into points with its own scale, and so is the tray icon's rectangle.
+#[cfg(target_os = "macos")]
+fn position_popup(app: &AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("popup")
+        .ok_or("Popup is unavailable")?;
+    let window_scale = window.scale_factor().map_err(safe_error)?;
+    let outer = window.outer_size().map_err(safe_error)?;
+    let size = PhysicalSize::new(
+        (f64::from(outer.width) / window_scale).round() as u32,
+        (f64::from(outer.height) / window_scale).round() as u32,
+    );
+    let monitors: Vec<(PhysicalRect<i32, u32>, PhysicalRect<i32, u32>, f64)> = window
+        .available_monitors()
+        .map_err(safe_error)?
+        .iter()
+        .map(|monitor| {
+            let scale = monitor.scale_factor();
+            let bounds = PhysicalRect {
+                position: *monitor.position(),
+                size: *monitor.size(),
+            };
+            (
+                in_points(bounds, scale),
+                in_points(*monitor.work_area(), scale),
+                scale,
+            )
+        })
+        .collect();
+    let containing = |rect: PhysicalRect<i32, u32>| {
+        let center = rect_center(rect);
+        monitors
+            .iter()
+            .find(|(bounds, _, _)| contains(*bounds, center))
+    };
+    let stored = *app.state::<PopupAnchor>().0.lock();
+    let anchor = stored.or_else(|| {
+        let rect = app.tray_by_id("main")?.rect().ok().flatten()?;
+        let physical = PhysicalRect {
+            position: rect.position.to_physical::<i32>(1.0),
+            size: rect.size.to_physical::<u32>(1.0),
+        };
+        monitors
+            .iter()
+            .map(|(bounds, _, scale)| (*bounds, in_points(physical, *scale)))
+            .find(|(bounds, candidate)| contains(*bounds, rect_center(*candidate)))
+            .map(|(_, candidate)| candidate)
+    });
+    let area = anchor
+        .and_then(|rect| containing(rect).map(|(_, area, _)| *area))
+        .or_else(|| {
+            let primary = window.primary_monitor().ok().flatten()?;
+            Some(in_points(*primary.work_area(), primary.scale_factor()))
+        });
+    if let Some(area) = area {
+        let origin = popup_origin(anchor, area, size);
+        window
+            .set_position(tauri::LogicalPosition::new(
+                f64::from(origin.x),
+                f64::from(origin.y),
+            ))
+            .map_err(safe_error)?;
+    }
+    Ok(())
+}
+
+/// `rect` in physical pixels of a display with backing `scale`, as whole points.
+#[cfg(target_os = "macos")]
+fn in_points(rect: PhysicalRect<i32, u32>, scale: f64) -> PhysicalRect<i32, u32> {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    let points = |value: f64| (value / scale).round();
+    PhysicalRect {
+        position: PhysicalPosition::new(
+            points(f64::from(rect.position.x)) as i32,
+            points(f64::from(rect.position.y)) as i32,
+        ),
+        size: PhysicalSize::new(
+            points(f64::from(rect.size.width)) as u32,
+            points(f64::from(rect.size.height)) as u32,
+        ),
+    }
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn contains(rect: PhysicalRect<i32, u32>, point: PhysicalPosition<i32>) -> bool {
+    point.x >= rect.position.x
+        && point.y >= rect.position.y
+        && point.x < rect.position.x + rect.size.width as i32
+        && point.y < rect.position.y + rect.size.height as i32
 }
 
 /// The popup's top-left: centered on `anchor` and opening away from the screen edge it sits on,
@@ -588,6 +738,28 @@ mod tests {
 
     fn strip() -> PhysicalRect<i32, u32> {
         rect(1469, 1024, 125, 56)
+    }
+
+    #[test]
+    fn a_rectangle_contains_its_near_edges_but_not_its_far_ones() {
+        let area = rect(0, 0, 100, 50);
+        assert!(contains(area, PhysicalPosition::new(0, 0)));
+        assert!(contains(area, PhysicalPosition::new(99, 49)));
+        assert!(!contains(area, PhysicalPosition::new(100, 10)));
+        assert!(!contains(area, PhysicalPosition::new(10, -1)));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn each_display_turns_back_into_points_with_its_own_scale() {
+        let built_in = in_points(rect(0, 0, 2940, 1912), 2.0);
+        assert_eq!((built_in.size.width, built_in.size.height), (1470, 956));
+        let external = in_points(rect(1470, 0, 1920, 1080), 1.0);
+        assert_eq!((external.position.x, external.size.width), (1470, 1920));
+        let island = rect(582, 0, 307, 32);
+        assert!(contains(built_in, rect_center(island)));
+        assert!(!contains(external, rect_center(island)));
+        assert_eq!(in_points(rect(10, 10, 20, 20), f64::NAN).size.width, 20);
     }
 
     #[test]

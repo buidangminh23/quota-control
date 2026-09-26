@@ -86,6 +86,28 @@ export function headerNotice(runtime: ProviderRuntimeState | undefined, language
   return snapshot?.warning ? translate(snapshot.warning, language) : null;
 }
 
+/** How an account card introduces itself on the island, the widget and the strip. */
+export interface CardIdentity {
+  /** The heading: the brand for an account named by its email, the account title otherwise. */
+  name: string;
+  account: string | null;
+  plan: string | null;
+  /** The header notice's first line, for an account that shows no readings. */
+  notice: string | null;
+}
+
+export function cardIdentity(provider: Provider, runtime: ProviderRuntimeState | undefined, language: Language): CardIdentity {
+  const local = isLocalHistoryCard(provider.id);
+  const email = local ? null : accountEmailOf(provider);
+  const plan = local ? undefined : runtime?.snapshot?.plan;
+  return {
+    name: email ? brandName(providerBrand(provider)) : providerTitle(provider, language),
+    account: email,
+    plan: plan ? translate(plan, language) : null,
+    notice: headerNotice(runtime, language)?.split("\n")[0] ?? null,
+  };
+}
+
 /** Whether the snapshot on screen is only an error (the first refresh failed): rows read "No data". */
 export function isErrorSnapshot(runtime: ProviderRuntimeState | undefined): boolean {
   return runtime?.snapshot?.errorCategory !== undefined;

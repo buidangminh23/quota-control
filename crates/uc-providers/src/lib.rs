@@ -1,9 +1,14 @@
 pub mod accounts;
 pub mod credentials;
+pub mod keychain;
 pub mod mapping;
 pub mod oauth;
 
-pub use accounts::{CliAccount, VisibleAccount, account_runtimes, cli_accounts, visible_accounts};
+pub use accounts::{
+    CliAccount, VisibleAccount, account_runtimes, cli_accounts, cli_accounts_keeping,
+    visible_accounts,
+};
+pub use credentials::CliLocation;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -67,7 +72,7 @@ pub struct LocalProvider {
 /// never shows the other account's limits under this card.
 struct CliBinding {
     id: String,
-    path: PathBuf,
+    location: CliLocation,
     profile: Option<PathBuf>,
     verified_token: tokio::sync::Mutex<Option<[u8; 32]>>,
 }
@@ -112,7 +117,7 @@ impl LocalProvider {
         }
         self.cli = Some(CliBinding {
             id: account.id.clone(),
-            path: account.path.clone(),
+            location: account.location.clone(),
             profile: account.profile.clone(),
             verified_token: tokio::sync::Mutex::new(None),
         });
@@ -135,9 +140,11 @@ impl LocalProvider {
             )
             .await;
         };
-        let (kind, path, profile) = (self.kind, binding.path.clone(), binding.profile.clone());
+        let (kind, location, profile) =
+            (self.kind, binding.location.clone(), binding.profile.clone());
         let (current, credentials) =
-            uc_core::load_blocking(move || accounts::read_cli_account(kind, path, profile)).await?;
+            uc_core::load_blocking(move || accounts::read_cli_account(kind, location, profile))
+                .await?;
         if current.id != binding.id {
             return Err(SimpleProviderError::new(
                 ErrorCategory::NotAvailable,

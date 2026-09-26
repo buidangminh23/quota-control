@@ -10,6 +10,7 @@ import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSe
 import type { ContextWindowSession, ExchangeRate, UsageGroupRow, UsageLedgerInfo, UsageQuery } from "./types";
 import type { LimitResetResult } from "./types";
 import type { PublicFeedName, PublicFeedSnapshot, QualityInfo, QualityQuery, QualitySummary } from "./insightsTypes";
+import type { GlanceDocument } from "@/model/glance";
 
 export type Unsubscribe = () => void;
 
@@ -69,6 +70,8 @@ export interface Backend {
   onTaskbarInfo?(listener: (info: TaskbarInfo) => void): Unsubscribe;
   /** Show a strip frame on the taskbar (tray title on Linux); `null` removes the strip. */
   setTaskbarStrip?(frame: StripFrame | null): Promise<void>;
+  /** Send the starred metrics to the macOS Dynamic Island and desktop widget; absent elsewhere. */
+  setGlance?(document: GlanceDocument): Promise<void>;
   /** The accelerator that toggles the popup from anywhere (`Ctrl+Alt+KeyU`), or `null` for none. */
   globalShortcut?(): Promise<string | null>;
   /** Register and save a new accelerator, or clear it with `null`; rejects when it is unusable. */

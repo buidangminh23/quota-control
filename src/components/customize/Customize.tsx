@@ -34,7 +34,7 @@ import {
   type ProviderRow,
 } from "@/model/layout";
 import { providerBrand, providerTitle } from "@/model/providerText";
-import { useIsEnabled, useLanguage } from "@/state/hooks";
+import { useBarKind, useIsEnabled, useLanguage } from "@/state/hooks";
 import { navigate, openCustomizeDetail, setProviderEnabled, showNotice, updateLayout, useApp } from "@/state/store";
 import { Switch } from "../ui/controls";
 import { ChevronRight, GearIcon, GripIcon, StarIcon } from "../ui/icons";
@@ -305,6 +305,7 @@ function SortableMetricRow({ descriptor, language }: { descriptor: WidgetDescrip
 
 function MetricRowView({ descriptor, language, handle, lifted }: { descriptor: WidgetDescriptor; language: Language; handle?: ReactNode; lifted?: boolean }) {
   const messages = messagesFor(language);
+  const bar = useBarKind();
   const layout = useApp((state) => state.layout);
   const catalog = useApp((state) => state.catalog);
   const title = translate(descriptor.template.title, language);
@@ -316,7 +317,7 @@ function MetricRowView({ descriptor, language, handle, lifted }: { descriptor: W
       return;
     }
     updateLayout((current) => setPinned(current, catalog, descriptor.id, !pinned));
-    showNotice(pinned ? messages.customize.unstarred : messages.customize.starred, "positive");
+    showNotice(pinned ? messages.customize.unstarred(bar) : messages.customize.starred(bar), "positive");
   };
   return (
     <div className={`uc-list-row is-metric${lifted ? " is-lifted" : ""}`}>
@@ -331,9 +332,9 @@ function MetricRowView({ descriptor, language, handle, lifted }: { descriptor: W
           type="button"
           className={`uc-star-button${pinned ? " is-on" : ""}`}
           aria-pressed={pinned}
-          aria-label={pinned ? messages.customize.unstar : messages.customize.star}
+          aria-label={pinned ? messages.customize.unstar : messages.customize.star(bar)}
           onClick={toggleStar}
-          {...tooltipProps(pinned ? messages.customize.unstar : messages.customize.star)}
+          {...tooltipProps(pinned ? messages.customize.unstar : messages.customize.star(bar))}
         >
           <StarIcon size={12} filled={pinned} />
         </button>

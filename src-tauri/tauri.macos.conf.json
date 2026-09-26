@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeBundleCommand": "node scripts/macos-widget.mjs build"
+  },
+  "bundle": {
+    "targets": ["app", "dmg"],
+    "shortDescription": "AI coding subscription limits in your menu bar",
+    "longDescription": "Quota Control is an unofficial port of OpenUsage. It shows session and weekly limits, credits and local spend for Claude, Codex, Cursor and other AI coding tools in the menu bar, a Dynamic Island around the notch and a desktop widget.",
+    "macOS": {
+      "minimumSystemVersion": "14.0",
+      "signingIdentity": "-",
+      "files": {
+        "PlugIns/QuotaControlWidget.appex": "gen/macos/QuotaControlWidget.appex"
+      },
+      "dmg": {
+        "windowSize": { "width": 660, "height": 400 },
+        "appPosition": { "x": 180, "y": 190 },
+        "applicationFolderPosition": { "x": 480, "y": 190 }
+      }
+    }
+  }
+}

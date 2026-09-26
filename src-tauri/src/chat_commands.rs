@@ -83,7 +83,26 @@ fn build_chat_window(
     if let Some(features) = features {
         builder = builder.window_features(features);
     }
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.data_store_identifier(data_store_identifier(&session.id));
+    }
     builder.build().map_err(safe_error)
+}
+
+/// WKWebView ignores data directories; on macOS each session keeps its cookies and storage in a
+/// data store named after the session instead.
+#[cfg(target_os = "macos")]
+fn data_store_identifier(session_id: &str) -> [u8; 16] {
+    uuid::Uuid::parse_str(session_id)
+        .map(|id| *id.as_bytes())
+        .unwrap_or_else(|_| {
+            let mut bytes = [0_u8; 16];
+            for (index, byte) in session_id.bytes().enumerate() {
+                bytes[index % 16] = bytes[index % 16].rotate_left(3) ^ byte;
+            }
+            bytes
+        })
 }
 
 pub async fn open_session(app: &AppHandle, store: &ChatStore, id: &str) -> Result<(), String> {

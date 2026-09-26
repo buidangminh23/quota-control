@@ -12,7 +12,11 @@
 //! thread with its own message loop, re-anchors on a one-second timer, rebuilds itself after Explorer
 //! restarts (`TaskbarCreated`) and reports taskbar size, scale and theme changes to the popup as
 //! `taskbar-info`.
-//! Linux: the frame's text becomes the tray title. Other platforms report the strip unsupported.
+//! Linux: the frame's text becomes the tray title.
+//! macOS: the frame becomes the menu bar item's image itself, drawn as a template so the system
+//! tints it for the menu bar, exactly like upstream's status item. The Bars glyph and the plain icon
+//! share that one image, so the strip wins over the glyph and the glyph over the icon.
+//! Other platforms report the strip unsupported.
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, PhysicalRect, Runtime, State};
@@ -66,7 +70,7 @@ pub struct TaskbarInfo {
 }
 
 impl TaskbarInfo {
-    #[cfg_attr(target_os = "linux", allow(dead_code))]
+    #[cfg_attr(any(target_os = "linux", target_os = "macos"), allow(dead_code))]
     pub const UNSUPPORTED: TaskbarInfo = TaskbarInfo {
         supported: false,
         height: 0,
@@ -146,6 +150,37 @@ pub fn decode_frame(frame: &StripFrame) -> Result<Bitmap, String> {
         text: frame.text.clone(),
         tooltip: frame.tooltip.clone(),
     })
+}
+
+impl Bitmap {
+    /// Back to straight RGBA, for platforms that take the frame as an ordinary image.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn straight_rgba(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.bgra.len());
+        for pixel in self.bgra.as_chunks::<4>().0 {
+            let alpha = pixel[3];
+            let unscale = |channel: u8| {
+                if alpha == 0 {
+                    0
+                } else {
+                    ((u16::from(channel) * 255 + u16::from(alpha) / 2) / u16::from(alpha)).min(255)
+                        as u8
+                }
+            };
+            let alpha = if alpha <= 1 && pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0 {
+                0
+            } else {
+                alpha
+            };
+            out.extend_from_slice(&[
+                unscale(pixel[2]),
+                unscale(pixel[1]),
+                unscale(pixel[0]),
+                alpha,
+            ]);
+        }
+        out
+    }
 }
 
 /// Straight RGBA to premultiplied BGRA. Fully transparent pixels keep an alpha of 1 so the whole
@@ -528,6 +563,13 @@ impl TaskbarStrip {
 
     pub fn set(&self, bitmap: Option<Bitmap>) {
         self.inner.set(bitmap);
+    }
+
+    /// The tray icon glyph (the Bars style), or `None` for the app icon, with its tooltip. Only
+    /// macOS draws both into one menu bar image; elsewhere the caller sets the tray icon directly.
+    #[cfg(target_os = "macos")]
+    pub fn set_glyph(&self, glyph: Option<tauri::image::Image<'static>>, tooltip: String) {
+        self.inner.set_glyph(glyph, tooltip);
     }
 
     /// Whether the popup is open. Its shadow reaches onto the taskbar, so the strip takes no color
@@ -1868,7 +1910,113 @@ mod platform {
     }
 }
 
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(target_os = "macos")]
+mod platform {
+    use std::sync::Arc;
+
+    use parking_lot::Mutex;
+    use tauri::image::Image;
+    use tauri::{AppHandle, Runtime};
+
+    use super::{Bitmap, StripClick, TaskbarEdge, TaskbarInfo, TaskbarTheme};
+
+    const TRAY_ID: &str = "main";
+    /// tray-icon draws every status item image this many points tall. Its plain `set_icon` also
+    /// clears the template flag, which leaves the black drawing black on a dark menu bar, so every
+    /// image goes through `set_icon_with_as_template`.
+    const ICON_POINTS: f64 = 18.0;
+
+    #[derive(Default)]
+    struct Images {
+        strip: Option<(Image<'static>, String)>,
+        glyph: Option<Image<'static>>,
+        tooltip: String,
+    }
+
+    type Show = Box<dyn Fn(Option<Image<'static>>, String) + Send + Sync>;
+
+    pub struct Strip {
+        images: Mutex<Images>,
+        scale: f64,
+        show: Show,
+    }
+
+    impl Strip {
+        pub fn start<R: Runtime>(
+            app: AppHandle<R>,
+            _on_click: Arc<dyn Fn(StripClick) + Send + Sync>,
+            _on_cover: Arc<dyn Fn(bool) + Send + Sync>,
+        ) -> Self {
+            let scale = app
+                .primary_monitor()
+                .ok()
+                .flatten()
+                .map(|monitor| monitor.scale_factor())
+                .filter(|scale| scale.is_finite() && *scale >= 1.0)
+                .unwrap_or(2.0);
+            Self {
+                images: Mutex::new(Images::default()),
+                scale,
+                show: Box::new(move |image, tooltip| {
+                    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+                        return;
+                    };
+                    let image = image.or_else(|| crate::menu_bar_icon().ok());
+                    if tray.set_icon_with_as_template(image, true).is_err()
+                        || tray
+                            .set_tooltip(Some(tooltip).filter(|tip| !tip.is_empty()))
+                            .is_err()
+                    {
+                        tracing::warn!("could not update the menu bar item");
+                    }
+                }),
+            }
+        }
+
+        pub fn info(&self) -> TaskbarInfo {
+            TaskbarInfo {
+                supported: true,
+                height: (ICON_POINTS * self.scale).round() as u32,
+                scale: self.scale,
+                theme: TaskbarTheme::Light,
+                edge: TaskbarEdge::Top,
+            }
+        }
+
+        pub fn set(&self, bitmap: Option<Bitmap>) {
+            let strip = bitmap.map(|bitmap| {
+                let image = Image::new_owned(bitmap.straight_rgba(), bitmap.width, bitmap.height);
+                (image, bitmap.tooltip)
+            });
+            self.images.lock().strip = strip;
+            self.apply();
+        }
+
+        /// The menu bar item is the strip itself, so the popup's shadow changes nothing here.
+        pub fn set_popup_visible(&self, _visible: bool) {}
+
+        pub fn set_glyph(&self, glyph: Option<Image<'static>>, tooltip: String) {
+            let mut images = self.images.lock();
+            images.glyph = glyph;
+            images.tooltip = tooltip;
+            drop(images);
+            self.apply();
+        }
+
+        fn apply(&self) {
+            let (image, tooltip) = {
+                let images = self.images.lock();
+                match &images.strip {
+                    Some((image, tooltip)) => (Some(image.clone()), tooltip.clone()),
+                    None => (images.glyph.clone(), images.tooltip.clone()),
+                }
+            };
+            (self.show)(image, tooltip);
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 mod platform {
     use std::sync::Arc;
 

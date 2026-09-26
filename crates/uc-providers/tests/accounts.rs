@@ -13,7 +13,7 @@ use uc_core::{
     RefreshContext,
 };
 use uc_providers::{
-    CliAccount, LocalProvider, ProviderKind, VisibleAccount,
+    CliAccount, CliLocation, LocalProvider, ProviderKind, VisibleAccount,
     accounts::{
         account_runtimes_with, cli_account_from, import_account_from_file, runtimes_with_client,
     },
@@ -1110,7 +1110,7 @@ fn a_browser_session_wins_over_the_cli_and_the_cli_wins_over_an_imported_copy() 
         id: id.into(),
         email: None,
         updated_at: Utc::now(),
-        path: dir.path().join("auth.json"),
+        location: CliLocation::File(dir.path().join("auth.json")),
         profile: None,
     };
     let mut logins = vec![login(&managed.id), login(&copied.id), login("codex@other")];

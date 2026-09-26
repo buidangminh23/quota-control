@@ -681,8 +681,7 @@ fn modified(metadata: &Metadata) -> String {
 }
 
 fn unsafe_path(path: &Path) -> bool {
-    path.ancestors()
-        .any(|ancestor| fs::symlink_metadata(ancestor).is_ok_and(|metadata| linked(&metadata)))
+    crate::linked_ancestry(path)
 }
 
 fn fingerprint(

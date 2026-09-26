@@ -9,6 +9,7 @@ use uc_accounts::{AccountRecord, AccountStore};
 use uc_core::{ErrorCategory, SimpleProviderError, paths};
 
 use crate::ProviderKind;
+use crate::keychain::{self, KeychainItem};
 
 pub struct Credentials {
     pub(crate) access_token: String,
@@ -24,9 +25,44 @@ pub struct CredentialStore {
     pub(crate) source: CredentialSource,
 }
 
+/// Where a CLI keeps its login: a JSON file, or on macOS the keychain item Claude Code writes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CliLocation {
+    File(PathBuf),
+    Keychain(KeychainItem),
+}
+
+impl CliLocation {
+    pub fn path(&self) -> Option<&Path> {
+        match self {
+            Self::File(path) => Some(path),
+            Self::Keychain(_) => None,
+        }
+    }
+
+    /// Where the CLI keeps its login on this computer. Claude Code on macOS uses the keychain and
+    /// may leave a stale `.credentials.json` behind, so the keychain wins whenever it holds a login.
+    pub fn discover(kind: ProviderKind) -> Self {
+        let (variable, directory, file) = match kind {
+            ProviderKind::Claude => ("CLAUDE_CONFIG_DIR", ".claude", ".credentials.json"),
+            ProviderKind::Codex => ("CODEX_HOME", ".codex", "auth.json"),
+        };
+        let root = paths::env_path(variable).unwrap_or_else(|| paths::home_dir().join(directory));
+        let file_location = Self::File(root.join(file));
+        if !cfg!(target_os = "macos") || kind != ProviderKind::Claude {
+            return file_location;
+        }
+        match keychain::find_claude() {
+            Ok(Some(item)) => Self::Keychain(item),
+            Ok(None) => file_location,
+            Err(_) => Self::Keychain(KeychainItem::claude()),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) enum CredentialSource {
-    File(PathBuf),
+    Cli(CliLocation),
     Account {
         store: Arc<AccountStore>,
         record: AccountRecord,
@@ -35,26 +71,29 @@ pub(crate) enum CredentialSource {
 
 impl CredentialStore {
     pub fn new(kind: ProviderKind, path: impl Into<PathBuf>) -> Self {
+        Self::at(kind, CliLocation::File(path.into()))
+    }
+
+    pub fn at(kind: ProviderKind, location: CliLocation) -> Self {
         Self {
             kind,
-            source: CredentialSource::File(path.into()),
+            source: CredentialSource::Cli(location),
         }
     }
 
     pub fn discover(kind: ProviderKind) -> Self {
-        let (variable, directory, file) = match kind {
-            ProviderKind::Claude => ("CLAUDE_CONFIG_DIR", ".claude", ".credentials.json"),
-            ProviderKind::Codex => ("CODEX_HOME", ".codex", "auth.json"),
-        };
-        let root = paths::env_path(variable).unwrap_or_else(|| paths::home_dir().join(directory));
-        Self::new(kind, root.join(file))
+        Self::at(kind, CliLocation::discover(kind))
+    }
+
+    pub fn location(&self) -> Option<&CliLocation> {
+        match &self.source {
+            CredentialSource::Cli(location) => Some(location),
+            CredentialSource::Account { .. } => None,
+        }
     }
 
     pub fn path(&self) -> Option<&Path> {
-        match &self.source {
-            CredentialSource::File(path) => Some(path),
-            _ => None,
-        }
+        self.location().and_then(CliLocation::path)
     }
 
     pub fn for_account(
@@ -86,9 +125,33 @@ impl CredentialStore {
                 )
             });
         }
-        let path = self.path().ok_or_else(invalid)?;
-        read_json_file(path, self.kind)
+        let location = self.location().ok_or_else(invalid)?;
+        read_location(location, self.kind)
     }
+}
+
+pub(crate) fn read_location(
+    location: &CliLocation,
+    kind: ProviderKind,
+) -> Result<Value, SimpleProviderError> {
+    match location {
+        CliLocation::File(path) => read_json_file(path, kind),
+        CliLocation::Keychain(item) => match keychain::password(item) {
+            Ok(Some(secret)) => keychain::decode_document(&secret).ok_or_else(invalid),
+            Ok(None) => Err(not_logged_in(kind)),
+            Err(_) => Err(SimpleProviderError::new(
+                ErrorCategory::CredentialAccess,
+                "Cannot read the login from the macOS keychain. Unlock the keychain and try again.",
+            )),
+        },
+    }
+}
+
+fn not_logged_in(kind: ProviderKind) -> SimpleProviderError {
+    SimpleProviderError::new(
+        ErrorCategory::NotLoggedIn,
+        format!("Sign in with {} to load usage.", kind.cli()),
+    )
 }
 
 pub(crate) fn read_json_file(
@@ -97,10 +160,7 @@ pub(crate) fn read_json_file(
 ) -> Result<Value, SimpleProviderError> {
     let file = std::fs::File::open(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
-            SimpleProviderError::new(
-                ErrorCategory::NotLoggedIn,
-                format!("Sign in with {} to load usage.", kind.cli()),
-            )
+            not_logged_in(kind)
         } else {
             SimpleProviderError::new(
                 ErrorCategory::CredentialAccess,

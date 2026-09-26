@@ -4,6 +4,7 @@
  * ids already seen are kept in the webview's storage so a restart does not repeat them, and the
  * first run only records what is there.
  */
+import { announceOnIsland } from "@/glance/alerts";
 import { useEffect } from "react";
 import { insightsFor } from "@/i18n/insights";
 import { activeWatch, parseResetStatus, type ResetWatch } from "@/model/insights/resets";
@@ -77,7 +78,10 @@ export function useResetNotifications(): void {
     writeSeen(next);
     if (!seen) return;
     const text = insightsFor(language);
-    const send = (title: string, post: string) => notify(title, excerpt(post)).catch((error: unknown) => console.error("Sending notification failed", error));
+    const send = (title: string, post: string) => {
+      announceOnIsland({ title, body: excerpt(post), brand: "codex", severity: "normal" });
+      return notify(title, excerpt(post)).catch((error: unknown) => console.error("Sending notification failed", error));
+    };
     if (status.latest && status.latest.id !== seen.latest && Date.now() - status.latest.announcedAt.getTime() < FRESH_MS) {
       void send(text.notifyResetTitle, status.latest.text);
     }

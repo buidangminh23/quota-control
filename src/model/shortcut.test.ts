@@ -35,4 +35,9 @@ describe("shortcutKeys", () => {
     expect(shortcutKeys("Alt+Backquote", "other")).toEqual(["Alt", "`"]);
     expect(shortcutKeys("F12", "windows")).toEqual(["F12"]);
   });
+
+  it("uses the macOS modifier symbols in their usual order", () => {
+    expect(shortcutKeys("Ctrl+Alt+Shift+Super+KeyU", "macos")).toEqual(["⌃", "⌥", "⇧", "⌘", "U"]);
+    expect(shortcutKeys("CmdOrCtrl+Space", "macos")).toEqual(["⌘", "Space"]);
+  });
 });

@@ -1,5 +1,5 @@
-# Builds signed installers for a version tag and drafts the GitHub release that the in-app updater
-# reads (latest.json). Publishing the draft is left to a person: installed apps only see a release
+# Builds signed installers for a version tag (Windows, Linux and Apple Silicon macOS) and drafts the
+# GitHub release that the in-app updater reads (latest.json). Publishing the draft is left to a person: installed apps only see a release
 # once it is published as the latest. A manual run builds the installers without releasing them.
 # A tag whose release is already published, for example by `scripts/release.mjs local`, is left alone.
 name: Release
@@ -51,6 +51,9 @@ jobs:
           - name: linux
             os: ubuntu-24.04
             bundles: deb,appimage
+          - name: macos
+            os: macos-latest
+            bundles: app,dmg
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -85,6 +88,9 @@ jobs:
             echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set; building unsigned installers that cannot be released."
             pnpm tauri build --ci --bundles "${{ matrix.bundles }}"
           fi
+      - name: Name the macOS updater archive after its version
+        if: runner.os == 'macOS' && hashFiles('target/release/bundle/macos/*.app.tar.gz') != ''
+        run: node scripts/release.mjs stage-macos
       - uses: actions/upload-artifact@v7
         with:
           name: bundle-${{ matrix.name }}
@@ -92,6 +98,8 @@ jobs:
             target/release/bundle/nsis/*-setup.exe*
             target/release/bundle/deb/*.deb*
             target/release/bundle/appimage/*.AppImage*
+            target/release/bundle/macos/*_*.app.tar.gz*
+            target/release/bundle/dmg/*.dmg
           if-no-files-found: error
           retention-days: 14
 

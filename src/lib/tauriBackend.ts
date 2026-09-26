@@ -6,6 +6,7 @@ import type { LimitResetResult } from "./types";
 import type { PublicFeedName, PublicFeedSnapshot, QualityInfo, QualityQuery, QualitySummary } from "./insightsTypes";
 import type { Language } from "@/i18n/language";
 import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
+import type { GlanceDocument } from "@/model/glance";
 
 /** Subscribe to a Tauri event synchronously; the returned function tears the listener down. */
 function subscribe<T>(event: string, listener: (payload: T) => void, replay?: () => Promise<T>): Unsubscribe {
@@ -168,6 +169,10 @@ export class TauriBackend implements Backend {
 
   setTaskbarStrip(frame: StripFrame | null): Promise<void> {
     return invoke("set_taskbar_strip", { frame: frame ? { ...frame, png: Array.from(frame.png) } : null });
+  }
+
+  setGlance(document: GlanceDocument): Promise<void> {
+    return invoke("set_glance", { document });
   }
 
   setTrayIcon(png: Uint8Array | null, tooltip: string): Promise<void> {
