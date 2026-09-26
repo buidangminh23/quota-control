@@ -476,7 +476,9 @@ fn updater(app: &AppHandle) -> tauri_plugin_updater::Result<Updater> {
     let mut builder = app.updater_builder().timeout(CHECK_TIMEOUT);
     if let Some(proxy) = uc_core::http::ProxyConfig::current() {
         match proxy.reqwest_proxy() {
-            Ok(rule) => builder = builder.configure_client(move |client| client.proxy(rule.clone())),
+            Ok(rule) => {
+                builder = builder.configure_client(move |client| client.proxy(rule.clone()))
+            }
             Err(error) => {
                 tracing::warn!(target: "updates", "ignoring the configured proxy: {}", safe_error(error));
             }
@@ -755,6 +757,9 @@ mod tests {
         let marker = marker("0.2.0", 1);
         let text = serde_json::to_string(&marker).unwrap();
         assert!(text.contains("\"startedAt\""));
-        assert_eq!(serde_json::from_str::<PendingInstall>(&text).unwrap(), marker);
+        assert_eq!(
+            serde_json::from_str::<PendingInstall>(&text).unwrap(),
+            marker
+        );
     }
 }
