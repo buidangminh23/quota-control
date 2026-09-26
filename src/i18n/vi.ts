@@ -96,7 +96,7 @@ export const vi: Messages = {
   },
   dashboard: {
     emptyState: "Mở Tùy chỉnh để chọn nội dung hiển thị.",
-    welcomeTitle: "Chào mừng đến với Usage Control",
+    welcomeTitle: "Chào mừng đến với Quota Control",
     welcomeMessage: "Ứng dụng đã bật sẵn các công cụ AI tìm thấy trên máy này. Bạn có thể thêm hoặc ẩn nhà cung cấp bất cứ lúc nào.",
     openCustomize: "Mở Tùy chỉnh",
     dismiss: "Đóng",
@@ -158,7 +158,7 @@ export const vi: Messages = {
     blendedRateAria: (value, count) => `Chi phí bình quân mỗi triệu token ${value} từ ${count} nhà cung cấp`,
   },
   chrome: {
-    appName: "Usage Control",
+    appName: "Quota Control",
     identity: (name, version) => `${name} ${version}`,
     updating: "Đang cập nhật…",
     nextUpdateMinutes: (minutes) => `Cập nhật sau ${minutes} phút`,
@@ -245,7 +245,7 @@ export const vi: Messages = {
         cuttingItClose: "Báo khi dự báo cuối kỳ chỉ còn lại rất ít.",
         willRunOut: "Báo khi dự báo sẽ hết hạn mức trước thời điểm đặt lại.",
       })[key],
-    notificationsDenied: "Thông báo đang bị tắt cho Usage Control. Hãy bật lại trong cài đặt hệ thống.",
+    notificationsDenied: "Thông báo đang bị tắt cho Quota Control. Hãy bật lại trong cài đặt hệ thống.",
     allowNotifications: "Cho phép thông báo",
     copyLogPath: "Sao chép đường dẫn nhật ký",
     revealLog: (platform) => (platform === "windows" ? "Mở trong File Explorer" : "Mở thư mục nhật ký"),
@@ -288,7 +288,7 @@ export const vi: Messages = {
     createdOn: (date) => `Tạo ngày ${date}`,
   },
   strip: {
-    tooltipEmpty: "Usage Control — chưa có chỉ số gắn sao nào có dữ liệu",
+    tooltipEmpty: "Quota Control — chưa có chỉ số gắn sao nào có dữ liệu",
   },
   notify: {
     title: (provider, metric) => `${provider} · ${metric}`,

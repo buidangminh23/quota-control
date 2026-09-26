@@ -75,7 +75,7 @@ export const en: Messages = {
   },
   dashboard: {
     emptyState: "Turn on Customize to choose what to show.",
-    welcomeTitle: "Welcome to Usage Control",
+    welcomeTitle: "Welcome to Quota Control",
     welcomeMessage: "We set you up with the AI tools found on this computer. Add or hide providers any time.",
     openCustomize: "Open Customize",
     dismiss: "Dismiss",
@@ -137,7 +137,7 @@ export const en: Messages = {
     blendedRateAria: (value, count) => `Blended cost per megatoken ${value} across ${count} providers`,
   },
   chrome: {
-    appName: "Usage Control",
+    appName: "Quota Control",
     identity: (name, version) => `${name} ${version}`,
     updating: "Updating…",
     nextUpdateMinutes: (minutes) => `Next update in ${minutes}m`,
@@ -222,7 +222,7 @@ export const en: Messages = {
         cuttingItClose: "Alerts when a metric is projected to finish the period with little left.",
         willRunOut: "Alerts when a metric is projected to run out before it resets.",
       })[key],
-    notificationsDenied: "Notifications are turned off for Usage Control. Turn them on in system settings.",
+    notificationsDenied: "Notifications are turned off for Quota Control. Turn them on in system settings.",
     allowNotifications: "Allow Notifications",
     copyLogPath: "Copy Log Path",
     revealLog: (platform) => (platform === "windows" ? "Show in File Explorer" : "Open Log Folder"),
@@ -265,7 +265,7 @@ export const en: Messages = {
     createdOn: (date) => `Created ${date}`,
   },
   strip: {
-    tooltipEmpty: "Usage Control — no starred metric has data yet",
+    tooltipEmpty: "Quota Control — no starred metric has data yet",
   },
   notify: {
     title: (provider, metric) => `${provider} · ${metric}`,

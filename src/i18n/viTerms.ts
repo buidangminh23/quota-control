@@ -94,7 +94,7 @@ const EXACT: Readonly<Record<string, string>> = {
   "The callback state does not match this login.": "Trạng thái trả về không khớp với lần đăng nhập này.",
   "The authorization code is invalid.": "Mã xác thực không hợp lệ.",
   "The local login callback stopped.": "Bước nhận kết quả đăng nhập đã dừng.",
-  "This callback does not match an active Usage Control login.": "Kết quả này không khớp với lần đăng nhập Usage Control nào đang chờ.",
+  "This callback does not match an active Quota Control login.": "Kết quả này không khớp với lần đăng nhập Quota Control nào đang chờ.",
   "Login flow expired or does not exist": "Lần đăng nhập đã hết hạn hoặc không tồn tại",
   "This login is no longer active. Start again.": "Lần đăng nhập này không còn hiệu lực. Hãy bắt đầu lại.",
   "This login has expired. Start again.": "Lần đăng nhập đã hết hạn. Hãy bắt đầu lại.",

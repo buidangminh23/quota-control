@@ -4,7 +4,7 @@ import { backend } from "@/lib/backend";
 import { useApp } from "@/state/store";
 import { openDialog } from "../ui/dialog";
 
-export const REPOSITORY_URL = "https://github.com/buidangminh23/usage-control";
+export const REPOSITORY_URL = "https://github.com/buidangminh23/quota-control";
 
 export function openAboutDialog(): void {
   const { info, settings } = useApp.getState();

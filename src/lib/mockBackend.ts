@@ -38,7 +38,7 @@ export class MockBackend implements Backend {
   private readonly chatSessions: ChatSession[] = [];
 
   async appInfo(): Promise<AppInfo> {
-    return { name: "Usage Control", version: "0.1.0", platform: "web" };
+    return { name: "Quota Control", version: "0.1.0", platform: "web" };
   }
 
   async catalog(): Promise<ProviderEntry[]> {
