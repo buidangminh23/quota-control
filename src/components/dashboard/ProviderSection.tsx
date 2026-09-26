@@ -3,7 +3,7 @@
  * name, plan and refresh state, then a card of metric rows. On Demand metrics sit behind the caret
  * together with the provider's links. Right-click on the header or a row opens its context menu.
  */
-import { useMemo, useRef } from "react";
+import { useMemo } from "react";
 import { messagesFor, translate, type Messages } from "@/i18n";
 import { backend } from "@/lib/backend";
 import type { AccountProvider, ProviderRuntimeState, WidgetDescriptor } from "@/lib/types";
@@ -20,9 +20,8 @@ import {
 } from "@/model/layout";
 import { accountEmailOf, accountLabelOf, brandName, headerNotice, providerBrand, providerTitle, stalenessHint } from "@/model/providerText";
 import { condensedTextRowOffsets, widgetDataFor, type DisplayOptions, type WidgetData } from "@/model/widgetData";
-import { copyScreenshot } from "@/share/screenshot";
 import { navigate, openChatFor, refresh, setProviderEnabled, showNotice, updateLayout, useApp } from "@/state/store";
-import { ChevronDown, ChevronUp, ExternalIcon, ShareIcon, Spinner, WarningTriangle } from "../ui/icons";
+import { ChevronDown, ChevronUp, ExternalIcon, Spinner, WarningTriangle } from "../ui/icons";
 import { openMenu, type MenuEntry } from "../ui/menu";
 import { ProviderMark } from "../ui/ProviderMark";
 import { tooltipProps, truncatedTooltipProps } from "../ui/tooltip";
@@ -60,11 +59,6 @@ function chatTarget(group: ProviderMetrics): { provider: AccountProvider; label:
   return isLocalHistoryCard(group.provider.id) ? { provider: brand, label: brand } : null;
 }
 
-async function share(element: HTMLElement | null, messages: Messages): Promise<void> {
-  const copied = await copyScreenshot(element);
-  showNotice(copied ? messages.chrome.copiedToClipboard : messages.chrome.copyFailed, copied ? "positive" : "notice");
-}
-
 function openChat(target: { provider: AccountProvider; label: string }, messages: Messages): void {
   openChatFor(target.provider, target.label).catch((error: unknown) => {
     console.error("Opening chat failed", error);
@@ -79,7 +73,6 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
   const title = providerTitle(group.provider, language);
   const email = isLocalHistoryCard(providerId) ? null : accountEmailOf(group.provider);
   const heading = email ? brandName(providerBrand(group.provider)) : title;
-  const sectionRef = useRef<HTMLElement>(null);
   const layout = useApp((state) => state.layout);
   const catalog = useApp((state) => state.catalog);
   const open = layout.openProviders.includes(providerId);
@@ -100,8 +93,6 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
     { kind: "item", label: messages.dashboard.refreshProvider(title), onSelect: () => refresh(providerId) },
     { kind: "item", label: messages.dashboard.customizeEllipsis, onSelect: () => navigate("customize", providerId) },
     ...(chat ? [{ kind: "item" as const, label: messages.dashboard.openChat(CHAT_PRODUCTS[chat.provider]), onSelect: () => openChat(chat, messages) }] : []),
-    { kind: "separator" },
-    { kind: "item", label: messages.dashboard.shareScreenshot, onSelect: () => void share(sectionRef.current, messages) },
   ];
 
   const rowEntries = (descriptor: WidgetDescriptor): MenuEntry[] => {
@@ -144,7 +135,7 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
   );
 
   return (
-    <section ref={sectionRef} className="uc-section" aria-label={title} data-provider-section={providerId}>
+    <section className="uc-section" aria-label={title}>
       <header
         className="uc-section-head"
         onContextMenu={(event) => {
@@ -176,20 +167,9 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
               <WarningTriangle size={11} />
             </span>
           ) : null}
-          <span className="uc-spacer" />
-          <button
-            type="button"
-            className="uc-icon-button is-reveal"
-            data-share-exclude="true"
-            aria-label={messages.dashboard.copyScreenshot(title)}
-            onClick={() => void share(sectionRef.current, messages)}
-            {...tooltipProps(messages.dashboard.copyScreenshot(title))}
-          >
-            <ShareIcon size={12} />
-          </button>
         </div>
         {email ? (
-          <div className="uc-section-account" data-share-exclude="true" {...truncatedTooltipProps(email)}>
+          <div className="uc-section-account" {...truncatedTooltipProps(email)}>
             {email}
           </div>
         ) : null}
@@ -200,7 +180,6 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
           <button
             type="button"
             className="uc-caret"
-            data-share-exclude="true"
             aria-expanded={open}
             aria-label={open ? messages.dashboard.showLess : messages.dashboard.showMore}
             onClick={() => updateLayout((current) => setProviderOpen(current, providerId, !open), { undoable: false })}

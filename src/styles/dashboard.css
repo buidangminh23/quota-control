@@ -4,10 +4,6 @@
   gap: var(--uc-section-gap);
 }
 
-.uc-spacer {
-  flex: 1 1 auto;
-}
-
 .uc-card {
   background: var(--uc-card);
   border-radius: var(--uc-card-radius);
@@ -112,22 +108,12 @@
   color: var(--uc-secondary);
   transition:
     background 120ms ease-out,
-    color 120ms ease-out,
-    opacity 120ms ease-out;
+    color 120ms ease-out;
 }
 
 .uc-icon-button:hover:not(:disabled) {
   background: var(--uc-quinary);
   color: var(--uc-label);
-}
-
-.uc-icon-button.is-reveal {
-  opacity: 0;
-}
-
-.uc-section:hover .uc-icon-button.is-reveal,
-.uc-icon-button.is-reveal:focus-visible {
-  opacity: 1;
 }
 
 .uc-inline-icon {

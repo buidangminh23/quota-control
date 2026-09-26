@@ -127,10 +127,6 @@ export class TauriBackend implements Backend {
     return invoke("open_url", { url });
   }
 
-  copyImagePng(png: Uint8Array): Promise<void> {
-    return invoke("copy_image_png", { png: Array.from(png) });
-  }
-
   copyText(text: string): Promise<void> {
     return invoke("copy_text", { text });
   }

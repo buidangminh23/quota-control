@@ -209,8 +209,6 @@ export class MockBackend implements Backend {
     window.open(url, "_blank", "noopener");
   }
 
-  async copyImagePng(): Promise<void> {}
-
   async copyText(text: string): Promise<void> {
     await navigator.clipboard?.writeText(text);
   }

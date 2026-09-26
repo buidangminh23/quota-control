@@ -60,15 +60,12 @@ export interface DashboardMessages {
   showMore: string;
   showLess: string;
   refreshing: string;
-  copyScreenshot(name: string): string;
-  copiedToClipboard: string;
   hide: string;
   hideProvider(name: string): string;
   starForTaskbar: string;
   unstar: string;
   refreshProvider(name: string): string;
   customizeEllipsis: string;
-  shareScreenshot: string;
   pinLimit(max: number): string;
   peak(readout: string): string;
   tokensReadout(count: string): string;
@@ -117,7 +114,6 @@ export interface ChromeMessages {
   options: string;
   customize: string;
   settings: string;
-  noEnabledProviders: string;
   about(name: string): string;
   quit(name: string): string;
   back: string;
@@ -128,9 +124,9 @@ export interface ChromeMessages {
   resetAllConfirm: string;
   cancel: string;
   accounts: string;
-  shareScreenshot: string;
-  copiedToClipboard: string;
-  copyFailed: string;
+  /** The Options menu's update entry, worded like the tray menu's. */
+  checkForUpdates: string;
+  installUpdate(version: string): string;
   aboutDescription: string;
   openRepository: string;
   close: string;

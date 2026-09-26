@@ -85,7 +85,6 @@ pub fn run() -> anyhow::Result<()> {
             commands::resize_popup,
             commands::hide_popup,
             commands::open_url,
-            commands::copy_image_png,
             commands::copy_text,
             commands::set_tray_icon,
             commands::quit_app,

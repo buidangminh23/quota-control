@@ -100,15 +100,6 @@ export function InfoCircle(props: IconProps) {
   );
 }
 
-export function ShareIcon(props: IconProps) {
-  return (
-    <Svg {...props}>
-      <path d="M8 1.8v8.4M5.2 4.4L8 1.6l2.8 2.8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M5.3 6.6H4.2a1 1 0 0 0-1 1v5.6a1 1 0 0 0 1 1h7.6a1 1 0 0 0 1-1V7.6a1 1 0 0 0-1-1h-1.1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </Svg>
-  );
-}
-
 export function CheckCircleFill(props: IconProps) {
   return (
     <Svg {...props}>

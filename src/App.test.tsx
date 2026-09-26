@@ -1,11 +1,9 @@
 import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { messagesFor } from "@/i18n";
 import { setBackend } from "@/lib/backend";
 import { MockBackend } from "@/lib/mockBackend";
 import { updateSettings, useApp } from "@/state/store";
 import { App } from "./App";
-import { optionsEntries } from "./components/chrome/Footer";
 import { closeDialog } from "./components/ui/dialog";
 import { closeMenu } from "./components/ui/menu";
 
@@ -125,17 +123,18 @@ describe("popup", () => {
     expect(stored?.enabledProviders).toEqual(expect.arrayContaining(["claude-local", "codex-local"]));
   });
 
-  it("offers the open tab's content in the screenshot menu", async () => {
-    await renderApp();
-    const shareMenu = () => {
-      const entries = optionsEntries(messagesFor("vi"), "Quota Control");
-      const share = entries.find((entry) => entry.kind === "submenu");
-      if (share?.kind !== "submenu") throw new Error("share submenu missing");
-      return share.entries.flatMap((entry) => (entry.kind === "item" ? [entry.label] : []));
-    };
-    expect(shareMenu()).toEqual(["Claude · Công ty", "Claude · Cá nhân", "Codex"]);
-    fireEvent.click(screen.getByRole("tab", { name: "Token" }));
-    expect(shareMenu()).toEqual(["Token"]);
+  it("checks for a new version from the Options menu, where screenshot sharing used to be", async () => {
+    const api = await renderApp();
+    expect(screen.queryByRole("button", { name: /ảnh chụp/ })).not.toBeInTheDocument();
+    const check = vi.spyOn(api, "checkForUpdate");
+    fireEvent.click(screen.getByRole("button", { name: "Tùy chọn" }));
+    expect(screen.queryByRole("menuitem", { name: /ảnh chụp/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Kiểm tra phiên bản mới…" }));
+    expect(check).toHaveBeenCalledOnce();
+    expect(await screen.findByText("Đang kiểm tra phiên bản mới…")).toBeInTheDocument();
+    expect(await screen.findByText("Có phiên bản mới")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Tùy chọn" }));
+    expect(screen.getByRole("menuitem", { name: "Cài bản mới 0.2.0…" })).toBeEnabled();
   });
 
   it("draws the Claude and Codex marks in their brand colors", async () => {
@@ -176,7 +175,6 @@ describe("popup", () => {
     const card = await screen.findByRole("region", { name: "Claude · someone@example.com" });
     const email = within(card).getByText("someone@example.com");
     expect(email).toHaveClass("uc-section-account");
-    expect(email).toHaveAttribute("data-share-exclude", "true");
     expect(within(card).getByText("Claude")).toHaveClass("uc-section-name");
     expect(within(card).queryByText("Claude · someone@example.com")).not.toBeInTheDocument();
     expect(screen.getByText("Claude · Cá nhân")).toHaveClass("uc-section-name");

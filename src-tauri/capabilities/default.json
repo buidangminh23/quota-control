@@ -9,7 +9,6 @@
     "core:window:default",
     "opener:default",
     "clipboard-manager:allow-write-text",
-    "clipboard-manager:allow-write-image",
     "notification:default",
     "global-shortcut:default",
     "autostart:default"

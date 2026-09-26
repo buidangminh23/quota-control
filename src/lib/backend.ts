@@ -46,7 +46,6 @@ export interface Backend {
   /** Tray menu items ask the popup to open a screen (e.g. Settings). */
   onNavigate(listener: (screen: PopoverScreen) => void): Unsubscribe;
   openUrl(url: string): Promise<void>;
-  copyImagePng(png: Uint8Array): Promise<void>;
   copyText(text: string): Promise<void>;
   /** Replace the tray icon (PNG bytes) and tooltip; `null` restores the app icon. */
   setTrayIcon(png: Uint8Array | null, tooltip: string): Promise<void>;

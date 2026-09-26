@@ -94,12 +94,6 @@ pub fn open_url(app: AppHandle, url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn copy_image_png(app: AppHandle, png: Vec<u8>) -> Result<(), String> {
-    let image = decode_image(&png)?;
-    app.clipboard().write_image(&image).map_err(safe_error)
-}
-
-#[tauri::command]
 pub async fn copy_text(app: AppHandle, text: String) -> Result<(), String> {
     if text.len() > 1_048_576 {
         return Err("Clipboard text exceeds the 1 MiB limit".into());

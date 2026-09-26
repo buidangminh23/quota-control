@@ -2,7 +2,7 @@
  * Total Spend across providers (upstream `TotalSpendCard`): a metric menu header, a capsule period
  * picker and the ring with its ranked legend. Only enabled providers that ship spend tiles count.
  */
-import { useMemo, useRef } from "react";
+import { useMemo } from "react";
 import { messagesFor, type Language } from "@/i18n";
 import type { Provider } from "@/lib/types";
 import { formatCostPerMtok, formatNumber, totalSpendRingCenter, type TotalSpendMetric } from "@/model/format";
@@ -12,10 +12,9 @@ import { ringSectorPath } from "@/model/ringPath";
 import type { TotalSpendPeriod } from "@/model/settings";
 import { brandColor, projectTotalSpend, ringArcs, TOTAL_SPEND_METRICS, TOTAL_SPEND_PERIODS, totalSpendSlices, type TotalSpendProjection } from "@/model/totalSpend";
 import { useIsDark, useIsEnabled, useSettings } from "@/state/hooks";
-import { showNotice, updateSettings, useApp } from "@/state/store";
-import { copyScreenshot } from "@/share/screenshot";
-import { ChevronDown, InfoCircle, ShareIcon } from "../ui/icons";
-import { openMenu, openMenuAt } from "../ui/menu";
+import { updateSettings, useApp } from "@/state/store";
+import { ChevronDown, InfoCircle } from "../ui/icons";
+import { openMenuAt } from "../ui/menu";
 import { tooltipProps } from "../ui/tooltip";
 
 const RING_SIZE = 104;
@@ -39,7 +38,6 @@ export function TotalSpendCard() {
   const layout = useApp((state) => state.layout);
   const engine = useApp((state) => state.engine);
   const isEnabled = useIsEnabled();
-  const sectionRef = useRef<HTMLElement>(null);
   const providers = useMemo(() => spendCapableProviders(layout, catalog, isEnabled), [layout, catalog, isEnabled]);
   const metric = settings.totalSpendMetric;
   const period = settings.totalSpendPeriod;
@@ -50,10 +48,6 @@ export function TotalSpendCard() {
   }, [engine, providers, period, metric, language]);
 
   const names = messages.format.list(providers.map((provider) => spendLegendName(provider, language)));
-  const share = async () => {
-    const copied = await copyScreenshot(sectionRef.current);
-    showNotice(copied ? messages.chrome.copiedToClipboard : messages.chrome.copyFailed, copied ? "positive" : "notice");
-  };
   const metricMenu = (element: HTMLElement) =>
     openMenuAt(
       element,
@@ -67,15 +61,7 @@ export function TotalSpendCard() {
     );
 
   return (
-    <section
-      ref={sectionRef}
-      className="uc-section"
-      data-total-spend="true"
-      onContextMenu={(event) => {
-        event.preventDefault();
-        openMenu({ entries: [{ kind: "item", label: messages.dashboard.shareScreenshot, onSelect: () => void share() }], anchor: { x: event.clientX, y: event.clientY } });
-      }}
-    >
+    <section className="uc-section">
       <div className="uc-section-header is-spend">
         <button
           type="button"
@@ -90,10 +76,6 @@ export function TotalSpendCard() {
         <span className="uc-inline-icon uc-secondary" aria-label={messages.totalSpend.onlyIncludes(names)} {...tooltipProps(messages.totalSpend.onlyIncludes(names))}>
           <InfoCircle size={12} />
         </span>
-        <span className="uc-spacer" />
-        <button type="button" className="uc-icon-button is-reveal" data-share-exclude="true" aria-label={messages.dashboard.copyScreenshot(messages.totalSpend.metric(metric))} onClick={() => void share()} {...tooltipProps(messages.dashboard.shareScreenshot)}>
-          <ShareIcon size={12} />
-        </button>
       </div>
       <div className="uc-card uc-spend-card">
         <PeriodPicker period={period} language={language} />
