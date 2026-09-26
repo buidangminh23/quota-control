@@ -27,16 +27,10 @@ impl BackendService {
     pub fn new(runtimes: Vec<Arc<dyn ProviderRuntime>>) -> anyhow::Result<Self> {
         let config = EngineConfig::default();
         let cache = SnapshotCache::new(SnapshotCache::default_path(), config.refresh_interval);
-        let identities = runtimes
-            .iter()
-            .map(|r| (r.provider().id.clone(), r.provider().id.clone()))
-            .collect();
-        let engine = Arc::new(Engine::with_options(
+        let engine = Arc::new(uc_api::build_engine(
             runtimes,
             cache.clone(),
             config,
-            identities,
-            None,
             uc_core::system_clock(),
         ));
         let documents = DocumentStore::default_store();
@@ -82,16 +76,10 @@ impl BackendService {
         let prior = self.engine();
         let previously_known = prior.provider_ids();
         let config = prior.config().clone();
-        let identities = runtimes
-            .iter()
-            .map(|r| (r.provider().id.clone(), r.provider().id.clone()))
-            .collect();
-        let next = Arc::new(Engine::with_options(
+        let next = Arc::new(uc_api::build_engine(
             runtimes,
             self.cache.clone(),
             config,
-            identities,
-            None,
             uc_core::system_clock(),
         ));
         let mut enabled: Vec<_> = next
@@ -153,6 +141,20 @@ impl BackendService {
             platform: std::env::consts::OS,
             log_file: uc_core::paths::log_file().to_string_lossy().into_owned(),
         }
+    }
+
+    /// What the local HTTP API serves right now, in the dashboard's provider order.
+    pub fn api_state(&self) -> uc_api::ApiState {
+        let order = self
+            .documents
+            .lock()
+            .load(DocumentName::Layout)
+            .ok()
+            .flatten()
+            .and_then(|layout| layout.get("providerOrder").cloned())
+            .and_then(|order| serde_json::from_value::<Vec<String>>(order).ok())
+            .unwrap_or_default();
+        uc_api::ApiState::capture(&self.engine(), &order, chrono::Utc::now())
     }
 
     pub fn load(&self, name: &str) -> Result<Option<Value>, String> {

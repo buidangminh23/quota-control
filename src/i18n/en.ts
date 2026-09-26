@@ -190,12 +190,41 @@ export const en: Messages = {
         usageDisplay: "Usage Display",
         taskbar: "Taskbar",
         notifications: "Notifications",
+        commandLine: "Command Line",
         advanced: "Advanced",
       })[key],
     language: "Language",
     showTotalSpend: "Show Total Spend",
     launchAtLogin: (platform) => (platform === "windows" ? "Launch with Windows" : "Launch at Login"),
     launchAtLoginError: "Couldn't change launch at login.",
+    globalShortcut: "Global Shortcut",
+    globalShortcutTooltip: "Open Quota Control from anywhere",
+    recordShortcut: "Record Shortcut",
+    pressShortcut: "Press keys…",
+    clearShortcut: "Clear Shortcut",
+    shortcutNeedsModifier: (platform) => `Add Ctrl, Alt, Shift or ${platform === "windows" ? "Win" : "Super"} to the key.`,
+    shortcutUnsupported: "That key can't be used in a shortcut.",
+    shortcutUnavailable: "Couldn't use this shortcut. Another app may already use it.",
+    terminalHelper: "Terminal Helper",
+    installCli: "Install",
+    uninstallCli: "Uninstall",
+    cliNote: "Adds a global usagectl command agents can use to monitor limits.",
+    cliStatus: (state, location) => {
+      switch (state) {
+        case "installed":
+          return "Installed. Open a new terminal to use it.";
+        case "managed":
+          return `Installed with the package at ${location ?? "usagectl"}.`;
+        case "conflict":
+          return `${location ?? "usagectl"} already exists and wasn't installed by Quota Control.`;
+        case "unavailable":
+          return "This build doesn't include usagectl.";
+        default:
+          return null;
+      }
+    },
+    cliFailed: "Couldn't change the terminal helper.",
+    localApiNote: (url) => `While Quota Control runs, other apps on this computer can read the same limits at ${url}.`,
     iconStyle: "Icon Style",
     iconStyleOption: (style) => (style === "text" ? "Text" : "Bars"),
     theme: "Theme",

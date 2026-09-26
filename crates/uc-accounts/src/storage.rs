@@ -7,15 +7,19 @@ use uuid::Uuid;
 use crate::{AccountError, Result};
 
 pub fn lock(root: &Path) -> Result<File> {
+    lock_file(root, &root.join("registry.lock"))
+}
+
+/// Block until this process holds the exclusive lock on `path`, a lock file inside `root`.
+pub fn lock_file(root: &Path, path: &Path) -> Result<File> {
     ensure_directory(root)?;
     ensure_directory(&root.join("credentials"))?;
-    let path = root.join("registry.lock");
-    reject_links(&path)?;
+    reject_links(path)?;
     let file = options()
         .read(true)
         .write(true)
         .create(true)
-        .open(&path)
+        .open(path)
         .map_err(|_| AccountError::Storage)?;
     verify_file(&file)?;
     file.lock().map_err(|_| AccountError::Storage)?;

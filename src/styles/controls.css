@@ -56,6 +56,44 @@
   background: var(--uc-card-hover);
 }
 
+.uc-shortcut {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.uc-shortcut-field {
+  justify-content: center;
+  min-width: 92px;
+  padding: 0 9px;
+}
+
+.uc-shortcut-field.is-empty {
+  color: var(--uc-secondary);
+}
+
+.uc-shortcut-field.is-recording {
+  color: var(--uc-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--uc-accent) 55%, transparent);
+}
+
+.uc-shortcut-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  color: var(--uc-secondary);
+  background: var(--uc-quinary);
+}
+
+.uc-shortcut-clear:hover {
+  color: var(--uc-label);
+  background: var(--uc-quaternary);
+}
+
 .uc-button {
   display: inline-flex;
   align-items: center;

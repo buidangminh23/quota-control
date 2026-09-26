@@ -9,6 +9,7 @@ import type {
   AccountProvider,
   AppInfo,
   ChatSession,
+  CliStatus,
   ConnectedAccount,
   EngineState,
   PopoverScreen,
@@ -36,6 +37,8 @@ export class MockBackend implements Backend {
   private readonly accounts: ConnectedAccount[] = fixtureAccounts();
   private readonly pendingLogins = new Map<string, { provider: AccountProvider; label: string }>();
   private readonly chatSessions: ChatSession[] = [];
+  private shortcut: string | null = null;
+  private cli: CliStatus = { state: "notInstalled", command: "usagectl" };
 
   async appInfo(): Promise<AppInfo> {
     return { name: "Quota Control", version: "0.1.0", platform: "web" };
@@ -181,6 +184,31 @@ export class MockBackend implements Backend {
   }
 
   async setTrayIcon(): Promise<void> {}
+
+  async globalShortcut(): Promise<string | null> {
+    return this.shortcut;
+  }
+
+  async setGlobalShortcut(shortcut: string | null): Promise<string | null> {
+    this.shortcut = shortcut;
+    return shortcut;
+  }
+
+  async pauseGlobalShortcut(): Promise<void> {}
+
+  async cliStatus(): Promise<CliStatus> {
+    return { ...this.cli };
+  }
+
+  async installCli(): Promise<CliStatus> {
+    this.cli = { state: "installed", command: "usagectl", location: "~/.local/bin/usagectl" };
+    return { ...this.cli };
+  }
+
+  async uninstallCli(): Promise<CliStatus> {
+    this.cli = { state: "notInstalled", command: "usagectl" };
+    return { ...this.cli };
+  }
 
   async quit(): Promise<void> {}
 

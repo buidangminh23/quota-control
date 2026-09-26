@@ -24,15 +24,7 @@ impl Accounts {
     }
 
     pub fn runtimes(&self) -> Result<Vec<Arc<dyn ProviderRuntime>>, String> {
-        let mut runtimes =
-            uc_providers::managed_runtimes(self.store.clone()).map_err(safe_error)?;
-        runtimes.push(Arc::new(uc_logscan::LocalHistoryRuntime::new(
-            uc_logscan::LogSource::Claude,
-        )));
-        runtimes.push(Arc::new(uc_logscan::LocalHistoryRuntime::new(
-            uc_logscan::LogSource::Codex,
-        )));
-        Ok(runtimes)
+        uc_api::provider_runtimes(self.store.clone()).map_err(safe_error)
     }
 }
 

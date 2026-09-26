@@ -239,6 +239,11 @@
   margin: 0;
 }
 
+.uc-settings-api {
+  margin-top: 0;
+  overflow-wrap: anywhere;
+}
+
 .uc-settings-actions {
   display: flex;
   gap: 8px;

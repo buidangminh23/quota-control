@@ -17,6 +17,7 @@ uc-pricing = { path = "crates/uc-pricing" }
 uc-logscan = { path = "crates/uc-logscan" }
 uc-providers = { path = "crates/uc-providers" }
 uc-engine = { path = "crates/uc-engine" }
+uc-api = { path = "crates/uc-api" }
 
 anyhow = "1"
 async-trait = "0.1"

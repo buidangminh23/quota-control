@@ -497,3 +497,45 @@ async fn cancelled_runtime_keeps_rotated_token_transaction_alive() {
         "fixture-rotated-refresh"
     );
 }
+
+#[tokio::test]
+async fn managed_renewal_waits_for_another_process_and_reuses_its_session() {
+    let (dir, store) = store();
+    let record = store
+        .import(
+            "claude",
+            "Managed",
+            "account-a|org-a",
+            &claude_doc(1),
+            CredentialMode::ManagedOauth,
+        )
+        .unwrap();
+    let other_process = AccountStore::new(dir.path().join("accounts"));
+    let held = other_process.renewal_lock(&record.id).unwrap();
+    let client = http(
+        json!({"access_token":"fixture-new","refresh_token":"fixture-next","expires_in":3600}),
+    );
+    let provider = runtimes_with_client(store.clone(), client.clone())
+        .unwrap()
+        .remove(0);
+    let refresh = tokio::spawn(async move { provider.refresh(RefreshContext::manual()).await });
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert!(client.requests.lock().unwrap().is_empty());
+    let mut renewed = claude_doc(Utc::now().timestamp_millis() + 3_600_000);
+    renewed["claudeAiOauth"]["accessToken"] = json!("fixture-other");
+    renewed["claudeAiOauth"]["refreshToken"] = json!("fixture-other-refresh");
+    other_process
+        .update_credentials(&record.id, &renewed)
+        .unwrap();
+    drop(held);
+    let snapshot = refresh.await.unwrap();
+    assert!(!snapshot.is_error(), "{:?}", snapshot.error_category);
+    let requests = client.requests.lock().unwrap();
+    assert!(requests.iter().all(|request| request.method == "GET"));
+    assert!(requests.iter().all(|request| {
+        request
+            .headers
+            .contains(&("Authorization".into(), "Bearer fixture-other".into()))
+    }));
+    assert_eq!(store.credentials(&record.id).unwrap(), renewed);
+}

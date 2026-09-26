@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Backend, DocumentName, Unsubscribe } from "./backend";
-import type { AccountLogin, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo } from "./types";
+import type { AccountLogin, AccountProvider, AppInfo, ChatSession, CliStatus, ConnectedAccount, EngineState, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo } from "./types";
 
 /** Subscribe to a Tauri event synchronously; the returned function tears the listener down. */
 function subscribe<T>(event: string, listener: (payload: T) => void, replay?: () => Promise<T>): Unsubscribe {
@@ -148,6 +148,30 @@ export class TauriBackend implements Backend {
 
   setTrayIcon(png: Uint8Array | null, tooltip: string): Promise<void> {
     return invoke("set_tray_icon", { png: png ? Array.from(png) : null, tooltip });
+  }
+
+  globalShortcut(): Promise<string | null> {
+    return invoke<string | null>("global_shortcut");
+  }
+
+  setGlobalShortcut(shortcut: string | null): Promise<string | null> {
+    return invoke<string | null>("set_global_shortcut", { shortcut });
+  }
+
+  pauseGlobalShortcut(paused: boolean): Promise<void> {
+    return invoke("pause_global_shortcut", { paused });
+  }
+
+  cliStatus(): Promise<CliStatus> {
+    return invoke<CliStatus>("cli_status");
+  }
+
+  installCli(): Promise<CliStatus> {
+    return invoke<CliStatus>("install_cli");
+  }
+
+  uninstallCli(): Promise<CliStatus> {
+    return invoke<CliStatus>("uninstall_cli");
   }
 
   quit(): Promise<void> {

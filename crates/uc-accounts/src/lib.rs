@@ -74,6 +74,12 @@ impl Default for Registry {
     }
 }
 
+/// Held while one process renews an account's session, so the app and the CLI never spend the
+/// same refresh token. Released on drop.
+pub struct RenewalLock {
+    _file: std::fs::File,
+}
+
 #[derive(Clone)]
 pub struct AccountStore {
     root: PathBuf,
@@ -200,7 +206,29 @@ impl AccountStore {
         let mut registry = self.registry()?;
         let entry = registry.accounts.remove(id).ok_or(AccountError::NotFound)?;
         storage::remove(&self.secret_path(id, entry.credential_revision))?;
-        self.save_registry(&registry)
+        self.save_registry(&registry)?;
+        let _ = storage::remove(&self.renewal_path(id));
+        Ok(())
+    }
+
+    /// Wait until no other process is renewing `id`'s session, then hold that right until the
+    /// returned guard drops.
+    pub fn renewal_lock(&self, id: &str) -> Result<RenewalLock> {
+        if id.is_empty()
+            || !id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'@' || byte == b'-')
+        {
+            return Err(AccountError::InvalidAccount);
+        }
+        storage::lock_file(&self.root, &self.renewal_path(id))
+            .map(|file| RenewalLock { _file: file })
+    }
+
+    fn renewal_path(&self, id: &str) -> PathBuf {
+        self.root
+            .join("credentials")
+            .join(format!("{id}.renewal.lock"))
     }
 
     fn secret_path(&self, id: &str, revision: Uuid) -> PathBuf {

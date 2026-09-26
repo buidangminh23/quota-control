@@ -17,6 +17,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "quota-control"
 path = "src/main.rs"
 
+[[bin]]
+name = "usagectl"
+path = "src/bin/usagectl.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -30,6 +34,7 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"
+uc-api.workspace = true
 uc-core.workspace = true
 uc-accounts.workspace = true
 uc-engine.workspace = true

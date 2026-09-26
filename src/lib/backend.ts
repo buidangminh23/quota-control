@@ -4,7 +4,7 @@
  *
  * Rust command names live in `src-tauri/src/commands.rs`; keep both sides in sync.
  */
-import type { AccountLogin, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo } from "./types";
+import type { AccountLogin, AccountProvider, AppInfo, ChatSession, CliStatus, ConnectedAccount, EngineState, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo } from "./types";
 
 export type Unsubscribe = () => void;
 
@@ -49,6 +49,15 @@ export interface Backend {
   onTaskbarInfo?(listener: (info: TaskbarInfo) => void): Unsubscribe;
   /** Show a strip frame on the taskbar (tray title on Linux); `null` removes the strip. */
   setTaskbarStrip?(frame: StripFrame | null): Promise<void>;
+  /** The accelerator that toggles the popup from anywhere (`Ctrl+Alt+KeyU`), or `null` for none. */
+  globalShortcut?(): Promise<string | null>;
+  /** Register and save a new accelerator, or clear it with `null`; rejects when it is unusable. */
+  setGlobalShortcut?(shortcut: string | null): Promise<string | null>;
+  /** Release the accelerator while Settings records one, so pressing it records instead of toggling. */
+  pauseGlobalShortcut?(paused: boolean): Promise<void>;
+  cliStatus?(): Promise<CliStatus>;
+  installCli?(): Promise<CliStatus>;
+  uninstallCli?(): Promise<CliStatus>;
   quit(): Promise<void>;
 }
 

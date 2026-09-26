@@ -3341,6 +3341,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "quota-control"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "ksni",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-clipboard-manager",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "uc-accounts",
+ "uc-api",
+ "uc-core",
+ "uc-engine",
+ "uc-logscan",
+ "uc-providers",
+ "url",
+ "uuid",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5135,6 +5170,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "uc-api"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "futures",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uc-accounts",
+ "uc-core",
+ "uc-engine",
+ "uc-logscan",
+ "uc-providers",
+]
+
+[[package]]
 name = "uc-core"
 version = "0.1.0"
 dependencies = [
@@ -5304,40 +5358,6 @@ dependencies = [
  "serde",
  "unic-ucd-ident",
  "url",
-]
-
-[[package]]
-name = "quota-control"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "ksni",
- "parking_lot",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-clipboard-manager",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
- "tauri-plugin-single-instance",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "uc-accounts",
- "uc-core",
- "uc-engine",
- "uc-logscan",
- "uc-providers",
- "url",
- "uuid",
- "windows-sys 0.61.2",
 ]
 
 [[package]]

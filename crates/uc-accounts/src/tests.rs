@@ -474,3 +474,34 @@ fn unix_storage_is_owner_only_and_rejects_symlinks() {
     .unwrap();
     assert!(matches!(store.list(), Err(AccountError::UnsafePath)));
 }
+
+#[test]
+fn renewal_lock_holds_off_a_second_holder_until_released() {
+    let (store, _dir) = store();
+    let first = store.renewal_lock("codex@abc").unwrap();
+    let (acquired, receiver) = std::sync::mpsc::channel();
+    let waiter = {
+        let store = store.clone();
+        std::thread::spawn(move || {
+            let _second = store.renewal_lock("codex@abc").unwrap();
+            acquired.send(()).unwrap();
+        })
+    };
+    assert!(
+        receiver
+            .recv_timeout(std::time::Duration::from_millis(300))
+            .is_err()
+    );
+    let _other_account = store.renewal_lock("claude@abc").unwrap();
+    drop(first);
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap();
+    waiter.join().unwrap();
+    for invalid in ["", "../registry", "codex@abc/../x", "codex@abc\\x"] {
+        assert!(matches!(
+            store.renewal_lock(invalid),
+            Err(AccountError::InvalidAccount)
+        ));
+    }
+}

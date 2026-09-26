@@ -11,9 +11,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use credentials::CredentialStore;
 use uc_core::{
-    Clock, ErrorCategory, HttpRequest, Provider, ProviderLink, ProviderRuntime, ProviderSnapshot,
-    RefreshContext, ReqwestHttpClient, SessionStartSignal, SharedHttpClient, SimpleProviderError,
-    WidgetDescriptor, system_clock,
+    Clock, ErrorCategory, HttpRequest, LimitResourceKind, LimitResourceSource, MetricKind,
+    Provider, ProviderLink, ProviderRuntime, ProviderSnapshot, RefreshContext, ReqwestHttpClient,
+    SessionStartSignal, SharedHttpClient, SimpleProviderError, WidgetDescriptor, system_clock,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -220,37 +220,84 @@ impl ProviderRuntime for LocalProvider {
                     None,
                     signal,
                 )
+                .exporting_progress(suffix, "percent")
             })
             .collect();
         match self.kind {
-            ProviderKind::Claude => descriptors.push(WidgetDescriptor::bounded_dollars(
-                format!("{}.extra", self.provider.id),
-                &self.provider,
-                "Extra Usage",
-                Some("Extra usage spent"),
-                100.0,
-                None,
-                Some("spent"),
-            )),
+            ProviderKind::Claude => descriptors.push(
+                WidgetDescriptor::bounded_dollars(
+                    format!("{}.extra", self.provider.id),
+                    &self.provider,
+                    "Extra Usage",
+                    Some("Extra usage spent"),
+                    100.0,
+                    None,
+                    Some("spent"),
+                )
+                .exporting_limit(
+                    "extraUsage",
+                    LimitResourceKind::Consumption,
+                    "usd",
+                    LimitResourceSource::ProgressOrValue {
+                        kind: MetricKind::Dollars,
+                        label: None,
+                    },
+                    false,
+                ),
+            ),
             ProviderKind::Codex => {
-                descriptors.push(WidgetDescriptor::combined(
-                    format!("{}.credits", self.provider.id),
-                    &self.provider,
-                    "Credits",
-                    None,
-                    false,
-                ));
-                descriptors.push(WidgetDescriptor::values(
-                    format!("{}.rateLimitResets", self.provider.id),
-                    &self.provider,
-                    "Rate Limit Resets",
-                    None,
-                    Some(uc_core::MetricKind::Count),
-                    Some("available"),
-                    false,
-                    Some("resets"),
-                    true,
-                ));
+                descriptors.push(
+                    WidgetDescriptor::combined(
+                        format!("{}.credits", self.provider.id),
+                        &self.provider,
+                        "Credits",
+                        None,
+                        false,
+                    )
+                    .exporting_limit(
+                        "credits",
+                        LimitResourceKind::Balance,
+                        "credits",
+                        LimitResourceSource::Value {
+                            kind: MetricKind::Count,
+                            label: Some("credits".into()),
+                        },
+                        false,
+                    )
+                    .exporting_limit(
+                        "creditValue",
+                        LimitResourceKind::Balance,
+                        "usd",
+                        LimitResourceSource::Value {
+                            kind: MetricKind::Dollars,
+                            label: None,
+                        },
+                        false,
+                    ),
+                );
+                descriptors.push(
+                    WidgetDescriptor::values(
+                        format!("{}.rateLimitResets", self.provider.id),
+                        &self.provider,
+                        "Rate Limit Resets",
+                        None,
+                        Some(MetricKind::Count),
+                        Some("available"),
+                        false,
+                        Some("resets"),
+                        true,
+                    )
+                    .exporting_limit(
+                        "rateLimitResets",
+                        LimitResourceKind::Balance,
+                        "resets",
+                        LimitResourceSource::Value {
+                            kind: MetricKind::Count,
+                            label: Some("available".into()),
+                        },
+                        false,
+                    ),
+                );
             }
         }
         descriptors

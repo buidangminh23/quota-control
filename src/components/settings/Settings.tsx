@@ -1,7 +1,8 @@
 /**
  * The Settings screen (upstream `SettingsScreen`): Customize-style cards of rows for language, total
- * spend and launch at login; appearance; how usage reads; the taskbar strip; pace notifications; and
- * the log file plus a full reset. Changes apply live and persist to the shared settings document.
+ * spend, launch at login and the global shortcut; appearance; how usage reads; the taskbar strip;
+ * pace notifications; the `usagectl` terminal helper; and the log file plus a full reset. Changes
+ * apply live and persist to the shared settings document.
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { LANGUAGES, messagesFor, type Language } from "@/i18n";
@@ -13,6 +14,8 @@ import { useSettings } from "@/state/hooks";
 import { navigate, resetAllSettings, showNotice, updateSettings, useApp } from "@/state/store";
 import { useTaskbarInfo } from "@/strip/support";
 import { CrossLink } from "../customize/Customize";
+import { CommandLineRows } from "./CommandLine";
+import { ShortcutRecorder } from "./ShortcutRecorder";
 import { Button, Picker, Switch } from "../ui/controls";
 import { confirmAction } from "../ui/dialog";
 import { SlidersIcon, WarningTriangle } from "../ui/icons";
@@ -113,7 +116,11 @@ export function Settings() {
   const notificationsOn = anyNotificationEnabled(settings);
   const [access, requestAccess] = useNotificationAccess(notificationsOn);
   const [logError, setLogError] = useState<string | null>(null);
+  const [shortcutError, setShortcutError] = useState<string | null>(null);
+  const [shortcutGeneration, setShortcutGeneration] = useState(0);
   const stripSupported = useTaskbarInfo()?.supported === true;
+  const shortcutSupported = typeof backend().setGlobalShortcut === "function";
+  const cliSupported = typeof backend().cliStatus === "function";
   const section = (key: SettingsSectionKey) => text.section(key);
 
   const setNotification = (key: NotificationKey, on: boolean) => {
@@ -147,6 +154,11 @@ export function Settings() {
     if (!confirmed) return;
     resetAllSettings();
     if (autostart === false) changeAutostart(true);
+    await backend()
+      .setGlobalShortcut?.(null)
+      .catch(() => undefined);
+    setShortcutError(null);
+    setShortcutGeneration((generation) => generation + 1);
   };
 
   return (
@@ -164,6 +176,12 @@ export function Settings() {
           </Row>
         ) : null}
         {autostartError ? <InlineNotice text={autostartError} /> : null}
+        {shortcutSupported ? (
+          <Row label={text.globalShortcut}>
+            <ShortcutRecorder key={shortcutGeneration} platform={platform} onError={setShortcutError} />
+          </Row>
+        ) : null}
+        {shortcutError ? <InlineNotice text={shortcutError} /> : null}
       </Section>
 
       <Section title={section("appearance")}>
@@ -221,6 +239,12 @@ export function Settings() {
           </div>
         ) : null}
       </Section>
+
+      {cliSupported ? (
+        <Section title={section("commandLine")}>
+          <CommandLineRows />
+        </Section>
+      ) : null}
 
       <Section title={section("advanced")}>
         {info?.logFile ? (

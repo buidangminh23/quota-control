@@ -1,9 +1,12 @@
 mod account_commands;
 mod chat_commands;
 mod chat_store;
+mod cli_install;
 mod commands;
+mod integrations;
 mod ipc_guard;
 mod service;
+mod shortcut;
 mod taskbar_strip;
 
 use tauri::menu::{ContextMenu, Menu, MenuItem, Submenu};
@@ -17,8 +20,18 @@ use service::{BackendService, safe_error};
 use tauri_plugin_autostart::ManagerExt as _;
 
 pub fn run() -> anyhow::Result<()> {
+    #[cfg(not(windows))]
+    if std::env::args_os().nth(1).is_some_and(|arg| arg == "--cli") {
+        let arguments = std::env::args_os()
+            .skip(2)
+            .map(|argument| argument.to_string_lossy().into_owned());
+        std::process::exit(uc_api::cli::main(arguments));
+    }
     if std::env::args().any(|arg| arg == "--diagnose") {
         return diagnose();
+    }
+    if std::env::args().any(|arg| arg == "--unregister-cli") {
+        return cli_install::unregister().map_err(anyhow::Error::msg);
     }
     std::fs::create_dir_all(uc_core::paths::log_dir())?;
     let appender = tracing_appender::rolling::never(uc_core::paths::log_dir(), "UsageControl.log");
@@ -41,7 +54,7 @@ pub fn run() -> anyhow::Result<()> {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(shortcut::plugin())
         .plugin(tauri_plugin_autostart::Builder::new().app_name("Usage Control").build())
         .invoke_handler(ipc_guard::trusted_handler(tauri::generate_handler![
             commands::app_info,
@@ -69,6 +82,12 @@ pub fn run() -> anyhow::Result<()> {
             chat_commands::open_chat_session,
             taskbar_strip::taskbar_info,
             taskbar_strip::set_taskbar_strip,
+            shortcut::global_shortcut,
+            shortcut::set_global_shortcut,
+            shortcut::pause_global_shortcut,
+            cli_install::cli_status,
+            cli_install::install_cli,
+            cli_install::uninstall_cli,
         ]))
         .setup(|app| {
             if !cfg!(debug_assertions) && app.autolaunch().is_enabled().unwrap_or(false) {
@@ -76,6 +95,7 @@ pub fn run() -> anyhow::Result<()> {
                     tracing::warn!("Could not refresh launch-at-login path: {error}");
                 }
             }
+            app.manage(integrations::IntegrationStore::default_store());
             let accounts = account_commands::Accounts::new(std::sync::Arc::new(
                 uc_accounts::AccountStore::default_store(),
             ));
@@ -173,6 +193,23 @@ pub fn run() -> anyhow::Result<()> {
                 }
             }));
             app.state::<BackendService>().start(app.handle());
+            if let Err(error) = shortcut::restore(app.handle()) {
+                tracing::warn!("The saved global shortcut is unavailable: {error}");
+            }
+            cli_install::sync_at_launch(app.handle());
+            let api_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match uc_api::server::bind().await {
+                    Ok(listener) => {
+                        tracing::info!(target: "local_api", "listening on 127.0.0.1:{}", uc_api::server::PORT);
+                        uc_api::server::serve(listener, move || {
+                            api_app.state::<BackendService>().api_state()
+                        })
+                        .await;
+                    }
+                    Err(error) => tracing::info!(target: "local_api", "disabled: {error}"),
+                }
+            });
             Ok(())
         })
         .run(tauri::generate_context!())?;

@@ -2,7 +2,7 @@
  * The shape every language catalog implements. Parameterized entries are functions so each language
  * controls word order (English "95% left" vs Vietnamese "Còn 95%").
  */
-import type { ErrorCategory } from "@/lib/types";
+import type { CliState, ErrorCategory } from "@/lib/types";
 
 export type DisplayModeKey = "used" | "remaining";
 export type ResetModeKey = "relative" | "absolute";
@@ -150,7 +150,7 @@ export interface CustomizeMessages {
   undo: string;
 }
 
-export type SettingsSectionKey = "general" | "appearance" | "usageDisplay" | "taskbar" | "notifications" | "advanced";
+export type SettingsSectionKey = "general" | "appearance" | "usageDisplay" | "taskbar" | "notifications" | "commandLine" | "advanced";
 export type NotificationKey = "almostOut" | "cuttingItClose" | "willRunOut";
 
 export interface SettingsMessages {
@@ -159,6 +159,21 @@ export interface SettingsMessages {
   showTotalSpend: string;
   launchAtLogin(platform: "windows" | "linux" | "other"): string;
   launchAtLoginError: string;
+  globalShortcut: string;
+  globalShortcutTooltip: string;
+  recordShortcut: string;
+  pressShortcut: string;
+  clearShortcut: string;
+  shortcutNeedsModifier(platform: "windows" | "linux" | "other"): string;
+  shortcutUnsupported: string;
+  shortcutUnavailable: string;
+  terminalHelper: string;
+  installCli: string;
+  uninstallCli: string;
+  cliNote: string;
+  cliStatus(state: CliState, location: string | undefined): string | null;
+  cliFailed: string;
+  localApiNote(url: string): string;
   iconStyle: string;
   iconStyleOption(style: "text" | "bars"): string;
   theme: string;

@@ -6,6 +6,7 @@
 //! | caches (snapshots, log scans, pricing) | `%LOCALAPPDATA%\UsageControl\Cache` | `$XDG_CACHE_HOME/usage-control` |
 //! | log file | `%LOCALAPPDATA%\UsageControl\Logs` | `$XDG_STATE_HOME/usage-control` |
 //! | user config (proxy) | `~/.usage-control/config.json` | `~/.usage-control/config.json` |
+//! | `usagectl` on PATH | `%LOCALAPPDATA%\UsageControl\bin` | `~/.local/bin` |
 //!
 //! `USAGE_CONTROL_HOME` redirects everything under one directory (tests, portable installs).
 
@@ -75,6 +76,21 @@ pub fn log_dir() -> PathBuf {
 
 pub fn log_file() -> PathBuf {
     log_dir().join("UsageControl.log")
+}
+
+/// Where Settings puts the `usagectl` command so terminals find it.
+pub fn bin_dir() -> PathBuf {
+    if let Some(root) = override_root() {
+        return root.join("bin");
+    }
+    if cfg!(windows) {
+        dirs::data_local_dir()
+            .unwrap_or_else(home_dir)
+            .join(APP_DIR_WINDOWS)
+            .join("bin")
+    } else {
+        home_dir().join(".local").join("bin")
+    }
 }
 
 /// `~/.usage-control/config.json`: the hand-edited user config (proxy), like upstream's

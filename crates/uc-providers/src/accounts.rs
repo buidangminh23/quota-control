@@ -234,14 +234,23 @@ async fn ready_credentials_inner(
     let lock = refresh_lock(&record.id);
     let _guard = lock.lock().await;
     let source_copy = source.clone();
-    let mut document = uc_core::load_blocking(move || source_copy.read_document()).await?;
+    let document = uc_core::load_blocking(move || source_copy.read_document()).await?;
     let credentials = parse_credentials(kind, &document)?;
-    let rejected = rejected_token.is_some_and(|token| token == credentials.access_token);
-    if !rejected
-        && !credentials
-            .expires_at
-            .is_some_and(|expiry| expiry <= now + chrono::Duration::seconds(60))
-    {
+    if !needs_renewal(&credentials, rejected_token, now) {
+        return Ok(credentials);
+    }
+    let renewal_store = store.clone();
+    let renewal_id = record.id.clone();
+    let source_copy = source.clone();
+    let (_renewal, mut document) = uc_core::load_blocking(move || {
+        let renewal = renewal_store
+            .renewal_lock(&renewal_id)
+            .map_err(|_| account_error())?;
+        Ok::<_, SimpleProviderError>((renewal, source_copy.read_document()?))
+    })
+    .await?;
+    let credentials = parse_credentials(kind, &document)?;
+    if !needs_renewal(&credentials, rejected_token, now) {
         return Ok(credentials);
     }
     let refresh = match kind {
@@ -301,6 +310,19 @@ async fn ready_credentials_inner(
     })
     .await?;
     Ok(parsed)
+}
+
+/// True when the stored session was just rejected or is about to expire. Re-checked after the
+/// cross-process lock, because another process may have renewed it while this one waited.
+fn needs_renewal(
+    credentials: &Credentials,
+    rejected_token: Option<&str>,
+    now: DateTime<Utc>,
+) -> bool {
+    rejected_token.is_some_and(|token| token == credentials.access_token)
+        || credentials
+            .expires_at
+            .is_some_and(|expiry| expiry <= now + chrono::Duration::seconds(60))
 }
 
 pub(crate) fn apply_tokens(

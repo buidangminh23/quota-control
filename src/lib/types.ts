@@ -284,3 +284,13 @@ export interface StripFrame {
   text: string;
   tooltip: string;
 }
+
+/** Where `usagectl` stands on this computer (`cli_install.rs`). */
+export type CliState = "unavailable" | "managed" | "installed" | "notInstalled" | "conflict";
+
+export interface CliStatus {
+  state: CliState;
+  command: string;
+  /** The installed command, the package's copy, or the file in the way. */
+  location?: string;
+}
