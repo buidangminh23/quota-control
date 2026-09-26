@@ -104,13 +104,67 @@ pub async fn copy_text(app: AppHandle, text: String) -> Result<(), String> {
     app.clipboard().write_text(text).map_err(safe_error)
 }
 
+/// The tray icon the popup last asked for (`None`: the app icon), and whether the taskbar strip
+/// covers the icon's notification-area button. While it does, the button shows a clear icon so
+/// nothing of the icon peeks out from under the strip, and the requested one comes back after.
+#[derive(Default)]
+pub struct TrayImage {
+    requested: parking_lot::Mutex<Option<tauri::image::Image<'static>>>,
+    covered: std::sync::atomic::AtomicBool,
+}
+
+impl TrayImage {
+    pub fn set_covered(&self, app: &AppHandle, covered: bool) {
+        self.covered
+            .store(covered, std::sync::atomic::Ordering::Release);
+        if let Err(error) = self.apply(app) {
+            tracing::warn!("could not update the tray icon: {error}");
+        }
+    }
+
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    fn request(
+        &self,
+        app: &AppHandle,
+        image: Option<tauri::image::Image<'static>>,
+    ) -> Result<(), String> {
+        *self.requested.lock() = image;
+        self.apply(app)
+    }
+
+    /// An icon nobody can see. Its pixels keep an alpha of 1, because Windows draws an icon whose
+    /// alpha is zero throughout as if it had no alpha at all: a black square.
+    fn clear_icon() -> tauri::image::Image<'static> {
+        tauri::image::Image::new_owned([0, 0, 0, 1].repeat(16 * 16), 16, 16)
+    }
+
+    fn apply(&self, app: &AppHandle) -> Result<(), String> {
+        let tray = app.tray_by_id("main").ok_or("Tray is unavailable")?;
+        let image = if self.covered.load(std::sync::atomic::Ordering::Acquire) {
+            Self::clear_icon()
+        } else if let Some(image) = self.requested.lock().clone() {
+            image
+        } else {
+            app.default_window_icon()
+                .cloned()
+                .ok_or("Default icon is unavailable")?
+        };
+        tray.set_icon(Some(image)).map_err(safe_error)
+    }
+}
+
 #[tauri::command]
-pub fn set_tray_icon(app: AppHandle, png: Option<Vec<u8>>, tooltip: String) -> Result<(), String> {
+pub fn set_tray_icon(
+    app: AppHandle,
+    images: State<'_, TrayImage>,
+    png: Option<Vec<u8>>,
+    tooltip: String,
+) -> Result<(), String> {
     if tooltip.len() > 512 {
         return Err("Tooltip is too long".into());
     }
     let glyph = png.as_deref().map(decode_image).transpose()?;
-    set_tray_glyph(&app, glyph, tooltip)
+    set_tray_glyph(&app, &images, glyph, tooltip)
 }
 
 /// macOS draws the glyph, the strip and the app icon into the one menu bar image, so the strip
@@ -118,6 +172,7 @@ pub fn set_tray_icon(app: AppHandle, png: Option<Vec<u8>>, tooltip: String) -> R
 #[cfg(target_os = "macos")]
 fn set_tray_glyph(
     app: &AppHandle,
+    _images: &TrayImage,
     glyph: Option<tauri::image::Image<'static>>,
     tooltip: String,
 ) -> Result<(), String> {
@@ -129,18 +184,12 @@ fn set_tray_glyph(
 #[cfg(not(target_os = "macos"))]
 fn set_tray_glyph(
     app: &AppHandle,
+    images: &TrayImage,
     glyph: Option<tauri::image::Image<'static>>,
     tooltip: String,
 ) -> Result<(), String> {
     let tray = app.tray_by_id("main").ok_or("Tray is unavailable")?;
-    let image = match glyph {
-        Some(image) => image,
-        None => app
-            .default_window_icon()
-            .cloned()
-            .ok_or("Default icon is unavailable")?,
-    };
-    tray.set_icon(Some(image)).map_err(safe_error)?;
+    images.request(app, glyph)?;
     tray.set_tooltip(Some(tooltip)).map_err(safe_error)
 }
 
