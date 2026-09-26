@@ -12,9 +12,11 @@ use crate::service::safe_error;
 
 const MAX_BYTES: usize = 256 * 1024;
 const VERSION: u64 = 1;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub const FILE_NAME: &str = "glance.json";
 /// The widget file's own folder inside the settings folder: the sandboxed widgets may read only
 /// this folder, never the accounts and credentials beside it.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub const FOLDER_NAME: &str = "widget";
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const RELOAD_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);

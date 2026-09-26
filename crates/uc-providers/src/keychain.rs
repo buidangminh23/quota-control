@@ -190,7 +190,10 @@ pub fn decode_document(secret: &str) -> Option<Value> {
         .strip_prefix("0x")
         .or_else(|| text.strip_prefix("0X"))
         .unwrap_or(text);
-    if hex.is_empty() || hex.len() % 2 != 0 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if hex.is_empty()
+        || !hex.len().is_multiple_of(2)
+        || !hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
         return None;
     }
     let bytes: Option<Vec<u8>> = (0..hex.len())
