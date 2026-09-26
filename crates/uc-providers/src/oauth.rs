@@ -100,6 +100,7 @@ struct FlowHandle {
     expires: Instant,
     url: String,
     cancel: Arc<Notify>,
+    listener: tokio::task::JoinHandle<()>,
 }
 
 struct PreparedAccount {
@@ -146,6 +147,7 @@ pub struct OAuthManager {
     endpoints: OAuthEndpoints,
     pending: Mutex<HashMap<String, PendingLogin>>,
     flows: Mutex<HashMap<String, FlowHandle>>,
+    cancelled: Mutex<HashMap<String, Instant>>,
 }
 
 impl OAuthManager {
@@ -156,6 +158,7 @@ impl OAuthManager {
             endpoints: OAuthEndpoints::default(),
             pending: Mutex::new(HashMap::new()),
             flows: Mutex::new(HashMap::new()),
+            cancelled: Mutex::new(HashMap::new()),
         }
     }
 
@@ -190,13 +193,25 @@ impl OAuthManager {
         let now = Instant::now();
         let mut pending = self.pending.lock().await;
         pending.retain(|_, flow| flow.expires > now && flow.kind != kind);
-        self.flows.lock().await.retain(|_, flow| {
-            let superseded = flow.kind == kind;
-            if superseded {
+        let stopped: Vec<_> = {
+            let mut flows = self.flows.lock().await;
+            let ids: Vec<_> = flows
+                .iter()
+                .filter(|(_, flow)| flow.kind == kind || flow.expires <= now)
+                .map(|(id, _)| id.clone())
+                .collect();
+            ids.into_iter()
+                .filter_map(|id| flows.remove(&id).map(|flow| (id, flow)))
+                .collect()
+        };
+        for (id, flow) in stopped {
+            if flow.expires > now {
+                self.remember_cancelled(id, flow.expires).await;
                 flow.cancel.notify_one();
             }
-            flow.expires > now && !superseded
-        });
+            flow.listener.abort();
+            let _ = flow.listener.await;
+        }
         if pending.len() >= 8 {
             return Err(auth_error(
                 "Too many pending logins. Cancel an existing login first.",
@@ -242,6 +257,7 @@ impl OAuthManager {
                 expires: now + FLOW_LIFETIME,
                 url: url.clone(),
                 cancel: Arc::new(Notify::new()),
+                listener: task,
             },
         );
         Ok(LoginStart {
@@ -262,11 +278,32 @@ impl OAuthManager {
     }
 
     pub async fn cancel_login(&self, flow_id: &str) -> Result<(), SimpleProviderError> {
-        self.pending.lock().await.remove(flow_id);
-        if let Some(flow) = self.flows.lock().await.remove(flow_id) {
+        let mut pending = self.pending.lock().await;
+        pending.remove(flow_id);
+        let flow = self.flows.lock().await.remove(flow_id);
+        if let Some(flow) = flow {
+            self.remember_cancelled(flow_id.to_owned(), flow.expires)
+                .await;
             flow.cancel.notify_one();
+            flow.listener.abort();
+            let _ = flow.listener.await;
         }
         Ok(())
+    }
+
+    async fn remember_cancelled(&self, flow_id: String, expires: Instant) {
+        let mut cancelled = self.cancelled.lock().await;
+        cancelled.retain(|_, expiry| *expiry > Instant::now());
+        cancelled.insert(flow_id, expires);
+        while cancelled.len() > 64 {
+            if let Some(oldest) = cancelled
+                .iter()
+                .min_by_key(|(_, expiry)| **expiry)
+                .map(|(id, _)| id.clone())
+            {
+                cancelled.remove(&oldest);
+            }
+        }
     }
 
     /// Wait for the browser to come back, then exchange the code and save the account. Once the
@@ -275,12 +312,19 @@ impl OAuthManager {
         &self,
         flow_id: &str,
     ) -> Result<AccountRecord, SimpleProviderError> {
-        let mut flow = self
-            .pending
-            .lock()
-            .await
-            .remove(flow_id)
-            .ok_or_else(|| auth_error("This login is no longer active. Start again."))?;
+        let flow = self.pending.lock().await.remove(flow_id);
+        let mut flow = match flow {
+            Some(flow) => flow,
+            None => {
+                let mut cancelled = self.cancelled.lock().await;
+                cancelled.retain(|_, expires| *expires > Instant::now());
+                return Err(auth_error(if cancelled.remove(flow_id).is_some() {
+                    LOGIN_CANCELLED
+                } else {
+                    "This login is no longer active. Start again."
+                }));
+            }
+        };
         if flow.expires <= Instant::now() {
             return Err(auth_error(LOGIN_EXPIRED));
         }
@@ -603,25 +647,22 @@ impl CallbackContext {
 async fn serve_callback(listeners: Vec<TcpListener>, context: CallbackContext) -> CallbackResult {
     let context = Arc::new(context);
     let (sender, mut receiver) = mpsc::channel(1);
-    let mut accepting = tokio::task::JoinSet::new();
-    for listener in listeners {
-        let context = context.clone();
-        let sender = sender.clone();
-        accepting.spawn(async move {
-            while let Ok((socket, address)) = listener.accept().await {
-                if address.ip().is_loopback() {
-                    tokio::spawn(answer(socket, context.clone(), sender.clone()));
+    loop {
+        let accepted = tokio::select! {
+            result = receiver.recv() => return result.unwrap_or_else(|| Err(callback_unavailable())),
+            accepted = listeners[0].accept() => accepted,
+            accepted = async {
+                match listeners.get(1) {
+                    Some(listener) => listener.accept().await,
+                    None => std::future::pending().await,
                 }
-            }
-        });
+            } => accepted,
+        };
+        let (socket, address) = accepted.map_err(|_| callback_unavailable())?;
+        if address.ip().is_loopback() {
+            tokio::spawn(answer(socket, context.clone(), sender.clone()));
+        }
     }
-    drop(sender);
-    let result = receiver
-        .recv()
-        .await
-        .unwrap_or_else(|| Err(auth_error("The local login callback stopped.")));
-    accepting.abort_all();
-    result
 }
 
 async fn answer(
@@ -942,6 +983,9 @@ mod tests {
         let reply = tab.await.unwrap();
         assert!(reply.starts_with("HTTP/1.1 200"));
         assert!(reply.contains("Claude is connected"));
+        manager.cancel_login(&start.flow_id).await.unwrap();
+        let error = manager.complete_login(&start.flow_id).await.unwrap_err();
+        assert!(!is_cancelled(&error));
     }
 
     #[tokio::test]
@@ -1000,6 +1044,117 @@ mod tests {
             manager.authorization_url(&second.flow_id).await,
             Some(second.authorization_url.clone())
         );
+    }
+
+    #[tokio::test]
+    async fn codex_replacement_releases_its_only_callback_port() {
+        for completing in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let socket = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+            let port = socket.local_addr().unwrap().port();
+            drop(socket);
+            let manager = Arc::new(
+                OAuthManager::new(Arc::new(AccountStore::new(dir.path().join("accounts"))))
+                    .with_endpoints(OAuthEndpoints {
+                        codex_ports: vec![port],
+                        ..OAuthEndpoints::default()
+                    }),
+            );
+            let first = manager
+                .begin_login(ProviderKind::Codex, "First".into())
+                .await
+                .unwrap();
+            let waiting = if completing {
+                let manager = manager.clone();
+                let id = first.flow_id.clone();
+                Some(tokio::spawn(
+                    async move { manager.complete_login(&id).await },
+                ))
+            } else {
+                None
+            };
+            if completing {
+                while manager.pending.lock().await.contains_key(&first.flow_id) {
+                    tokio::task::yield_now().await;
+                }
+            }
+            let second = manager
+                .begin_login(ProviderKind::Codex, "Second".into())
+                .await;
+            assert!(
+                second.is_ok(),
+                "replacement failed: {:?}",
+                second.err().map(|error| error.message)
+            );
+            if let Some(waiting) = waiting {
+                assert!(is_cancelled(&waiting.await.unwrap().unwrap_err()));
+            }
+            manager
+                .cancel_login(&second.unwrap().flow_id)
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_returns_after_the_callback_port_is_released() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_store, manager) = manager(&dir);
+        let start = manager
+            .begin_login(ProviderKind::Claude, "Fixture".into())
+            .await
+            .unwrap();
+        let query = query(&start);
+        let port = Url::parse(&query["redirect_uri"]).unwrap().port().unwrap();
+        let _ = browse(&query["redirect_uri"], "/favicon.ico".into())
+            .await
+            .unwrap();
+        manager.cancel_login(&start.flow_id).await.unwrap();
+        let rebound = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await;
+        assert!(rebound.is_ok(), "cancelled listener still owns its port");
+    }
+
+    #[tokio::test]
+    async fn cancellation_before_completion_is_reported_as_cancelled() {
+        for replaced in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let (_store, manager) = manager(&dir);
+            let first = manager
+                .begin_login(ProviderKind::Claude, "First".into())
+                .await
+                .unwrap();
+            if replaced {
+                manager
+                    .begin_login(ProviderKind::Claude, "Second".into())
+                    .await
+                    .unwrap();
+            } else {
+                manager.cancel_login(&first.flow_id).await.unwrap();
+            }
+            let error = manager.complete_login(&first.flow_id).await.unwrap_err();
+            assert!(is_cancelled(&error), "unexpected status: {}", error.message);
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_history_expires_and_has_a_fixed_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_store, manager) = manager(&dir);
+        let now = Instant::now();
+        for index in 0..80 {
+            manager
+                .remember_cancelled(index.to_string(), now + FLOW_LIFETIME)
+                .await;
+        }
+        assert_eq!(manager.cancelled.lock().await.len(), 64);
+        manager
+            .cancelled
+            .lock()
+            .await
+            .insert("expired".into(), now - Duration::from_secs(1));
+        let error = manager.complete_login("expired").await.unwrap_err();
+        assert!(!is_cancelled(&error));
+        assert!(!manager.cancelled.lock().await.contains_key("expired"));
     }
 
     #[tokio::test]
