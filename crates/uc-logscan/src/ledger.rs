@@ -17,6 +17,57 @@ use crate::{LogScanner, LogSource, day, linked};
 const BATCH_LINES: usize = 512;
 const BATCH_BYTES: u64 = 4 * 1024 * 1024;
 const PROBE_BYTES: u64 = 4096;
+const DERIVATION_VERSION: i64 = 3;
+
+#[derive(Serialize, Deserialize)]
+struct EventDetails {
+    input: i64,
+    cache_write: i64,
+    cache_write_hour: i64,
+    fast: bool,
+    request_boundaries_known: bool,
+    token_usage_known: bool,
+    reported_cost: Option<f64>,
+    cwd: String,
+    repository: String,
+}
+
+impl EventDetails {
+    fn from_event(event: &Event) -> Self {
+        Self {
+            input: event.tokens.input,
+            cache_write: event.tokens.cache_write,
+            cache_write_hour: event.tokens.cache_write_hour,
+            fast: event.tokens.fast,
+            request_boundaries_known: event.request_boundaries_known,
+            token_usage_known: event.token_usage.is_some(),
+            reported_cost: event.cost,
+            cwd: event.project_cwd.clone(),
+            repository: event.project_repository.clone(),
+        }
+    }
+
+    fn cost(&self, model: &str, output: i64, cached: i64) -> Option<f64> {
+        self.reported_cost.or_else(|| {
+            self.token_usage_known
+                .then(|| {
+                    uc_pricing::estimate(
+                        model,
+                        uc_pricing::Tokens {
+                            input: self.input,
+                            output,
+                            cache_read: cached,
+                            cache_write: self.cache_write,
+                            cache_write_hour: self.cache_write_hour,
+                            fast: self.fast,
+                        },
+                        self.request_boundaries_known,
+                    )
+                })
+                .flatten()
+        })
+    }
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -110,13 +161,13 @@ impl UsageLedger {
              PRAGMA cache_size=-8192;
              PRAGMA temp_store=FILE;",
         )?;
+        connection.execute_batch("BEGIN IMMEDIATE;")?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version != 0 && version != 1 {
+        if !(0..=2).contains(&version) {
             bail!("The usage ledger version is unsupported");
         }
         connection.execute_batch(
-            "BEGIN IMMEDIATE;
-             CREATE TABLE IF NOT EXISTS usage_events (
+            "CREATE TABLE IF NOT EXISTS usage_events (
                 source TEXT NOT NULL, event_key TEXT NOT NULL,
                 timestamp INTEGER NOT NULL, day TEXT NOT NULL,
                 model TEXT NOT NULL, project TEXT NOT NULL,
@@ -135,10 +186,17 @@ impl UsageLedger {
              ) WITHOUT ROWID;
              CREATE TABLE IF NOT EXISTS ledger_metadata (
                 key TEXT PRIMARY KEY, value TEXT NOT NULL
-             ) WITHOUT ROWID;
-             PRAGMA user_version=1;
-             COMMIT;",
+             ) WITHOUT ROWID;",
         )?;
+        if version < 2 {
+            connection.execute_batch(
+                "ALTER TABLE usage_events ADD COLUMN details TEXT;
+                 ALTER TABLE usage_events ADD COLUMN derivation_version INTEGER NOT NULL DEFAULT 0;
+                 DELETE FROM file_checkpoints;
+                 PRAGMA user_version=2;",
+            )?;
+        }
+        connection.execute_batch("COMMIT;")?;
         Ok(Self {
             connection: Mutex::new(connection),
             import_lock: Mutex::new(()),
@@ -261,6 +319,7 @@ impl UsageLedger {
                     self.walk(root, 0, scanner, &mut pass)?;
                 }
             }
+            self.refresh_derivations(pass.report.events_written > 0)?;
             self.connection()?.execute(
                 "INSERT INTO ledger_metadata(key,value) VALUES('updatedAt',?1)
                  ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -273,6 +332,90 @@ impl UsageLedger {
             callback(info);
         }
         outcome
+    }
+
+    fn refresh_derivations(&self, imported: bool) -> Result<()> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let version = format!("{}:{DERIVATION_VERSION}", uc_pricing::PRICING_VERSION);
+        let saved: Option<String> = transaction
+            .query_row(
+                "SELECT value FROM ledger_metadata WHERE key='derivationVersion'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let reprice = saved.as_deref() != Some(&version);
+        if !reprice && !imported {
+            return Ok(());
+        }
+        let mut aliases: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+            std::collections::BTreeMap::new();
+        {
+            let mut select = transaction.prepare("SELECT DISTINCT json_extract(details,'$.cwd') FROM usage_events WHERE details IS NOT NULL")?;
+            let paths = select.query_map([], |row| row.get::<_, String>(0))?;
+            for path in paths {
+                if let Some((alias, canonical)) = crate::project::repository_alias(&path?) {
+                    aliases.entry(alias).or_default().insert(canonical);
+                }
+            }
+        }
+        {
+            let mut select = transaction.prepare(
+                "SELECT source,event_key,model,output,cached,details,cost,project FROM usage_events WHERE details IS NOT NULL",
+            )?;
+            let mut rows = select.query([])?;
+            let mut update = transaction.prepare(
+                "UPDATE usage_events SET cost=?1,project=?2,derivation_version=?3,details=?6 WHERE source=?4 AND event_key=?5",
+            )?;
+            let mut projects = std::collections::HashMap::new();
+            while let Some(row) = rows.next()? {
+                let mut details: EventDetails = serde_json::from_str(&row.get::<_, String>(5)?)?;
+                let old_cost: Option<f64> = row.get(6)?;
+                let cost = if reprice {
+                    details.cost(&row.get::<_, String>(2)?, row.get(3)?, row.get(4)?)
+                } else {
+                    old_cost
+                };
+                let project = projects
+                    .entry((details.cwd.clone(), details.repository.clone()))
+                    .or_insert_with(|| {
+                        let resolved =
+                            crate::project::resolve(&details.cwd, Some(&details.repository));
+                        if crate::project::local_root(&details.cwd).is_some()
+                            || resolved != crate::project::resolve(&details.cwd, None)
+                        {
+                            return resolved;
+                        }
+                        aliases
+                            .get(&resolved)
+                            .filter(|names| names.len() == 1)
+                            .and_then(|names| names.first())
+                            .cloned()
+                            .unwrap_or(resolved)
+                    });
+                if old_cost == cost
+                    && row.get::<_, String>(7)? == *project
+                    && details.repository == *project
+                {
+                    continue;
+                }
+                details.repository = project.clone();
+                update.execute(params![
+                    cost,
+                    project.as_str(),
+                    DERIVATION_VERSION,
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    serde_json::to_string(&details)?
+                ])?;
+            }
+        }
+        transaction.execute(
+            "INSERT INTO ledger_metadata(key,value) VALUES('derivationVersion',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [version],
+        )?;
+        transaction.commit()?;
+        Ok(())
     }
 
     fn walk<F: FnMut(UsageLedgerInfo)>(
@@ -454,25 +597,20 @@ impl UsageLedger {
         let mut written = 0;
         {
             let mut insert = transaction.prepare_cached(
-                "INSERT INTO usage_events(source,event_key,timestamp,day,model,project,input,output,cached,creation,total,cost,sidechain)
-                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+                "INSERT INTO usage_events(source,event_key,timestamp,day,model,project,input,output,cached,creation,total,cost,sidechain,details,derivation_version)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
                  ON CONFLICT(source,event_key) DO UPDATE SET
                     timestamp=excluded.timestamp,day=excluded.day,model=excluded.model,project=excluded.project,
                     input=excluded.input,output=excluded.output,cached=excluded.cached,creation=excluded.creation,
-                    total=excluded.total,cost=excluded.cost,sidechain=excluded.sidechain
+                    total=excluded.total,cost=excluded.cost,sidechain=excluded.sidechain,
+                    details=excluded.details,derivation_version=excluded.derivation_version
                  WHERE excluded.sidechain<usage_events.sidechain
-                    OR (excluded.sidechain=usage_events.sidechain AND excluded.total>usage_events.total)"
+                    OR (excluded.sidechain=usage_events.sidechain AND (excluded.total>usage_events.total
+                        OR (excluded.total=usage_events.total AND excluded.derivation_version>usage_events.derivation_version)))"
             )?;
             for event in events.iter() {
-                let cost = event.cost.or_else(|| {
-                    event.token_usage.and_then(|_| {
-                        uc_pricing::estimate(
-                            &event.model,
-                            event.tokens,
-                            event.request_boundaries_known,
-                        )
-                    })
-                });
+                let details = EventDetails::from_event(event);
+                let cost = details.cost(&event.model, event.tokens.output, event.tokens.cache_read);
                 written += insert.execute(params![
                     source_name(scanner.source),
                     event.key,
@@ -489,7 +627,9 @@ impl UsageLedger {
                         .saturating_add(event.tokens.cache_write_hour),
                     event.total,
                     cost,
-                    event.sidechain
+                    event.sidechain,
+                    serde_json::to_string(&details)?,
+                    DERIVATION_VERSION
                 ])?;
             }
         }

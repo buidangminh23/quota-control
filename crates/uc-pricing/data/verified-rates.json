@@ -90,5 +90,128 @@
       "https://developers.openai.com/api/docs/models/gpt-6-luna",
       "https://developers.openai.com/api/docs/pricing"
     ]
+  },
+  "claude-sonnet-5": {
+    "i": 2,
+    "o": 10,
+    "cr": 0.2,
+    "cw": 2.5,
+    "cwh": 4,
+    "verified_on": "2026-09-26",
+    "sources": [
+      "https://platform.claude.com/docs/en/about-claude/pricing"
+    ]
+  },
+  "claude-fable-5": {
+    "i": 10,
+    "o": 50,
+    "cr": 1,
+    "cw": 12.5,
+    "cwh": 20,
+    "verified_on": "2026-09-26",
+    "sources": [
+      "https://platform.claude.com/docs/en/about-claude/pricing"
+    ]
+  },
+  "claude-opus-4-8": {
+    "i": 5,
+    "o": 25,
+    "cr": 0.5,
+    "cw": 6.25,
+    "cwh": 10,
+    "fast": 2,
+    "verified_on": "2026-09-26",
+    "sources": [
+      "https://platform.claude.com/docs/en/about-claude/pricing"
+    ]
+  },
+  "gpt-6-sol": {
+    "i": 2,
+    "o": 10,
+    "cr": 0.2,
+    "cw": 2.5,
+    "ia": 4,
+    "oa": 15.0,
+    "cra": 0.4,
+    "cwa": 5.0,
+    "long_context_threshold": 272000,
+    "hour_cache_unsupported": true,
+    "fast": 2,
+    "verified_on": "2026-09-26",
+    "sources": [
+      "https://developers.openai.com/api/docs/pricing"
+    ]
+  },
+  "gpt-5.6-sol": {
+    "i": 4,
+    "o": 20,
+    "cr": 0.4,
+    "cw": 5,
+    "ia": 8,
+    "oa": 30.0,
+    "cra": 0.8,
+    "cwa": 10,
+    "long_context_threshold": 272000,
+    "hour_cache_unsupported": true,
+    "fast": 2,
+    "verified_on": "2026-09-26",
+    "sources": [
+      "https://developers.openai.com/api/docs/pricing"
+    ]
+  },
+  "gpt-5.6-terra": {
+    "i": 2,
+    "o": 12,
+    "cr": 0.2,
+    "cw": 2.5,
+    "ia": 4,
+    "oa": 18.0,
+    "cra": 0.4,
+    "cwa": 5.0,
+    "long_context_threshold": 272000,
+    "hour_cache_unsupported": true,
+    "fast": 2,
+    "verified_on": "2026-09-26",
+    "sources": [
+      "https://developers.openai.com/api/docs/pricing"
+    ]
+  },
+  "gpt-5.5": {
+    "i": 5,
+    "o": 30,
+    "cr": 0.5,
+    "cw": 0,
+    "ia": 10,
+    "oa": 45.0,
+    "cra": 1.0,
+    "cwa": 0,
+    "long_context_threshold": 272000,
+    "hour_cache_unsupported": true,
+    "fast": 2.5,
+    "cache_write_unsupported": true,
+    "fast_long_context_unsupported": true,
+    "verified_on": "2026-09-26",
+    "sources": [
+      "https://developers.openai.com/api/docs/pricing"
+    ]
+  },
+  "gpt-5.4": {
+    "i": 2.5,
+    "o": 15,
+    "cr": 0.25,
+    "cw": 0,
+    "ia": 5.0,
+    "oa": 22.5,
+    "cra": 0.5,
+    "cwa": 0,
+    "long_context_threshold": 272000,
+    "hour_cache_unsupported": true,
+    "fast": 2,
+    "cache_write_unsupported": true,
+    "fast_long_context_unsupported": true,
+    "verified_on": "2026-09-26",
+    "sources": [
+      "https://developers.openai.com/api/docs/pricing"
+    ]
   }
 }

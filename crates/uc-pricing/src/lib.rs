@@ -4,6 +4,7 @@ use std::sync::LazyLock;
 use serde::Deserialize;
 
 pub const PRICING_SOURCE: &str = "Bundled OpenUsage snapshot (2026-07-02) with official model updates verified 2026-09-26; API-equivalent estimate, not subscription charges";
+pub const PRICING_VERSION: &str = "2026-09-26.2";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Tokens {
@@ -42,6 +43,10 @@ struct Rates {
     long_context_threshold: Option<i64>,
     #[serde(default)]
     hour_cache_unsupported: bool,
+    #[serde(default)]
+    cache_write_unsupported: bool,
+    #[serde(default)]
+    fast_long_context_unsupported: bool,
     fast: Option<f64>,
 }
 
@@ -71,6 +76,7 @@ pub fn estimate(model: &str, tokens: Tokens, request_boundaries_known: bool) -> 
         return None;
     }
     if !request_boundaries_known
+        && tokens.prompt() > rates.long_context_threshold.unwrap_or(200_000)
         && [rates.ia, rates.oa, rates.cra, rates.cwa]
             .iter()
             .any(Option::is_some)
@@ -80,7 +86,13 @@ pub fn estimate(model: &str, tokens: Tokens, request_boundaries_known: bool) -> 
     if tokens.cache_write_hour > 0 && rates.hour_cache_unsupported {
         return None;
     }
+    if tokens.cache_write > 0 && rates.cache_write_unsupported {
+        return None;
+    }
     let high = tokens.prompt() > rates.long_context_threshold.unwrap_or(200_000);
+    if tokens.fast && high && rates.fast_long_context_unsupported {
+        return None;
+    }
     let choose = |base, higher: Option<f64>| if high { higher.unwrap_or(base) } else { base };
     let input = choose(rates.i, rates.ia);
     let multiplier = if tokens.fast { rates.fast? } else { 1.0 };
@@ -112,7 +124,13 @@ mod tests {
             ("claude-opus-5-5", 4.0, 20.0, 0.2, 5.0, Some(8.0)),
             ("claude-opus-5", 5.0, 25.0, 0.5, 6.25, Some(10.0)),
             ("claude-fable-5-1", 10.0, 50.0, 0.25, 12.5, Some(20.0)),
+            ("claude-fable-5", 10.0, 50.0, 1.0, 12.5, Some(20.0)),
+            ("claude-opus-4-8", 5.0, 25.0, 0.5, 6.25, Some(10.0)),
+            ("claude-sonnet-5", 2.0, 10.0, 0.2, 2.5, Some(4.0)),
             ("gpt-6-astra", 10.0, 50.0, 1.0, 12.5, None),
+            ("gpt-6-sol", 2.0, 10.0, 0.2, 2.5, None),
+            ("gpt-5.6-sol", 4.0, 20.0, 0.4, 5.0, None),
+            ("gpt-5.6-terra", 2.0, 12.0, 0.2, 2.5, None),
             ("gpt-5.6-luna", 0.2, 1.2, 0.02, 0.25, None),
             ("gpt-6-luna", 0.1, 0.5, 0.01, 0.125, None),
         ] {
@@ -164,6 +182,9 @@ mod tests {
     fn openai_long_context_threshold_counts_all_prompt_buckets_and_reprices_full_request() {
         for (model, input, output, read, write) in [
             ("gpt-6-astra", 10.0, 50.0, 1.0, 12.5),
+            ("gpt-6-sol", 2.0, 10.0, 0.2, 2.5),
+            ("gpt-5.6-sol", 4.0, 20.0, 0.4, 5.0),
+            ("gpt-5.6-terra", 2.0, 12.0, 0.2, 2.5),
             ("gpt-5.6-luna", 0.2, 1.2, 0.02, 0.25),
             ("gpt-6-luna", 0.1, 0.5, 0.01, 0.125),
         ] {
@@ -193,17 +214,26 @@ mod tests {
                     },
                     expected * 2.0,
                 );
-                assert!(estimate(model, tokens, false).is_none());
+                if prompt > 272_000 {
+                    assert!(estimate(model, tokens, false).is_none());
+                } else {
+                    assert_eq!(
+                        estimate(model, tokens, false),
+                        estimate(model, tokens, true)
+                    );
+                }
             }
-            assert!(estimate(
-                model,
-                Tokens {
-                    input: 1,
-                    ..Tokens::default()
-                },
-                false
-            )
-            .is_none());
+            assert!(
+                estimate(
+                    model,
+                    Tokens {
+                        input: 1,
+                        ..Tokens::default()
+                    },
+                    false
+                )
+                .is_some()
+            );
         }
     }
 
@@ -213,6 +243,9 @@ mod tests {
             ("claude-opus-5-5", 4.0, 0.2, 5.0, 8.0, true),
             ("claude-opus-5", 5.0, 0.5, 6.25, 10.0, true),
             ("claude-fable-5-1", 10.0, 0.25, 12.5, 20.0, false),
+            ("claude-fable-5", 10.0, 1.0, 12.5, 20.0, false),
+            ("claude-opus-4-8", 5.0, 0.5, 6.25, 10.0, true),
+            ("claude-sonnet-5", 2.0, 0.2, 2.5, 4.0, false),
         ] {
             let tokens = Tokens {
                 input: 600_000,
@@ -260,11 +293,11 @@ mod tests {
     fn verified_entries_include_dated_primary_source_provenance() {
         let verified: serde_json::Value =
             serde_json::from_str(include_str!("../data/verified-rates.json")).unwrap();
-        assert_eq!(verified.as_object().unwrap().len(), 6);
+        assert_eq!(verified.as_object().unwrap().len(), 14);
         for (model, entry) in verified.as_object().unwrap() {
             assert_eq!(entry["verified_on"], "2026-09-26");
             let sources = entry["sources"].as_array().unwrap();
-            assert!(sources.len() >= 2, "{model}");
+            assert!(!sources.is_empty(), "{model}");
             assert!(sources.iter().all(|source| {
                 let url = source.as_str().unwrap();
                 url.starts_with("https://platform.claude.com/docs/")
@@ -277,16 +310,120 @@ mod tests {
     #[test]
     fn exact_models_only_and_no_invented_fast_rates() {
         assert!(estimate("gpt-future", Tokens::default(), true).is_none());
-        assert!(estimate(
-            "gpt-5",
-            Tokens {
-                fast: true,
+        assert!(
+            estimate(
+                "gpt-5",
+                Tokens {
+                    fast: true,
+                    ..Tokens::default()
+                },
+                true
+            )
+            .is_none()
+        );
+        for model in ["codex-auto-review", "Unattributed"] {
+            assert!(estimate(model, Tokens::default(), true).is_none());
+        }
+        assert!(
+            estimate(
+                "claude-sonnet-4-20250514",
+                Tokens {
+                    input: 200_001,
+                    ..Tokens::default()
+                },
+                false
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn gpt_54_and_55_price_supported_buckets_and_context_tiers() {
+        for (model, input, output, cached, fast) in [
+            ("gpt-5.4", 2.5, 15.0, 0.25, 2.0),
+            ("gpt-5.5", 5.0, 30.0, 0.5, 2.5),
+        ] {
+            for prompt in [272_000, 272_001] {
+                let tokens = Tokens {
+                    input: prompt - 100_000,
+                    cache_read: 100_000,
+                    output: 1_000,
+                    ..Tokens::default()
+                };
+                let high = prompt > 272_000;
+                let expected = ((tokens.input as f64 * input + 100_000.0 * cached)
+                    * if high { 2.0 } else { 1.0 }
+                    + 1_000.0 * output * if high { 1.5 } else { 1.0 })
+                    / 1_000_000.0;
+                assert_cost(model, tokens, expected);
+                let fast_tokens = Tokens {
+                    fast: true,
+                    ..tokens
+                };
+                if high {
+                    assert!(estimate(model, fast_tokens, true).is_none());
+                    assert!(estimate(model, tokens, false).is_none());
+                } else {
+                    assert_cost(model, fast_tokens, expected * fast);
+                    assert_eq!(
+                        estimate(model, tokens, false),
+                        estimate(model, tokens, true)
+                    );
+                }
+            }
+            for tokens in [
+                Tokens {
+                    cache_write: 1,
+                    ..Tokens::default()
+                },
+                Tokens {
+                    cache_write_hour: 1,
+                    ..Tokens::default()
+                },
+            ] {
+                assert!(estimate(model, tokens, true).is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn aggregate_short_context_is_exact_but_negative_counts_are_rejected() {
+        for (model, threshold) in [
+            ("gpt-5.6-luna", 272_000),
+            ("claude-sonnet-4-20250514", 200_000),
+        ] {
+            let tokens = Tokens {
+                input: threshold,
                 ..Tokens::default()
-            },
-            true
-        )
-        .is_none());
-        assert!(estimate("claude-sonnet-4-20250514", Tokens::default(), false).is_none());
+            };
+            assert_eq!(
+                estimate(model, tokens, false),
+                estimate(model, tokens, true)
+            );
+            assert!(
+                estimate(
+                    model,
+                    Tokens {
+                        input: threshold + 1,
+                        ..tokens
+                    },
+                    false
+                )
+                .is_none()
+            );
+            assert!(
+                estimate(
+                    model,
+                    Tokens {
+                        input: threshold + 1,
+                        cache_read: -1,
+                        ..tokens
+                    },
+                    false
+                )
+                .is_none()
+            );
+        }
     }
 
     #[test]

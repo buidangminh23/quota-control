@@ -63,6 +63,229 @@ fn total(ledger: &UsageLedger) -> i64 {
 }
 
 #[test]
+fn legacy_migration_reimports_equal_events_and_unifies_repository_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("bot tele");
+    fs::create_dir_all(root.join(".git")).unwrap();
+    fs::write(
+        root.join(".git/config"),
+        "[remote \"origin\"]\nurl=https://example.test/team/bot-tele.git\n",
+    )
+    .unwrap();
+    let logs = dir.path().join("logs");
+    fs::create_dir(&logs).unwrap();
+    let mut event = claude("priced", "2024-01-01", 1000, None);
+    event["cwd"] = json!(root);
+    event["message"]["model"] = json!("claude-sonnet-5");
+    append(&logs.join("claude.jsonl"), &[event]);
+    let db = dir.path().join("usage.sqlite3");
+    let scan = scanner(LogSource::Claude, &logs);
+    let ledger = UsageLedger::open(&db).unwrap();
+    ledger.import(std::slice::from_ref(&scan), |_| {}).unwrap();
+    let before = total(&ledger);
+    drop(ledger);
+    let connection = rusqlite::Connection::open(&db).unwrap();
+    connection
+        .execute_batch(
+            "ALTER TABLE usage_events DROP COLUMN details;
+         ALTER TABLE usage_events DROP COLUMN derivation_version;
+         UPDATE usage_events SET cost=123,project='bot tele';
+         PRAGMA user_version=1;",
+        )
+        .unwrap();
+    drop(connection);
+    let ledger = UsageLedger::open(&db).unwrap();
+    assert_eq!(total(&ledger), before);
+    let report = ledger.import(std::slice::from_ref(&scan), |_| {}).unwrap();
+    assert_eq!(report.files_read, 1);
+    assert_eq!(report.events_written, 1);
+    assert_eq!(total(&ledger), before);
+    let rows = ledger.summary(&query(UsageGrouping::Project)).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].key, "bot-tele");
+    assert!((rows[0].totals.cost_usd.unwrap() - 0.0020306).abs() < 1e-10);
+    assert_eq!(ledger.import(&[scan], |_| {}).unwrap().files_read, 0);
+    drop(ledger);
+    assert!(UsageLedger::open(db).is_ok());
+}
+
+#[test]
+fn price_revision_recomputes_deleted_logs_from_exact_billing_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("display folder");
+    fs::create_dir_all(root.join(".git")).unwrap();
+    fs::write(
+        root.join(".git/config"),
+        "[remote \"origin\"]\nurl=https://example.test/team/repository.git\n",
+    )
+    .unwrap();
+    let logs = dir.path().join("logs");
+    fs::create_dir(&logs).unwrap();
+    let mut event = claude("hourly", "2024-01-01", 1000, None);
+    event["cwd"] = json!(root);
+    event["message"]["model"] = json!("claude-opus-5");
+    event["message"]["usage"]["speed"] = json!("fast");
+    event["message"]["usage"]["cache_creation"] =
+        json!({"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":200});
+    append(
+        &logs.join("claude.jsonl"),
+        &[event, claude("reported", "2024-01-01", 1, Some(0.75))],
+    );
+    let db = dir.path().join("usage.sqlite3");
+    let scan = scanner(LogSource::Claude, &logs);
+    let ledger = UsageLedger::open(&db).unwrap();
+    ledger.import(std::slice::from_ref(&scan), |_| {}).unwrap();
+    let before = ledger.summary(&query(UsageGrouping::Model)).unwrap();
+    assert!((before[0].totals.cost_usd.unwrap() - 0.015353).abs() < 1e-10);
+    let before_tokens = total(&ledger);
+    drop(ledger);
+    fs::remove_dir_all(logs).unwrap();
+    fs::remove_dir_all(root).unwrap();
+    let connection = rusqlite::Connection::open(&db).unwrap();
+    connection.execute_batch("UPDATE usage_events SET cost=NULL,project='stale'; UPDATE ledger_metadata SET value='outdated' WHERE key='derivationVersion';").unwrap();
+    drop(connection);
+    let ledger = UsageLedger::open(&db).unwrap();
+    assert_eq!(ledger.import(&[scan], |_| {}).unwrap().files_read, 0);
+    assert_eq!(
+        ledger.summary(&query(UsageGrouping::Model)).unwrap(),
+        before
+    );
+    assert_eq!(total(&ledger), before_tokens);
+    assert!(
+        ledger
+            .summary(&query(UsageGrouping::Project))
+            .unwrap()
+            .iter()
+            .any(|row| row.key == "repository")
+    );
+}
+
+#[test]
+fn both_sources_share_one_repository_key_and_small_aggregate_codex_is_priced() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("bot tele");
+    fs::create_dir_all(root.join(".git")).unwrap();
+    fs::write(
+        root.join(".git/config"),
+        "[remote \"origin\"]\nurl=https://example.test/team/bot-tele.git\n",
+    )
+    .unwrap();
+    let claude_logs = dir.path().join("claude");
+    let codex_logs = dir.path().join("codex");
+    fs::create_dir(&claude_logs).unwrap();
+    fs::create_dir(&codex_logs).unwrap();
+    let mut event = claude("local", "2024-01-01", 1000, None);
+    event["cwd"] = json!(root);
+    append(&claude_logs.join("session.jsonl"), &[event]);
+    append(
+        &codex_logs.join("session.jsonl"),
+        &[
+            json!({"type":"session_meta","payload":{"id":"fixture","cwd":"Z:/missing/bot tele","git":{"repository_url":"https://example.test/team/bot-tele.git"}}}),
+            json!({"type":"turn_context","payload":{"model":"gpt-5.6-luna"}}),
+            codex_count("2024-01-01T12:00:00Z", 1000, 10),
+        ],
+    );
+    let ledger = UsageLedger::open(dir.path().join("usage.sqlite3")).unwrap();
+    ledger
+        .import(
+            &[
+                scanner(LogSource::Claude, &claude_logs),
+                scanner(LogSource::Codex, &codex_logs),
+            ],
+            |_| {},
+        )
+        .unwrap();
+    let rows = ledger.summary(&query(UsageGrouping::Project)).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| row.key == "bot-tele"));
+    assert!(
+        rows.iter()
+            .find(|row| row.source == "codex")
+            .unwrap()
+            .totals
+            .cost_usd
+            .is_some()
+    );
+}
+
+#[test]
+fn historical_folder_aliases_follow_one_verified_repository_but_not_ambiguous_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("current/bot tele");
+    fs::create_dir_all(root.join(".git")).unwrap();
+    fs::write(
+        root.join(".git/config"),
+        "[remote \"origin\"]\nurl=https://example.test/team/bot-tele.git\n",
+    )
+    .unwrap();
+    let logs = dir.path().join("logs");
+    fs::create_dir(&logs).unwrap();
+    let mut known = claude("known", "2024-01-01", 1, None);
+    known["cwd"] = json!(root);
+    let mut historical = claude("historical", "2024-01-01", 2, None);
+    historical["cwd"] = json!(dir.path().join("removed/bot tele"));
+    append(&logs.join("first.jsonl"), &[known, historical.clone()]);
+    let db = dir.path().join("usage.sqlite3");
+    let scan = scanner(LogSource::Claude, &logs);
+    let ledger = UsageLedger::open(&db).unwrap();
+    ledger.import(std::slice::from_ref(&scan), |_| {}).unwrap();
+    let rows = ledger.summary(&query(UsageGrouping::Project)).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].key, "bot-tele");
+    historical["message"]["id"] = json!("appended");
+    append(&logs.join("first.jsonl"), &[historical]);
+    ledger.import(std::slice::from_ref(&scan), |_| {}).unwrap();
+    assert_eq!(
+        ledger
+            .summary(&query(UsageGrouping::Project))
+            .unwrap()
+            .len(),
+        1
+    );
+    let other_root = dir.path().join("other/bot-tele");
+    fs::create_dir_all(other_root.join(".git")).unwrap();
+    fs::write(
+        other_root.join(".git/config"),
+        "[remote \"origin\"]\nurl=https://example.test/team/other-repository.git\n",
+    )
+    .unwrap();
+    let mut other = claude("alias-target", "2024-01-01", 1, None);
+    other["cwd"] = json!(other_root);
+    append(&logs.join("other.jsonl"), &[other]);
+    ledger.import(std::slice::from_ref(&scan), |_| {}).unwrap();
+    let rows = ledger.summary(&query(UsageGrouping::Project)).unwrap();
+    assert_eq!(
+        rows.iter()
+            .find(|row| row.key == "bot-tele")
+            .unwrap()
+            .totals
+            .total_tokens,
+        32
+    );
+    assert!(rows.iter().any(|row| row.key == "other-repository"));
+    for (parent, remote) in [("one", "repository-one"), ("two", "repository-two")] {
+        let cwd = dir.path().join(parent).join("ambiguous");
+        fs::create_dir_all(cwd.join(".git")).unwrap();
+        fs::write(
+            cwd.join(".git/config"),
+            format!("[remote \"origin\"]\nurl=https://example.test/team/{remote}.git\n"),
+        )
+        .unwrap();
+        let mut event = claude(parent, "2024-01-01", 1, None);
+        event["cwd"] = json!(cwd);
+        append(&logs.join("ambiguity.jsonl"), &[event]);
+    }
+    let mut missing = claude("missing", "2024-01-01", 1, None);
+    missing["cwd"] = json!(dir.path().join("removed/ambiguous"));
+    append(&logs.join("ambiguity.jsonl"), &[missing]);
+    ledger.import(&[scan], |_| {}).unwrap();
+    let rows = ledger.summary(&query(UsageGrouping::Project)).unwrap();
+    assert!(rows.iter().any(|row| row.key == "ambiguous"));
+    assert!(rows.iter().any(|row| row.key == "repository-one"));
+    assert!(rows.iter().any(|row| row.key == "repository-two"));
+}
+
+#[test]
 fn all_groupings_inclusive_dates_and_cost_wire_shape() {
     let dir = tempfile::tempdir().unwrap();
     let logs = dir.path().join("logs");
