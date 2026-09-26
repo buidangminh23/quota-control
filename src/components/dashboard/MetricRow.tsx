@@ -1,11 +1,12 @@
 /**
  * One metric inside a provider card (upstream `WidgetRowView`). A bounded metric is a label line with
- * the pace warning, a capsule meter and a headline/reset line; an unbounded one is a single line with
- * the value right-aligned, which reveals a hover detail when there is more to show.
+ * the pace warning, a capsule meter, a headline/reset line and, under a countdown, the exact time the
+ * limit comes back; an unbounded one is a single line with the value right-aligned, which reveals a
+ * hover detail when there is more to show.
  */
 import type { Language } from "@/i18n";
 import { messagesFor } from "@/i18n";
-import { meterState, meterTooltip, meterSeverity, spareText, boundedTrailingText, hasResetLabel, resetTooltip, hasMeterStyleToggle, meterStyleTooltip, type MeterState } from "@/model/meterState";
+import { meterState, meterTooltip, meterSeverity, spareText, boundedTrailingText, hasResetLabel, resetTooltip, restoreText, hasMeterStyleToggle, meterStyleTooltip, type MeterState } from "@/model/meterState";
 import {
   expirySeverity,
   hasModelBreakdown,
@@ -58,6 +59,7 @@ function BoundedRow({ data, now, interactive }: { data: WidgetData; now: Date; i
   const state = meterState(data, now);
   const language = data.language;
   const trailing = boundedTrailingText(data, now);
+  const restore = restoreText(data, now);
   const resetToggle = interactive && hasResetLabel(data, now);
   const styleToggle = interactive && hasMeterStyleToggle(data);
   return (
@@ -87,6 +89,7 @@ function BoundedRow({ data, now, interactive }: { data: WidgetData; now: Date; i
           )
         ) : null}
       </div>
+      {restore ? <div className="uc-row-restore uc-num">{restore}</div> : null}
     </div>
   );
 }

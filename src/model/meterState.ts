@@ -6,7 +6,7 @@
  * off the share used, never the displayed fraction, so color and copy never flip with Used/Left.
  */
 import { messagesFor, translate, type Language } from "@/i18n";
-import { deadlineLabel, resetAbsoluteLabel, resetRelativeLabel } from "./format";
+import { deadlineLabel, resetAbsoluteLabel, resetRelativeLabel, restoreLabel } from "./format";
 import { evaluatePace, minimumElapsed, secondsToRunOut } from "./pace";
 import {
   boundedSubtitle,
@@ -168,6 +168,12 @@ export function boundedTrailingText(data: WidgetData, now: Date): string | null 
 /** Whether the trailing text is a concrete reset countdown (a click flips Countdown/Exact Time). */
 export function hasResetLabel(data: WidgetData, now: Date): boolean {
   return data.hasData && data.subtitleOverride === undefined && data.resetsAt !== null && !isFreshSessionWindow(data, now);
+}
+
+/** The line under a reset countdown with the exact time the limit comes back; Exact Time already shows it. */
+export function restoreText(data: WidgetData, now: Date): string | null {
+  if (data.resetDisplayMode === "absolute" || !hasResetLabel(data, now) || !data.resetsAt) return null;
+  return restoreLabel(data.resetsAt, now, data.timeFormat, data.language);
 }
 
 /** The opposite reset format from the one shown, or the "Not started" explanation. */

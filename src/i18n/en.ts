@@ -1,5 +1,5 @@
 /** English catalog: the upstream OpenUsage copy, adapted for Windows and Linux. */
-import type { Messages, When } from "./messages";
+import type { Messages, RestoreDay, When } from "./messages";
 
 function when(value: When): string {
   switch (value.kind) {
@@ -13,6 +13,17 @@ function when(value: When): string {
       return `${value.date} at ${value.time}`;
     case "soon":
       return "soon";
+  }
+}
+
+function restoreDay(day: RestoreDay): string {
+  switch (day.kind) {
+    case "today":
+      return "today";
+    case "tomorrow":
+      return "tomorrow";
+    case "on":
+      return day.date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
   }
 }
 
@@ -32,6 +43,7 @@ export const en: Messages = {
       const prefix = VERBS[verb];
       return value.kind === "in" ? `${prefix} in ${value.duration}` : `${prefix} ${when(value)}`;
     },
+    restoresAt: (time, day) => `Back at ${time} · ${restoreDay(day)}`,
     expiryListHeader: (mode) => (mode === "relative" ? "Resets expire in:" : "Resets expire:"),
     list(items) {
       if (items.length <= 1) return items[0] ?? "";

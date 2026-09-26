@@ -209,6 +209,16 @@
   color: var(--uc-secondary);
 }
 
+.uc-row-restore {
+  margin-top: calc(2px - var(--uc-row-gap));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--uc-caption-size);
+  color: var(--uc-tertiary);
+  text-align: right;
+  white-space: nowrap;
+}
+
 button.uc-row-headline:hover,
 button.uc-row-trailing:hover,
 button.uc-row-warning:hover {

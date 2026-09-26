@@ -4,7 +4,7 @@
  * en_US output, Vietnamese follows vi-VN.
  */
 import { messagesFor, translate, type Language } from "@/i18n";
-import type { DeadlineVerb, When } from "@/i18n/messages";
+import type { DeadlineVerb, RestoreDay, When } from "@/i18n/messages";
 import { compact, compactDollars, decimal, dollars, localeOf } from "@/i18n/numbers";
 import type { MetricKind, MetricValue } from "@/lib/types";
 import { roundHalfAwayFromZero } from "./decimal";
@@ -112,6 +112,10 @@ function startOfDay(date: Date): number {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
 }
 
+function daysBetween(now: Date, date: Date): number {
+  return Math.round((startOfDay(date) - startOfDay(now)) / 86_400_000);
+}
+
 /** The structured "when" of a deadline, or `null` when the duration is not finite. */
 export function whenOf(date: Date, mode: ResetDisplayMode, now: Date, timeFormat: TimeFormat, language: Language): When | null {
   const seconds = (date.getTime() - now.getTime()) / 1000;
@@ -121,7 +125,7 @@ export function whenOf(date: Date, mode: ResetDisplayMode, now: Date, timeFormat
     return duration === null ? null : { kind: "in", duration };
   }
   if (seconds <= 0) return { kind: "soon" };
-  const dayDiff = Math.round((startOfDay(date) - startOfDay(now)) / 86_400_000);
+  const dayDiff = daysBetween(now, date);
   const time = shortTime(date, timeFormat, language);
   if (dayDiff <= 0) return { kind: "today", time };
   if (dayDiff === 1) return { kind: "tomorrow", time };
@@ -153,4 +157,12 @@ export function resetRelativeLabel(resetsAt: Date, now: Date, timeFormat: TimeFo
 
 export function resetAbsoluteLabel(resetsAt: Date, now: Date, timeFormat: TimeFormat, language: Language): string | null {
   return deadlineLabel("resets", resetsAt, "absolute", now, timeFormat, language);
+}
+
+/** The exact wall-clock moment a limit comes back, e.g. `Hồi lại lúc 13:05 · T6 02/10`; `null` once it has passed. */
+export function restoreLabel(resetsAt: Date, now: Date, timeFormat: TimeFormat, language: Language): string | null {
+  if (!(resetsAt.getTime() > now.getTime())) return null;
+  const dayDiff = daysBetween(now, resetsAt);
+  const day: RestoreDay = dayDiff <= 0 ? { kind: "today" } : dayDiff === 1 ? { kind: "tomorrow" } : { kind: "on", date: resetsAt };
+  return messagesFor(language).format.restoresAt(shortTime(resetsAt, timeFormat, language), day);
 }

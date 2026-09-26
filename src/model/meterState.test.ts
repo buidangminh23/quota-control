@@ -9,6 +9,7 @@ import {
   meterTooltip,
   paceTick,
   resetTooltip,
+  restoreText,
   spareText,
   type MeterState,
 } from "./meterState";
@@ -330,6 +331,17 @@ describe("meter copy in Vietnamese", () => {
     expect(state.kind === "runningOut" && state.eta?.startsWith("Hết hạn mức sau ")).toBe(true);
     expect(boundedTrailingText(data, current)?.startsWith("Đặt lại sau ")).toBe(true);
     expect(resetTooltip(data, current)?.startsWith("Đặt lại lúc ")).toBe(true);
+  });
+
+  it("adds the exact restore time under a countdown only", () => {
+    const current = new Date(2026, 8, 26, 12);
+    const data = vi(makeWidget("Weekly", "percent", 50, 100, { resetsAt: new Date(2026, 9, 2, 13, 5), periodDurationMs: week * 1000 }));
+    expect(boundedTrailingText(data, current)).toBe("Đặt lại sau 6 ngày 1 giờ");
+    expect(restoreText(data, current)).toBe("Hồi lại lúc 13:05 · T6 02/10");
+    expect(restoreText({ ...data, resetDisplayMode: "absolute" }, current)).toBeNull();
+    expect(restoreText({ ...data, resetsAt: null }, current)).toBeNull();
+    expect(restoreText({ ...data, hasData: false }, current)).toBeNull();
+    expect(restoreText({ ...data, subtitleOverride: "Paused" }, current)).toBeNull();
   });
 
   it("explains a fresh session and missing data in Vietnamese", () => {

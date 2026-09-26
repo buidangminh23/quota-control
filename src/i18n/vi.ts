@@ -1,5 +1,5 @@
 /** Vietnamese catalog — the default language. Numbers follow vi-VN (see `numbers.ts`). */
-import type { Messages, When } from "./messages";
+import type { Messages, RestoreDay, When } from "./messages";
 import { viTerm } from "./viTerms";
 
 function when(value: When): string {
@@ -14,6 +14,23 @@ function when(value: When): string {
       return `${value.time} ngày ${value.date}`;
     case "soon":
       return "sắp tới";
+  }
+}
+
+const WEEKDAYS = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"] as const;
+
+function twoDigits(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function restoreDay(day: RestoreDay): string {
+  switch (day.kind) {
+    case "today":
+      return "hôm nay";
+    case "tomorrow":
+      return "ngày mai";
+    case "on":
+      return `${WEEKDAYS[day.date.getDay()]} ${twoDigits(day.date.getDate())}/${twoDigits(day.date.getMonth() + 1)}`;
   }
 }
 
@@ -43,6 +60,7 @@ export const vi: Messages = {
       if (value.kind === "in") return `${phrases.lead} sau ${value.duration}`;
       return `${phrases.lead} lúc ${when(value)}`;
     },
+    restoresAt: (time, day) => `Hồi lại lúc ${time} · ${restoreDay(day)}`,
     expiryListHeader: (mode) => (mode === "relative" ? "Các lượt đặt lại hết hạn sau:" : "Các lượt đặt lại hết hạn lúc:"),
     list: (items) => new Intl.ListFormat("vi", { type: "conjunction" }).format(items),
   },

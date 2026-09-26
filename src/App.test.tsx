@@ -56,6 +56,16 @@ describe("popup", () => {
     expect(screen.getByText(/Cập nhật sau/)).toBeInTheDocument();
   });
 
+  it("puts the exact restore time under each reset countdown, but not beside Exact Time", async () => {
+    await renderApp();
+    const work = screen.getByRole("region", { name: "Claude · Công ty" });
+    const countdowns = within(work).getAllByText(/^Đặt lại sau /);
+    expect(within(work).getAllByText(/^Hồi lại lúc \d{1,2}:\d{2} · /)).toHaveLength(countdowns.length);
+    fireEvent.click(countdowns[0]!);
+    expect(within(work).getAllByText(/^Đặt lại lúc /)).toHaveLength(countdowns.length);
+    expect(within(work).queryByText(/^Hồi lại lúc /)).not.toBeInTheDocument();
+  });
+
   it("shows the token total, then each source's trend and periods, on the Token tab and remembers the choice", async () => {
     await renderApp();
     fireEvent.click(screen.getByRole("tab", { name: "Token" }));

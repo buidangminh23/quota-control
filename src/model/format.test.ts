@@ -6,6 +6,7 @@ import {
   formatNumber,
   formatValue,
   resetAbsoluteLabel,
+  restoreLabel,
   shortTime,
   totalSpendRingCenter,
   type TotalSpendMetric,
@@ -149,6 +150,18 @@ describe("Formatters", () => {
     expect(resetAbsoluteLabel(new Date(2024, 5, 2, 13), now, "12h", "en")?.startsWith("Resets tomorrow at ")).toBe(true);
     expect(resetAbsoluteLabel(new Date(2024, 5, 6, 12), now, "12h", "en")?.startsWith("Resets Jun 6 at ")).toBe(true);
     expect(resetAbsoluteLabel(new Date(now.getTime() - 1000), now, "12h", "en")).toBe("Resets soon");
+  });
+
+  it("gives the exact restore time with today, tomorrow or the weekday and date", () => {
+    const now = new Date(2026, 8, 26, 12);
+    expect(restoreLabel(new Date(2026, 8, 26, 18, 38), now, "24h", "vi")).toBe("Hồi lại lúc 18:38 · hôm nay");
+    expect(restoreLabel(new Date(2026, 8, 27, 9, 5), now, "24h", "vi")).toBe("Hồi lại lúc 9:05 · ngày mai");
+    expect(restoreLabel(new Date(2026, 9, 2, 13, 5), now, "24h", "vi")).toBe("Hồi lại lúc 13:05 · T6 02/10");
+    expect(restoreLabel(new Date(2026, 9, 4, 8, 0), now, "24h", "vi")).toBe("Hồi lại lúc 8:00 · CN 04/10");
+    expect(plainSpaces(restoreLabel(new Date(2026, 9, 2, 13, 5), now, "12h", "en"))).toBe("Back at 1:05 PM · Fri, Oct 2");
+    expect(plainSpaces(restoreLabel(new Date(2026, 8, 27, 9, 5), now, "12h", "en"))).toBe("Back at 9:05 AM · tomorrow");
+    expect(restoreLabel(now, now, "24h", "vi")).toBeNull();
+    expect(restoreLabel(new Date(now.getTime() - 1000), now, "24h", "vi")).toBeNull();
   });
 
   it("buckets absolute labels by local day in Vietnamese", () => {

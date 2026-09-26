@@ -20,11 +20,16 @@ export type When =
   | { kind: "on"; date: string; time: string }
   | { kind: "soon" };
 
+/** The day of a limit's exact restore time, next to its clock time. */
+export type RestoreDay = { kind: "today" } | { kind: "tomorrow" } | { kind: "on"; date: Date };
+
 export interface FormatMessages {
   duration(days: number, hours: number, minutes: number): string;
   monthDay(date: Date): string;
   when(when: When): string;
   deadline(verb: DeadlineVerb, when: When): string;
+  /** The line under a reset countdown, e.g. `Hồi lại lúc 13:05 · T6 02/10`. */
+  restoresAt(time: string, day: RestoreDay): string;
   expiryListHeader(mode: ResetModeKey): string;
   list(items: string[]): string;
 }
