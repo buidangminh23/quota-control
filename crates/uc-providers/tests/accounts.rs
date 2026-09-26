@@ -861,6 +861,109 @@ fn write_codex_login(dir: &std::path::Path, account: &str) -> std::path::PathBuf
 }
 
 #[tokio::test]
+async fn codex_cli_email_labels_follow_id_token_without_changing_identity() {
+    let (dir, store) = store();
+    let path = write_codex_login(dir.path(), "account-one");
+    let original = cli_account_from(ProviderKind::Codex, path.clone(), None).unwrap();
+    let base: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for (claims, expected) in [
+        (
+            json!({"email":"  direct@example.com  "}),
+            Some("direct@example.com"),
+        ),
+        (
+            json!({"https://api.openai.com/profile":{"email":"nested@example.com"}}),
+            Some("nested@example.com"),
+        ),
+        (
+            json!({"email":"primary@example.com","https://api.openai.com/profile":{"email":"secondary@example.com"}}),
+            Some("primary@example.com"),
+        ),
+        (json!({}), None),
+        (json!({"email":42}), None),
+        (json!({"email":"invalid"}), None),
+        (json!({"email":"bad\n@example.com"}), None),
+        (
+            json!({"email":format!("{}@example.com", "x".repeat(257))}),
+            None,
+        ),
+    ] {
+        let mut document = base.clone();
+        document["tokens"]["id_token"] = json!(jwt(claims));
+        document["tokens"]["access_token"] = json!(jwt(
+            json!({"email":"not-the-label@example.com","exp":2000000000,"https://api.openai.com/auth":{"chatgpt_user_id":"fixture-user"}})
+        ));
+        std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+        let login = cli_account_from(ProviderKind::Codex, path.clone(), None).unwrap();
+        assert_eq!(login.id, original.id);
+        assert_eq!(login.email.as_deref(), expected);
+        let runtimes =
+            account_runtimes_with(store.clone(), std::slice::from_ref(&login), http(json!({})))
+                .unwrap();
+        assert_eq!(runtimes[0].provider().id, original.id);
+        assert_eq!(
+            runtimes[0].provider().display_name,
+            expected
+                .map(|email| format!("Codex · {email}"))
+                .unwrap_or_else(|| "Codex".into())
+        );
+        let snapshot = runtimes[0].refresh(RefreshContext::scheduled()).await;
+        assert_eq!(snapshot.error_category, None);
+        assert_eq!(snapshot.display_name, runtimes[0].provider().display_name);
+    }
+}
+
+#[test]
+fn claude_cli_email_labels_use_merged_profile_without_changing_identity() {
+    let (dir, store) = store();
+    let path = dir.path().join(".credentials.json");
+    let profile = dir.path().join(".claude.json");
+    let mut document = claude_doc(4_000_000_000_000);
+    document["oauthAccount"]["emailAddress"] = json!("stale-credentials@example.com");
+    std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+    let mut original_id = None;
+    for (email, expected) in [
+        (
+            Some(json!("  profile@example.com  ")),
+            Some("profile@example.com"),
+        ),
+        (
+            Some(json!("changed@example.com")),
+            Some("changed@example.com"),
+        ),
+        (None, None),
+        (Some(Value::Null), None),
+        (Some(json!(42)), None),
+        (Some(json!("invalid")), None),
+        (Some(json!("bad\n@example.com")), None),
+    ] {
+        let mut metadata =
+            json!({"oauthAccount":{"accountUuid":"account-a","organizationUuid":"org-a"}});
+        if let Some(email) = email {
+            metadata["oauthAccount"]["emailAddress"] = email;
+        }
+        std::fs::write(&profile, serde_json::to_vec(&metadata).unwrap()).unwrap();
+        let login =
+            cli_account_from(ProviderKind::Claude, path.clone(), Some(profile.clone())).unwrap();
+        assert_eq!(
+            &login.id,
+            original_id.get_or_insert_with(|| login.id.clone())
+        );
+        assert_eq!(login.email.as_deref(), expected);
+        let runtimes =
+            account_runtimes_with(store.clone(), std::slice::from_ref(&login), http(json!({})))
+                .unwrap();
+        assert_eq!(runtimes[0].provider().id, login.id);
+        assert_eq!(
+            runtimes[0].provider().display_name,
+            expected
+                .map(|email| format!("Claude · {email}"))
+                .unwrap_or_else(|| "Claude".into())
+        );
+    }
+}
+
+#[tokio::test]
 async fn cli_logins_are_read_live_and_a_switched_account_is_refused() {
     let (dir, store) = store();
     let path = write_codex_login(dir.path(), "account-one");
@@ -1005,11 +1108,13 @@ fn a_browser_session_wins_over_the_cli_and_the_cli_wins_over_an_imported_copy() 
     let login = |id: &str| CliAccount {
         kind: ProviderKind::Codex,
         id: id.into(),
+        email: None,
         updated_at: Utc::now(),
         path: dir.path().join("auth.json"),
         profile: None,
     };
-    let logins = vec![login(&managed.id), login(&copied.id), login("codex@other")];
+    let mut logins = vec![login(&managed.id), login(&copied.id), login("codex@other")];
+    logins[0].email = Some("cli@example.com".into());
     let shown: Vec<(String, bool)> = visible_accounts(&records, &logins)
         .into_iter()
         .map(|account| match account {
@@ -1021,6 +1126,12 @@ fn a_browser_session_wins_over_the_cli_and_the_cli_wins_over_an_imported_copy() 
     assert!(shown.contains(&(managed.id.clone(), false)));
     assert!(shown.contains(&(copied.id.clone(), true)));
     assert!(shown.contains(&("codex@other".to_string(), true)));
+    let runtimes = account_runtimes_with(store, &logins, http(json!({}))).unwrap();
+    let managed_runtime = runtimes
+        .iter()
+        .find(|runtime| runtime.provider().id == managed.id)
+        .unwrap();
+    assert_eq!(managed_runtime.provider().display_name, "Codex · Work");
 }
 
 struct CliProfileHttp {

@@ -103,6 +103,9 @@ impl LocalProvider {
     /// when the same account is later connected through the browser.
     pub fn with_cli_login(mut self, account: &CliAccount) -> Self {
         self.provider.id = account.id.clone();
+        if let Some(email) = &account.email {
+            self.provider.display_name = format!("{} · {}", self.provider.display_name, email);
+        }
         self.cli = Some(CliBinding {
             id: account.id.clone(),
             path: account.path.clone(),

@@ -314,6 +314,7 @@ mod tests {
         let login = CliAccount {
             kind: ProviderKind::Codex,
             id: "codex@aa".into(),
+            email: None,
             updated_at: Utc::now(),
             path: "auth.json".into(),
             profile: None,

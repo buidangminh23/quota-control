@@ -218,6 +218,7 @@ pub(crate) fn claude_profile_path() -> PathBuf {
 pub struct CliAccount {
     pub kind: ProviderKind,
     pub id: String,
+    pub email: Option<String>,
     pub updated_at: DateTime<Utc>,
     pub path: PathBuf,
     pub profile: Option<PathBuf>,
@@ -259,6 +260,12 @@ pub(crate) fn read_cli_account(
         document["oauthAccount"] = read_json_file(profile, kind)?["oauthAccount"].clone();
     }
     let key = identity(kind, &document)?;
+    let email = match kind {
+        ProviderKind::Codex => crate::oauth::codex_email_label(&document["tokens"]),
+        ProviderKind::Claude => {
+            crate::oauth::email_label(&document["oauthAccount"]["emailAddress"])
+        }
+    };
     let updated_at = std::fs::metadata(&path)
         .and_then(|metadata| metadata.modified())
         .map(DateTime::<Utc>::from)
@@ -267,6 +274,7 @@ pub(crate) fn read_cli_account(
         CliAccount {
             kind,
             id: account_id(kind, &key),
+            email,
             updated_at,
             path,
             profile,
