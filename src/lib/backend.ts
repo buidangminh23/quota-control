@@ -4,7 +4,7 @@
  *
  * Rust command names live in `src-tauri/src/commands.rs`; keep both sides in sync.
  */
-import type { AccountLogin, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, PopoverScreen, ProviderEntry } from "./types";
+import type { AccountLogin, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo } from "./types";
 
 export type Unsubscribe = () => void;
 
@@ -44,6 +44,11 @@ export interface Backend {
   copyText(text: string): Promise<void>;
   /** Replace the tray icon (PNG bytes) and tooltip; `null` restores the app icon. */
   setTrayIcon(png: Uint8Array | null, tooltip: string): Promise<void>;
+  /** The taskbar band the live strip is rendered for; absent where the core has no strip. */
+  taskbarInfo?(): Promise<TaskbarInfo>;
+  onTaskbarInfo?(listener: (info: TaskbarInfo) => void): Unsubscribe;
+  /** Show a strip frame on the taskbar (tray title on Linux); `null` removes the strip. */
+  setTaskbarStrip?(frame: StripFrame | null): Promise<void>;
   quit(): Promise<void>;
 }
 

@@ -8,6 +8,14 @@ fn main() {
         )
         .expect("Tauri build configuration failed");
         println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        let compatibility = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("windows")
+            .join("compatibility.manifest");
+        println!("cargo:rerun-if-changed={}", compatibility.display());
+        println!(
+            "cargo:rustc-link-arg=/MANIFESTINPUT:{}",
+            compatibility.display()
+        );
         println!(
             "cargo:rustc-link-arg=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"
         );

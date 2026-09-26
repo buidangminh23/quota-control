@@ -11,7 +11,7 @@ import { autostartEnabled, canRevealFiles, notificationAccess, requestNotificati
 import { backend } from "@/lib/backend";
 import { useSettings } from "@/state/hooks";
 import { navigate, resetAllSettings, showNotice, updateSettings, useApp } from "@/state/store";
-import { taskbarStripSupported } from "@/strip/support";
+import { useTaskbarInfo } from "@/strip/support";
 import { CrossLink } from "../customize/Customize";
 import { Button, Picker, Switch } from "../ui/controls";
 import { confirmAction } from "../ui/dialog";
@@ -113,7 +113,7 @@ export function Settings() {
   const notificationsOn = anyNotificationEnabled(settings);
   const [access, requestAccess] = useNotificationAccess(notificationsOn);
   const [logError, setLogError] = useState<string | null>(null);
-  const stripSupported = taskbarStripSupported();
+  const stripSupported = useTaskbarInfo()?.supported === true;
   const section = (key: SettingsSectionKey) => text.section(key);
 
   const setNotification = (key: NotificationKey, on: boolean) => {

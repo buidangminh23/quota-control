@@ -263,3 +263,24 @@ export interface AccountLogin {
   callbackMode: "manual" | "loopback";
   expiresInSeconds: number;
 }
+
+/** The taskbar band the strip frames are rendered for (`taskbar_strip.rs`). */
+export interface TaskbarInfo {
+  supported: boolean;
+  /** Device-pixel height of the taskbar band. */
+  height: number;
+  /** Device pixels per logical pixel on the taskbar's monitor. */
+  scale: number;
+  /** The taskbar's own (system) theme, which can differ from the app theme. */
+  theme: "light" | "dark";
+  edge: "bottom" | "top" | "left" | "right";
+}
+
+/** One rendered strip frame: PNG in device pixels plus its text and tooltip forms. */
+export interface StripFrame {
+  png: Uint8Array;
+  width: number;
+  height: number;
+  text: string;
+  tooltip: string;
+}

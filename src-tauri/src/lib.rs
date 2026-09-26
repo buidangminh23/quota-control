@@ -4,11 +4,13 @@ mod chat_store;
 mod commands;
 mod ipc_guard;
 mod service;
+mod taskbar_strip;
 
-use tauri::menu::{Menu, MenuItem, Submenu};
+use tauri::menu::{ContextMenu, Menu, MenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{
-    AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalRect, PhysicalSize, WebviewUrl,
+    WebviewWindowBuilder, WindowEvent,
 };
 
 use service::{BackendService, safe_error};
@@ -64,6 +66,8 @@ pub fn run() -> anyhow::Result<()> {
             chat_commands::list_chat_sessions,
             chat_commands::create_chat_session,
             chat_commands::open_chat_session,
+            taskbar_strip::taskbar_info,
+            taskbar_strip::set_taskbar_strip,
         ]))
         .setup(|app| {
             let accounts = account_commands::Accounts::new(std::sync::Arc::new(
@@ -74,6 +78,7 @@ pub fn run() -> anyhow::Result<()> {
             app.manage(service);
             app.manage(chat_store::ChatStore::default_store());
             app.manage(chat_commands::ChatWindows::default());
+            app.manage(PopupAnchor::default());
             let window =
                 WebviewWindowBuilder::new(app, "popup", WebviewUrl::App("index.html".into()))
                     .title("Usage Control")
@@ -143,23 +148,24 @@ pub fn run() -> anyhow::Result<()> {
                         button_state: MouseButtonState::Up,
                         ..
                     } = event
+                        && let Err(error) = toggle_popup(tray.app_handle(), None)
                     {
-                        let app = tray.app_handle();
-                        let visible = app
-                            .get_webview_window("popup")
-                            .and_then(|w| w.is_visible().ok())
-                            .unwrap_or(false);
-                        let result = if visible {
-                            hide_popup(app)
-                        } else {
-                            show_popup(app)
-                        };
-                        if let Err(error) = result {
-                            tracing::warn!("{error}");
-                        }
+                        tracing::warn!("{error}");
                     }
                 })
                 .build(app)?;
+            let strip_app = app.handle().clone();
+            app.manage(taskbar_strip::TaskbarStrip::install(app.handle(), move |click| {
+                let result = match click.button {
+                    taskbar_strip::StripButton::Primary => {
+                        toggle_popup(&strip_app, Some(click.bounds))
+                    }
+                    taskbar_strip::StripButton::Secondary => show_tray_menu(&strip_app),
+                };
+                if let Err(error) = result {
+                    tracing::warn!("{error}");
+                }
+            }));
             app.state::<BackendService>().start(app.handle());
             Ok(())
         })
@@ -272,10 +278,39 @@ pub(crate) fn update_tray_menu(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn show_popup(app: &AppHandle) -> Result<(), String> {
+fn toggle_popup(app: &AppHandle, anchor: Option<PhysicalRect<i32, u32>>) -> Result<(), String> {
+    let visible = app
+        .get_webview_window("popup")
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
+    if visible {
+        hide_popup(app)
+    } else {
+        show_popup_at(app, anchor)
+    }
+}
+
+/// The tray icon's menu at the pointer, for a right click on the taskbar strip.
+fn show_tray_menu(app: &AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("popup")
         .ok_or("Popup is unavailable")?;
+    tray_menu(app)?
+        .popup(window.as_ref().window())
+        .map_err(safe_error)
+}
+
+fn show_popup(app: &AppHandle) -> Result<(), String> {
+    show_popup_at(app, None)
+}
+
+/// Show the popup against `anchor` (a screen rectangle in physical pixels, such as the taskbar
+/// strip), or against the tray icon when there is none.
+fn show_popup_at(app: &AppHandle, anchor: Option<PhysicalRect<i32, u32>>) -> Result<(), String> {
+    let window = app
+        .get_webview_window("popup")
+        .ok_or("Popup is unavailable")?;
+    *app.state::<PopupAnchor>().0.lock() = anchor;
     position_popup(app)?;
     window.show().map_err(safe_error)?;
     window.set_focus().map_err(safe_error)?;
@@ -292,43 +327,76 @@ fn hide_popup(app: &AppHandle) -> Result<(), String> {
     window.emit("popup-visibility", false).map_err(safe_error)
 }
 
+/// Gap, in physical pixels, between the popup and the rectangle it opens against.
+const POPUP_GAP: i32 = 8;
+
+/// What the popup was last opened against (`None`: the tray icon), so resizes keep it there.
+#[derive(Default)]
+struct PopupAnchor(parking_lot::Mutex<Option<PhysicalRect<i32, u32>>>);
+
+fn rect_center(rect: PhysicalRect<i32, u32>) -> PhysicalPosition<i32> {
+    PhysicalPosition::new(
+        rect.position.x + rect.size.width as i32 / 2,
+        rect.position.y + rect.size.height as i32 / 2,
+    )
+}
+
+/// Center the popup on its anchor (falling back to the tray icon), opening away from the screen
+/// edge the anchor sits on and staying inside that monitor's work area.
 fn position_popup(app: &AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("popup")
         .ok_or("Popup is unavailable")?;
-    let tray_rect = app
-        .tray_by_id("main")
-        .and_then(|tray| tray.rect().ok().flatten());
     let scale = window.scale_factor().map_err(safe_error)?;
-    let anchor = tray_rect.map(|rect| rect.position.to_physical::<i32>(scale));
-    let monitor = if let Some(point) = anchor {
+    let stored = *app.state::<PopupAnchor>().0.lock();
+    let anchor = stored.or_else(|| {
+        app.tray_by_id("main")
+            .and_then(|tray| tray.rect().ok().flatten())
+            .map(|rect| PhysicalRect {
+                position: rect.position.to_physical::<i32>(scale),
+                size: rect.size.to_physical::<u32>(scale),
+            })
+    });
+    let monitor = if let Some(rect) = anchor {
+        let center = rect_center(rect);
         window
-            .monitor_from_point(f64::from(point.x), f64::from(point.y))
+            .monitor_from_point(f64::from(center.x), f64::from(center.y))
             .map_err(safe_error)?
     } else {
         window.current_monitor().map_err(safe_error)?
     }
     .or(window.primary_monitor().map_err(safe_error)?);
     if let Some(monitor) = monitor {
-        let area = monitor.work_area();
         let size = window.outer_size().map_err(safe_error)?;
-        let min_x = area.position.x;
-        let min_y = area.position.y;
-        let max_x = (min_x + area.size.width as i32 - size.width as i32).max(min_x);
-        let max_y = (min_y + area.size.height as i32 - size.height as i32).max(min_y);
-        let point = anchor.unwrap_or(PhysicalPosition::new(max_x, max_y + size.height as i32));
-        let x = (point.x - size.width as i32 / 2).clamp(min_x, max_x);
-        let y = if point.y < min_y + area.size.height as i32 / 2 {
-            point.y + 24
-        } else {
-            point.y - size.height as i32 - 8
-        }
-        .clamp(min_y, max_y);
         window
-            .set_position(PhysicalPosition::new(x, y))
+            .set_position(popup_origin(anchor, *monitor.work_area(), size))
             .map_err(safe_error)?;
     }
     Ok(())
+}
+
+/// The popup's top-left: centered on `anchor` and opening away from the screen edge it sits on,
+/// kept inside `area`; with no anchor, the area's bottom-right corner.
+fn popup_origin(
+    anchor: Option<PhysicalRect<i32, u32>>,
+    area: PhysicalRect<i32, u32>,
+    size: PhysicalSize<u32>,
+) -> PhysicalPosition<i32> {
+    let min_x = area.position.x;
+    let min_y = area.position.y;
+    let max_x = (min_x + area.size.width as i32 - size.width as i32).max(min_x);
+    let max_y = (min_y + area.size.height as i32 - size.height as i32).max(min_y);
+    let Some(rect) = anchor else {
+        return PhysicalPosition::new(max_x, max_y);
+    };
+    let top = rect.position.y;
+    let x = rect_center(rect).x - size.width as i32 / 2;
+    let y = if top < min_y + area.size.height as i32 / 2 {
+        top + rect.size.height as i32 + POPUP_GAP
+    } else {
+        top - size.height as i32 - POPUP_GAP
+    };
+    PhysicalPosition::new(x.clamp(min_x, max_x), y.clamp(min_y, max_y))
 }
 
 fn diagnose() -> anyhow::Result<()> {
@@ -355,4 +423,58 @@ fn diagnose() -> anyhow::Result<()> {
         println!("{}", serde_json::to_string_pretty(&summary)?);
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const POPUP: PhysicalSize<u32> = PhysicalSize {
+        width: 336,
+        height: 797,
+    };
+
+    fn rect(x: i32, y: i32, width: u32, height: u32) -> PhysicalRect<i32, u32> {
+        PhysicalRect {
+            position: PhysicalPosition::new(x, y),
+            size: PhysicalSize::new(width, height),
+        }
+    }
+
+    /// A 1080p monitor with a 56 px taskbar along the bottom.
+    fn work_area() -> PhysicalRect<i32, u32> {
+        rect(0, 0, 1920, 1024)
+    }
+
+    fn strip() -> PhysicalRect<i32, u32> {
+        rect(1469, 1024, 125, 56)
+    }
+
+    #[test]
+    fn opens_centered_above_a_strip_on_a_bottom_taskbar() {
+        let origin = popup_origin(Some(strip()), work_area(), POPUP);
+        assert_eq!((origin.x, origin.y), (1363, 219));
+    }
+
+    #[test]
+    fn opens_below_an_anchor_on_a_top_taskbar() {
+        let top_area = rect(0, 56, 1920, 1024);
+        let origin = popup_origin(Some(rect(1469, 0, 125, 56)), top_area, POPUP);
+        assert_eq!((origin.x, origin.y), (1363, 64));
+    }
+
+    #[test]
+    fn stays_inside_the_work_area_near_its_edges() {
+        let corner = rect(1880, 1024, 40, 56);
+        let origin = popup_origin(Some(corner), work_area(), POPUP);
+        assert_eq!((origin.x, origin.y), (1584, 219));
+        let tall = PhysicalSize::new(336, 1100);
+        assert_eq!(popup_origin(Some(strip()), work_area(), tall).y, 0);
+    }
+
+    #[test]
+    fn falls_back_to_the_bottom_right_corner_without_an_anchor() {
+        let origin = popup_origin(None, work_area(), POPUP);
+        assert_eq!((origin.x, origin.y), (1584, 227));
+    }
 }

@@ -1,39 +1,11 @@
 /**
- * The native taskbar strip is optional: the core exposes it when it can embed a window in the
- * taskbar (Windows) or set a tray title (Linux). The popup detects the methods on the backend at run
- * time, so the strip lights up as soon as the core ships them and the tray-icon glyph covers the rest.
+ * The native taskbar strip is optional: the core hosts it where it can (a window in the Windows
+ * taskbar, the tray title on Linux) and exposes `taskbarInfo`/`setTaskbarStrip` on the backend. Where
+ * the backend has neither, the strip reports unsupported and the tray-icon glyph covers it.
  */
 import { useSyncExternalStore } from "react";
 import { backend, type Unsubscribe } from "@/lib/backend";
-
-export interface TaskbarInfo {
-  supported: boolean;
-  /** Physical pixel height of the taskbar band. */
-  height: number;
-  scale: number;
-  /** The taskbar's own theme (Windows "system" theme), not the app theme. */
-  theme: "light" | "dark";
-  edge: "bottom" | "top" | "left" | "right";
-}
-
-export interface StripFrame {
-  png: Uint8Array;
-  width: number;
-  height: number;
-  text: string;
-  tooltip: string;
-}
-
-interface StripApi {
-  setTaskbarStrip(frame: StripFrame | null): Promise<void>;
-  taskbarInfo(): Promise<TaskbarInfo>;
-  onTaskbarInfo?(listener: (info: TaskbarInfo) => void): Unsubscribe;
-}
-
-function stripApi(): StripApi | null {
-  const candidate = backend() as unknown as Partial<StripApi>;
-  return typeof candidate.setTaskbarStrip === "function" && typeof candidate.taskbarInfo === "function" ? (candidate as StripApi) : null;
-}
+import type { StripFrame, TaskbarInfo } from "@/lib/types";
 
 let info: TaskbarInfo | null = null;
 const listeners = new Set<() => void>();
@@ -45,8 +17,8 @@ function publish(next: TaskbarInfo | null): void {
 
 /** Ask the core for taskbar support once and follow its changes; a no-op when the core has no strip. */
 export function watchTaskbarInfo(): Unsubscribe {
-  const api = stripApi();
-  if (!api) return () => {};
+  const api = backend();
+  if (!api.taskbarInfo) return () => {};
   let alive = true;
   api
     .taskbarInfo()
@@ -70,11 +42,7 @@ export function useTaskbarInfo(): TaskbarInfo | null {
   );
 }
 
-export function taskbarStripSupported(): boolean {
-  return info?.supported === true;
-}
-
 export function pushStripFrame(frame: StripFrame | null): Promise<void> {
-  const api = stripApi();
-  return api ? api.setTaskbarStrip(frame) : Promise.resolve();
+  const api = backend();
+  return api.setTaskbarStrip ? api.setTaskbarStrip(frame) : Promise.resolve();
 }

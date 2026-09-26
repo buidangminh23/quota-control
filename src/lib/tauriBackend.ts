@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Backend, DocumentName, Unsubscribe } from "./backend";
-import type { AccountLogin, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, PopoverScreen, ProviderEntry } from "./types";
+import type { AccountLogin, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo } from "./types";
 
 /** Subscribe to a Tauri event synchronously; the returned function tears the listener down. */
 function subscribe<T>(event: string, listener: (payload: T) => void, replay?: () => Promise<T>): Unsubscribe {
@@ -132,6 +132,18 @@ export class TauriBackend implements Backend {
 
   copyText(text: string): Promise<void> {
     return invoke("copy_text", { text });
+  }
+
+  taskbarInfo(): Promise<TaskbarInfo> {
+    return invoke<TaskbarInfo>("taskbar_info");
+  }
+
+  onTaskbarInfo(listener: (info: TaskbarInfo) => void): Unsubscribe {
+    return subscribe<TaskbarInfo>("taskbar-info", listener, () => this.taskbarInfo());
+  }
+
+  setTaskbarStrip(frame: StripFrame | null): Promise<void> {
+    return invoke("set_taskbar_strip", { frame: frame ? { ...frame, png: Array.from(frame.png) } : null });
   }
 
   setTrayIcon(png: Uint8Array | null, tooltip: string): Promise<void> {
