@@ -25,7 +25,7 @@ use crate::ProviderKind;
 use crate::accounts::{
     CLAUDE_CLIENT, CLAUDE_SCOPE, CODEX_CLIENT, account_error, apply_tokens, auth_error, identity,
 };
-use crate::credentials::parse_credentials;
+use crate::credentials::{jwt_claims, parse_credentials};
 
 const FLOW_LIFETIME: Duration = Duration::from_secs(600);
 /// How long the browser tab waits for the account to be saved before it shows an interim page.
@@ -481,7 +481,7 @@ impl OAuthManager {
         };
         apply_tokens(flow.kind, &mut document, &tokens, chrono::Utc::now())?;
         let credentials = parse_credentials(flow.kind, &document)?;
-        if flow.kind == ProviderKind::Claude {
+        let email = if flow.kind == ProviderKind::Claude {
             let profile = self
                 .http
                 .send(
@@ -510,11 +510,25 @@ impl OAuthManager {
             if let Some(tier) = profile["organization"]["rate_limit_tier"].as_str() {
                 document["claudeAiOauth"]["rateLimitTier"] = json!(tier);
             }
-        }
+            email_label(&profile["account"]["email"])
+        } else {
+            tokens["id_token"]
+                .as_str()
+                .and_then(jwt_claims)
+                .and_then(|claims| {
+                    email_label(&claims["email"])
+                        .or_else(|| email_label(&claims["https://api.openai.com/profile"]["email"]))
+                })
+        };
         let key = identity(flow.kind, &document)?;
+        let label = if flow.label.trim().is_empty() || flow.label.trim() == flow.kind.cli() {
+            email.unwrap_or_else(|| flow.kind.cli().into())
+        } else {
+            flow.label.clone()
+        };
         Ok(PreparedAccount {
             kind: flow.kind,
-            label: flow.label.clone(),
+            label,
             identity: key,
             document,
         })
@@ -545,6 +559,24 @@ impl OAuthManager {
         .await
         .map_err(|_| account_error())?
     }
+}
+
+fn email_label(value: &Value) -> Option<String> {
+    let raw = value.as_str()?;
+    if raw.chars().any(char::is_control) {
+        return None;
+    }
+    let email = raw.trim();
+    let (local, domain) = email.split_once('@')?;
+    if email.len() > 256
+        || email.chars().any(char::is_whitespace)
+        || local.is_empty()
+        || domain.is_empty()
+        || domain.contains('@')
+    {
+        return None;
+    }
+    Some(email.to_owned())
 }
 
 fn callback_unavailable() -> SimpleProviderError {
@@ -872,6 +904,191 @@ mod tests {
             .query_pairs()
             .map(|(key, value)| (key.into_owned(), value.into_owned()))
             .collect()
+    }
+
+    struct EmailHttp {
+        tokens: Value,
+        profile: Value,
+    }
+
+    #[async_trait]
+    impl HttpClient for EmailHttp {
+        async fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+            Ok(HttpResponse {
+                status: 200,
+                headers: HashMap::new(),
+                body: serde_json::to_vec(if request.method == "POST" {
+                    &self.tokens
+                } else {
+                    &self.profile
+                })
+                .unwrap(),
+            })
+        }
+    }
+
+    fn fixture_jwt(email: Value, namespaced: bool) -> String {
+        let mut claims = json!({
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "fixture-workspace",
+                "chatgpt_user_id": "fixture-user"
+            }
+        });
+        if namespaced {
+            claims["https://api.openai.com/profile"] = json!({"email": email});
+        } else {
+            claims["email"] = email;
+        }
+        format!(
+            "header.{}.signature",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap())
+        )
+    }
+
+    fn email_http(email: Value) -> EmailHttp {
+        EmailHttp {
+            tokens: json!({
+                "access_token": fixture_jwt(json!("access-token@example.com"), false),
+                "id_token": fixture_jwt(email.clone(), false),
+                "refresh_token": "fixture-refresh",
+                "expires_in": 3600
+            }),
+            profile: json!({
+                "account": {"uuid": "fixture-account", "email": email},
+                "organization": {"uuid": "fixture-org"}
+            }),
+        }
+    }
+
+    async fn connect_email_fixture(
+        store: Arc<AccountStore>,
+        kind: ProviderKind,
+        label: &str,
+        http: EmailHttp,
+    ) -> AccountRecord {
+        let manager = OAuthManager::new(store)
+            .with_http(Arc::new(http))
+            .with_endpoints(OAuthEndpoints {
+                codex_ports: vec![0],
+                ..OAuthEndpoints::default()
+            });
+        let start = manager.begin_login(kind, label.into()).await.unwrap();
+        let query = query(&start);
+        let redirect = Url::parse(&query["redirect_uri"]).unwrap();
+        let tab = browse(
+            &query["redirect_uri"],
+            format!("{}?code=fixture&state={}", redirect.path(), query["state"]),
+        );
+        let record = manager.complete_login(&start.flow_id).await.unwrap();
+        assert!(tab.await.unwrap().contains("is connected"));
+        record
+    }
+
+    #[tokio::test]
+    async fn browser_accounts_default_to_profile_email() {
+        for kind in [ProviderKind::Claude, ProviderKind::Codex] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(AccountStore::new(dir.path().join("accounts")));
+            let record = connect_email_fixture(
+                store.clone(),
+                kind,
+                kind.cli(),
+                email_http(json!("  account@example.com  ")),
+            )
+            .await;
+            assert_eq!(record.label, "account@example.com");
+            assert_eq!(store.list().unwrap()[0].label, "account@example.com");
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_accounts_with_unusable_email_keep_provider_labels() {
+        for kind in [ProviderKind::Claude, ProviderKind::Codex] {
+            for email in [
+                Value::Null,
+                json!(42),
+                json!(""),
+                json!("  "),
+                json!("not-an-email"),
+                json!("local@"),
+                json!("@domain"),
+                json!("a b@example.com"),
+                json!("a\n@example.com"),
+                json!(format!("{}@example.com", "x".repeat(257))),
+            ] {
+                let dir = tempfile::tempdir().unwrap();
+                let store = Arc::new(AccountStore::new(dir.path().join("accounts")));
+                let record =
+                    connect_email_fixture(store, kind, kind.cli(), email_http(email)).await;
+                assert_eq!(record.label, kind.cli());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_codex_accepts_namespaced_id_token_email() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(AccountStore::new(dir.path().join("accounts")));
+        let mut http = email_http(Value::Null);
+        http.tokens["id_token"] = json!(fixture_jwt(json!("namespaced@example.com"), true));
+        let record = connect_email_fixture(store, ProviderKind::Codex, "codex", http).await;
+        assert_eq!(record.label, "namespaced@example.com");
+    }
+
+    #[tokio::test]
+    async fn browser_codex_does_not_use_access_token_email() {
+        for id_token in [
+            Value::Null,
+            json!("malformed"),
+            json!(fixture_jwt(Value::Null, false)),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(AccountStore::new(dir.path().join("accounts")));
+            let mut http = email_http(Value::Null);
+            http.tokens["id_token"] = id_token;
+            let record = connect_email_fixture(store, ProviderKind::Codex, "codex", http).await;
+            assert_eq!(record.label, "codex");
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_accounts_preserve_explicit_library_labels() {
+        for kind in [ProviderKind::Claude, ProviderKind::Codex] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(AccountStore::new(dir.path().join("accounts")));
+            let record = connect_email_fixture(
+                store,
+                kind,
+                "Work account",
+                email_http(json!("account@example.com")),
+            )
+            .await;
+            assert_eq!(record.label, "Work account");
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_reconnection_updates_label_without_replacing_account() {
+        for kind in [ProviderKind::Claude, ProviderKind::Codex] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(AccountStore::new(dir.path().join("accounts")));
+            let first =
+                connect_email_fixture(store.clone(), kind, kind.cli(), email_http(Value::Null))
+                    .await;
+            for email in ["first@example.com", "second@example.com"] {
+                let reconnected = connect_email_fixture(
+                    store.clone(),
+                    kind,
+                    kind.cli(),
+                    email_http(json!(email)),
+                )
+                .await;
+                assert_eq!(reconnected.id, first.id);
+                assert_eq!(reconnected.connected_at, first.connected_at);
+                assert_eq!(reconnected.label, email);
+                assert_eq!(store.list().unwrap(), vec![reconnected]);
+            }
+        }
     }
 
     /// Play the browser: request `target` from the callback listener and return the whole reply.
