@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uc_pricing::Tokens;
 
@@ -11,12 +12,13 @@ pub(crate) struct Event {
     pub key: String,
     pub timestamp: DateTime<Utc>,
     pub model: String,
+    pub project: String,
     pub tokens: Tokens,
     pub total: i64,
     pub token_usage: Option<uc_core::TokenUsage>,
     pub cost: Option<f64>,
     pub request_boundaries_known: bool,
-    sidechain: bool,
+    pub(crate) sidechain: bool,
 }
 
 impl Event {
@@ -28,6 +30,7 @@ impl Event {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub(crate) struct Parser {
     source: LogSource,
     session: String,
@@ -37,6 +40,9 @@ pub(crate) struct Parser {
     saw_meta: bool,
     child_gate: Option<i64>,
     fast: bool,
+    cwd: String,
+    repository: Option<String>,
+    project: String,
 }
 
 impl Parser {
@@ -50,6 +56,9 @@ impl Parser {
             saw_meta: false,
             child_gate: None,
             fast: false,
+            cwd: String::new(),
+            repository: None,
+            project: String::new(),
         }
     }
 
@@ -61,7 +70,28 @@ impl Parser {
         }
     }
 
-    fn claude(&self, root: &Value) -> Option<Event> {
+    fn update_project(&mut self, cwd: Option<&str>, repository: Option<&str>) {
+        let mut changed = false;
+        if let Some(cwd) =
+            cwd.filter(|value| value.len() <= 32768 && !value.chars().any(char::is_control))
+            && self.cwd != cwd
+        {
+            self.cwd = cwd.to_owned();
+            changed = true;
+        }
+        if let Some(repository) = repository
+            && self.repository.as_deref() != Some(repository)
+        {
+            self.repository = Some(repository.to_owned());
+            changed = true;
+        }
+        if changed {
+            self.project = crate::project::resolve(&self.cwd, self.repository.as_deref());
+        }
+    }
+
+    fn claude(&mut self, root: &Value) -> Option<Event> {
+        self.update_project(root["cwd"].as_str(), None);
         if root["type"] != "assistant" {
             return None;
         }
@@ -111,6 +141,7 @@ impl Parser {
             key,
             timestamp,
             model,
+            project: self.project.clone(),
             tokens,
             total: tokens.total(),
             token_usage,
@@ -122,6 +153,12 @@ impl Parser {
 
     fn codex(&mut self, root: &Value) -> Option<Event> {
         let payload = &root["payload"];
+        if root["type"] == "session_meta" {
+            self.update_project(
+                payload["cwd"].as_str(),
+                text(&payload["git"], "repository_url"),
+            );
+        }
         if root["type"] == "session_meta" && !self.saw_meta {
             self.saw_meta = true;
             if let Some(id) = text(payload, "id") {
@@ -139,6 +176,7 @@ impl Parser {
             return None;
         }
         if root["type"] == "turn_context" {
+            self.update_project(payload["cwd"].as_str(), None);
             if let Some(model) = model(payload) {
                 self.model = model;
             }
@@ -237,6 +275,7 @@ impl Parser {
             key,
             timestamp: time,
             model: self.model.clone(),
+            project: self.project.clone(),
             tokens,
             total: usage.total,
             token_usage,
@@ -247,7 +286,7 @@ impl Parser {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct RawTokens {
     input: i64,
     cached: i64,
@@ -328,4 +367,135 @@ fn model(value: &Value) -> Option<String> {
                     .all(|c| c.is_ascii_alphanumeric() || "-_.:/".contains(c))
         })
         .map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn codex_count(input: i64, output: i64) -> Value {
+        json!({"type":"event_msg","timestamp":"2026-09-26T12:00:01Z","payload":{
+            "type":"token_count","info":{"total_token_usage":{
+                "input_tokens":input,"output_tokens":output,"cached_input_tokens":0,"total_tokens":input+output
+            }}
+        }})
+    }
+
+    fn claude_message(id: Option<&str>, cwd: Option<&str>, sidechain: bool) -> Value {
+        json!({"type":"assistant","timestamp":"2026-09-26T12:00:01Z","cwd":cwd,"isSidechain":sidechain,
+            "message":{"id":id,"model":"claude-sonnet-4","usage":{"input_tokens":10,"output_tokens":5}}})
+    }
+
+    fn same_event(actual: &Event, expected: &Event) {
+        assert_eq!(actual.key, expected.key);
+        assert_eq!(actual.timestamp, expected.timestamp);
+        assert_eq!(actual.project, expected.project);
+        assert_eq!(actual.model, expected.model);
+        assert_eq!(actual.tokens, expected.tokens);
+        assert_eq!(actual.total, expected.total);
+        assert_eq!(actual.token_usage, expected.token_usage);
+        assert_eq!(actual.cost, expected.cost);
+        assert_eq!(
+            actual.request_boundaries_known,
+            expected.request_boundaries_known
+        );
+        assert_eq!(actual.sidechain, expected.sidechain);
+    }
+
+    #[test]
+    fn codex_project_follows_session_metadata_and_changed_turn_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("second-project");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let mut parser = Parser::new(LogSource::Codex, Path::new("fixture.jsonl"));
+        parser.parse(&json!({"type":"session_meta","payload":{"id":"session","cwd":"Z:\\missing\\checkout","git":{"repository_url":"git@github.com:team/first-project.git"}}}));
+        assert_eq!(
+            parser.parse(&codex_count(10, 5)).unwrap().project,
+            "first-project"
+        );
+        parser.parse(&json!({"type":"turn_context","payload":{"cwd":root.join("src").to_string_lossy(),"model":"gpt-5"}}));
+        let event = parser.parse(&codex_count(20, 10)).unwrap();
+        assert_eq!(event.project, "second-project");
+        assert_eq!(event.model, "gpt-5");
+        parser.parse(&json!({"type":"session_meta","payload":{"id":"ignored-duplicate","cwd":"Z:\\missing\\third","git":{"repository_url":"https://github.com/team/third-project.git"}}}));
+        let event = parser.parse(&codex_count(30, 15)).unwrap();
+        assert_eq!(event.project, "third-project");
+        assert!(event.key.starts_with("codex:session:"));
+    }
+
+    #[test]
+    fn claude_project_uses_each_record_cwd_and_last_known_directory() {
+        let mut parser = Parser::new(LogSource::Claude, Path::new("fixture.jsonl"));
+        parser.parse(&json!({"type":"user","cwd":"Z:\\missing\\First Project"}));
+        assert_eq!(
+            parser
+                .parse(&claude_message(Some("first"), None, false))
+                .unwrap()
+                .project,
+            "First Project"
+        );
+        assert_eq!(
+            parser
+                .parse(&claude_message(
+                    Some("second"),
+                    Some("/missing/second-project"),
+                    false
+                ))
+                .unwrap()
+                .project,
+            "second-project"
+        );
+        let mut unknown = Parser::new(LogSource::Claude, Path::new("fixture.jsonl"));
+        assert_eq!(
+            unknown
+                .parse(&claude_message(None, None, false))
+                .unwrap()
+                .project,
+            ""
+        );
+    }
+
+    #[test]
+    fn codex_checkpoint_resumes_child_gate_totals_model_and_project() {
+        let mut original = Parser::new(LogSource::Codex, Path::new("fixture.jsonl"));
+        original.parse(&json!({"type":"session_meta","timestamp":"2026-09-26T12:00:00Z","payload":{"id":"child","parent_thread_id":"parent","cwd":"/missing/sample-project"}}));
+        original.parse(&json!({"type":"turn_context","payload":{"model":"gpt-5"}}));
+        original.parse(&json!({"type":"event_msg","payload":{"type":"thread_settings_applied","service_tier":"priority"}}));
+        assert!(original.parse(&codex_count(100, 20)).is_none());
+        let checkpoint = serde_json::to_vec(&original).unwrap();
+        let mut resumed: Parser = serde_json::from_slice(&checkpoint).unwrap();
+        for parser in [&mut original, &mut resumed] {
+            assert!(parser.parse(&codex_count(120, 25)).is_none());
+            parser.parse(&json!({"type":"event_msg","timestamp":"2026-09-26T12:00:01Z","payload":{"type":"task_started","started_at":1790424001_i64}}));
+        }
+        let expected = original.parse(&codex_count(140, 30)).unwrap();
+        let actual = resumed.parse(&codex_count(140, 30)).unwrap();
+        same_event(&actual, &expected);
+        assert_eq!(actual.total, 25);
+        assert!(actual.tokens.fast);
+        assert_eq!(actual.project, "sample-project");
+        assert!(resumed.parse(&codex_count(140, 30)).is_none());
+    }
+
+    #[test]
+    fn claude_checkpoint_keeps_fallback_key_and_sidechain_preference() {
+        let mut original = Parser::new(LogSource::Claude, Path::new("fixture.jsonl"));
+        original.parse(&claude_message(
+            None,
+            Some("/missing/sample-project"),
+            false,
+        ));
+        let mut resumed: Parser =
+            serde_json::from_slice(&serde_json::to_vec(&original).unwrap()).unwrap();
+        let expected = original.parse(&claude_message(None, None, true)).unwrap();
+        let actual = resumed.parse(&claude_message(None, None, true)).unwrap();
+        same_event(&actual, &expected);
+        assert_eq!(actual.key, "fixture.jsonl:2");
+        assert_eq!(actual.project, "sample-project");
+        let primary = original.parse(&claude_message(None, None, false)).unwrap();
+        assert!(primary.preferred_over(&actual));
+        assert!(!actual.preferred_over(&primary));
+    }
 }

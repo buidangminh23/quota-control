@@ -1,6 +1,8 @@
 mod cache;
+pub mod ledger;
 mod parser;
 mod presentation;
+mod project;
 
 use std::collections::BTreeMap;
 use std::fs::{self, Metadata};
@@ -14,7 +16,8 @@ use uc_core::*;
 
 pub use presentation::{HistoryRuntime, LocalHistoryRuntime, append_history, history_descriptors};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum LogSource {
     Claude,
     Codex,

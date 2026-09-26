@@ -28,6 +28,7 @@ tauri-build = { version = "2", features = [] }
 anyhow.workspace = true
 chrono.workspace = true
 parking_lot.workspace = true
+quick-xml = "0.41"
 semver = "1"
 serde.workspace = true
 serde_json.workspace = true

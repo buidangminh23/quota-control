@@ -4,12 +4,14 @@ mod chat_commands;
 mod chat_store;
 mod cli_install;
 mod commands;
+pub mod exchange_rate;
 mod integrations;
 mod ipc_guard;
 mod service;
 mod shortcut;
 mod taskbar_strip;
 mod updates;
+mod usage_commands;
 
 use tauri::menu::{ContextMenu, Menu, MenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -76,6 +78,9 @@ pub fn run() -> anyhow::Result<()> {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(ipc_guard::trusted_handler(tauri::generate_handler![
             commands::app_info,
+            usage_commands::usage_summary,
+            usage_commands::usage_ledger_info,
+            usage_commands::exchange_rate,
             commands::catalog,
             commands::engine_state,
             commands::refresh,
@@ -116,6 +121,7 @@ pub fn run() -> anyhow::Result<()> {
                 tracing::warn!("Could not refresh launch-at-login path: {error}");
             }
             app.manage(integrations::IntegrationStore::default_store());
+            app.manage(usage_commands::UsageService::new()?);
             let accounts = account_commands::Accounts::new(std::sync::Arc::new(
                 uc_accounts::AccountStore::default_store(),
             ));
@@ -226,6 +232,7 @@ pub fn run() -> anyhow::Result<()> {
             }));
             app.state::<BackendService>().start(app.handle());
             app.state::<updates::Updates>().start(app.handle());
+            usage_commands::start(app.handle());
             let label_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 account_commands::backfill_account_labels(&label_app).await;
