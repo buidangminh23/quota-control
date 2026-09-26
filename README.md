@@ -213,8 +213,9 @@ pnpm tauri build
 The results are `target/release/bundle/deb/Quota Control_0.1.0_amd64.deb` and
 `target/release/bundle/appimage/Quota Control_0.1.0_amd64.AppImage`. The `.deb` depends on
 WebKitGTK 4.1, GTK 3 and Ayatana AppIndicator, and installs `/usr/bin/quota-control` and
-`/usr/bin/usagectl`. The AppImage carries its own libraries; run `Quota Control_0.1.0_amd64.AppImage --cli`
-for the command line. Without FUSE 2, set `APPIMAGE_EXTRACT_AND_RUN=1`.
+`/usr/bin/usagectl`. The AppImage carries its own libraries and does not need libfuse2; run
+`Quota Control_0.1.0_amd64.AppImage --cli` for the command line. Where FUSE is unavailable,
+`APPIMAGE_EXTRACT_AND_RUN=1` runs it without mounting.
 
 ## Upgrade compatibility
 
