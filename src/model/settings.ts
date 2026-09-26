@@ -16,6 +16,9 @@ export type DensitySetting = "regular" | "compact";
 /** How starred metrics render on the taskbar: provider mark plus values, or the compact bars glyph. */
 export type IconStyle = "text" | "bars";
 export type TotalSpendPeriod = "today" | "yesterday" | "last30";
+/** The dashboard's tabs, left to right: account limits, then the total token use. */
+export type DashboardTab = "quota" | "tokens";
+export const DASHBOARD_TABS: readonly DashboardTab[] = ["quota", "tokens"];
 
 export interface NotificationSettings {
   /** A metric crosses under 10% remaining. */
@@ -34,7 +37,10 @@ export interface AppSettings {
   timeFormat: TimeFormat;
   iconStyle: IconStyle;
   showTaskbarStrip: boolean;
+  /** Whether the dashboard has its Token tab (upstream "Show Total Spend"). */
   showTotalSpend: boolean;
+  /** The dashboard tab the popup opens on. */
+  dashboardTab: DashboardTab;
   totalSpendPeriod: TotalSpendPeriod;
   totalSpendMetric: TotalSpendMetric;
   displayMode: DisplayMode;
@@ -57,8 +63,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   iconStyle: "text",
   showTaskbarStrip: true,
   showTotalSpend: true,
+  dashboardTab: "quota",
   totalSpendPeriod: "today",
-  totalSpendMetric: "cost",
+  totalSpendMetric: "tokens",
   displayMode: "remaining",
   resetDisplayMode: "relative",
   alwaysShowPacing: false,
@@ -97,6 +104,7 @@ export function parseSettings(raw: unknown): AppSettings {
     iconStyle: oneOf(stored.iconStyle, ["text", "bars"], defaults.iconStyle),
     showTaskbarStrip: flag(stored.showTaskbarStrip, defaults.showTaskbarStrip),
     showTotalSpend: flag(stored.showTotalSpend, defaults.showTotalSpend),
+    dashboardTab: oneOf(stored.dashboardTab, DASHBOARD_TABS, defaults.dashboardTab),
     totalSpendPeriod: oneOf(stored.totalSpendPeriod, ["today", "yesterday", "last30"], defaults.totalSpendPeriod),
     totalSpendMetric: oneOf(stored.totalSpendMetric, ["cost", "costPerMtok", "tokens"], defaults.totalSpendMetric),
     displayMode: oneOf(stored.displayMode, ["used", "remaining"], defaults.displayMode),

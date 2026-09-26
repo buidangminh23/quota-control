@@ -5,9 +5,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { messagesFor, type Language, type Messages } from "@/i18n";
 import type { IsEnabled } from "@/model/layout";
-import type { AppSettings } from "@/model/settings";
+import type { AppSettings, DashboardTab } from "@/model/settings";
 import type { DisplayOptions } from "@/model/widgetData";
-import { displayOptionsOf, isProviderEnabled, useApp } from "./store";
+import { displayOptionsOf, hasTokensTab, isProviderEnabled, useApp } from "./store";
 
 export function useSettings(): AppSettings {
   return useApp((state) => state.settings);
@@ -29,6 +29,19 @@ export function useDisplay(): DisplayOptions {
 export function useIsEnabled(): IsEnabled {
   const enabledProviders = useApp((state) => state.enabledProviders);
   return useCallback((providerId: string) => isProviderEnabled({ enabledProviders }, providerId), [enabledProviders]);
+}
+
+export interface DashboardTabState {
+  /** Whether the tab bar shows: only while the dashboard has its Token tab. */
+  tabbed: boolean;
+  /** The tab on screen. */
+  tab: DashboardTab;
+}
+
+export function useDashboardTabs(): DashboardTabState {
+  const tabbed = useApp(hasTokensTab);
+  const saved = useApp((state) => state.settings.dashboardTab);
+  return useMemo(() => ({ tabbed, tab: tabbed ? saved : "quota" }), [tabbed, saved]);
 }
 
 /**

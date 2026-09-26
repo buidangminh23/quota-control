@@ -10,7 +10,7 @@ import { displayGroups } from "@/model/layout";
 import { providerTitle } from "@/model/providerText";
 import { copyScreenshot } from "@/share/screenshot";
 import { useLanguage, useNow } from "@/state/hooks";
-import { navigate, refresh, showNotice, useApp, type Screen } from "@/state/store";
+import { navigate, refresh, showNotice, useApp, visibleDashboardTab, type Screen } from "@/state/store";
 import { Pill } from "../ui/controls";
 import { openAboutDialog } from "./about";
 import { ChevronDown, Spinner } from "../ui/icons";
@@ -48,8 +48,18 @@ function toggle(screen: Screen): void {
   navigate(useApp.getState().screen === screen ? "dashboard" : screen);
 }
 
+function shareSection(selector: string, messages: Messages): void {
+  void copyScreenshot(document.querySelector<HTMLElement>(selector)).then((copied) =>
+    showNotice(copied ? messages.chrome.copiedToClipboard : messages.chrome.copyFailed, copied ? "positive" : "notice"),
+  );
+}
+
+/** What the open dashboard tab can share: the token total on Token, each account's card on Hạn mức. */
 function shareEntries(messages: Messages): MenuEntry[] {
   const state = useApp.getState();
+  if (visibleDashboardTab(state) === "tokens") {
+    return [{ kind: "item", label: messages.dashboard.tab("tokens"), onSelect: () => shareSection("[data-total-spend]", messages) }];
+  }
   const enabled = state.enabledProviders;
   const groups = displayGroups(state.layout, state.catalog, (id) => enabled === null || enabled.includes(id));
   if (groups.length === 0) return [{ kind: "item", label: messages.chrome.noEnabledProviders, disabled: true, onSelect: () => {} }];
@@ -57,12 +67,7 @@ function shareEntries(messages: Messages): MenuEntry[] {
   return groups.map((group) => ({
     kind: "item" as const,
     label: providerTitle(group.provider, language),
-    onSelect: () => {
-      const element = document.querySelector<HTMLElement>(`[data-provider-section="${CSS.escape(group.provider.id)}"]`);
-      void copyScreenshot(element).then((copied) =>
-        showNotice(copied ? messages.chrome.copiedToClipboard : messages.chrome.copyFailed, copied ? "positive" : "notice"),
-      );
-    },
+    onSelect: () => shareSection(`[data-provider-section="${CSS.escape(group.provider.id)}"]`, messages),
   }));
 }
 

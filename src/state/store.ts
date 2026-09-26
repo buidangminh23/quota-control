@@ -18,15 +18,18 @@ import type {
   ProviderEntry,
   UpdateStatus,
 } from "@/lib/types";
-import { reconcileLayout, parseLayout, resetAllLayout, sameLayout, type LayoutDocument } from "@/model/layout";
+import { reconcileLayout, parseLayout, resetAllLayout, sameLayout, spendCapableProviders, type LayoutDocument } from "@/model/layout";
 import { brandName } from "@/model/providerText";
-import { DEFAULT_SETTINGS, enabledProvidersOf, mergeSettingsDocument, parseSettings, type AppSettings } from "@/model/settings";
+import { DASHBOARD_TABS, DEFAULT_SETTINGS, enabledProvidersOf, mergeSettingsDocument, parseSettings, type AppSettings, type DashboardTab } from "@/model/settings";
 import { isTransientBanner, updateBannerKey, updateBannerOf } from "@/model/updateBanner";
 import type { DisplayOptions } from "@/model/widgetData";
 
 export type Screen = PopoverScreen | "accounts";
 
 export type NoticeTone = "positive" | "notice";
+
+/** Which way the screen content slides in: from the right (`forward`) or from the left (`back`). */
+export type Motion = "forward" | "back";
 
 /** A browser sign-in in progress. It outlives the popup, which hides while the browser is in front. */
 export type AccountLogin =
@@ -63,6 +66,8 @@ export interface AppState {
   screen: Screen;
   /** The screen being left, for the slide direction. */
   previousScreen: Screen;
+  /** How the dashboard content enters after a tab switch; cleared by any navigation. */
+  tabMotion: Motion | null;
   customizeProviderId: string | null;
   popupVisible: boolean;
   notice: Notice | null;
@@ -91,6 +96,7 @@ export const useApp = create<AppState>(() => ({
   undoStack: [],
   screen: "dashboard",
   previousScreen: "dashboard",
+  tabMotion: null,
   customizeProviderId: null,
   popupVisible: true,
   notice: null,
@@ -103,6 +109,17 @@ const set = useApp.setState;
 
 export function isProviderEnabled(state: Pick<AppState, "enabledProviders">, providerId: string): boolean {
   return state.enabledProviders === null || state.enabledProviders.includes(providerId);
+}
+
+/** The dashboard has its Token tab while Total Spend is on and an enabled provider tracks spend. */
+export function hasTokensTab(state: Pick<AppState, "settings" | "layout" | "catalog" | "enabledProviders">): boolean {
+  if (!state.settings.showTotalSpend) return false;
+  return spendCapableProviders(state.layout, state.catalog, (providerId) => isProviderEnabled(state, providerId)).length > 0;
+}
+
+/** The dashboard tab on screen: the saved one, or Hạn mức while there is no Token tab. */
+export function visibleDashboardTab(state: Pick<AppState, "settings" | "layout" | "catalog" | "enabledProviders">): DashboardTab {
+  return hasTokensTab(state) ? state.settings.dashboardTab : "quota";
 }
 
 export function displayOptionsOf(settings: AppSettings): DisplayOptions {
@@ -141,6 +158,20 @@ function persistLayout(): void {
 export function updateSettings(patch: Partial<AppSettings>): void {
   set({ settings: { ...get().settings, ...patch } });
   persistSettings();
+}
+
+/** Show a dashboard tab; its content slides in from the side the tab sits on. */
+export function selectDashboardTab(tab: DashboardTab): void {
+  const current = visibleDashboardTab(get());
+  if (tab === current) return;
+  set({ tabMotion: DASHBOARD_TABS.indexOf(tab) > DASHBOARD_TABS.indexOf(current) ? "forward" : "back" });
+  updateSettings({ dashboardTab: tab });
+}
+
+/** The tab after (`step` 1) or before (`step` -1) the one on screen, wrapping around. */
+export function cycleDashboardTab(step: 1 | -1): void {
+  const index = DASHBOARD_TABS.indexOf(visibleDashboardTab(get()));
+  selectDashboardTab(DASHBOARD_TABS[(index + step + DASHBOARD_TABS.length) % DASHBOARD_TABS.length]!);
 }
 
 /** Apply a layout change; `undoable` records the prior layout (upstream `recordingUndoStep`). */
@@ -194,7 +225,7 @@ export function setProviderEnabled(providerId: string, enabled: boolean): void {
 
 export function navigate(screen: Screen, customizeProviderId: string | null = null): void {
   const { screen: current } = get();
-  set({ screen, previousScreen: current, customizeProviderId: screen === "customize" ? customizeProviderId : null });
+  set({ screen, previousScreen: current, tabMotion: null, customizeProviderId: screen === "customize" ? customizeProviderId : null });
 }
 
 export function openCustomizeDetail(providerId: string | null): void {
@@ -352,7 +383,7 @@ function applyCatalog(catalog: ProviderEntry[]): void {
 }
 
 function resetTransientState(): void {
-  set({ screen: "dashboard", previousScreen: "dashboard", customizeProviderId: null });
+  set({ screen: "dashboard", previousScreen: "dashboard", tabMotion: null, customizeProviderId: null });
   clearNotice();
   if (isTransientBanner(updateBannerOf(get().update))) dismissUpdate();
 }

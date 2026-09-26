@@ -70,6 +70,7 @@ export function TotalSpendCard() {
     <section
       ref={sectionRef}
       className="uc-section"
+      data-total-spend="true"
       onContextMenu={(event) => {
         event.preventDefault();
         openMenu({ entries: [{ kind: "item", label: messages.dashboard.shareScreenshot, onSelect: () => void share() }], anchor: { x: event.clientX, y: event.clientY } });

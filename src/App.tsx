@@ -1,16 +1,18 @@
 /**
  * The popup shell: loads the store, applies theme/density/motion to the document, routes between
- * screens, reports the content height so the core sizes the window, handles the keyboard shortcuts
- * (Esc, Enter, Ctrl+R, Ctrl+,, Ctrl+Z, Ctrl+Q) and keeps the taskbar and notifications live.
+ * screens and dashboard tabs, reports the content height so the core sizes the window, handles the
+ * keyboard shortcuts (Esc, Enter, Ctrl+Tab, Ctrl+R, Ctrl+,, Ctrl+Z, Ctrl+Q) and keeps the taskbar and
+ * notifications live.
  */
 import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 import { messagesFor } from "@/i18n";
 import { backend } from "@/lib/backend";
 import { useUsageNotifications } from "@/notify/useUsageNotifications";
 import { useTaskbarStrip } from "@/strip/useTaskbarStrip";
-import { useIsDark } from "@/state/hooks";
-import { navigate, refresh, startApp, undoLayout, useApp, type Screen } from "@/state/store";
+import { useDashboardTabs, useIsDark } from "@/state/hooks";
+import { cycleDashboardTab, hasTokensTab, navigate, refresh, startApp, undoLayout, useApp, type Screen } from "@/state/store";
 import { Accounts } from "./components/accounts/Accounts";
+import { DashboardTabs } from "./components/chrome/DashboardTabs";
 import { Footer } from "./components/chrome/Footer";
 import { goBack, TopBar } from "./components/chrome/TopBar";
 import { Customize } from "./components/customize/Customize";
@@ -61,6 +63,14 @@ function useKeyboard(): void {
         dismissHoverPopovers();
         if (useApp.getState().screen !== "dashboard") goBack();
         else void backend().hidePopup();
+        return;
+      }
+      if (ctrl && event.key === "Tab") {
+        const state = useApp.getState();
+        if (state.screen === "dashboard" && hasTokensTab(state)) {
+          event.preventDefault();
+          cycleDashboardTab(event.shiftKey ? -1 : 1);
+        }
         return;
       }
       if (event.key === "F5" || (ctrl && key === "r")) {
@@ -137,7 +147,9 @@ function ScreenContent({ screen }: { screen: Screen }) {
 export function App() {
   const screen = useApp((state) => state.screen);
   const previous = useApp((state) => state.previousScreen);
+  const tabMotion = useApp((state) => state.tabMotion);
   const detail = useApp((state) => state.customizeProviderId);
+  const { tabbed, tab } = useDashboardTabs();
   const visible = useApp((state) => state.popupVisible);
   const notice = useApp((state) => state.notice);
   const topRef = useRef<HTMLDivElement>(null);
@@ -165,28 +177,34 @@ export function App() {
     hideTooltip();
   }, [visible]);
 
+  const view = screen === "dashboard" ? `dashboard:${tabbed ? tab : "limits-only"}` : `${screen}:${detail ?? ""}`;
+
   useLayoutEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
     dismissHoverPopovers();
     hideTooltip();
-  }, [screen, detail]);
+  }, [view]);
 
   useDocumentAttributes();
   useKeyboard();
-  usePopupHeight(topRef, contentRef, footerRef, `${screen}:${detail ?? ""}`);
+  usePopupHeight(topRef, contentRef, footerRef, view);
   useTaskbarStrip();
   useUsageNotifications();
 
-  const direction = screen === "dashboard" && previous !== "dashboard" ? "back" : "forward";
+  const direction = tabMotion ?? (screen === "dashboard" && previous !== "dashboard" ? "back" : "forward");
   return (
     <div className="uc-shell" data-screen={screen}>
       {screen !== "dashboard" ? (
         <div ref={topRef}>
           <TopBar screen={screen} />
         </div>
+      ) : tabbed ? (
+        <div ref={topRef}>
+          <DashboardTabs tab={tab} />
+        </div>
       ) : null}
       <main ref={scrollRef} className="uc-scroll">
-        <div ref={contentRef} key={`${screen}:${detail ?? ""}`} className={`uc-content is-entering-${direction}`}>
+        <div ref={contentRef} key={view} className={`uc-content is-entering-${direction}`}>
           <ScreenContent screen={screen} />
         </div>
       </main>

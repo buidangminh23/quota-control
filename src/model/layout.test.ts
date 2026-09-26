@@ -4,10 +4,13 @@ import {
   applyMetricSections,
   brandOf,
   canPin,
+  customizeDetail,
   customizeRows,
   defaultProviderOrder,
   displayGroups,
+  hasDashboardCard,
   isLocalHistoryCard,
+  isTokenMetric,
   layoutFamily,
   MAX_PINS_PER_PROVIDER,
   parseLayout,
@@ -86,21 +89,38 @@ describe("reconcileLayout", () => {
 describe("layout views and edits", () => {
   const layout = reconcileLayout(null, catalog);
 
-  it("lists every enabled provider with placed metrics and hides disabled ones", () => {
-    expect(ids(displayGroups(layout, catalog, all))).toEqual([WORK, PERSONAL, "claude-local", CODEX, "codex-local"]);
+  it("lists every enabled account card with placed metrics and hides disabled ones", () => {
+    expect(ids(displayGroups(layout, catalog, all))).toEqual([WORK, PERSONAL, CODEX]);
     expect(ids(displayGroups(layout, catalog, (id) => id !== PERSONAL))).not.toContain(PERSONAL);
     expect(customizeRows(layout, catalog, (id) => id !== PERSONAL).find((row) => row.provider.id === PERSONAL)?.enabled).toBe(false);
   });
 
+  it("gives local-history providers no card and no Customize entry, yet keeps them in the token total", () => {
+    expect(hasDashboardCard("claude-local")).toBe(false);
+    expect(hasDashboardCard(WORK)).toBe(true);
+    expect(ids(customizeRows(layout, catalog, all))).toEqual([WORK, PERSONAL, CODEX]);
+    expect(customizeDetail(layout, catalog, "codex-local")).toBeNull();
+    expect(ids(spendCapableProviders(layout, catalog, all).map((provider) => ({ provider })))).toEqual(["claude-local", "codex-local"]);
+  });
+
+  it("keeps spend tiles and the usage trend off provider cards", () => {
+    const local = catalog.find((entry) => entry.provider.id === "claude-local")!;
+    const tokenMetrics = local.descriptors.filter(isTokenMetric).map((descriptor) => descriptor.id);
+    expect(tokenMetrics).toEqual(["claude-local.trend", "claude-local.today", "claude-local.yesterday", "claude-local.last30"]);
+    const account = { ...catalog[0]!, descriptors: [...catalog[0]!.descriptors, { ...local.descriptors[1]!, id: `${WORK}.today`, providerId: WORK }] };
+    const withSpend = [account, ...catalog.slice(1)];
+    const next = setMetricEnabled(reconcileLayout(layout, withSpend), `${WORK}.today`, true);
+    const card = displayGroups(next, withSpend, all).find((entry) => entry.provider.id === WORK)!;
+    expect([...card.always, ...card.onDemand].map((descriptor) => descriptor.id)).not.toContain(`${WORK}.today`);
+    expect(customizeRows(next, withSpend, all).find((row) => row.provider.id === WORK)?.metricCount).toBe(catalog[0]!.descriptors.length);
+  });
+
   it("promotes a card whose every metric is On Demand above the caret", () => {
-    const onlyTokens = catalog.find((entry) => entry.provider.id === "codex-local")!;
     let next = layout;
-    for (const descriptor of onlyTokens.descriptors) {
-      if (!descriptor.id.endsWith("Tokens")) next = setMetricEnabled(next, descriptor.id, false);
-    }
-    const group = displayGroups(next, catalog, all).find((entry) => entry.provider.id === "codex-local")!;
+    for (const suffix of ["session", "weekly"]) next = setMetricEnabled(next, `${CODEX}.${suffix}`, false);
+    const group = displayGroups(next, catalog, all).find((entry) => entry.provider.id === CODEX)!;
     expect(group.onDemand).toEqual([]);
-    expect(group.always.map((descriptor) => descriptor.id)).toEqual(["codex-local.inputTokens", "codex-local.outputTokens", "codex-local.cachedInputTokens"]);
+    expect(group.always.map((descriptor) => descriptor.id)).toEqual([`${CODEX}.spark`, `${CODEX}.sparkWeekly`, `${CODEX}.credits`, `${CODEX}.rateLimitResets`]);
   });
 
   it("caps stars at two per provider", () => {

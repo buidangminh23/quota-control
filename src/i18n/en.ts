@@ -105,9 +105,11 @@ export const en: Messages = {
     localUsageTitle: (brand) => `${brand} · This Computer`,
     noAccountsTitle: "Connect an Account to See Limits",
     noAccountsMessage:
-      "Add a Claude or Codex account to track session and weekly limits. Spend on this computer is counted without signing in.",
+      "Add a Claude or Codex account to track session and weekly limits. Tokens used on this computer still show in the Tokens tab without signing in.",
     noAccountsShort: "No accounts yet",
     addAccount: "Add Account",
+    tabsLabel: "Dashboard view",
+    tab: (key) => ({ quota: "Limits", tokens: "Tokens" })[key],
     openChat: (product) => `Open ${product} in the App`,
     trendRange: (days, first, last) => `${days} days, ${first} – ${last}`,
     expiryStatus: (severity) =>
@@ -196,7 +198,7 @@ export const en: Messages = {
         advanced: "Advanced",
       })[key],
     language: "Language",
-    showTotalSpend: "Show Total Spend",
+    showTotalSpend: "Show Tokens Tab",
     launchAtLogin: (platform) => (platform === "windows" ? "Launch with Windows" : "Launch at Login"),
     launchAtLoginError: "Couldn't change launch at login.",
     globalShortcut: "Global Shortcut",

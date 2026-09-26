@@ -8,6 +8,7 @@ export type DisplayModeKey = "used" | "remaining";
 export type ResetModeKey = "relative" | "absolute";
 export type DeadlineVerb = "resets" | "limit" | "resetExpires";
 export type SpendPeriodKey = "today" | "yesterday" | "last30";
+export type DashboardTabKey = "quota" | "tokens";
 export type SpendMetricKey = "cost" | "costPerMtok" | "tokens";
 export type RingUnitKey = "dollars" | "perMtok" | "billion" | "million" | "thousand" | "tokens";
 
@@ -84,6 +85,8 @@ export interface DashboardMessages {
   noAccountsMessage: string;
   noAccountsShort: string;
   addAccount: string;
+  tabsLabel: string;
+  tab(key: DashboardTabKey): string;
   openChat(product: string): string;
   trendRange(days: number, first: string, last: string): string;
   expiryStatus(severity: "normal" | "warning" | "critical"): string;

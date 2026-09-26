@@ -126,9 +126,11 @@ export const vi: Messages = {
     localUsageTitle: (brand) => `${brand} · Trên máy này`,
     noAccountsTitle: "Kết nối tài khoản để xem hạn mức",
     noAccountsMessage:
-      "Thêm tài khoản Claude hoặc Codex để theo dõi hạn mức phiên và hạn mức tuần. Chi phí dùng trên máy này vẫn được tính mà không cần đăng nhập.",
+      "Thêm tài khoản Claude hoặc Codex để theo dõi hạn mức phiên và hạn mức tuần. Token dùng trên máy này vẫn hiện ở tab Token mà không cần đăng nhập.",
     noAccountsShort: "Chưa có tài khoản",
     addAccount: "Thêm tài khoản",
+    tabsLabel: "Chế độ xem",
+    tab: (key) => ({ quota: "Hạn mức", tokens: "Token" })[key],
     openChat: (product) => `Mở ${product} trong ứng dụng`,
     trendRange: (days, first, last) => `${days} ngày, ${first} – ${last}`,
     expiryStatus: (severity) =>
@@ -218,7 +220,7 @@ export const vi: Messages = {
         advanced: "Nâng cao",
       })[key],
     language: "Ngôn ngữ",
-    showTotalSpend: "Hiện tổng chi tiêu",
+    showTotalSpend: "Hiện tab Token",
     launchAtLogin: (platform) => (platform === "windows" ? "Khởi động cùng Windows" : "Khởi động khi đăng nhập"),
     launchAtLoginError: "Không đổi được chế độ khởi động cùng hệ thống.",
     globalShortcut: "Phím tắt toàn cục",

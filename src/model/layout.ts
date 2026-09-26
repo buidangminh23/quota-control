@@ -94,6 +94,19 @@ export function isLocalHistoryCard(providerId: string): boolean {
   return layoutFamily(providerId).endsWith("-local");
 }
 
+/**
+ * Whether a provider gets a card of its own. Local-history providers (`claude-local`) only feed the
+ * Token tab's total: they log the same usage as the signed-in accounts, so a card would repeat them.
+ */
+export function hasDashboardCard(providerId: string): boolean {
+  return !isLocalHistoryCard(providerId);
+}
+
+/** Spend tiles and the usage trend belong to the Token tab's total, never to a provider's card. */
+export function isTokenMetric(descriptor: WidgetDescriptor): boolean {
+  return descriptor.isSpendTile || descriptor.template.isChart === true;
+}
+
 function brandRank(brand: string): [number, string] {
   const index = LEADING_BRANDS.indexOf(brand);
   return index >= 0 ? [index, ""] : [LEADING_BRANDS.length, brand];
@@ -293,26 +306,31 @@ function split(layout: LayoutDocument, descriptors: WidgetDescriptor[]): { alway
   };
 }
 
+/** A card's metrics in the user's order, without the token metrics the Token tab totals. */
+function cardDescriptors(layout: LayoutDocument, entry: ProviderEntry): WidgetDescriptor[] {
+  return orderedDescriptors(layout, entry).filter((descriptor) => !isTokenMetric(descriptor));
+}
+
 /**
- * The dashboard's sections: enabled providers with at least one enabled metric. A card whose every
- * metric is On Demand shows them all above the caret, so a card never renders empty.
+ * The Hạn mức tab's sections: enabled providers that have a card and at least one enabled metric. A
+ * card whose every metric is On Demand shows them all above the caret, so a card never renders empty.
  */
 export function displayGroups(layout: LayoutDocument, catalog: readonly ProviderEntry[], isEnabled: IsEnabled): ProviderMetrics[] {
   const placed = new Set(layout.placed);
   return orderedEntries(layout, catalog).flatMap((entry) => {
-    if (!isEnabled(entry.provider.id)) return [];
-    const visible = orderedDescriptors(layout, entry).filter((descriptor) => placed.has(descriptor.id));
+    if (!isEnabled(entry.provider.id) || !hasDashboardCard(entry.provider.id)) return [];
+    const visible = cardDescriptors(layout, entry).filter((descriptor) => placed.has(descriptor.id));
     if (visible.length === 0) return [];
     const { always, onDemand } = split(layout, visible);
     return [always.length === 0 ? { provider: entry.provider, always: onDemand, onDemand: [] } : { provider: entry.provider, always, onDemand }];
   });
 }
 
-/** Every metric a provider supports, split by section (Customize detail). */
+/** Every metric a provider's card supports, split by section (Customize detail). */
 export function customizeDetail(layout: LayoutDocument, catalog: readonly ProviderEntry[], providerId: string): ProviderMetrics | null {
   const entry = entriesById(catalog).get(providerId);
-  if (!entry) return null;
-  return { provider: entry.provider, ...split(layout, orderedDescriptors(layout, entry)) };
+  if (!entry || !hasDashboardCard(providerId)) return null;
+  return { provider: entry.provider, ...split(layout, cardDescriptors(layout, entry)) };
 }
 
 export interface ProviderRow {
@@ -321,13 +339,15 @@ export interface ProviderRow {
   metricCount: number;
 }
 
-/** The Customize provider list: every provider, including disabled ones. */
+/** The Customize provider list: every provider with a card, including disabled ones. */
 export function customizeRows(layout: LayoutDocument, catalog: readonly ProviderEntry[], isEnabled: IsEnabled): ProviderRow[] {
-  return orderedEntries(layout, catalog).map((entry) => ({
-    provider: entry.provider,
-    enabled: isEnabled(entry.provider.id),
-    metricCount: entry.descriptors.length,
-  }));
+  return orderedEntries(layout, catalog)
+    .filter((entry) => hasDashboardCard(entry.provider.id))
+    .map((entry) => ({
+      provider: entry.provider,
+      enabled: isEnabled(entry.provider.id),
+      metricCount: entry.descriptors.filter((descriptor) => !isTokenMetric(descriptor)).length,
+    }));
 }
 
 /** Starred metrics per enabled provider, Always Visible first (the strip's order). */

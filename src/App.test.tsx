@@ -1,9 +1,11 @@
 import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { messagesFor } from "@/i18n";
 import { setBackend } from "@/lib/backend";
 import { MockBackend } from "@/lib/mockBackend";
 import { updateSettings, useApp } from "@/state/store";
 import { App } from "./App";
+import { optionsEntries } from "./components/chrome/Footer";
 import { closeDialog } from "./components/ui/dialog";
 import { closeMenu } from "./components/ui/menu";
 
@@ -23,7 +25,7 @@ afterEach(async () => {
   cleanup();
   await act(() => new Promise((resolve) => setTimeout(resolve, 5)));
   act(() =>
-    useApp.setState({ screen: "dashboard", previousScreen: "dashboard", customizeProviderId: null, notice: null, accountLogin: null, accountLoginError: null }),
+    useApp.setState({ screen: "dashboard", previousScreen: "dashboard", tabMotion: null, customizeProviderId: null, notice: null, accountLogin: null, accountLoginError: null }),
   );
 });
 
@@ -38,22 +40,83 @@ describe("popup", () => {
     expect(within(work).getByLabelText("Đang làm mới")).toBeInTheDocument();
   });
 
-  it("shows every connected account and this computer's usage in Vietnamese by default", async () => {
+  it("opens on the Hạn mức tab with every connected account in Vietnamese by default", async () => {
     await renderApp();
+    expect(screen.getByRole("tab", { name: "Hạn mức" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Token" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("tabpanel", { name: "Hạn mức" })).toBeInTheDocument();
     expect(screen.getByText("Claude · Cá nhân")).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Codex" })).toBeInTheDocument();
-    expect(screen.getByText("Claude · Trên máy này")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Chỉ số tổng chi tiêu/ })).toBeInTheDocument();
+    expect(screen.queryByText("Claude · Trên máy này")).not.toBeInTheDocument();
+    expect(screen.queryByText("Codex · Trên máy này")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Chỉ số tổng chi tiêu/ })).not.toBeInTheDocument();
     const work = screen.getByRole("region", { name: "Claude · Công ty" });
     expect(within(work).getByText("Còn 88%")).toBeInTheDocument();
     expect(within(work).getByText(/Đặt lại sau 3 giờ/)).toBeInTheDocument();
     expect(screen.getByText(/Cập nhật sau/)).toBeInTheDocument();
   });
 
+  it("shows only the token total on the Token tab and remembers the choice", async () => {
+    await renderApp();
+    fireEvent.click(screen.getByRole("tab", { name: "Token" }));
+    expect(screen.getByRole("tab", { name: "Token" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel", { name: "Token" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Chỉ số tổng chi tiêu/ })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Hôm nay" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Claude · Công ty" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Claude · Trên máy này")).not.toBeInTheDocument();
+    expect(useApp.getState().settings.dashboardTab).toBe("tokens");
+    expect(useApp.getState().tabMotion).toBe("forward");
+  });
+
+  it("moves between tabs with the arrow keys and Ctrl+Tab", async () => {
+    await renderApp();
+    const limits = screen.getByRole("tab", { name: "Hạn mức" });
+    act(() => limits.focus());
+    fireEvent.keyDown(limits, { key: "ArrowRight" });
+    expect(screen.getByRole("tab", { name: "Token" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Token" })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Token" }), { key: "Home" });
+    expect(screen.getByRole("tab", { name: "Hạn mức" })).toHaveAttribute("aria-selected", "true");
+    expect(useApp.getState().tabMotion).toBe("back");
+    fireEvent.keyDown(window, { key: "Tab", ctrlKey: true });
+    expect(screen.getByRole("tab", { name: "Token" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Token" })).toHaveFocus();
+    fireEvent.keyDown(window, { key: "Tab", ctrlKey: true, shiftKey: true });
+    expect(screen.getByRole("tab", { name: "Hạn mức" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("drops the tab bar and shows the limits while the Token tab is turned off", async () => {
+    await renderApp();
+    fireEvent.click(screen.getByRole("tab", { name: "Token" }));
+    act(() => updateSettings({ showTotalSpend: false }));
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Claude · Công ty" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Chỉ số tổng chi tiêu/ })).not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Tab", ctrlKey: true });
+    expect(screen.getByRole("region", { name: "Claude · Công ty" })).toBeInTheDocument();
+    act(() => updateSettings({ showTotalSpend: true }));
+    expect(screen.getByRole("tab", { name: "Token" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("offers the open tab's content in the screenshot menu", async () => {
+    await renderApp();
+    const shareMenu = () => {
+      const entries = optionsEntries(messagesFor("vi"), "Quota Control");
+      const share = entries.find((entry) => entry.kind === "submenu");
+      if (share?.kind !== "submenu") throw new Error("share submenu missing");
+      return share.entries.flatMap((entry) => (entry.kind === "item" ? [entry.label] : []));
+    };
+    expect(shareMenu()).toEqual(["Claude · Công ty", "Claude · Cá nhân", "Codex"]);
+    fireEvent.click(screen.getByRole("tab", { name: "Token" }));
+    expect(shareMenu()).toEqual(["Token"]);
+  });
+
   it("switches every screen to English", async () => {
     await renderApp();
     act(() => updateSettings({ language: "en" }));
-    expect(await screen.findByText("Claude · This Computer")).toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: "Limits" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Tokens" })).toBeInTheDocument();
     expect(screen.getAllByText("88% left").length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Options" }));
     expect(screen.getByRole("menuitem", { name: /Settings/ })).toBeInTheDocument();
