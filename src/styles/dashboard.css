@@ -209,8 +209,14 @@
   color: var(--uc-secondary);
 }
 
+.uc-row-readout {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .uc-row-restore {
-  margin-top: calc(2px - var(--uc-row-gap));
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: var(--uc-caption-size);

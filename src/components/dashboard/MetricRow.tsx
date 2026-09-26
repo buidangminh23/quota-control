@@ -69,27 +69,29 @@ function BoundedRow({ data, now, interactive }: { data: WidgetData; now: Date; i
         <PaceWarning data={data} state={state} language={language} interactive={interactive} />
       </div>
       <Meter data={data} state={state} now={now} />
-      <div className="uc-row-primary">
-        {styleToggle ? (
-          <button type="button" className="uc-row-headline uc-num" onClick={() => toggleMeterStyle(data)} {...tooltipProps(meterStyleTooltip(data))}>
-            {headline(data)}
-          </button>
-        ) : (
-          <span className="uc-row-headline uc-num">{headline(data)}</span>
-        )}
-        {trailing ? (
-          resetToggle ? (
-            <button type="button" className="uc-row-trailing uc-num" onClick={() => toggleResetDisplay(data)} {...tooltipProps(resetTooltip(data, now))}>
-              {trailing}
+      <div className="uc-row-readout">
+        <div className="uc-row-primary">
+          {styleToggle ? (
+            <button type="button" className="uc-row-headline uc-num" onClick={() => toggleMeterStyle(data)} {...tooltipProps(meterStyleTooltip(data))}>
+              {headline(data)}
             </button>
           ) : (
-            <span className="uc-row-trailing uc-num" {...tooltipProps(resetTooltip(data, now))}>
-              {trailing}
-            </span>
-          )
-        ) : null}
+            <span className="uc-row-headline uc-num">{headline(data)}</span>
+          )}
+          {trailing ? (
+            resetToggle ? (
+              <button type="button" className="uc-row-trailing uc-num" onClick={() => toggleResetDisplay(data)} {...tooltipProps(resetTooltip(data, now))}>
+                {trailing}
+              </button>
+            ) : (
+              <span className="uc-row-trailing uc-num" {...tooltipProps(resetTooltip(data, now))}>
+                {trailing}
+              </span>
+            )
+          ) : null}
+        </div>
+        {restore ? <div className="uc-row-restore uc-num">{restore}</div> : null}
       </div>
-      {restore ? <div className="uc-row-restore uc-num">{restore}</div> : null}
     </div>
   );
 }
