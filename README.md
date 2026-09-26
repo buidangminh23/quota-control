@@ -229,7 +229,7 @@ pnpm install
 pnpm tauri build
 ```
 
-The result is `target/release/bundle/nsis/Quota Control_0.1.0_x64-setup.exe`. It installs into
+The result is `target/release/bundle/nsis/Quota Control_<version>_x64-setup.exe`. It installs into
 `%LOCALAPPDATA%\Quota Control` with `usagectl.exe` next to the app and adds a Start menu entry.
 `/S` installs or uninstalls silently. Uninstalling removes the `usagectl` PATH entry and copy,
 and the launch-at-login entry when it points at this installation. Accounts and settings stay in
@@ -247,11 +247,11 @@ pnpm install
 pnpm tauri build
 ```
 
-The results are `target/release/bundle/deb/Quota Control_0.1.0_amd64.deb` and
-`target/release/bundle/appimage/Quota Control_0.1.0_amd64.AppImage`. The `.deb` depends on
+The results are `target/release/bundle/deb/Quota Control_<version>_amd64.deb` and
+`target/release/bundle/appimage/Quota Control_<version>_amd64.AppImage`. The `.deb` depends on
 WebKitGTK 4.1, GTK 3 and Ayatana AppIndicator, and installs `/usr/bin/quota-control` and
 `/usr/bin/usagectl`. The AppImage carries its own libraries and does not need libfuse2; run
-`Quota Control_0.1.0_amd64.AppImage --cli` for the command line. Where FUSE is unavailable,
+`Quota Control_<version>_amd64.AppImage --cli` for the command line. Where FUSE is unavailable,
 `APPIMAGE_EXTRACT_AND_RUN=1` runs it without mounting.
 
 ## Releases
@@ -271,7 +271,8 @@ Without GitHub Actions, `node scripts/release.mjs local` releases from Windows: 
 setup here and the `.deb` and AppImage in WSL from the committed tree, then assembles them into
 `target/release-assets/v0.2.0`. `--publish` uploads that folder to a draft release, and `--latest`
 publishes it, then reads `latest.json` back from GitHub and checks every download link.
-`--skip-linux` builds only the Windows setup; such a partial build cannot be published.
+Publishing creates the tag, and the Release workflow then finds the release published and builds
+nothing. `--skip-linux` builds only the Windows setup; such a partial build cannot be published.
 
 ### Signing key
 

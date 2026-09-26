@@ -1,6 +1,7 @@
 # Builds signed installers for a version tag and drafts the GitHub release that the in-app updater
 # reads (latest.json). Publishing the draft is left to a person: installed apps only see a release
 # once it is published as the latest. A manual run builds the installers without releasing them.
+# A tag whose release is already published, for example by `scripts/release.mjs local`, is left alone.
 name: Release
 
 on:
@@ -16,8 +17,30 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  check:
+    name: Check for a published release
+    runs-on: ubuntu-latest
+    outputs:
+      published: ${{ steps.release.outputs.published }}
+    steps:
+      - id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          published=false
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            draft=$(gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || true)
+            if [ "$draft" = "false" ]; then
+              published=true
+              echo "::notice::$GITHUB_REF_NAME is already published; nothing to build."
+            fi
+          fi
+          echo "published=$published" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build (${{ matrix.name }})
+    needs: check
+    if: needs.check.outputs.published != 'true'
     strategy:
       fail-fast: true
       matrix:
