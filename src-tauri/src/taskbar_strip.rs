@@ -6,7 +6,9 @@
 //! the taskbar's edge (Windhawk's centered taskbar), the strip becomes a matching island right after
 //! it instead. When a styler rule widens the app's own notification-area button to fit the strip
 //! (Windhawk's Taskbar Styler, by the button's name [`SLOT_NAME`]), the strip covers that button and
-//! sits inside the notification area itself, on its real background. It is owned by one dedicated
+//! sits inside the notification area itself, on its real background, shrinking a little when it
+//! grows wider than the button; it only leaves the button for the island placement, never for a
+//! spot over the notification area's own buttons. It is owned by one dedicated
 //! thread with its own message loop, re-anchors on a one-second timer, rebuilds itself after Explorer
 //! restarts (`TaskbarCreated`) and reports taskbar size, scale and theme changes to the popup as
 //! `taskbar-info`.
@@ -244,6 +246,15 @@ pub fn island_strip_origin(
     (before >= 0).then_some((before, island.top))
 }
 
+/// Whether a taskbar styler has moved the notification area away from `TrayNotifyWnd`, where a
+/// stock taskbar draws it: its buttons then start left of that window (`tray_left` and `notify_left`
+/// in the same coordinates). The left end decides, because a styler that also widens a button can
+/// push the island's right end past the window's left edge.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn tray_moved(tray_left: i32, notify_left: i32, gap: i32) -> bool {
+    tray_left + gap < notify_left
+}
+
 /// How far the notification area's island reaches above and below its buttons (`tray` top and
 /// bottom), read from the taskbar frame's top and bottom while the frame stays centered on the
 /// buttons as the island is. A frame that has grown lopsided, as while a dock animation magnifies
@@ -375,12 +386,123 @@ pub fn framed(content: &Bitmap, height: u32, padding: u32, radius: f64, color: [
     }
 }
 
+/// Least the strip may shrink to fit the app's widened notification-area button. A button too
+/// narrow for that leaves the strip beside the notification area, at full size.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub const MIN_SLOT_SCALE: f64 = 0.75;
+
+/// The part of `content` that shows anything, as (`left`, `top`, `right`, `bottom`) with `right` and
+/// `bottom` exclusive: pixels above the alpha of 1 that keeps clear pixels clickable. Frames are as
+/// tall as the taskbar band, so the rows above and below their text are clear.
+fn ink(content: &Bitmap) -> Option<(u32, u32, u32, u32)> {
+    let mut bounds: Option<(u32, u32, u32, u32)> = None;
+    for y in 0..content.height {
+        for x in 0..content.width {
+            if content.bgra[((y * content.width + x) * 4 + 3) as usize] > 1 {
+                bounds = Some(
+                    bounds.map_or((x, y, x + 1, y + 1), |(left, top, right, bottom)| {
+                        (left.min(x), top.min(y), right.max(x + 1), bottom.max(y + 1))
+                    }),
+                );
+            }
+        }
+    }
+    bounds
+}
+
+/// Space kept clear inside the button at each end when the strip has to shrink, so it never
+/// touches the button's rounded edges.
+fn slot_margin(height: u32) -> u32 {
+    (height / 10).max(2)
+}
+
+/// How much `content` has to shrink to fit a `width` x `height` button: 1 while what it shows fits,
+/// less when that is wider or taller than the button (keeping [`slot_margin`] clear at each end).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn slot_scale(content: &Bitmap, width: u32, height: u32) -> f64 {
+    let (left, top, right, bottom) = ink(content).unwrap_or((0, 0, content.width, content.height));
+    let (shown_width, shown_height) = ((right - left).max(1), (bottom - top).max(1));
+    if shown_width <= width && shown_height <= height {
+        return 1.0;
+    }
+    let room = width.saturating_sub(slot_margin(height) * 2);
+    (f64::from(room) / f64::from(shown_width))
+        .min(f64::from(height) / f64::from(shown_height))
+        .min(1.0)
+}
+
+/// Whether the app's notification-area button, `width` x `height`, holds the strip: a taskbar
+/// styler must have widened it on purpose (icon buttons are about square, so at least twice as wide
+/// as tall), and the strip must keep at least [`MIN_SLOT_SCALE`] of its size inside it.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn slot_holds(content: &Bitmap, width: i32, height: i32) -> bool {
+    height > 0
+        && width >= height * 2
+        && slot_scale(content, width as u32, height as u32) >= MIN_SLOT_SCALE
+}
+
+/// `region` of `content` (`left`, `top`, `right`, `bottom`, the last two exclusive) resampled to
+/// `width` x `height` by averaging the premultiplied pixels each target pixel covers, so shrunk
+/// text stays smooth.
+fn resized(content: &Bitmap, region: (u32, u32, u32, u32), width: u32, height: u32) -> Bitmap {
+    let (left, top, right, bottom) = region;
+    let step_x = f64::from(right - left) / f64::from(width);
+    let step_y = f64::from(bottom - top) / f64::from(height);
+    let mut bgra = Vec::with_capacity((width * height * 4) as usize);
+    for target_y in 0..height {
+        let from_y = f64::from(top) + f64::from(target_y) * step_y;
+        let to_y = from_y + step_y;
+        for target_x in 0..width {
+            let from_x = f64::from(left) + f64::from(target_x) * step_x;
+            let to_x = from_x + step_x;
+            let mut sums = [0.0_f64; 4];
+            let mut area = 0.0;
+            let mut y = from_y.floor() as u32;
+            while f64::from(y) < to_y && y < bottom {
+                let cover_y = to_y.min(f64::from(y + 1)) - from_y.max(f64::from(y));
+                let mut x = from_x.floor() as u32;
+                while f64::from(x) < to_x && x < right {
+                    let cover = (to_x.min(f64::from(x + 1)) - from_x.max(f64::from(x))) * cover_y;
+                    let index = ((y * content.width + x) * 4) as usize;
+                    for (sum, value) in sums.iter_mut().zip(&content.bgra[index..index + 4]) {
+                        *sum += f64::from(*value) * cover;
+                    }
+                    area += cover;
+                    x += 1;
+                }
+                y += 1;
+            }
+            bgra.extend(sums.map(|sum| (sum / area).round().clamp(0.0, 255.0) as u8));
+        }
+    }
+    Bitmap {
+        width,
+        height,
+        bgra,
+        text: content.text.clone(),
+        tooltip: content.tooltip.clone(),
+    }
+}
+
 /// The strip inside the app's widened notification-area button: `content` centered in a `width` x
 /// `height` box that is otherwise clear, so the notification area's own background shows through.
-/// Clear pixels keep an alpha of 1 so the whole button stays the strip's to click; content outside
-/// the box is clipped.
+/// Clear pixels keep an alpha of 1 so the whole button stays the strip's to click. Clear rows and
+/// columns outside the box are clipped; when what the strip shows is wider or taller than the box,
+/// that part shrinks to fit (see [`slot_scale`]) so the strip never has to leave the button.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn slotted(content: &Bitmap, width: u32, height: u32) -> Bitmap {
+    let scale = slot_scale(content, width, height);
+    let shrunk = (scale < 1.0).then(|| {
+        let region = ink(content).unwrap_or((0, 0, content.width, content.height));
+        let (left, top, right, bottom) = region;
+        resized(
+            content,
+            region,
+            ((f64::from(right - left) * scale).floor() as u32).max(1),
+            ((f64::from(bottom - top) * scale).floor() as u32).max(1),
+        )
+    });
+    let content = shrunk.as_ref().unwrap_or(content);
     let mut bgra = [0, 0, 0, 1].repeat((width * height) as usize);
     let shift_x = (i64::from(width) - i64::from(content.width)) / 2;
     let shift_y = (i64::from(height) - i64::from(content.height)) / 2;
@@ -521,8 +643,8 @@ mod platform {
 
     use super::{
         Bitmap, Fill, Island, SLOT_NAME, StripButton, StripClick, TASKBAR_INFO_EVENT, TaskbarEdge,
-        TaskbarInfo, TaskbarTheme, framed, island_reach, island_strip_origin, slotted,
-        strip_origin,
+        TaskbarInfo, TaskbarTheme, framed, island_reach, island_strip_origin, slot_holds, slotted,
+        strip_origin, tray_moved,
     };
 
     const WM_APP_FRAME: u32 = WM_APP + 1;
@@ -543,7 +665,9 @@ mod platform {
     /// UI Automation id of every notification-area icon button; [`SLOT_NAME`] tells the app's apart.
     const SLOT_AUTOMATION_ID: &str = "NotifyItemIcon";
     const AUTOMATION_TIMEOUT_MS: u32 = 1000;
-    /// How long a notification area read earlier stands in for reads that fail.
+    /// How long a notification area read earlier stands in for reads that fail once the taskbar's own
+    /// geometry has changed; while that geometry holds, the last read stands in for as long as reads
+    /// keep failing.
     const LAYOUT_GRACE: Duration = Duration::from_secs(10);
     /// Passes in a row without the widened button before the strip leaves it, so a button being laid
     /// out again never makes the strip jump out and back.
@@ -861,8 +985,9 @@ mod platform {
         automation: Option<Automation>,
         unavailable: bool,
         sample: Option<ColorSample>,
-        /// The last layout read, and when.
-        last: Option<(Layout, Instant)>,
+        /// The last layout read, when, and the taskbar geometry it was read against
+        /// (`notify_left`, width, height).
+        last: Option<(Layout, Instant, (i32, i32, i32))>,
         /// How far the island reaches above and below the tray buttons, as last read from a frame
         /// centered on them.
         reach: Option<(i32, i32)>,
@@ -907,18 +1032,20 @@ mod platform {
         }
 
         /// The notification area now, or the one read last when this read fails (UI Automation calls
-        /// into a busy Explorer time out now and then) and it is at most `LAYOUT_GRACE` old, so one
-        /// failed read never moves the strip.
-        fn layout(&mut self, taskbar: HWND) -> Option<Layout> {
-            match self.read_layout(taskbar) {
+        /// into a busy Explorer time out now and then): for as long as the taskbar's geometry is the
+        /// one that read saw, otherwise for at most `LAYOUT_GRACE`. Failed reads therefore never move
+        /// the strip onto the notification area's buttons.
+        fn layout(&mut self, taskbar: &Taskbar) -> Option<Layout> {
+            let geometry = (taskbar.notify_left, taskbar.width, taskbar.height);
+            match self.read_layout(taskbar.hwnd) {
                 Some(layout) => {
-                    self.last = Some((layout, Instant::now()));
+                    self.last = Some((layout, Instant::now(), geometry));
                     Some(layout)
                 }
                 None => self
                     .last
-                    .filter(|(_, read)| read.elapsed() < LAYOUT_GRACE)
-                    .map(|(layout, _)| layout),
+                    .filter(|(_, read, seen)| *seen == geometry || read.elapsed() < LAYOUT_GRACE)
+                    .map(|(layout, _, _)| layout),
             }
         }
 
@@ -1011,9 +1138,9 @@ mod platform {
         }
 
         /// The tray's island in taskbar client coordinates, or `None` on a stock taskbar, where the
-        /// tray still sits at `TrayNotifyWnd`. The fill is read in the island's padding on the
-        /// screen-edge side, away from the windows and flyouts above the taskbar, or in the Show
-        /// Desktop sliver at its right end when the island has no padding.
+        /// tray still sits at `TrayNotifyWnd` (see [`tray_moved`]). The fill is read in the island's
+        /// padding on the screen-edge side, away from the windows and flyouts above the taskbar, or
+        /// in the Show Desktop sliver at its right end when the island has no padding.
         fn island(
             &mut self,
             taskbar: &Taskbar,
@@ -1022,7 +1149,7 @@ mod platform {
             popup_open: bool,
         ) -> Option<Island> {
             let tray = to_client(taskbar.hwnd, layout.tray);
-            if tray.right + gap >= taskbar.notify_left {
+            if !tray_moved(tray.left, taskbar.notify_left, gap) {
                 return None;
             }
             if let Some(frame) = layout.frame.map(|frame| to_client(taskbar.hwnd, frame))
@@ -1199,13 +1326,11 @@ mod platform {
             let gap = (GAP_POINTS * scale).round() as i32;
             let padding = (FRAME_PADDING_POINTS * scale).round() as u32;
             let popup_open = self.shared.popup.load(Ordering::Acquire);
-            let layout = self.islands.layout(taskbar.hwnd);
+            let layout = self.islands.layout(taskbar);
             let fitting = layout
                 .and_then(|layout| layout.slot)
                 .map(|slot| to_client(taskbar.hwnd, slot))
-                .filter(|slot| {
-                    slot.right - slot.left >= content.width as i32 && slot.bottom > slot.top
-                });
+                .filter(|slot| slot_holds(content, slot.right - slot.left, slot.bottom - slot.top));
             match fitting {
                 Some(slot) => {
                     self.slot = Some(slot);
@@ -2040,24 +2165,89 @@ mod tests {
         assert_eq!(pixel(&white, 2, 4), vec![61, 41, 35, 255]);
     }
 
+    /// A frame as the popup renders it: `width` x `height`, clear (alpha 1) except rows `ink`.
+    fn frame_with_ink(
+        width: u32,
+        height: u32,
+        ink: std::ops::Range<u32>,
+        pixel: [u8; 4],
+    ) -> Bitmap {
+        let mut frame = bitmap(width, height, [0, 0, 0, 1]);
+        for y in ink {
+            for x in 0..width {
+                let index = ((y * width + x) * 4) as usize;
+                frame.bgra[index..index + 4].copy_from_slice(&pixel);
+            }
+        }
+        frame
+    }
+
     #[test]
-    fn slots_the_content_centered_into_a_clear_button_and_clips_its_margins() {
+    fn slots_the_content_centered_into_a_clear_button_and_clips_clear_rows() {
         let pixel = |image: &Bitmap, x: u32, y: u32| {
             let index = ((y * image.width + x) * 4) as usize;
             image.bgra[index..index + 4].to_vec()
         };
-        let slot = slotted(&bitmap(4, 8, [255, 255, 255, 255]), 10, 6);
+        let slot = slotted(&frame_with_ink(4, 8, 2..6, [255, 255, 255, 255]), 10, 6);
         assert_eq!((slot.width, slot.height), (10, 6));
         assert_eq!(slot.text, "Claude 12%");
         assert_eq!(pixel(&slot, 0, 0), vec![0, 0, 0, 1]);
+        assert_eq!(pixel(&slot, 3, 0), vec![0, 0, 0, 1]);
+        assert_eq!(pixel(&slot, 3, 1), vec![255, 255, 255, 255]);
+        assert_eq!(pixel(&slot, 6, 4), vec![255, 255, 255, 255]);
+        assert_eq!(pixel(&slot, 3, 5), vec![0, 0, 0, 1]);
         assert_eq!(pixel(&slot, 2, 3), vec![0, 0, 0, 1]);
-        assert_eq!(pixel(&slot, 3, 0), vec![255, 255, 255, 255]);
-        assert_eq!(pixel(&slot, 6, 5), vec![255, 255, 255, 255]);
         assert_eq!(pixel(&slot, 7, 3), vec![0, 0, 0, 1]);
-        let wide = slotted(&bitmap(12, 2, [9, 9, 9, 9]), 10, 4);
-        assert_eq!(pixel(&wide, 0, 1), vec![9, 9, 9, 9]);
-        assert_eq!(pixel(&wide, 9, 2), vec![9, 9, 9, 9]);
-        assert_eq!(pixel(&wide, 0, 0), vec![0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn shrinks_a_strip_wider_than_the_button_to_fit_inside_it() {
+        let pixel = |image: &Bitmap, x: u32, y: u32| {
+            let index = ((y * image.width + x) * 4) as usize;
+            image.bgra[index..index + 4].to_vec()
+        };
+        let wide = frame_with_ink(40, 8, 2..6, [200, 200, 200, 200]);
+        assert!((slot_scale(&wide, 20, 10) - 0.4).abs() < 1e-9);
+        let slot = slotted(&wide, 20, 10);
+        assert_eq!((slot.width, slot.height), (20, 10));
+        assert_eq!(pixel(&slot, 2, 4), vec![200, 200, 200, 200]);
+        assert_eq!(pixel(&slot, 17, 4), vec![200, 200, 200, 200]);
+        assert_eq!(pixel(&slot, 1, 4), vec![0, 0, 0, 1]);
+        assert_eq!(pixel(&slot, 18, 4), vec![0, 0, 0, 1]);
+        assert_eq!(pixel(&slot, 10, 3), vec![0, 0, 0, 1]);
+        assert_eq!(pixel(&slot, 10, 5), vec![0, 0, 0, 1]);
+        assert!(slot.bgra.chunks(4).all(|pixel| pixel[3] >= 1));
+
+        let mut stripes = bitmap(4, 1, [100, 100, 100, 100]);
+        stripes.bgra[4..8].copy_from_slice(&[200, 200, 200, 200]);
+        stripes.bgra[12..16].copy_from_slice(&[200, 200, 200, 200]);
+        let halved = resized(&stripes, (0, 0, 4, 1), 2, 1);
+        assert_eq!(halved.bgra, vec![150, 150, 150, 150, 150, 150, 150, 150]);
+        assert_eq!(
+            slot_scale(&frame_with_ink(40, 8, 2..6, [9, 9, 9, 9]), 60, 10),
+            1.0
+        );
+    }
+
+    #[test]
+    fn holds_the_strip_only_in_a_button_widened_for_it() {
+        let strip = frame_with_ink(190, 56, 18..38, [255, 255, 255, 255]);
+        assert!(slot_holds(&strip, 212, 42));
+        assert!(slot_holds(&strip, 180, 42));
+        assert!(!slot_holds(&strip, 120, 42));
+        assert!(!slot_holds(&strip, 32, 42));
+        assert!(!slot_holds(&strip, 212, 0));
+        let short = frame_with_ink(30, 56, 18..38, [255, 255, 255, 255]);
+        assert!(!slot_holds(&short, 32, 42));
+        assert!(slot_holds(&short, 84, 42));
+    }
+
+    #[test]
+    fn tells_a_moved_notification_area_from_the_stock_one() {
+        assert!(!tray_moved(1570, 1566, 4));
+        assert!(!tray_moved(1562, 1566, 4));
+        assert!(tray_moved(962, 1566, 4));
+        assert!(tray_moved(962, 1386, 4));
     }
 
     #[test]
