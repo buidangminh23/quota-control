@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Backend, DocumentName, Unsubscribe } from "./backend";
-import type { ExchangeRate, UsageGroupRow, UsageLedgerInfo, UsageQuery } from "./types";
+import type { ContextWindowSession, ExchangeRate, UsageGroupRow, UsageLedgerInfo, UsageQuery } from "./types";
 import type { Language } from "@/i18n/language";
 import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
 
@@ -46,6 +46,10 @@ export class TauriBackend implements Backend {
 
   exchangeRate(): Promise<ExchangeRate | null> {
     return invoke<ExchangeRate | null>("exchange_rate");
+  }
+
+  contextWindows(): Promise<ContextWindowSession[]> {
+    return invoke<ContextWindowSession[]>("context_windows");
   }
 
   appInfo(): Promise<AppInfo> {

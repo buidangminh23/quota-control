@@ -278,6 +278,29 @@ export interface ExchangeRate {
   stale: boolean;
 }
 
+/**
+ * How full one recent Claude Code or Codex session's context window is, read from its local log. The
+ * core never reads or returns message text.
+ */
+export interface ContextWindowSession {
+  source: UsageSource;
+  /** The Claude Code session id or the Codex thread id. */
+  sessionId: string;
+  /** Repository name under the ledger's project rule; empty when unknown. */
+  project: string;
+  model: string;
+  /** Tokens in the context now: the latest request's prompt (input, cache reads and writes) plus its reply. */
+  usedTokens: number;
+  /** The model's context window for this session, or `null` when the log does not tell. */
+  windowTokens: number | null;
+  /** The prompt of the session's first request after its latest compaction: system prompt, tools, memory, opening message. */
+  baseTokens: number;
+  /** What the latest exchange added: `usedTokens` minus the previous request's; 0 after a single request. */
+  lastTurnTokens: number;
+  /** ISO time of the latest request. */
+  updatedAt: string;
+}
+
 export interface ChatSession {
   id: string;
   provider: AccountProvider;

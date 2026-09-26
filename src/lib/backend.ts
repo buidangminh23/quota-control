@@ -7,7 +7,7 @@
 import type { Language } from "@/i18n/language";
 import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
 
-import type { ExchangeRate, UsageGroupRow, UsageLedgerInfo, UsageQuery } from "./types";
+import type { ContextWindowSession, ExchangeRate, UsageGroupRow, UsageLedgerInfo, UsageQuery } from "./types";
 
 export type Unsubscribe = () => void;
 
@@ -19,6 +19,8 @@ export interface Backend {
   usageLedgerInfo(): Promise<UsageLedgerInfo>;
   onUsageLedgerChanged(listener: (info: UsageLedgerInfo) => void): Unsubscribe;
   exchangeRate(): Promise<ExchangeRate | null>;
+  /** Recent sessions (a request in the last 24 hours), newest first; cheap enough to poll every 10 seconds. */
+  contextWindows?(): Promise<ContextWindowSession[]>;
   appInfo(): Promise<AppInfo>;
   catalog(): Promise<ProviderEntry[]>;
   onCatalogChanged(listener: (catalog: ProviderEntry[]) => void): Unsubscribe;

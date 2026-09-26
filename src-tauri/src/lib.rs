@@ -81,6 +81,7 @@ pub fn run() -> anyhow::Result<()> {
             usage_commands::usage_summary,
             usage_commands::usage_ledger_info,
             usage_commands::exchange_rate,
+            usage_commands::context_windows,
             commands::catalog,
             commands::engine_state,
             commands::refresh,
