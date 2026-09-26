@@ -18,6 +18,7 @@ export interface InsightsMessages {
   source(source: UsageSource): string;
   refresh: string;
   refreshing: string;
+  refreshTooltip: string;
   loading: string;
   failed(detail: string): string;
   fetchedAgo(ago: string): string;
@@ -35,9 +36,11 @@ export interface InsightsMessages {
   unnamedProject: string;
   projectTurns(project: string, turns: string): string;
   scanning: string;
-  scanned(files: string, ago: string): string;
+  scannedFiles(files: string): string;
+  scannedAgo(ago: string): string;
   notScanned: string;
   rescan: string;
+  rescanTooltip: string;
   noTurns: string;
   score: string;
   scoreRange(low: string, high: string): string;
@@ -77,9 +80,9 @@ export interface InsightsMessages {
   arenaNote: string;
   agentNote: string;
   arena3dNote: string;
-  epochSource(ago: string): string;
+  epochSource: string;
   arenaSource(date: string): string;
-  arena3dSource(ago: string): string;
+  arena3dSource: string;
   showMore(count: number): string;
   showLess: string;
 

@@ -1,14 +1,22 @@
 /**
  * Small pieces shared by the Benchmark and Reset tabs: the capsule switch, a rate bar with its
- * confidence band, the source line with its link, a fold-out explanation and number helpers.
+ * confidence band, the source line with its link, the fetch time with its refresh button, a
+ * fold-out explanation and number helpers.
  */
 import { useState, type ReactNode } from "react";
 import type { Language } from "@/i18n";
+import type { InsightsMessages } from "@/i18n/insights";
 import { decimal } from "@/i18n/numbers";
 import { backend } from "@/lib/backend";
+import type { PublicFeedName, PublicFeedSnapshot } from "@/lib/insightsTypes";
 import { compactDuration } from "@/model/format";
+import { useNow } from "@/state/hooks";
+import { refreshFeeds, useInsights } from "@/state/insights";
+import { Button } from "../ui/controls";
 import { ChevronDown, ChevronUp, ExternalIcon } from "../ui/icons";
 import { tooltipProps } from "../ui/tooltip";
+
+const MINUTE_MS = 60_000;
 
 export function Segmented<T extends string>({
   value,
@@ -78,6 +86,39 @@ export function SourceLine({ text, url, linkLabel }: { text: string; url?: strin
       <span>{text}</span>
       {url ? <LinkButton url={url} label={linkLabel ?? text} /> : null}
     </p>
+  );
+}
+
+/**
+ * When the copy on screen was fetched, and a button that asks the sources for their latest
+ * published data now. After a failed attempt the time is that of the last good download, because
+ * that copy is what the view still shows.
+ */
+export function FeedStatus({
+  names,
+  shown,
+  language,
+  text,
+  tooltip,
+}: {
+  names: readonly PublicFeedName[];
+  shown: PublicFeedSnapshot | undefined;
+  language: Language;
+  text: InsightsMessages;
+  tooltip?: string;
+}) {
+  const now = useNow();
+  const refreshing = useInsights((state) => names.some((name) => state.refreshing[name] === true));
+  const at = shown?.error ? shown.fetchedAt : (shown?.checkedAt ?? shown?.fetchedAt);
+  const ago = agoText(at, now, language);
+  const recent = at ? now.getTime() - new Date(at).getTime() < MINUTE_MS : false;
+  return (
+    <div className="uc-insight-status">
+      <span className="uc-insight-status-text">{ago === null ? "" : recent ? text.justNow : text.fetchedAgo(ago)}</span>
+      <Button onClick={() => void refreshFeeds(names)} className="is-small" disabled={refreshing} tooltip={tooltip}>
+        {refreshing ? text.refreshing : text.refresh}
+      </Button>
+    </div>
   );
 }
 

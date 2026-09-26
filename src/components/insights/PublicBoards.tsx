@@ -11,12 +11,12 @@ import type { PublicFeedSnapshot } from "@/lib/insightsTypes";
 import type { ArenaBoard } from "@/model/insights/arena";
 import { BENCHMARK_CATEGORIES, benchmarkLabel, benchmarkUrl, type BenchmarkBoard, type BenchmarkCategory } from "@/model/insights/epoch";
 import { effortVariant, modelKey } from "@/model/insights/modelNames";
-import { useNow, useSettings } from "@/state/hooks";
+import { useSettings } from "@/state/hooks";
 import { setPublicBoard, useInsights, type PublicBoardChoice } from "@/state/insights";
 import { ChevronUpDown } from "../ui/icons";
 import { openMenuAt, type MenuEntry } from "../ui/menu";
 import { arena3dOf, arenaOf, epochBoardsOf, epochScoresOf, useFeeds } from "./data";
-import { agoText, dayText, LinkButton, numberText, percentText, SourceLine } from "./parts";
+import { dayText, FeedStatus, LinkButton, numberText, percentText, SourceLine } from "./parts";
 
 const LIST_PREVIEW = 10;
 const RESULT_PREVIEW = 5;
@@ -29,11 +29,6 @@ function usedBy(myKeys: ReadonlySet<string>, name: string): boolean {
   if (myKeys.has(key)) return true;
   for (const mine of myKeys) if (effortVariant(mine, key)) return true;
   return false;
-}
-
-function fetchedLine(snapshot: PublicFeedSnapshot | undefined, now: Date, language: Language, text: InsightsMessages): string {
-  const ago = agoText(snapshot?.fetchedAt, now, language);
-  return ago ? text.fetchedAgo(ago) : text.justNow;
 }
 
 function FeedState({ snapshot, text }: { snapshot: PublicFeedSnapshot | undefined; text: InsightsMessages }) {
@@ -65,7 +60,6 @@ function ShowMore({ total, expanded, onToggle, preview, text }: { total: number;
 function EciBoard({ myKeys, language, text }: { myKeys: ReadonlySet<string>; language: Language; text: InsightsMessages }) {
   const feeds = useFeeds(["epochScores"]);
   const snapshot = feeds.epochScores;
-  const now = useNow();
   const [expanded, setExpanded] = useState(false);
   const models = epochScoresOf(snapshot);
   const shown = expanded ? models : models.slice(0, LIST_PREVIEW);
@@ -98,7 +92,8 @@ function EciBoard({ myKeys, language, text }: { myKeys: ReadonlySet<string>; lan
         </div>
       ) : null}
       <p className="uc-insight-note">{text.eciNote}</p>
-      <SourceLine text={text.epochSource(fetchedLine(snapshot, now, language, text))} url={ECI_URL} linkLabel={text.openLink} />
+      <FeedStatus names={["epochScores"]} shown={snapshot} language={language} text={text} tooltip={text.refreshTooltip} />
+      <SourceLine text={text.epochSource} url={ECI_URL} linkLabel={text.openLink} />
     </>
   );
 }
@@ -139,7 +134,6 @@ function BenchmarkCard({ board, myKeys, language, text }: { board: BenchmarkBoar
 function CategoryBoard({ category, myKeys, language, text }: { category: BenchmarkCategory; myKeys: ReadonlySet<string>; language: Language; text: InsightsMessages }) {
   const feeds = useFeeds(["epochBenchmarks"]);
   const snapshot = feeds.epochBenchmarks;
-  const now = useNow();
   const boards = epochBoardsOf(snapshot).filter((board) => board.info.category === category);
   return (
     <>
@@ -148,7 +142,8 @@ function CategoryBoard({ category, myKeys, language, text }: { category: Benchma
       {boards.map((board) => (
         <BenchmarkCard key={board.name} board={board} myKeys={myKeys} language={language} text={text} />
       ))}
-      <SourceLine text={text.epochSource(fetchedLine(snapshot, now, language, text))} />
+      <FeedStatus names={["epochBenchmarks"]} shown={snapshot} language={language} text={text} tooltip={text.refreshTooltip} />
+      <SourceLine text={text.epochSource} />
     </>
   );
 }
@@ -216,6 +211,7 @@ function ArenaBoardView({ slug, myKeys, language, text }: { slug: string; myKeys
       {snapshot?.body && !board ? <p className="uc-empty">{text.noResults}</p> : null}
       {board ? <ArenaEntries board={board} myKeys={myKeys} language={language} text={text} /> : null}
       <p className="uc-insight-note">{slug === "agent" ? text.agentNote : text.arenaNote}</p>
+      <FeedStatus names={["arena"]} shown={snapshot} language={language} text={text} tooltip={text.refreshTooltip} />
       {arena ? <SourceLine text={text.arenaSource(arena.date ? dayText(arena.date, language) : "—")} url={board?.sourceUrl} linkLabel={text.openLink} /> : null}
     </>
   );
@@ -224,7 +220,6 @@ function ArenaBoardView({ slug, myKeys, language, text }: { slug: string; myKeys
 function Arena3dView({ myKeys, language, text }: { myKeys: ReadonlySet<string>; language: Language; text: InsightsMessages }) {
   const feeds = useFeeds(["arena3d"]);
   const snapshot = feeds.arena3d;
-  const now = useNow();
   const entries = arena3dOf(snapshot);
   const [expanded, setExpanded] = useState(false);
   const shown = expanded ? entries : entries.slice(0, LIST_PREVIEW);
@@ -250,7 +245,8 @@ function Arena3dView({ myKeys, language, text }: { myKeys: ReadonlySet<string>; 
         </div>
       ) : null}
       <p className="uc-insight-note">{text.arena3dNote}</p>
-      <SourceLine text={text.arena3dSource(fetchedLine(snapshot, now, language, text))} url={ARENA_3D_URL} linkLabel={text.openLink} />
+      <FeedStatus names={["arena3d"]} shown={snapshot} language={language} text={text} tooltip={text.refreshTooltip} />
+      <SourceLine text={text.arena3dSource} url={ARENA_3D_URL} linkLabel={text.openLink} />
     </>
   );
 }

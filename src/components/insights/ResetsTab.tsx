@@ -10,10 +10,9 @@ import { shortTime, type TimeFormat } from "@/model/format";
 import { activeWatch, FORECAST_HORIZONS, forecastResets, HALF_LIFE_DAYS, parseResets, parseResetStatus, resetStats, type CodexReset, type ResetSource, type ResetStatus } from "@/model/insights/resets";
 import { excerpt } from "@/notify/useResetNotifications";
 import { useNow, useSettings } from "@/state/hooks";
-import { refreshFeeds, useInsights } from "@/state/insights";
-import { Button } from "../ui/controls";
+import { useInsights } from "@/state/insights";
 import { useFeeds } from "./data";
-import { agoText, dateText, Disclosure, LinkButton, numberText, percentText, RateBar, SourceLine } from "./parts";
+import { agoText, dateText, Disclosure, FeedStatus, LinkButton, numberText, percentText, RateBar, SourceLine } from "./parts";
 
 const HISTORY_PREVIEW = 8;
 const SITE_URL = "https://codex-resets.com";
@@ -174,15 +173,12 @@ export function ResetsTab() {
   const { language, timeFormat } = useSettings();
   const text = insightsFor(language);
   const feeds = useFeeds(FEEDS);
-  const refreshing = useInsights((state) => FEEDS.some((name) => state.refreshing[name]));
   const errors = useInsights((state) => state.feedErrors);
-  const now = useNow();
   const status = useMemo(() => parseResetStatus(feeds.codexResetStatus?.body), [feeds.codexResetStatus]);
   const resets = useMemo(() => parseResets(feeds.codexResets?.body, [status?.latest ?? null]), [feeds.codexResets, status]);
   const loaded = feeds.codexResetStatus !== undefined && feeds.codexResets !== undefined;
   const empty = loaded && !feeds.codexResetStatus?.body && !feeds.codexResets?.body;
   const stale = FEEDS.some((name) => feeds[name]?.error);
-  const checked = agoText(feeds.codexResetStatus?.checkedAt ?? feeds.codexResetStatus?.fetchedAt, now, language);
   const error = FEEDS.map((name) => feeds[name]?.error ?? errors[name]).find(Boolean);
 
   return (
@@ -198,12 +194,7 @@ export function ResetsTab() {
           <History resets={resets} language={language} timeFormat={timeFormat} text={text} />
         </>
       ) : null}
-      <div className="uc-insight-status">
-        <span className="uc-insight-status-text">{checked ? text.fetchedAgo(checked) : ""}</span>
-        <Button onClick={() => void refreshFeeds(FEEDS)} className="is-small" disabled={refreshing}>
-          {refreshing ? text.refreshing : text.refresh}
-        </Button>
-      </div>
+      <FeedStatus names={FEEDS} shown={feeds.codexResetStatus} language={language} text={text} />
       <SourceLine text={text.resetsSource} url={SITE_URL} linkLabel={text.openLink} />
       <Disclosure title={text.methodTitle}>
         {text.resetsMethod.map((paragraph) => (

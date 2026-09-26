@@ -72,7 +72,18 @@ describe("Benchmark tab", () => {
     expect(screen.getByText(/^Chưa đủ dữ liệu \(\d+\)$/)).toBeInTheDocument();
     expect(screen.getByText("Claude Sonnet 5")).toBeInTheDocument();
     expect(screen.getByText(/lượt có kiểm tra 0\/10/)).toBeInTheDocument();
-    expect(screen.getByText(/^Đã đọc 1\.284 tệp nhật ký/)).toBeInTheDocument();
+    expect(screen.getByText(/^Đã quét 1\.284 tệp nhật ký/)).toBeInTheDocument();
+  });
+
+  it("rescans the local logs on request", async () => {
+    const api = await renderApp();
+    const rescan = vi.spyOn(api, "rescanModelQuality");
+    openTab("Benchmark");
+    await screen.findByRole("article", { name: "Claude Opus 5" });
+    fireEvent.click(screen.getByRole("button", { name: "Quét lại nhật ký" }));
+    expect(rescan).toHaveBeenCalledOnce();
+    expect(screen.getByText("Đang quét nhật ký…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Quét lại nhật ký" })).toBeDisabled();
   });
 
   it("narrows to a project and a period", async () => {
@@ -112,6 +123,37 @@ describe("Benchmark tab", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Bảng xếp hạng:/ }));
     fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "3D Arena · Tạo mô hình 3D" }));
     expect(await screen.findByText("PicGen3D")).toBeInTheDocument();
+  });
+
+  it("fetches the shown public board again on request", async () => {
+    const api = await renderApp();
+    const refresh = vi.spyOn(api, "refreshPublicFeed");
+    openTab("Benchmark");
+    await screen.findByRole("article", { name: "Claude Opus 5" });
+    fireEvent.click(screen.getByRole("radio", { name: "Công khai" }));
+    await screen.findByText("GPT-6 Astra");
+    expect(screen.getByText(/^Tải 2 giờ/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Làm mới" }));
+    expect(refresh).toHaveBeenCalledExactlyOnceWith("epochScores");
+    expect(screen.getByRole("button", { name: "Đang làm mới…" })).toBeDisabled();
+    expect(await screen.findByText("Vừa tải")).toBeInTheDocument();
+  });
+
+  it("dates a board by its last good download after a failed fetch", async () => {
+    await renderApp();
+    openTab("Benchmark");
+    await screen.findByRole("article", { name: "Claude Opus 5" });
+    fireEvent.click(screen.getByRole("radio", { name: "Công khai" }));
+    await screen.findByText("GPT-6 Astra");
+    const snapshot = useInsights.getState().feeds.epochScores!;
+    const downloaded = new Date(Date.now() - 3 * 3_600_000).toISOString();
+    act(() =>
+      useInsights.setState({
+        feeds: { ...useInsights.getState().feeds, epochScores: { ...snapshot, fetchedAt: downloaded, checkedAt: new Date().toISOString(), error: "timed out", stale: true } },
+      }),
+    );
+    expect(screen.getByText("Lần tải gần nhất bị lỗi, đang hiện bản đã lưu.")).toBeInTheDocument();
+    expect(screen.getByText(/^Tải 3 giờ/)).toBeInTheDocument();
   });
 
   it("compares the user's models across sources and adds one by search", async () => {

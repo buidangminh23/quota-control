@@ -55,11 +55,21 @@ function ScanStatus({ language, text }: { language: Language; text: InsightsMess
   const info = useInsights((state) => state.qualityInfo);
   const now = useNow();
   const ago = agoText(info?.scannedAt, now, language);
-  const status = info?.scanning ? text.scanning : info?.scannedAt && ago ? text.scanned(numberText(language, info.files), ago) : text.notScanned;
+  const status = info?.scanning ? (
+    text.scanning
+  ) : info?.scannedAt && ago ? (
+    <>
+      {text.scannedFiles(numberText(language, info.files))}
+      <br />
+      {text.scannedAgo(ago)}
+    </>
+  ) : (
+    text.notScanned
+  );
   return (
     <div className="uc-insight-status">
       <span className="uc-insight-status-text">{status}</span>
-      <Button onClick={rescanQuality} className="is-small" disabled={info?.scanning === true}>
+      <Button onClick={rescanQuality} className="is-small" disabled={info?.scanning === true} tooltip={text.rescanTooltip}>
         {text.rescan}
       </Button>
     </div>

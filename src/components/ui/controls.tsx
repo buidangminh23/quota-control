@@ -83,6 +83,7 @@ export function Button({
   variant = "bordered",
   disabled,
   className,
+  tooltip,
   ...rest
 }: {
   children: ReactNode;
@@ -90,10 +91,11 @@ export function Button({
   variant?: "bordered" | "prominent" | "destructive" | "plain";
   disabled?: boolean;
   className?: string;
+  tooltip?: string;
   "aria-label"?: string;
 }) {
   return (
-    <button type="button" className={`uc-button is-${variant}${className ? ` ${className}` : ""}`} disabled={disabled} onClick={onClick} {...rest}>
+    <button type="button" className={`uc-button is-${variant}${className ? ` ${className}` : ""}`} disabled={disabled} onClick={onClick} {...tooltipProps(tooltip)} {...rest}>
       {children}
     </button>
   );
