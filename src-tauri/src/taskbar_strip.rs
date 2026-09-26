@@ -4,13 +4,22 @@
 //! Windows: a layered, never-activating child window inside `Shell_TrayWnd`, immediately left of the
 //! notification area. When a taskbar styler draws the notification area as its own island away from
 //! the taskbar's edge (Windhawk's centered taskbar), the strip becomes a matching island right after
-//! it instead. It is owned by one dedicated thread with its own message loop, re-anchors on a
-//! one-second timer, rebuilds itself after Explorer restarts (`TaskbarCreated`) and reports taskbar
-//! size, scale and theme changes to the popup as `taskbar-info`.
+//! it instead. When a styler rule widens the app's own notification-area button to fit the strip
+//! (Windhawk's Taskbar Styler, by the button's name [`SLOT_NAME`]), the strip covers that button and
+//! sits inside the notification area itself, on its real background. It is owned by one dedicated
+//! thread with its own message loop, re-anchors on a one-second timer, rebuilds itself after Explorer
+//! restarts (`TaskbarCreated`) and reports taskbar size, scale and theme changes to the popup as
+//! `taskbar-info`.
 //! Linux: the frame's text becomes the tray title. Other platforms report the strip unsupported.
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, PhysicalRect, Runtime, State};
+
+/// The tray icon's tooltip while the strip shows, which Windows also gives its notification-area
+/// button as a name. A taskbar styler rule widens the button by this name to make room for the
+/// strip: `SystemTray.NotifyIconView#NotifyItemIcon[AutomationProperties.Name=Quota Control]`.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub const SLOT_NAME: &str = "Quota Control";
 
 /// Largest frame the popup may send, in device pixels.
 const MAX_FRAME_WIDTH: u32 = 4096;
@@ -200,6 +209,69 @@ pub fn island_strip_origin(
     (before >= 0).then_some((before, island.top))
 }
 
+/// How far the notification area's island reaches above and below its buttons (`tray` top and
+/// bottom), read from the taskbar frame's top and bottom while the frame stays centered on the
+/// buttons as the island is. A frame that has grown lopsided, as while a dock animation magnifies
+/// the app buttons, says nothing about the island.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn island_reach(frame: (i32, i32), tray: (i32, i32)) -> Option<(i32, i32)> {
+    let ((frame_top, frame_bottom), (tray_top, tray_bottom)) = (frame, tray);
+    let centered = ((frame_top + frame_bottom) - (tray_top + tray_bottom)).abs() <= 1;
+    (centered && frame_top <= tray_top && frame_bottom >= tray_bottom)
+        .then_some((tray_top - frame_top, frame_bottom - tray_bottom))
+}
+
+/// The island fill the strip paints, read off the screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub struct Fill {
+    pub color: [u8; 3],
+    /// Whether `color` came from a reading nothing could have tinted.
+    pub settled: bool,
+    /// A differing reading waiting for the next one to confirm it.
+    pending: Option<[u8; 3]>,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl Fill {
+    /// Largest per-channel difference between two readings of the same fill.
+    const TOLERANCE: u8 = 3;
+
+    pub fn new(color: [u8; 3], settled: bool) -> Self {
+        Self {
+            color,
+            settled,
+            pending: None,
+        }
+    }
+
+    /// Take a clean reading. An unsettled fill adopts it at once; a settled one adopts a differing
+    /// reading only when the next reading agrees with it, so a single tinted reading never shows.
+    pub fn read(&mut self, reading: [u8; 3]) {
+        let similar = |one: [u8; 3], two: [u8; 3]| {
+            one.iter()
+                .zip(two)
+                .all(|(a, b)| a.abs_diff(b) <= Self::TOLERANCE)
+        };
+        if !self.settled
+            || self
+                .pending
+                .is_some_and(|pending| similar(pending, reading))
+        {
+            *self = Self::new(reading, true);
+        } else if similar(reading, self.color) {
+            self.pending = None;
+        } else {
+            self.pending = Some(reading);
+        }
+    }
+
+    /// Let the next clean reading replace the fill, as after a theme or display change.
+    pub fn unsettle(&mut self) {
+        self.settled = false;
+    }
+}
+
 fn scale_channel(channel: u8, alpha: u8) -> u8 {
     ((u16::from(channel) * u16::from(alpha) + 127) / 255) as u8
 }
@@ -268,19 +340,63 @@ pub fn framed(content: &Bitmap, height: u32, padding: u32, radius: f64, color: [
     }
 }
 
+/// The strip inside the app's widened notification-area button: `content` centered in a `width` x
+/// `height` box that is otherwise clear, so the notification area's own background shows through.
+/// Clear pixels keep an alpha of 1 so the whole button stays the strip's to click; content outside
+/// the box is clipped.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn slotted(content: &Bitmap, width: u32, height: u32) -> Bitmap {
+    let mut bgra = [0, 0, 0, 1].repeat((width * height) as usize);
+    let shift_x = (i64::from(width) - i64::from(content.width)) / 2;
+    let shift_y = (i64::from(height) - i64::from(content.height)) / 2;
+    for row in 0..content.height {
+        let Ok(y) = u32::try_from(i64::from(row) + shift_y) else {
+            continue;
+        };
+        if y >= height {
+            continue;
+        }
+        for column in 0..content.width {
+            let Ok(x) = u32::try_from(i64::from(column) + shift_x) else {
+                continue;
+            };
+            if x >= width {
+                continue;
+            }
+            let source = ((row * content.width + column) * 4) as usize;
+            let target = ((y * width + x) * 4) as usize;
+            bgra[target..target + 4].copy_from_slice(&content.bgra[source..source + 4]);
+        }
+    }
+    Bitmap {
+        width,
+        height,
+        bgra,
+        text: content.text.clone(),
+        tooltip: content.tooltip.clone(),
+    }
+}
+
 /// Tauri state: the running strip for this platform.
 pub struct TaskbarStrip {
     inner: platform::Strip,
 }
 
 impl TaskbarStrip {
-    /// Start the strip. `on_click` runs on the main thread.
+    /// Start the strip. `on_click` runs on the main thread, and so does `on_cover`, which hears
+    /// whether the strip now covers the app's notification-area button (the button then shows a
+    /// clear icon, so nothing of the icon peeks out from under the strip).
     pub fn install<R: Runtime>(
         app: &AppHandle<R>,
         on_click: impl Fn(StripClick) + Send + Sync + 'static,
+        on_cover: impl Fn(bool) + Send + Sync + 'static,
     ) -> Self {
         Self {
-            inner: platform::Strip::start(app.clone(), std::sync::Arc::new(on_click)),
+            inner: platform::Strip::start(
+                app.clone(),
+                std::sync::Arc::new(on_click),
+                std::sync::Arc::new(on_cover),
+            ),
         }
     }
 
@@ -290,6 +406,12 @@ impl TaskbarStrip {
 
     pub fn set(&self, bitmap: Option<Bitmap>) {
         self.inner.set(bitmap);
+    }
+
+    /// Whether the popup is open. Its shadow reaches onto the taskbar, so the strip takes no color
+    /// readings from the taskbar meanwhile.
+    pub fn set_popup_visible(&self, visible: bool) {
+        self.inner.set_popup_visible(visible);
     }
 }
 
@@ -311,7 +433,7 @@ pub fn set_taskbar_strip(
 #[cfg(windows)]
 mod platform {
     use std::cell::RefCell;
-    use std::sync::atomic::{AtomicIsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
@@ -335,13 +457,14 @@ mod platform {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, FindWindowExW,
-        FindWindowW, GetMessageW, GetParent, GetWindowRect, HWND_TOP, IDC_ARROW, IsWindow,
-        LoadCursorW, MA_NOACTIVATE, MSG, PostMessageW, RegisterClassExW, RegisterWindowMessageW,
-        SWP_NOACTIVATE, SWP_SHOWWINDOW, SendMessageW, SetTimer, SetWindowPos, TranslateMessage,
-        ULW_ALPHA, UpdateLayeredWindow, WM_APP, WM_DISPLAYCHANGE, WM_LBUTTONUP, WM_MOUSEACTIVATE,
+        FindWindowW, GW_CHILD, GetMessageW, GetParent, GetWindow, GetWindowRect, HWND_TOP,
+        IDC_ARROW, IsChild, IsWindow, LoadCursorW, MA_NOACTIVATE, MSG, PostMessageW,
+        RegisterClassExW, RegisterWindowMessageW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        SWP_SHOWWINDOW, SendMessageW, SetTimer, SetWindowPos, TranslateMessage, ULW_ALPHA,
+        UpdateLayeredWindow, WM_APP, WM_DISPLAYCHANGE, WM_LBUTTONUP, WM_MOUSEACTIVATE,
         WM_NCDESTROY, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_CHILD,
         WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-        WS_POPUP, WS_VISIBLE,
+        WS_POPUP, WS_VISIBLE, WindowFromPoint,
     };
 
     use windows::Win32::System::Com::{
@@ -349,14 +472,15 @@ mod platform {
     };
     use windows::Win32::UI::Accessibility::{
         CUIAutomation, IUIAutomation, IUIAutomation2, IUIAutomationCacheRequest,
-        IUIAutomationCondition, TreeScope_Children, UIA_BoundingRectanglePropertyId,
-        UIA_ClassNamePropertyId,
+        IUIAutomationCondition, TreeScope_Children, UIA_AutomationIdPropertyId,
+        UIA_BoundingRectanglePropertyId, UIA_ClassNamePropertyId, UIA_NamePropertyId,
     };
     use windows::core::Interface;
 
     use super::{
-        Bitmap, Island, StripButton, StripClick, TASKBAR_INFO_EVENT, TaskbarEdge, TaskbarInfo,
-        TaskbarTheme, framed, island_strip_origin, strip_origin,
+        Bitmap, Fill, Island, SLOT_NAME, StripButton, StripClick, TASKBAR_INFO_EVENT, TaskbarEdge,
+        TaskbarInfo, TaskbarTheme, framed, island_reach, island_strip_origin, slotted,
+        strip_origin,
     };
 
     const WM_APP_FRAME: u32 = WM_APP + 1;
@@ -374,13 +498,21 @@ mod platform {
     const XAML_SITE_CLASS: &str = "Windows.UI.Input.InputSite.WindowClass";
     const TRAY_CLASS_PREFIX: &str = "SystemTray.";
     const TASKBAR_FRAME_CLASS: &str = "Taskbar.TaskbarFrameAutomationPeer";
+    /// UI Automation id of every notification-area icon button; [`SLOT_NAME`] tells the app's apart.
+    const SLOT_AUTOMATION_ID: &str = "NotifyItemIcon";
     const AUTOMATION_TIMEOUT_MS: u32 = 1000;
+    /// How long a notification area read earlier stands in for reads that fail.
+    const LAYOUT_GRACE: Duration = Duration::from_secs(10);
+    /// Passes in a row without the widened button before the strip leaves it, so a button being laid
+    /// out again never makes the strip jump out and back.
+    const SLOT_EXIT_PASSES: u8 = 2;
     const COLOR_REFRESH: Duration = Duration::from_secs(30);
     const TOOLTIP_MAX_WIDTH_POINTS: f64 = 360.0;
     /// The dark common-controls theme Explorer itself uses for tooltips over a dark taskbar.
     const DARK_TOOLTIP_THEME: &str = "DarkMode_Explorer";
 
     type ClickHandler = Arc<dyn Fn(StripClick) + Send + Sync>;
+    type CoverHandler = Arc<dyn Fn(bool) + Send + Sync>;
     /// Hands a click job to the main thread (window procedures must never block on Tauri).
     type Dispatch = Box<dyn Fn(Box<dyn FnOnce() + Send>) + Send>;
 
@@ -392,10 +524,15 @@ mod platform {
         host: Arc<AtomicIsize>,
         pending: Arc<Mutex<Option<Option<Bitmap>>>>,
         info: Arc<Mutex<TaskbarInfo>>,
+        popup: Arc<AtomicBool>,
     }
 
     impl Strip {
-        pub fn start<R: Runtime>(app: AppHandle<R>, on_click: ClickHandler) -> Self {
+        pub fn start<R: Runtime>(
+            app: AppHandle<R>,
+            on_click: ClickHandler,
+            on_cover: CoverHandler,
+        ) -> Self {
             let host = Arc::new(AtomicIsize::new(0));
             let pending = Arc::new(Mutex::new(None));
             let info = Arc::new(Mutex::new(
@@ -403,14 +540,16 @@ mod platform {
                     .map(|taskbar| taskbar.info)
                     .unwrap_or(TaskbarInfo::UNSUPPORTED),
             ));
+            let popup = Arc::new(AtomicBool::new(false));
             let thread = Shared {
                 host: host.clone(),
                 pending: pending.clone(),
                 info: info.clone(),
+                popup: popup.clone(),
             };
             let spawned = std::thread::Builder::new()
                 .name("taskbar-strip".into())
-                .spawn(move || run(app, on_click, thread));
+                .spawn(move || run(app, on_click, on_cover, thread));
             if let Err(error) = spawned {
                 tracing::warn!("taskbar strip thread failed to start: {error}");
             }
@@ -418,7 +557,12 @@ mod platform {
                 host,
                 pending,
                 info,
+                popup,
             }
+        }
+
+        pub fn set_popup_visible(&self, visible: bool) {
+            self.popup.store(visible, Ordering::Release);
         }
 
         pub fn info(&self) -> TaskbarInfo {
@@ -443,6 +587,8 @@ mod platform {
         host: Arc<AtomicIsize>,
         pending: Arc<Mutex<Option<Option<Bitmap>>>>,
         info: Arc<Mutex<TaskbarInfo>>,
+        /// Whether the popup is open, which puts its shadow on the taskbar.
+        popup: Arc<AtomicBool>,
     }
 
     /// The taskbar as read now: its window, the notification area's left edge in taskbar client
@@ -564,6 +710,8 @@ mod platform {
             let cache = client.CreateCacheRequest().ok()?;
             cache.AddProperty(UIA_ClassNamePropertyId).ok()?;
             cache.AddProperty(UIA_BoundingRectanglePropertyId).ok()?;
+            cache.AddProperty(UIA_AutomationIdPropertyId).ok()?;
+            cache.AddProperty(UIA_NamePropertyId).ok()?;
             let all = client.CreateTrueCondition().ok()?;
             Some(Automation { client, cache, all })
         }
@@ -640,10 +788,28 @@ mod platform {
         }
     }
 
+    /// Whether the screen pixel at (`x`, `y`) shows the taskbar rather than a window over it, such
+    /// as a screenshot tool's dimmed overlay or a full-screen app.
+    fn taskbar_shows(taskbar: HWND, x: i32, y: i32) -> bool {
+        let window = unsafe { WindowFromPoint(POINT { x, y }) };
+        window == taskbar || (!window.is_null() && unsafe { IsChild(taskbar, window) } != 0)
+    }
+
     struct ColorSample {
         at: (i32, i32),
-        color: [u8; 3],
+        fill: Fill,
         taken: Instant,
+    }
+
+    /// The notification area as UI Automation reports it, in screen coordinates.
+    #[derive(Clone, Copy)]
+    struct Layout {
+        /// The notification-area buttons' combined box.
+        tray: RECT,
+        /// The taskbar frame's box, as tall as the notification area's island on styled taskbars.
+        frame: Option<RECT>,
+        /// The app's own notification-area button.
+        slot: Option<RECT>,
     }
 
     /// Reads the notification area's island. The Windows 11 tray is XAML without windows of its
@@ -653,6 +819,11 @@ mod platform {
         automation: Option<Automation>,
         unavailable: bool,
         sample: Option<ColorSample>,
+        /// The last layout read, and when.
+        last: Option<(Layout, Instant)>,
+        /// How far the island reaches above and below the tray buttons, as last read from a frame
+        /// centered on them.
+        reach: Option<(i32, i32)>,
     }
 
     impl Islands {
@@ -661,7 +832,23 @@ mod platform {
                 automation: None,
                 unavailable: false,
                 sample: None,
+                last: None,
+                reach: None,
             }
+        }
+
+        /// Take the next clean color reading as the island's fill, after a theme or display change.
+        fn distrust_fill(&mut self) {
+            if let Some(sample) = self.sample.as_mut() {
+                sample.fill.unsettle();
+            }
+        }
+
+        /// Forget everything read from a taskbar that Explorer has since replaced.
+        fn forget(&mut self) {
+            self.last = None;
+            self.reach = None;
+            self.distrust_fill();
         }
 
         fn automation(&mut self) -> Option<&Automation> {
@@ -677,12 +864,28 @@ mod platform {
             self.automation.as_ref()
         }
 
-        /// The tray buttons' combined box and the taskbar frame's box, in screen coordinates.
-        fn tray(&mut self, taskbar: HWND) -> Option<(RECT, Option<RECT>)> {
+        /// The notification area now, or the one read last when this read fails (UI Automation calls
+        /// into a busy Explorer time out now and then) and it is at most `LAYOUT_GRACE` old, so one
+        /// failed read never moves the strip.
+        fn layout(&mut self, taskbar: HWND) -> Option<Layout> {
+            match self.read_layout(taskbar) {
+                Some(layout) => {
+                    self.last = Some((layout, Instant::now()));
+                    Some(layout)
+                }
+                None => self
+                    .last
+                    .filter(|(_, read)| read.elapsed() < LAYOUT_GRACE)
+                    .map(|(layout, _)| layout),
+            }
+        }
+
+        fn read_layout(&mut self, taskbar: HWND) -> Option<Layout> {
             let site = xaml_site(taskbar)?;
             let automation = self.automation()?;
             let mut tray: Option<RECT> = None;
             let mut frame = None;
+            let mut slot = None;
             unsafe {
                 let root = automation
                     .client
@@ -712,63 +915,100 @@ mod platform {
                     let class = class.to_string();
                     if class.starts_with(TRAY_CLASS_PREFIX) {
                         tray = Some(tray.map_or(rect, |tray| union(tray, rect)));
+                        let is_slot = child
+                            .CachedAutomationId()
+                            .is_ok_and(|id| id == SLOT_AUTOMATION_ID)
+                            && child.CachedName().is_ok_and(|name| name == SLOT_NAME);
+                        if is_slot && slot.is_none() {
+                            slot = Some(rect);
+                        }
                     } else if class == TASKBAR_FRAME_CLASS {
                         frame = Some(rect);
                     }
                 }
             }
-            Some((tray?, frame))
+            Some(Layout {
+                tray: tray?,
+                frame,
+                slot,
+            })
         }
 
-        /// The island's fill, sampled where no button draws: above the buttons when the island
-        /// has room there, otherwise in the Show Desktop sliver at its right end.
-        fn color(&mut self, at: (i32, i32)) -> Option<[u8; 3]> {
-            let fresh = self
-                .sample
-                .as_ref()
-                .filter(|sample| sample.at == at && sample.taken.elapsed() < COLOR_REFRESH);
-            if let Some(sample) = fresh {
-                return Some(sample.color);
+        /// The island's fill at `at`. Readings are taken only where the taskbar itself shows and
+        /// never while the popup's shadow reaches the taskbar (`popup_open`); a reading that differs
+        /// from the fill in use replaces it once the next reading agrees (see [`Fill::read`]), so a
+        /// passing overlay never tints the strip.
+        fn color(&mut self, at: (i32, i32), taskbar: HWND, popup_open: bool) -> Option<[u8; 3]> {
+            let reading = || {
+                (!popup_open && taskbar_shows(taskbar, at.0, at.1))
+                    .then(|| screen_pixel(at.0, at.1))
+                    .flatten()
+            };
+            match self.sample.as_mut() {
+                Some(sample) if sample.at == at => {
+                    let due = !sample.fill.settled || sample.taken.elapsed() >= COLOR_REFRESH;
+                    if due && let Some(color) = reading() {
+                        sample.fill.read(color);
+                        sample.taken = Instant::now();
+                    }
+                    Some(sample.fill.color)
+                }
+                previous => {
+                    let clean = reading();
+                    let color = clean
+                        .or(previous.map(|sample| sample.fill.color))
+                        .or_else(|| screen_pixel(at.0, at.1))?;
+                    self.sample = Some(ColorSample {
+                        at,
+                        fill: Fill::new(color, clean.is_some()),
+                        taken: Instant::now(),
+                    });
+                    Some(color)
+                }
             }
-            let color = screen_pixel(at.0, at.1)?;
-            self.sample = Some(ColorSample {
-                at,
-                color,
-                taken: Instant::now(),
-            });
-            Some(color)
         }
 
         /// The tray's island in taskbar client coordinates, or `None` on a stock taskbar, where the
-        /// tray still sits at `TrayNotifyWnd`.
-        fn read(&mut self, taskbar: &Taskbar, gap: i32) -> Option<Island> {
-            let (tray_screen, frame_screen) = self.tray(taskbar.hwnd)?;
-            let tray = to_client(taskbar.hwnd, tray_screen);
+        /// tray still sits at `TrayNotifyWnd`. The fill is read in the island's padding on the
+        /// screen-edge side, away from the windows and flyouts above the taskbar, or in the Show
+        /// Desktop sliver at its right end when the island has no padding.
+        fn island(
+            &mut self,
+            taskbar: &Taskbar,
+            layout: &Layout,
+            gap: i32,
+            popup_open: bool,
+        ) -> Option<Island> {
+            let tray = to_client(taskbar.hwnd, layout.tray);
             if tray.right + gap >= taskbar.notify_left {
                 return None;
             }
-            let (top, bottom) = frame_screen
-                .map(|frame| to_client(taskbar.hwnd, frame))
-                .filter(|frame| frame.top <= tray.top && frame.bottom >= tray.bottom)
-                .map_or((tray.top, tray.bottom), |frame| (frame.top, frame.bottom));
+            if let Some(frame) = layout.frame.map(|frame| to_client(taskbar.hwnd, frame))
+                && let Some(reach) =
+                    island_reach((frame.top, frame.bottom), (tray.top, tray.bottom))
+            {
+                self.reach = Some(reach);
+            }
+            let (above, below) = self.reach.unwrap_or((0, 0));
             let scale = taskbar.info.scale;
-            let probe = if top < tray.top {
-                (
-                    tray_screen.right - (FRAME_RADIUS_POINTS * scale * 2.0).round() as i32,
-                    tray_screen.top - (tray.top - top + 1) / 2,
-                )
-            } else {
-                (
-                    tray_screen.right - 3,
-                    (tray_screen.top + tray_screen.bottom) / 2,
-                )
+            let inside = layout.tray.right - (FRAME_RADIUS_POINTS * scale * 2.0).round() as i32;
+            let upper = (inside, layout.tray.top - (above + 1) / 2);
+            let lower = (inside, layout.tray.bottom + below / 2);
+            let probe = match taskbar.info.edge {
+                TaskbarEdge::Top if above >= 2 => upper,
+                _ if below >= 2 => lower,
+                _ if above >= 2 => upper,
+                _ => (
+                    layout.tray.right - 3,
+                    (layout.tray.top + layout.tray.bottom) / 2,
+                ),
             };
             Some(Island {
                 left: tray.left - (ISLAND_INSET_POINTS * scale).round() as i32,
                 right: tray.right,
-                top,
-                bottom,
-                color: self.color(probe)?,
+                top: tray.top - above,
+                bottom: tray.bottom + below,
+                color: self.color(probe, taskbar.hwnd, popup_open)?,
             })
         }
     }
@@ -781,26 +1021,39 @@ mod platform {
         tip_style: Option<(TaskbarTheme, isize)>,
     }
 
-    /// What a framed frame was composed for, so it is recomposed only when one of these changes.
+    /// How the current frame is composed for its place, so it is recomposed only when this changes.
     #[derive(Clone, Copy, PartialEq)]
-    struct FrameKey {
-        height: u32,
-        padding: u32,
-        radius: f64,
-        color: [u8; 3],
+    enum Composition {
+        /// An island of its own beside the notification area's.
+        Framed {
+            height: u32,
+            padding: u32,
+            radius: f64,
+            color: [u8; 3],
+        },
+        /// Inside the app's widened notification-area button.
+        Slotted { width: u32, height: u32 },
     }
 
     struct State<R: Runtime> {
         app: AppHandle<R>,
         shared: Shared,
+        on_cover: CoverHandler,
         taskbar_created: u32,
         window: Option<Window>,
         bitmap: Option<Bitmap>,
-        /// The current frame composed as an island, while the strip sits beside the tray island.
-        framed: Option<(FrameKey, Bitmap)>,
+        /// The current frame composed for its place; `None` while it sits as sent, beside a stock
+        /// notification area.
+        composed: Option<(Composition, Bitmap)>,
         islands: Islands,
         painted: bool,
         placed: Option<(i32, i32, i32, i32)>,
+        /// The widened notification-area button the strip covers, in taskbar client coordinates.
+        slot: Option<RECT>,
+        /// Passes in a row that found that button gone or too narrow for the frame.
+        slot_misses: u8,
+        /// Whether the app last heard that the strip covers its button.
+        covering: bool,
     }
 
     thread_local! {
@@ -813,6 +1066,9 @@ mod platform {
         fn taskbar_created(&self) -> u32;
         fn apply_pending(&mut self);
         fn sync(&mut self);
+        /// Re-read the taskbar after a theme or display change, or (`restarted`) after Explorer
+        /// replaced the taskbar.
+        fn taskbar_changed(&mut self, restarted: bool);
         fn window_destroyed(&mut self, hwnd: HWND) -> Option<HWND>;
     }
 
@@ -830,10 +1086,19 @@ mod platform {
                 .and_then(|mut pending| pending.take());
             if let Some(bitmap) = update {
                 self.bitmap = bitmap;
-                self.framed = None;
+                self.composed = None;
                 self.painted = false;
                 self.sync();
             }
+        }
+
+        fn taskbar_changed(&mut self, restarted: bool) {
+            if restarted {
+                self.islands.forget();
+            } else {
+                self.islands.distrust_fill();
+            }
+            self.sync();
         }
 
         fn sync(&mut self) {
@@ -882,7 +1147,7 @@ mod platform {
                 .as_ref()
                 .is_some_and(|window| unsafe { IsWindow(window.strip) } != 0 && unsafe { GetParent(window.strip) } == taskbar.hwnd);
             if !alive {
-                self.close();
+                self.discard_window();
                 self.window = create_window(taskbar.hwnd);
             }
             let (Some(window), Some(content)) = (self.window.as_mut(), self.bitmap.as_ref()) else {
@@ -891,69 +1156,131 @@ mod platform {
             let scale = taskbar.info.scale;
             let gap = (GAP_POINTS * scale).round() as i32;
             let padding = (FRAME_PADDING_POINTS * scale).round() as u32;
-            let beside = self.islands.read(taskbar, gap).and_then(|island| {
-                let width = (content.width + padding * 2) as i32;
-                island_strip_origin(taskbar.width, &island, width, gap)
-                    .map(|origin| (island, origin))
-            });
-            let (x, y, bitmap) = match beside {
-                Some((island, (x, y))) => {
-                    let key = FrameKey {
-                        height: (island.bottom - island.top).max(1) as u32,
-                        padding,
-                        radius: FRAME_RADIUS_POINTS * scale,
-                        color: island.color,
-                    };
-                    if self.framed.as_ref().map(|(current, _)| *current) != Some(key) {
-                        self.framed = Some((
-                            key,
-                            framed(content, key.height, key.padding, key.radius, key.color),
-                        ));
-                        self.painted = false;
-                    }
-                    let Some((_, bitmap)) = self.framed.as_ref() else {
-                        return;
-                    };
-                    (x, y, bitmap)
+            let popup_open = self.shared.popup.load(Ordering::Acquire);
+            let layout = self.islands.layout(taskbar.hwnd);
+            let fitting = layout
+                .and_then(|layout| layout.slot)
+                .map(|slot| to_client(taskbar.hwnd, slot))
+                .filter(|slot| {
+                    slot.right - slot.left >= content.width as i32 && slot.bottom > slot.top
+                });
+            match fitting {
+                Some(slot) => {
+                    self.slot = Some(slot);
+                    self.slot_misses = 0;
+                }
+                None if self.slot.is_some() && self.slot_misses + 1 < SLOT_EXIT_PASSES => {
+                    self.slot_misses += 1;
                 }
                 None => {
-                    if self.framed.take().is_some() {
-                        self.painted = false;
-                    }
-                    let (x, y) = strip_origin(
-                        taskbar.height,
-                        taskbar.notify_left,
-                        content.width as i32,
-                        content.height as i32,
-                        gap,
-                    );
-                    (x, y, content)
+                    self.slot = None;
+                    self.slot_misses = 0;
                 }
+            }
+            let (x, y, composition) = if let Some(slot) = self.slot {
+                let composition = Composition::Slotted {
+                    width: (slot.right - slot.left) as u32,
+                    height: (slot.bottom - slot.top) as u32,
+                };
+                (slot.left, slot.top, Some(composition))
+            } else if let Some((island, (x, y))) = layout
+                .and_then(|layout| self.islands.island(taskbar, &layout, gap, popup_open))
+                .and_then(|island| {
+                    let width = (content.width + padding * 2) as i32;
+                    island_strip_origin(taskbar.width, &island, width, gap)
+                        .map(|origin| (island, origin))
+                })
+            {
+                let composition = Composition::Framed {
+                    height: (island.bottom - island.top).max(1) as u32,
+                    padding,
+                    radius: FRAME_RADIUS_POINTS * scale,
+                    color: island.color,
+                };
+                (x, y, Some(composition))
+            } else {
+                let (x, y) = strip_origin(
+                    taskbar.height,
+                    taskbar.notify_left,
+                    content.width as i32,
+                    content.height as i32,
+                    gap,
+                );
+                (x, y, None)
             };
-            let width = bitmap.width as i32;
-            let height = bitmap.height as i32;
-            if self.placed != Some((x, y, width, height)) || !self.painted {
+            match composition {
+                Some(composition)
+                    if self.composed.as_ref().map(|(current, _)| *current) != Some(composition) =>
+                {
+                    let bitmap = match composition {
+                        Composition::Framed {
+                            height,
+                            padding,
+                            radius,
+                            color,
+                        } => framed(content, height, padding, radius, color),
+                        Composition::Slotted { width, height } => slotted(content, width, height),
+                    };
+                    self.composed = Some((composition, bitmap));
+                    self.painted = false;
+                }
+                None if self.composed.take().is_some() => self.painted = false,
+                _ => {}
+            }
+            let bitmap = self.composed.as_ref().map_or(content, |(_, bitmap)| bitmap);
+            let placement = (x, y, bitmap.width as i32, bitmap.height as i32);
+            if self.placed != Some(placement) || !self.painted {
                 unsafe {
                     SetWindowPos(
                         window.strip,
                         HWND_TOP,
-                        x,
-                        y,
-                        width,
-                        height,
+                        placement.0,
+                        placement.1,
+                        placement.2,
+                        placement.3,
                         SWP_NOACTIVATE | SWP_SHOWWINDOW,
                     )
                 };
-                self.placed = Some((x, y, width, height));
+                self.placed = Some(placement);
+            } else if unsafe { GetWindow(taskbar.hwnd, GW_CHILD) } != window.strip {
+                unsafe {
+                    SetWindowPos(
+                        window.strip,
+                        HWND_TOP,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    )
+                };
             }
             style_tooltip(window, &taskbar.info);
             if !self.painted {
                 self.painted = paint(window.strip, bitmap);
                 update_tooltip(window, &bitmap.tooltip);
             }
+            let covering = self.slot.is_some() && self.painted;
+            self.cover(covering);
         }
 
-        fn close(&mut self) {
+        /// Tell the app, when it changes, whether the strip covers its notification-area button.
+        fn cover(&mut self, covering: bool) {
+            if self.covering == covering {
+                return;
+            }
+            self.covering = covering;
+            let on_cover = self.on_cover.clone();
+            if self
+                .app
+                .run_on_main_thread(move || on_cover(covering))
+                .is_err()
+            {
+                tracing::warn!("could not report where the taskbar strip sits");
+            }
+        }
+
+        fn discard_window(&mut self) {
             if let Some(window) = self.window.take() {
                 unsafe {
                     if !window.tooltip.is_null() {
@@ -964,6 +1291,13 @@ mod platform {
             }
             self.painted = false;
             self.placed = None;
+        }
+
+        fn close(&mut self) {
+            self.discard_window();
+            self.slot = None;
+            self.slot_misses = 0;
+            self.cover(false);
         }
     }
 
@@ -1224,11 +1558,11 @@ mod platform {
                 0
             }
             WM_SETTINGCHANGE | WM_DISPLAYCHANGE => {
-                with_state(|state| state.sync());
+                with_state(|state| state.taskbar_changed(false));
                 unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
             }
             _ if taskbar_created != 0 && message == taskbar_created => {
-                with_state(|state| state.sync());
+                with_state(|state| state.taskbar_changed(true));
                 0
             }
             _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
@@ -1263,7 +1597,12 @@ mod platform {
         }
     }
 
-    fn run<R: Runtime>(app: AppHandle<R>, on_click: ClickHandler, shared: Shared) {
+    fn run<R: Runtime>(
+        app: AppHandle<R>,
+        on_click: ClickHandler,
+        on_cover: CoverHandler,
+        shared: Shared,
+    ) {
         let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
         unsafe {
             let controls = INITCOMMONCONTROLSEX {
@@ -1322,13 +1661,17 @@ mod platform {
             *cell.borrow_mut() = Some(Box::new(State {
                 app,
                 shared,
+                on_cover,
                 taskbar_created,
                 window: None,
                 bitmap: None,
-                framed: None,
+                composed: None,
                 islands: Islands::new(),
                 painted: false,
                 placed: None,
+                slot: None,
+                slot_misses: 0,
+                covering: false,
             }));
         });
         unsafe { SetTimer(host, SYNC_TIMER, SYNC_INTERVAL_MS, None) };
@@ -1365,6 +1708,7 @@ mod platform {
         pub fn start<R: Runtime>(
             app: AppHandle<R>,
             _on_click: Arc<dyn Fn(StripClick) + Send + Sync>,
+            _on_cover: Arc<dyn Fn(bool) + Send + Sync>,
         ) -> Self {
             Self {
                 set_title: Box::new(move |title| {
@@ -1394,6 +1738,8 @@ mod platform {
                     .filter(|text| !text.is_empty()),
             );
         }
+
+        pub fn set_popup_visible(&self, _visible: bool) {}
     }
 }
 
@@ -1411,6 +1757,7 @@ mod platform {
         pub fn start<R: Runtime>(
             _app: AppHandle<R>,
             _on_click: Arc<dyn Fn(StripClick) + Send + Sync>,
+            _on_cover: Arc<dyn Fn(bool) + Send + Sync>,
         ) -> Self {
             Self
         }
@@ -1420,6 +1767,8 @@ mod platform {
         }
 
         pub fn set(&self, _bitmap: Option<Bitmap>) {}
+
+        pub fn set_popup_visible(&self, _visible: bool) {}
     }
 }
 
@@ -1541,6 +1890,59 @@ mod tests {
         assert_eq!(pixel(&white, 3, 0), vec![255, 255, 255, 255]);
         assert_eq!(pixel(&white, 12, 7), vec![255, 255, 255, 255]);
         assert_eq!(pixel(&white, 2, 4), vec![61, 41, 35, 255]);
+    }
+
+    #[test]
+    fn slots_the_content_centered_into_a_clear_button_and_clips_its_margins() {
+        let pixel = |image: &Bitmap, x: u32, y: u32| {
+            let index = ((y * image.width + x) * 4) as usize;
+            image.bgra[index..index + 4].to_vec()
+        };
+        let slot = slotted(&bitmap(4, 8, [255, 255, 255, 255]), 10, 6);
+        assert_eq!((slot.width, slot.height), (10, 6));
+        assert_eq!(slot.text, "Claude 12%");
+        assert_eq!(pixel(&slot, 0, 0), vec![0, 0, 0, 1]);
+        assert_eq!(pixel(&slot, 2, 3), vec![0, 0, 0, 1]);
+        assert_eq!(pixel(&slot, 3, 0), vec![255, 255, 255, 255]);
+        assert_eq!(pixel(&slot, 6, 5), vec![255, 255, 255, 255]);
+        assert_eq!(pixel(&slot, 7, 3), vec![0, 0, 0, 1]);
+        let wide = slotted(&bitmap(12, 2, [9, 9, 9, 9]), 10, 4);
+        assert_eq!(pixel(&wide, 0, 1), vec![9, 9, 9, 9]);
+        assert_eq!(pixel(&wide, 9, 2), vec![9, 9, 9, 9]);
+        assert_eq!(pixel(&wide, 0, 0), vec![0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn reads_the_island_reach_only_from_a_frame_centered_on_the_tray() {
+        assert_eq!(island_reach((1028, 1076), (1031, 1073)), Some((3, 3)));
+        assert_eq!(island_reach((1024, 1076), (1031, 1073)), None);
+        assert_eq!(island_reach((1025, 1076), (1031, 1073)), None);
+        assert_eq!(island_reach((1027, 1076), (1031, 1073)), Some((4, 3)));
+        assert_eq!(island_reach((1031, 1073), (1031, 1073)), Some((0, 0)));
+        assert_eq!(island_reach((1033, 1071), (1031, 1073)), None);
+    }
+
+    #[test]
+    fn a_settled_fill_changes_only_when_two_readings_agree() {
+        let mut fill = Fill::new([36, 43, 64], true);
+        fill.read([14, 17, 26]);
+        assert_eq!(fill.color, [36, 43, 64]);
+        fill.read([37, 42, 65]);
+        assert_eq!(fill.color, [36, 43, 64]);
+        fill.read([14, 17, 26]);
+        assert_eq!(fill.color, [36, 43, 64]);
+        fill.read([15, 17, 27]);
+        assert_eq!(fill, Fill::new([15, 17, 27], true));
+    }
+
+    #[test]
+    fn an_unsettled_fill_takes_the_next_clean_reading() {
+        let mut fill = Fill::new([48, 66, 119], false);
+        fill.read([36, 43, 64]);
+        assert_eq!(fill, Fill::new([36, 43, 64], true));
+        fill.unsettle();
+        fill.read([200, 200, 200]);
+        assert_eq!(fill, Fill::new([200, 200, 200], true));
     }
 
     #[test]

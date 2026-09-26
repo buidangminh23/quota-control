@@ -139,6 +139,7 @@ pub fn run() -> anyhow::Result<()> {
             app.manage(chat_store::ChatStore::default_store());
             app.manage(chat_commands::ChatWindows::default());
             app.manage(PopupAnchor::default());
+            app.manage(commands::TrayImage::default());
             app.manage(limit_resets::Redemptions::default());
             app.manage(updates::Updates::new(app.handle()));
             let window =
@@ -227,17 +228,26 @@ pub fn run() -> anyhow::Result<()> {
                 })
                 .build(app)?;
             let strip_app = app.handle().clone();
-            app.manage(taskbar_strip::TaskbarStrip::install(app.handle(), move |click| {
-                let result = match click.button {
-                    taskbar_strip::StripButton::Primary => {
-                        toggle_popup(&strip_app, Some(click.bounds))
+            let cover_app = app.handle().clone();
+            app.manage(taskbar_strip::TaskbarStrip::install(
+                app.handle(),
+                move |click| {
+                    let result = match click.button {
+                        taskbar_strip::StripButton::Primary => {
+                            toggle_popup(&strip_app, Some(click.bounds))
+                        }
+                        taskbar_strip::StripButton::Secondary => show_tray_menu(&strip_app),
+                    };
+                    if let Err(error) = result {
+                        tracing::warn!("{error}");
                     }
-                    taskbar_strip::StripButton::Secondary => show_tray_menu(&strip_app),
-                };
-                if let Err(error) = result {
-                    tracing::warn!("{error}");
-                }
-            }));
+                },
+                move |covered| {
+                    cover_app
+                        .state::<commands::TrayImage>()
+                        .set_covered(&cover_app, covered);
+                },
+            ));
             app.state::<BackendService>().start(app.handle());
             app.state::<updates::Updates>().start(app.handle());
             usage_commands::start(app.handle());
@@ -434,6 +444,9 @@ fn show_popup_at(app: &AppHandle, anchor: Option<PhysicalRect<i32, u32>>) -> Res
         .ok_or("Popup is unavailable")?;
     *app.state::<PopupAnchor>().0.lock() = anchor;
     position_popup(app)?;
+    if let Some(strip) = app.try_state::<taskbar_strip::TaskbarStrip>() {
+        strip.set_popup_visible(true);
+    }
     window.show().map_err(safe_error)?;
     window.set_focus().map_err(safe_error)?;
     window.emit("popup-visibility", true).map_err(safe_error)?;
@@ -448,6 +461,9 @@ fn hide_popup(app: &AppHandle) -> Result<(), String> {
         .get_webview_window("popup")
         .ok_or("Popup is unavailable")?;
     window.hide().map_err(safe_error)?;
+    if let Some(strip) = app.try_state::<taskbar_strip::TaskbarStrip>() {
+        strip.set_popup_visible(false);
+    }
     window.emit("popup-visibility", false).map_err(safe_error)
 }
 
