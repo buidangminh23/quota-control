@@ -8,19 +8,27 @@ import type {
   AccountLogin,
   AccountProvider,
   AppInfo,
+  AvailableUpdate,
   ChatSession,
   CliStatus,
   ConnectedAccount,
   EngineState,
   PopoverScreen,
   ProviderEntry,
+  UpdateStatus,
 } from "./types";
 import { accountDescriptors, accountProvider, fixtureAccounts, fixtureCatalog, fixtureEngineState } from "./fixtures";
 
 const REFRESH_DELAY_MS = 600;
 const LOGIN_EXPIRY_SECONDS = 600;
+const UPDATE_STEP_MS = 120;
+const UPDATE_SIZE_BYTES = 12_000_000;
 
 const ACCOUNT_LABELS: Record<AccountProvider, string> = { claude: "Claude", codex: "Codex" };
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function mockId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `mock-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -39,9 +47,14 @@ export class MockBackend implements Backend {
   private readonly chatSessions: ChatSession[] = [];
   private shortcut: string | null = null;
   private cli: CliStatus = { state: "notInstalled", command: "usagectl" };
+  private version = "0.1.0";
+  private updateState: UpdateStatus = { supported: true, currentVersion: "0.1.0", phase: "idle", manual: false, downloaded: 0 };
+  private readonly updateListeners = new Set<(status: UpdateStatus) => void>();
+  /** Test hook: the release the next check finds; `null` means the running version is the newest. */
+  nextRelease: AvailableUpdate | null = { version: "0.2.0", notes: "Faster refresh and a new update card." };
 
   async appInfo(): Promise<AppInfo> {
-    return { name: "Quota Control", version: "0.1.0", platform: "web" };
+    return { name: "Quota Control", version: this.version, platform: "web" };
   }
 
   async catalog(): Promise<ProviderEntry[]> {
@@ -210,7 +223,53 @@ export class MockBackend implements Backend {
     return { ...this.cli };
   }
 
+  async updateStatus(): Promise<UpdateStatus> {
+    return structuredClone(this.updateState);
+  }
+
+  onUpdateStatus(listener: (status: UpdateStatus) => void): Unsubscribe {
+    this.updateListeners.add(listener);
+    return () => this.updateListeners.delete(listener);
+  }
+
+  async checkForUpdate(): Promise<UpdateStatus> {
+    this.setUpdate({ phase: "checking", manual: true, failure: undefined });
+    await wait(UPDATE_STEP_MS);
+    const checkedAt = new Date().toISOString();
+    const release = this.nextRelease;
+    this.setUpdate(release ? { phase: "available", available: { ...release }, checkedAt } : { phase: "upToDate", available: undefined, checkedAt });
+    return this.updateStatus();
+  }
+
+  /** Simulates the download, then the relaunch on the new version (the core exits or restarts here). */
+  async installUpdate(): Promise<void> {
+    if (!this.updateState.available) await this.checkForUpdate();
+    const release = this.updateState.available;
+    if (!release) throw new Error("Quota Control is already up to date");
+    this.setUpdate({ phase: "downloading", manual: true, downloaded: 0, total: UPDATE_SIZE_BYTES, failure: undefined });
+    for (let step = 1; step <= 4; step += 1) {
+      await wait(UPDATE_STEP_MS);
+      this.setUpdate({ downloaded: (UPDATE_SIZE_BYTES * step) / 4 });
+    }
+    this.setUpdate({ phase: "installing" });
+    await wait(UPDATE_STEP_MS);
+    this.version = release.version;
+    this.nextRelease = null;
+    this.setUpdateStatus({ supported: true, currentVersion: release.version, phase: "idle", manual: false, downloaded: 0 });
+  }
+
+  /** Test hook: publish `status` the way the core pushes `update-status`. */
+  setUpdateStatus(status: UpdateStatus): void {
+    this.updateState = structuredClone(status);
+    const snapshot = structuredClone(this.updateState);
+    for (const listener of this.updateListeners) listener(snapshot);
+  }
+
   async quit(): Promise<void> {}
+
+  private setUpdate(patch: Partial<UpdateStatus>): void {
+    this.setUpdateStatus({ ...this.updateState, ...patch });
+  }
 
   private addAccount(provider: AccountProvider, label: string, credentialMode: ConnectedAccount["credentialMode"]): ConnectedAccount {
     const timestamp = new Date().toISOString();

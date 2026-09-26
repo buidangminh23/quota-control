@@ -1,7 +1,7 @@
 /**
- * The dashboard screen (upstream `DashboardContentView`): onboarding hints, the Total Spend card and
- * every enabled provider's section. Connected accounts are always listed; with none connected, a hint
- * leads to the Accounts screen.
+ * The dashboard screen (upstream `DashboardContentView`): the update card, onboarding hints, the
+ * Total Spend card and every enabled provider's section. Connected accounts are always listed; with
+ * none connected, a hint leads to the Accounts screen.
  */
 import { useMemo } from "react";
 import { messagesFor } from "@/i18n";
@@ -12,6 +12,7 @@ import { Button } from "../ui/controls";
 import { CloseIcon } from "../ui/icons";
 import { ProviderSection } from "./ProviderSection";
 import { TotalSpendCard } from "./TotalSpendCard";
+import { UpdateBanner } from "./UpdateBanner";
 
 function HintCard({ title, message, action, onAction, onDismiss, dismissLabel }: { title: string; message: string; action: string; onAction: () => void; onDismiss: () => void; dismissLabel: string }) {
   return (
@@ -49,6 +50,7 @@ export function Dashboard() {
 
   return (
     <div className="uc-stack">
+      <UpdateBanner />
       {showAccountsHint ? (
         <HintCard
           title={messages.dashboard.noAccountsTitle}

@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Backend, DocumentName, Unsubscribe } from "./backend";
-import type { AccountLogin, AccountProvider, AppInfo, ChatSession, CliStatus, ConnectedAccount, EngineState, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo } from "./types";
+import type { AccountLogin, AccountProvider, AppInfo, ChatSession, CliStatus, ConnectedAccount, EngineState, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
 
 /** Subscribe to a Tauri event synchronously; the returned function tears the listener down. */
 function subscribe<T>(event: string, listener: (payload: T) => void, replay?: () => Promise<T>): Unsubscribe {
@@ -172,6 +172,22 @@ export class TauriBackend implements Backend {
 
   uninstallCli(): Promise<CliStatus> {
     return invoke<CliStatus>("uninstall_cli");
+  }
+
+  updateStatus(): Promise<UpdateStatus> {
+    return invoke<UpdateStatus>("update_status");
+  }
+
+  onUpdateStatus(listener: (status: UpdateStatus) => void): Unsubscribe {
+    return subscribe<UpdateStatus>("update-status", listener, () => this.updateStatus());
+  }
+
+  checkForUpdate(): Promise<UpdateStatus> {
+    return invoke<UpdateStatus>("check_for_update");
+  }
+
+  installUpdate(): Promise<void> {
+    return invoke("install_update");
   }
 
   quit(): Promise<void> {

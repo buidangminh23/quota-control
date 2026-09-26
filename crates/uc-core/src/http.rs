@@ -214,6 +214,16 @@ impl ProxyConfig {
     fn proxy_url(&self) -> String {
         format!("{}://{}:{}", self.scheme.as_str(), self.host, self.port)
     }
+
+    /// The `reqwest` rule for this proxy: every scheme routed through it, credentials attached,
+    /// loopback left direct. Shared by the provider client and the app updater.
+    pub fn reqwest_proxy(&self) -> reqwest::Result<reqwest::Proxy> {
+        let mut rule = reqwest::Proxy::all(self.proxy_url())?;
+        if let (Some(user), Some(password)) = (&self.username, &self.password) {
+            rule = rule.basic_auth(user, password);
+        }
+        Ok(rule.no_proxy(reqwest::NoProxy::from_string("localhost,127.0.0.1,::1")))
+    }
 }
 
 fn percent_decode(raw: &str) -> String {
@@ -257,12 +267,9 @@ impl ReqwestHttpClient {
             .connect_timeout(Duration::from_secs(15))
             .pool_idle_timeout(Duration::from_secs(90));
         if let Some(proxy) = proxy {
-            let mut rule = reqwest::Proxy::all(proxy.proxy_url())
+            let rule = proxy
+                .reqwest_proxy()
                 .map_err(|e| HttpError::InvalidRequest(e.to_string()))?;
-            if let (Some(user), Some(password)) = (&proxy.username, &proxy.password) {
-                rule = rule.basic_auth(user, password);
-            }
-            rule = rule.no_proxy(reqwest::NoProxy::from_string("localhost,127.0.0.1,::1"));
             builder = builder.proxy(rule);
             tracing::info!(target: "config", "proxy enabled {}://{}:{}", proxy.scheme.as_str(), proxy.host, proxy.port);
         } else {

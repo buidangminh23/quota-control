@@ -16,6 +16,16 @@
       "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src ipc: http://ipc.localhost"
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkzQkU4RDMyNzYyREU0NjkKUldScDVDMTJNbzIra3phR0FyVUUrbkx5RFllOE44M0NSYWh0VGROUVRmT3c0SlEwOFUyQWllSXoK",
+      "endpoints": ["https://github.com/buidangminh23/quota-control/releases/latest/download/latest.json"],
+      "requireSignedVersion": true,
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["nsis", "deb", "appimage"],

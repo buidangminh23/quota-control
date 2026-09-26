@@ -3,9 +3,9 @@
  * `@AppStorage` settings (Appearance, Density, Time Format, Usage Display, Total Spend, Notifications,
  * Privacy, Logging) as one typed record.
  *
- * The document is shared with the Rust core: it reads `language` for native menus and owns
- * `enabledProviders`. Saving always merges onto the stored document, so keys the popup does not own
- * survive untouched.
+ * The document is shared with the Rust core: it reads `language` for native menus and
+ * `automaticUpdateChecks` for its update schedule, and owns `enabledProviders`. Saving always merges
+ * onto the stored document, so keys the popup does not own survive untouched.
  */
 import { DEFAULT_LANGUAGE, isLanguage, type Language } from "@/i18n";
 import type { ResetDisplayMode, TimeFormat, TotalSpendMetric } from "./format";
@@ -44,6 +44,8 @@ export interface AppSettings {
   customizeHintDismissed: boolean;
   /** The "connect an account" hint was closed; it stays closed even while no account is connected. */
   accountsHintDismissed: boolean;
+  /** The core looks for a new release at launch and every six hours (upstream "Update Automatically"). */
+  automaticUpdateChecks: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -63,6 +65,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   notifications: { almostOut: false, cuttingItClose: false, willRunOut: false },
   customizeHintDismissed: false,
   accountsHintDismissed: false,
+  automaticUpdateChecks: true,
 };
 
 /** Keys the core owns inside the shared document; the popup never writes them from its own copy. */
@@ -106,6 +109,7 @@ export function parseSettings(raw: unknown): AppSettings {
     },
     customizeHintDismissed: flag(stored.customizeHintDismissed, defaults.customizeHintDismissed),
     accountsHintDismissed: flag(stored.accountsHintDismissed, defaults.accountsHintDismissed),
+    automaticUpdateChecks: flag(stored.automaticUpdateChecks, defaults.automaticUpdateChecks),
   };
 }
 

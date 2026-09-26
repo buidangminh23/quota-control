@@ -1,8 +1,8 @@
 /**
  * The Settings screen (upstream `SettingsScreen`): Customize-style cards of rows for language, total
  * spend, launch at login and the global shortcut; appearance; how usage reads; the taskbar strip;
- * pace notifications; the `usagectl` terminal helper; and the log file plus a full reset. Changes
- * apply live and persist to the shared settings document.
+ * pace notifications; app updates; the `usagectl` terminal helper; and the log file plus a full
+ * reset. Changes apply live and persist to the shared settings document.
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { LANGUAGES, messagesFor, type Language } from "@/i18n";
@@ -16,6 +16,7 @@ import { useTaskbarInfo } from "@/strip/support";
 import { CrossLink } from "../customize/Customize";
 import { CommandLineRows } from "./CommandLine";
 import { ShortcutRecorder } from "./ShortcutRecorder";
+import { UpdateRows } from "./UpdateRows";
 import { Button, Picker, Switch } from "../ui/controls";
 import { confirmAction } from "../ui/dialog";
 import { SlidersIcon, WarningTriangle } from "../ui/icons";
@@ -121,6 +122,7 @@ export function Settings() {
   const stripSupported = useTaskbarInfo()?.supported === true;
   const shortcutSupported = typeof backend().setGlobalShortcut === "function";
   const cliSupported = typeof backend().cliStatus === "function";
+  const updatesSupported = typeof backend().updateStatus === "function";
   const section = (key: SettingsSectionKey) => text.section(key);
 
   const setNotification = (key: NotificationKey, on: boolean) => {
@@ -239,6 +241,12 @@ export function Settings() {
           </div>
         ) : null}
       </Section>
+
+      {updatesSupported ? (
+        <Section title={section("updates")}>
+          <UpdateRows />
+        </Section>
+      ) : null}
 
       {cliSupported ? (
         <Section title={section("commandLine")}>

@@ -6,6 +6,12 @@ describe("parseSettings", () => {
     expect(DEFAULT_SETTINGS.language).toBe("vi");
     expect(DEFAULT_SETTINGS.showTaskbarStrip).toBe(true);
     expect(DEFAULT_SETTINGS.displayMode).toBe("remaining");
+    expect(DEFAULT_SETTINGS.automaticUpdateChecks).toBe(true);
+  });
+
+  it("reads the update schedule the core also follows", () => {
+    expect(parseSettings({ automaticUpdateChecks: false }).automaticUpdateChecks).toBe(false);
+    expect(parseSettings({ automaticUpdateChecks: "off" }).automaticUpdateChecks).toBe(true);
   });
 
   it("keeps valid keys and falls back per key for invalid ones", () => {

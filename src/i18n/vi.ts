@@ -212,6 +212,7 @@ export const vi: Messages = {
         usageDisplay: "Hiển thị mức dùng",
         taskbar: "Thanh tác vụ",
         notifications: "Thông báo",
+        updates: "Cập nhật ứng dụng",
         commandLine: "Dòng lệnh",
         advanced: "Nâng cao",
       })[key],
@@ -318,6 +319,38 @@ export const vi: Messages = {
   },
   strip: {
     tooltipEmpty: "Quota Control — chưa có chỉ số gắn sao nào có dữ liệu",
+  },
+  update: {
+    availableTitle: "Có phiên bản mới",
+    availableMessage: (name, version) => `${name} ${version} đã sẵn sàng. Cài xong, ứng dụng tự mở lại.`,
+    install: "Cài bản mới",
+    whatsNew: "Xem thay đổi",
+    checking: "Đang kiểm tra phiên bản mới…",
+    upToDateTitle: "Đang dùng bản mới nhất",
+    upToDateMessage: (name, version) => `${name} ${version} là phiên bản mới nhất.`,
+    downloading: (version) => `Đang tải bản ${version}…`,
+    installing: (version) => `Đang cài bản ${version}…`,
+    installingNote: (platform) =>
+      platform === "windows" ? "Trình cài đặt sẽ hiện ra rồi ứng dụng tự mở lại." : "Ứng dụng tự khởi động lại khi cài xong.",
+    failedTitle: (stage) =>
+      ({ check: "Không kiểm tra được phiên bản mới", download: "Không tải được bản mới", install: "Chưa cài được bản mới" })[stage],
+    failure: (reason) =>
+      ({
+        network: "Không kết nối được máy chủ phát hành. Hãy kiểm tra mạng rồi thử lại.",
+        release: "Bản phát hành chưa có gói cho máy này hoặc thông tin phát hành bị lỗi.",
+        signature: "Tệp tải về không khớp chữ ký của Quota Control nên đã bị loại bỏ.",
+        permission: "Chưa được cấp quyền quản trị để cài bản mới.",
+        other: "Đã có lỗi xảy ra. Hãy thử lại sau.",
+      })[reason],
+    retry: "Thử lại",
+    automaticChecks: "Tự động kiểm tra phiên bản mới",
+    automaticChecksNote: "Kiểm tra khi mở ứng dụng rồi 6 giờ một lần. Bản mới chỉ được tải về khi bạn bấm cài.",
+    version: (version) => `Phiên bản ${version}`,
+    checkNow: "Kiểm tra ngay",
+    lastChecked: (time) => `Đang dùng bản mới nhất · kiểm tra lúc ${time}.`,
+    availableStatus: (version) => `Đã có bản ${version}.`,
+    unsupported: "Bản đang chạy không tự cập nhật được (bản dựng thử hoặc gói cài không hỗ trợ). Hãy tải bản mới trên trang phát hành.",
+    openReleases: "Mở trang phát hành",
   },
   notify: {
     title: (provider, metric) => `${provider} · ${metric}`,

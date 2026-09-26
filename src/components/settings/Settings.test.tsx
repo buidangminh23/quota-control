@@ -72,6 +72,46 @@ describe("global shortcut", () => {
   });
 });
 
+describe("app updates", () => {
+  it("checks on request and turns automatic checks off", async () => {
+    const api = await openSettings();
+    api.nextRelease = null;
+    expect(screen.getByRole("heading", { name: "Cập nhật ứng dụng" })).toBeInTheDocument();
+    expect(screen.getByText("Phiên bản 0.1.0")).toBeInTheDocument();
+    const automatic = screen.getByRole("switch", { name: "Tự động kiểm tra phiên bản mới" });
+    expect(automatic).toHaveAttribute("aria-checked", "true");
+    act(() => {
+      fireEvent.click(automatic);
+    });
+    expect(useApp.getState().settings.automaticUpdateChecks).toBe(false);
+    expect(automatic).toHaveAttribute("aria-checked", "false");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Kiểm tra ngay" }));
+    });
+    expect(await screen.findByText(/^Đang dùng bản mới nhất · kiểm tra lúc .+\.$/)).toBeInTheDocument();
+  });
+
+  it("offers the release a check found", async () => {
+    await openSettings();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Kiểm tra ngay" }));
+    });
+    expect(await screen.findByText("Đã có bản 0.2.0.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cài bản mới" })).toBeInTheDocument();
+  });
+
+  it("points a build that cannot update itself to the releases page", async () => {
+    const api = await openSettings();
+    act(() => api.setUpdateStatus({ supported: false, currentVersion: "0.1.0", phase: "idle", manual: false, downloaded: 0 }));
+    expect(await screen.findByText(/không tự cập nhật được/)).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "Tự động kiểm tra phiên bản mới" })).toBeNull();
+    const open = vi.spyOn(api, "openUrl").mockResolvedValue();
+    fireEvent.click(screen.getByRole("button", { name: "Mở trang phát hành" }));
+    expect(open).toHaveBeenCalledWith("https://github.com/buidangminh23/quota-control/releases");
+  });
+});
+
 describe("command line", () => {
   it("installs and removes the terminal helper and names the local API", async () => {
     await openSettings();

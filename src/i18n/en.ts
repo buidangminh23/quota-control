@@ -190,6 +190,7 @@ export const en: Messages = {
         usageDisplay: "Usage Display",
         taskbar: "Taskbar",
         notifications: "Notifications",
+        updates: "App Updates",
         commandLine: "Command Line",
         advanced: "Advanced",
       })[key],
@@ -295,6 +296,38 @@ export const en: Messages = {
   },
   strip: {
     tooltipEmpty: "Quota Control — no starred metric has data yet",
+  },
+  update: {
+    availableTitle: "Update Available",
+    availableMessage: (name, version) => `${name} ${version} is ready to install. The app reopens when it's done.`,
+    install: "Install Update",
+    whatsNew: "What's New",
+    checking: "Checking for updates…",
+    upToDateTitle: "You're Up to Date",
+    upToDateMessage: (name, version) => `${name} ${version} is the latest version.`,
+    downloading: (version) => `Downloading ${version}…`,
+    installing: (version) => `Installing ${version}…`,
+    installingNote: (platform) =>
+      platform === "windows" ? "The installer appears, then the app reopens on its own." : "The app restarts on its own when it's done.",
+    failedTitle: (stage) =>
+      ({ check: "Couldn't Check for Updates", download: "Couldn't Download the Update", install: "The Update Didn't Install" })[stage],
+    failure: (reason) =>
+      ({
+        network: "Couldn't reach the release server. Check your connection and try again.",
+        release: "The release has no package for this computer, or its details are damaged.",
+        signature: "The download doesn't match Quota Control's signature, so it was discarded.",
+        permission: "Administrator permission to install the update was not granted.",
+        other: "Something went wrong. Try again later.",
+      })[reason],
+    retry: "Try Again",
+    automaticChecks: "Check for Updates Automatically",
+    automaticChecksNote: "Checks at launch and every 6 hours. Updates download only when you choose to install.",
+    version: (version) => `Version ${version}`,
+    checkNow: "Check Now",
+    lastChecked: (time) => `Up to date · checked at ${time}.`,
+    availableStatus: (version) => `Version ${version} is available.`,
+    unsupported: "This build can't update itself (a development build or an unsupported package). Download new versions from the releases page.",
+    openReleases: "Open Releases Page",
   },
   notify: {
     title: (provider, metric) => `${provider} · ${metric}`,

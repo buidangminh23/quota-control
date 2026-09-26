@@ -704,6 +704,30 @@ button.uc-row-warning:hover {
   color: var(--uc-secondary);
 }
 
+.uc-update-card .uc-hint-message:last-child {
+  margin-bottom: 0;
+}
+
+.uc-update-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.uc-update-percent {
+  font-size: var(--uc-support-size);
+  color: var(--uc-secondary);
+}
+
+.uc-update-meter {
+  align-self: stretch;
+  margin: 2px 0;
+}
+
+.uc-update-meter-fill {
+  background: var(--uc-accent);
+}
+
 .uc-empty {
   margin: 0;
   padding: 24px 16px;

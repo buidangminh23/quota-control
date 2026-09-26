@@ -4,7 +4,7 @@
  *
  * Rust command names live in `src-tauri/src/commands.rs`; keep both sides in sync.
  */
-import type { AccountLogin, AccountProvider, AppInfo, ChatSession, CliStatus, ConnectedAccount, EngineState, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo } from "./types";
+import type { AccountLogin, AccountProvider, AppInfo, ChatSession, CliStatus, ConnectedAccount, EngineState, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
 
 export type Unsubscribe = () => void;
 
@@ -58,6 +58,14 @@ export interface Backend {
   cliStatus?(): Promise<CliStatus>;
   installCli?(): Promise<CliStatus>;
   uninstallCli?(): Promise<CliStatus>;
+  /** The app's self-update state; absent where the core has no updater. */
+  updateStatus?(): Promise<UpdateStatus>;
+  onUpdateStatus?(listener: (status: UpdateStatus) => void): Unsubscribe;
+  /** Look for a newer release now; resolves to the finished status. */
+  checkForUpdate?(): Promise<UpdateStatus>;
+  /** Download, verify and install the newest release, checking first when none is pending. The app
+   * then exits (Windows, relaunched by the installer) or restarts (Linux); a rejection means it stayed. */
+  installUpdate?(): Promise<void>;
   quit(): Promise<void>;
 }
 

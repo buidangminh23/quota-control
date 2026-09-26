@@ -2,7 +2,7 @@
  * The shape every language catalog implements. Parameterized entries are functions so each language
  * controls word order (English "95% left" vs Vietnamese "Còn 95%").
  */
-import type { CliState, ErrorCategory } from "@/lib/types";
+import type { CliState, ErrorCategory, UpdateFailureReason, UpdateFailureStage } from "@/lib/types";
 
 export type DisplayModeKey = "used" | "remaining";
 export type ResetModeKey = "relative" | "absolute";
@@ -150,7 +150,7 @@ export interface CustomizeMessages {
   undo: string;
 }
 
-export type SettingsSectionKey = "general" | "appearance" | "usageDisplay" | "taskbar" | "notifications" | "commandLine" | "advanced";
+export type SettingsSectionKey = "general" | "appearance" | "usageDisplay" | "taskbar" | "notifications" | "updates" | "commandLine" | "advanced";
 export type NotificationKey = "almostOut" | "cuttingItClose" | "willRunOut";
 
 export interface SettingsMessages {
@@ -239,6 +239,31 @@ export interface StripMessages {
   tooltipEmpty: string;
 }
 
+/** The dashboard's update card and the Settings "App Updates" section. */
+export interface UpdateMessages {
+  availableTitle: string;
+  availableMessage(name: string, version: string): string;
+  install: string;
+  whatsNew: string;
+  checking: string;
+  upToDateTitle: string;
+  upToDateMessage(name: string, version: string): string;
+  downloading(version: string): string;
+  installing(version: string): string;
+  installingNote(platform: "windows" | "linux" | "other"): string;
+  failedTitle(stage: UpdateFailureStage): string;
+  failure(reason: UpdateFailureReason): string;
+  retry: string;
+  automaticChecks: string;
+  automaticChecksNote: string;
+  version(version: string): string;
+  checkNow: string;
+  lastChecked(time: string): string;
+  availableStatus(version: string): string;
+  unsupported: string;
+  openReleases: string;
+}
+
 export interface NotifyMessages {
   title(provider: string, metric: string): string;
   almostOut(leftPercent: number, reset: string | null): string;
@@ -257,6 +282,7 @@ export interface Messages {
   settings: SettingsMessages;
   accounts: AccountsMessages;
   strip: StripMessages;
+  update: UpdateMessages;
   notify: NotifyMessages;
   /** Backend English text → this language; `undefined` keeps the source text. */
   term(text: string): string | undefined;

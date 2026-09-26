@@ -13,9 +13,11 @@ import type {
   EngineState,
   PopoverScreen,
   ProviderEntry,
+  UpdateStatus,
 } from "@/lib/types";
 import { reconcileLayout, parseLayout, resetAllLayout, sameLayout, type LayoutDocument } from "@/model/layout";
 import { DEFAULT_SETTINGS, enabledProvidersOf, mergeSettingsDocument, parseSettings, type AppSettings } from "@/model/settings";
+import { isTransientBanner, updateBannerKey, updateBannerOf } from "@/model/updateBanner";
 import type { DisplayOptions } from "@/model/widgetData";
 
 export type Screen = PopoverScreen | "accounts";
@@ -47,6 +49,10 @@ export interface AppState {
   customizeProviderId: string | null;
   popupVisible: boolean;
   notice: Notice | null;
+  /** The core's self-update state; `null` where there is no updater. */
+  update: UpdateStatus | null;
+  /** Key of the update card the user closed (`updateBannerKey`). */
+  dismissedUpdate: string | null;
 }
 
 /** Undo depth, matching upstream `LayoutUndoHistory`. */
@@ -69,6 +75,8 @@ export const useApp = create<AppState>(() => ({
   customizeProviderId: null,
   popupVisible: true,
   notice: null,
+  update: null,
+  dismissedUpdate: null,
 }));
 
 const get = () => useApp.getState();
@@ -191,6 +199,31 @@ export function refresh(providerId?: string): void {
   void backend().refresh(providerId).catch(logFailure("Refresh"));
 }
 
+/** Look for a new release now; the result shows on the update card and in Settings. */
+export function checkForUpdates(): void {
+  const api = backend();
+  if (!api.checkForUpdate) return;
+  set({ dismissedUpdate: null });
+  void api
+    .checkForUpdate()
+    .then((update) => set({ update }))
+    .catch(logFailure("Checking for updates"));
+}
+
+/** Download and install the newest release. On success the core exits or restarts the app. */
+export function installUpdate(): void {
+  const api = backend();
+  if (!api.installUpdate) return;
+  set({ dismissedUpdate: null });
+  void api.installUpdate().catch(logFailure("Installing the update"));
+}
+
+/** Close the update card until something new happens (upstream's banner close button). */
+export function dismissUpdate(): void {
+  const key = updateBannerKey(get().update);
+  if (key) set({ dismissedUpdate: key });
+}
+
 export async function reloadAccounts(): Promise<void> {
   try {
     set({ accounts: await backend().listAccounts() });
@@ -237,17 +270,19 @@ function applyCatalog(catalog: ProviderEntry[]): void {
 function resetTransientState(): void {
   set({ screen: "dashboard", previousScreen: "dashboard", customizeProviderId: null });
   clearNotice();
+  if (isTransientBanner(updateBannerOf(get().update))) dismissUpdate();
 }
 
 /** Load everything the popup shows and subscribe to the core's events; resolves to the teardown. */
 async function boot(): Promise<Array<() => void>> {
   const api = backend();
-  const [info, catalog, engine, settingsDoc, layoutDoc] = await Promise.all([
+  const [info, catalog, engine, settingsDoc, layoutDoc, update] = await Promise.all([
     api.appInfo(),
     api.catalog(),
     api.engineState(),
     api.loadDocument<unknown>("settings").catch(() => null),
     api.loadDocument<unknown>("layout").catch(() => null),
+    api.updateStatus?.().catch(() => null) ?? Promise.resolve(null),
   ]);
   const stored = parseLayout(layoutDoc);
   const layout = reconcileLayout(stored, catalog);
@@ -259,11 +294,13 @@ async function boot(): Promise<Array<() => void>> {
     settings: parseSettings(settingsDoc),
     enabledProviders: enabledProvidersOf(settingsDoc),
     layout,
+    update,
   });
   if (!stored || !sameLayout(stored, layout)) persistLayout();
   void reloadAccounts();
   void reloadChats();
   return [
+    api.onUpdateStatus?.((next) => set({ update: next })) ?? (() => {}),
     api.onEngineState((state) => set({ engine: state })),
     api.onCatalogChanged((next) => {
       applyCatalog(next);

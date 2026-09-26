@@ -8,6 +8,7 @@ mod ipc_guard;
 mod service;
 mod shortcut;
 mod taskbar_strip;
+mod updates;
 
 use tauri::menu::{ContextMenu, Menu, MenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -18,6 +19,16 @@ use tauri::{
 
 use service::{BackendService, safe_error};
 use tauri_plugin_autostart::ManagerExt as _;
+
+/// Keeps the log writer's worker alive; see [`flush_log`].
+static LOG_GUARD: parking_lot::Mutex<Option<tracing_appender::non_blocking::WorkerGuard>> =
+    parking_lot::Mutex::new(None);
+
+/// Write out every queued log line before the process ends without unwinding (the update
+/// handover exits or restarts in place). Lines logged afterwards are dropped.
+pub(crate) fn flush_log() {
+    drop(LOG_GUARD.lock().take());
+}
 
 pub fn run() -> anyhow::Result<()> {
     #[cfg(not(windows))]
@@ -35,7 +46,8 @@ pub fn run() -> anyhow::Result<()> {
     }
     std::fs::create_dir_all(uc_core::paths::log_dir())?;
     let appender = tracing_appender::rolling::never(uc_core::paths::log_dir(), "UsageControl.log");
-    let (writer, _guard) = tracing_appender::non_blocking(appender);
+    let (writer, guard) = tracing_appender::non_blocking(appender);
+    *LOG_GUARD.lock() = Some(guard);
     tracing_subscriber::fmt()
         .with_writer(writer)
         .with_ansi(false)
@@ -56,6 +68,7 @@ pub fn run() -> anyhow::Result<()> {
         .plugin(tauri_plugin_notification::init())
         .plugin(shortcut::plugin())
         .plugin(tauri_plugin_autostart::Builder::new().app_name("Usage Control").build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(ipc_guard::trusted_handler(tauri::generate_handler![
             commands::app_info,
             commands::catalog,
@@ -88,6 +101,9 @@ pub fn run() -> anyhow::Result<()> {
             cli_install::cli_status,
             cli_install::install_cli,
             cli_install::uninstall_cli,
+            updates::update_status,
+            updates::check_for_update,
+            updates::install_update,
         ]))
         .setup(|app| {
             if !cfg!(debug_assertions) && app.autolaunch().is_enabled().unwrap_or(false) {
@@ -105,6 +121,7 @@ pub fn run() -> anyhow::Result<()> {
             app.manage(chat_store::ChatStore::default_store());
             app.manage(chat_commands::ChatWindows::default());
             app.manage(PopupAnchor::default());
+            app.manage(updates::Updates::new(app.handle()));
             let window =
                 WebviewWindowBuilder::new(app, "popup", WebviewUrl::App("index.html".into()))
                     .title("Quota Control")
@@ -144,6 +161,16 @@ pub fn run() -> anyhow::Result<()> {
                         let engine = app.state::<BackendService>().engine();
                         tauri::async_runtime::spawn(async move {
                             engine.refresh_all(true).await;
+                        });
+                    }
+                    "update" => {
+                        let _ = show_popup(app);
+                        let app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let updates = app.state::<updates::Updates>();
+                            if updates.status().available.is_none() {
+                                updates.check(&app, true).await;
+                            }
                         });
                     }
                     "quit" => app.exit(0),
@@ -193,6 +220,7 @@ pub fn run() -> anyhow::Result<()> {
                 }
             }));
             app.state::<BackendService>().start(app.handle());
+            app.state::<updates::Updates>().start(app.handle());
             if let Err(error) = shortcut::restore(app.handle()) {
                 tracing::warn!("The saved global shortcut is unavailable: {error}");
             }
@@ -216,9 +244,9 @@ pub fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
-    let english = app
-        .state::<BackendService>()
+/// Whether native text (menus, notifications) should be English; the popup's language setting.
+pub(crate) fn english(app: &AppHandle) -> bool {
+    app.state::<BackendService>()
         .load("settings")
         .ok()
         .flatten()
@@ -228,7 +256,11 @@ fn tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
                 .and_then(|value| value.as_str())
                 .map(str::to_owned)
         })
-        .is_some_and(|language| language == "en");
+        .is_some_and(|language| language == "en")
+}
+
+fn tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
+    let english = english(app);
     let text = |vi, en| if english { en } else { vi };
     let show = MenuItem::with_id(
         app,
@@ -309,9 +341,21 @@ fn tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
         None::<&str>,
     )
     .map_err(safe_error)?;
+    let update = app
+        .state::<updates::Updates>()
+        .menu_label(english)
+        .map(|label| MenuItem::with_id(app, "update", label, true, None::<&str>))
+        .transpose()
+        .map_err(safe_error)?;
     let quit = MenuItem::with_id(app, "quit", text("Thoát", "Quit"), true, None::<&str>)
         .map_err(safe_error)?;
-    Menu::with_items(app, &[&show, &refresh, &sessions, &claude, &codex, &quit]).map_err(safe_error)
+    let mut items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
+        vec![&show, &refresh, &sessions, &claude, &codex];
+    if let Some(update) = &update {
+        items.push(update);
+    }
+    items.push(&quit);
+    Menu::with_items(app, &items).map_err(safe_error)
 }
 
 pub(crate) fn update_tray_menu(app: &AppHandle) -> Result<(), String> {

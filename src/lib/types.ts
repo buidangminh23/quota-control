@@ -294,3 +294,30 @@ export interface CliStatus {
   /** The installed command, the package's copy, or the file in the way. */
   location?: string;
 }
+
+/** Where the app's self-update stands (`updates.rs`). */
+export type UpdatePhase = "idle" | "checking" | "upToDate" | "available" | "downloading" | "installing" | "failed";
+export type UpdateFailureStage = "check" | "download" | "install";
+/** `release`: the manifest is missing or has no build for this package; `permission`: elevation was refused. */
+export type UpdateFailureReason = "network" | "release" | "signature" | "permission" | "other";
+
+export interface AvailableUpdate {
+  version: string;
+  notes?: string;
+  publishedAt?: string;
+}
+
+export interface UpdateStatus {
+  /** This installation can replace itself; development builds and other packages cannot. */
+  supported: boolean;
+  currentVersion: string;
+  phase: UpdatePhase;
+  /** The user started the current check or install; background checks stay quiet until they find something. */
+  manual: boolean;
+  available?: AvailableUpdate;
+  downloaded: number;
+  total?: number;
+  /** When the last check finished (ISO-8601). */
+  checkedAt?: string;
+  failure?: { stage: UpdateFailureStage; reason: UpdateFailureReason };
+}
