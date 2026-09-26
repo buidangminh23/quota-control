@@ -10,10 +10,10 @@ describe("provider titles", () => {
     expect(providerTitle(account("Công ty"), "vi")).toBe("Claude · Công ty");
   });
 
-  it("names local-history cards after this computer in both languages", () => {
+  it("names local-history sections after the brand alone in both languages", () => {
     const local = { id: "codex-local", displayName: "Codex Local Usage", icon: "codex" };
-    expect(providerTitle(local, "vi")).toBe("Codex · Trên máy này");
-    expect(providerTitle(local, "en")).toBe("Codex · This Computer");
+    expect(providerTitle(local, "vi")).toBe("Codex");
+    expect(providerTitle(local, "en")).toBe("Codex");
     expect(spendLegendName(local, "vi")).toBe("Codex");
   });
 });

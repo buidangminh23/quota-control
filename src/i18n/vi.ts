@@ -120,7 +120,6 @@ export const vi: Messages = {
     resetsEmpty: "Không có lượt đặt lại nào",
     resetsUnknownExpiries: (count) => `${count} lượt khả dụng, chưa rõ ngày hết hạn`,
     expiringSoon: "Sắp hết hạn",
-    localUsageTitle: (brand) => `${brand} · Trên máy này`,
     noAccountsTitle: "Kết nối tài khoản để xem hạn mức",
     noAccountsMessage:
       "Thêm tài khoản Claude hoặc Codex để theo dõi hạn mức phiên và hạn mức tuần. Token dùng trên máy này vẫn hiện ở tab Token mà không cần đăng nhập.",

@@ -22,6 +22,7 @@ import {
   setPinned,
   setProviderOpen,
   spendCapableProviders,
+  tokenGroups,
 } from "./layout";
 
 const catalog = fixtureCatalog();
@@ -101,6 +102,15 @@ describe("layout views and edits", () => {
     expect(ids(customizeRows(layout, catalog, all))).toEqual([WORK, PERSONAL, CODEX]);
     expect(customizeDetail(layout, catalog, "codex-local")).toBeNull();
     expect(ids(spendCapableProviders(layout, catalog, all).map((provider) => ({ provider })))).toEqual(["claude-local", "codex-local"]);
+  });
+
+  it("gives the Token tab each enabled token source's trend and periods, never the per-kind rows", () => {
+    const hidden = setMetricEnabled(layout, "claude-local.trend", false);
+    const groups = tokenGroups(hidden, catalog, all);
+    expect(ids(groups)).toEqual(["claude-local", "codex-local"]);
+    expect(groups[0]!.always.map((descriptor) => descriptor.id)).toEqual(["claude-local.trend", "claude-local.today", "claude-local.yesterday", "claude-local.last30"]);
+    expect(groups.every((group) => group.onDemand.length === 0)).toBe(true);
+    expect(ids(tokenGroups(layout, catalog, (id) => id !== "codex-local"))).toEqual(["claude-local"]);
   });
 
   it("keeps spend tiles and the usage trend off provider cards", () => {

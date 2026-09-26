@@ -95,14 +95,14 @@ export function isLocalHistoryCard(providerId: string): boolean {
 }
 
 /**
- * Whether a provider gets a card of its own. Local-history providers (`claude-local`) only feed the
- * Token tab's total: they log the same usage as the signed-in accounts, so a card would repeat them.
+ * Whether a provider gets a card on the Hạn mức tab. Local-history providers (`claude-local`) log the
+ * same usage as the signed-in accounts, so they only feed the Token tab (`tokenGroups`).
  */
 export function hasDashboardCard(providerId: string): boolean {
   return !isLocalHistoryCard(providerId);
 }
 
-/** Spend tiles and the usage trend belong to the Token tab's total, never to a provider's card. */
+/** Spend tiles and the usage trend belong to the Token tab, never to an account's card. */
 export function isTokenMetric(descriptor: WidgetDescriptor): boolean {
   return descriptor.isSpendTile || descriptor.template.isChart === true;
 }
@@ -323,6 +323,20 @@ export function displayGroups(layout: LayoutDocument, catalog: readonly Provider
     if (visible.length === 0) return [];
     const { always, onDemand } = split(layout, visible);
     return [always.length === 0 ? { provider: entry.provider, always: onDemand, onDemand: [] } : { provider: entry.provider, always, onDemand }];
+  });
+}
+
+/**
+ * The Token tab's sections under the total: each enabled token source with its usage trend and its
+ * period rows, in the user's metric order. Customize no longer lists these providers, so the rows
+ * ignore `placed` and are all shown, and the per-kind token rows stay out: the tab counts every kind
+ * of token together.
+ */
+export function tokenGroups(layout: LayoutDocument, catalog: readonly ProviderEntry[], isEnabled: IsEnabled): ProviderMetrics[] {
+  return orderedEntries(layout, catalog).flatMap((entry) => {
+    if (hasDashboardCard(entry.provider.id) || !isEnabled(entry.provider.id)) return [];
+    const always = orderedDescriptors(layout, entry).filter(isTokenMetric);
+    return always.length === 0 ? [] : [{ provider: entry.provider, always, onDemand: [] }];
   });
 }
 

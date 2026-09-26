@@ -99,7 +99,6 @@ export const en: Messages = {
     resetsEmpty: "No resets available",
     resetsUnknownExpiries: (count) => `${count} available, expiry dates unavailable`,
     expiringSoon: "Expiring soon",
-    localUsageTitle: (brand) => `${brand} · This Computer`,
     noAccountsTitle: "Connect an Account to See Limits",
     noAccountsMessage:
       "Add a Claude or Codex account to track session and weekly limits. Tokens used on this computer still show in the Tokens tab without signing in.",

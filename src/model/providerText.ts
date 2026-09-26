@@ -47,11 +47,12 @@ export function accountEmailOf(provider: Provider): string | null {
 
 /**
  * The card header title. Account cards drop a label that only repeats the family (the default label
- * is the CLI name, e.g. `Claude · claude`); local-history cards read as "this computer".
+ * is the CLI name, e.g. `Claude · claude`); local-history sections, which only appear on the Token
+ * tab, read as the brand.
  */
 export function providerTitle(provider: Provider, language: Language): string {
   const brand = providerBrand(provider);
-  if (isLocalHistoryCard(provider.id)) return messagesFor(language).dashboard.localUsageTitle(brandName(brand));
+  if (isLocalHistoryCard(provider.id)) return brandName(brand);
   const label = accountLabelOf(provider);
   if (label !== null) {
     const trimmed = label.trim();

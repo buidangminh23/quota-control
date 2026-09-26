@@ -1,12 +1,12 @@
 /**
  * The dashboard screen (upstream `DashboardContentView`), split into two tabs. Hạn mức lists every
  * connected account's card, with onboarding hints and a way to add an account when none is connected.
- * Token shows the total token use across providers. The update card and a sign-in in progress sit on
- * top of both.
+ * Token shows the total token use across providers, then each provider's usage trend and period
+ * rows. The update card and a sign-in in progress sit on top of both.
  */
 import { useMemo } from "react";
 import { messagesFor, type Messages } from "@/i18n";
-import { displayGroups } from "@/model/layout";
+import { displayGroups, tokenGroups, type ProviderMetrics } from "@/model/layout";
 import type { AppSettings } from "@/model/settings";
 import { useDashboardTabs, useDisplay, useIsEnabled, useNow, useSettings } from "@/state/hooks";
 import { navigate, updateSettings, useApp } from "@/state/store";
@@ -35,18 +35,44 @@ function HintCard({ title, message, action, onAction, onDismiss, dismissLabel }:
   );
 }
 
-function LimitsTab({ settings, messages }: { settings: AppSettings; messages: Messages }) {
+function ProviderSections({ groups }: { groups: ProviderMetrics[] }) {
   const display = useDisplay();
+  const engine = useApp((state) => state.engine);
+  const now = useNow();
+  const interval = engine?.refreshIntervalMs ?? 300_000;
+  return groups.map((group) => (
+    <ProviderSection
+      key={group.provider.id}
+      group={group}
+      runtime={engine?.providers[group.provider.id]}
+      display={display}
+      refreshIntervalMs={interval}
+      now={now}
+    />
+  ));
+}
+
+function TokensTab() {
   const catalog = useApp((state) => state.catalog);
   const layout = useApp((state) => state.layout);
-  const engine = useApp((state) => state.engine);
+  const isEnabled = useIsEnabled();
+  const groups = useMemo(() => tokenGroups(layout, catalog, isEnabled), [layout, catalog, isEnabled]);
+  return (
+    <>
+      <TotalSpendCard />
+      <ProviderSections groups={groups} />
+    </>
+  );
+}
+
+function LimitsTab({ settings, messages }: { settings: AppSettings; messages: Messages }) {
+  const catalog = useApp((state) => state.catalog);
+  const layout = useApp((state) => state.layout);
   const accounts = useApp((state) => state.accounts);
   const signingIn = useApp((state) => state.accountLogin !== null);
   const ready = useApp((state) => state.ready);
   const isEnabled = useIsEnabled();
-  const now = useNow();
   const groups = useMemo(() => displayGroups(layout, catalog, isEnabled), [layout, catalog, isEnabled]);
-  const interval = engine?.refreshIntervalMs ?? 300_000;
   const noAccounts = ready && accounts.length === 0 && !signingIn;
   const showAccountsHint = noAccounts && !settings.accountsHintDismissed;
   const showAccountsRow = noAccounts && settings.accountsHintDismissed;
@@ -90,16 +116,7 @@ function LimitsTab({ settings, messages }: { settings: AppSettings; messages: Me
         />
       ) : null}
       {groups.length > 0 ? (
-        groups.map((group) => (
-          <ProviderSection
-            key={group.provider.id}
-            group={group}
-            runtime={engine?.providers[group.provider.id]}
-            display={display}
-            refreshIntervalMs={interval}
-            now={now}
-          />
-        ))
+        <ProviderSections groups={groups} />
       ) : noAccounts ? null : (
         <p className="uc-empty">{ready ? messages.dashboard.emptyState : ""}</p>
       )}
@@ -117,7 +134,7 @@ export function Dashboard() {
     <div className="uc-stack" {...panel}>
       <UpdateBanner />
       <LoginProgress messages={messages} />
-      {tab === "tokens" ? <TotalSpendCard /> : <LimitsTab settings={settings} messages={messages} />}
+      {tab === "tokens" ? <TokensTab /> : <LimitsTab settings={settings} messages={messages} />}
     </div>
   );
 }

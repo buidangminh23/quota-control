@@ -77,7 +77,6 @@ export interface DashboardMessages {
   resetsEmpty: string;
   resetsUnknownExpiries(count: number): string;
   expiringSoon: string;
-  localUsageTitle(brand: string): string;
   noAccountsTitle: string;
   noAccountsMessage: string;
   noAccountsShort: string;

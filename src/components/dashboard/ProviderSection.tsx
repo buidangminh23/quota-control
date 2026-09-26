@@ -86,37 +86,45 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
   const refreshing = runtime?.refreshing ?? false;
   const plan = isLocalHistoryCard(providerId) ? undefined : runtime?.snapshot?.plan;
   const chat = chatTarget(group);
+  const tokenSource = isLocalHistoryCard(providerId);
+  const refreshEntry: MenuEntry = { kind: "item", label: messages.dashboard.refreshProvider(title), onSelect: () => refresh(providerId) };
+  const customizeEntry: MenuEntry = { kind: "item", label: messages.dashboard.customizeEllipsis, onSelect: () => navigate("customize", providerId) };
 
-  const headerEntries = (): MenuEntry[] => [
-    { kind: "item", label: messages.dashboard.hideProvider(title), onSelect: () => setProviderEnabled(providerId, false) },
-    { kind: "separator" },
-    { kind: "item", label: messages.dashboard.refreshProvider(title), onSelect: () => refresh(providerId) },
-    { kind: "item", label: messages.dashboard.customizeEllipsis, onSelect: () => navigate("customize", providerId) },
-    ...(chat ? [{ kind: "item" as const, label: messages.dashboard.openChat(CHAT_PRODUCTS[chat.provider]), onSelect: () => openChat(chat, messages) }] : []),
-  ];
+  const headerEntries = (): MenuEntry[] =>
+    tokenSource
+      ? [refreshEntry]
+      : [
+          { kind: "item", label: messages.dashboard.hideProvider(title), onSelect: () => setProviderEnabled(providerId, false) },
+          { kind: "separator" },
+          refreshEntry,
+          customizeEntry,
+          ...(chat ? [{ kind: "item" as const, label: messages.dashboard.openChat(CHAT_PRODUCTS[chat.provider]), onSelect: () => openChat(chat, messages) }] : []),
+        ];
 
   const rowEntries = (descriptor: WidgetDescriptor): MenuEntry[] => {
     const pinned = isPinned(layout, descriptor.id);
+    const pin: MenuEntry[] = descriptor.pinnable
+      ? [
+          {
+            kind: "item",
+            label: pinned ? messages.dashboard.unstar : messages.dashboard.starForTaskbar,
+            onSelect: () => {
+              if (!pinned && !canPin(layout, catalog, descriptor.id)) {
+                showNotice(messages.dashboard.pinLimit(MAX_PINS_PER_PROVIDER), "notice");
+                return;
+              }
+              updateLayout((current) => setPinned(current, catalog, descriptor.id, !pinned));
+            },
+          },
+        ]
+      : [];
+    if (tokenSource) return [...pin, ...(pin.length > 0 ? [{ kind: "separator" as const }] : []), refreshEntry];
     return [
       { kind: "item", label: messages.dashboard.hide, onSelect: () => updateLayout((current) => setMetricEnabled(current, descriptor.id, false)) },
-      ...(descriptor.pinnable
-        ? [
-            {
-              kind: "item" as const,
-              label: pinned ? messages.dashboard.unstar : messages.dashboard.starForTaskbar,
-              onSelect: () => {
-                if (!pinned && !canPin(layout, catalog, descriptor.id)) {
-                  showNotice(messages.dashboard.pinLimit(MAX_PINS_PER_PROVIDER), "notice");
-                  return;
-                }
-                updateLayout((current) => setPinned(current, catalog, descriptor.id, !pinned));
-              },
-            },
-          ]
-        : []),
+      ...pin,
       { kind: "separator" },
-      { kind: "item", label: messages.dashboard.refreshProvider(title), onSelect: () => refresh(providerId) },
-      { kind: "item", label: messages.dashboard.customizeEllipsis, onSelect: () => navigate("customize", providerId) },
+      refreshEntry,
+      customizeEntry,
     ];
   };
 

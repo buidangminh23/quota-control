@@ -56,17 +56,31 @@ describe("popup", () => {
     expect(screen.getByText(/Cập nhật sau/)).toBeInTheDocument();
   });
 
-  it("shows only the token total on the Token tab and remembers the choice", async () => {
+  it("shows the token total, then each source's trend and periods, on the Token tab and remembers the choice", async () => {
     await renderApp();
     fireEvent.click(screen.getByRole("tab", { name: "Token" }));
     expect(screen.getByRole("tab", { name: "Token" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tabpanel", { name: "Token" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Chỉ số tổng chi tiêu/ })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Hôm nay" })).toBeInTheDocument();
+    for (const name of ["Claude", "Codex"]) {
+      const source = screen.getByRole("region", { name });
+      for (const row of ["Xu hướng sử dụng", "Hôm nay", "Hôm qua", "30 ngày qua"]) expect(within(source).getByText(row)).toBeInTheDocument();
+      expect(within(source).queryByText("Token đầu vào")).not.toBeInTheDocument();
+    }
     expect(screen.queryByRole("region", { name: "Claude · Công ty" })).not.toBeInTheDocument();
-    expect(screen.queryByText("Claude · Trên máy này")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Trên máy này/)).not.toBeInTheDocument();
     expect(useApp.getState().settings.dashboardTab).toBe("tokens");
     expect(useApp.getState().tabMotion).toBe("forward");
+  });
+
+  it("offers only a refresh on a token source, since hiding it would empty the Token tab", async () => {
+    await renderApp();
+    fireEvent.click(screen.getByRole("tab", { name: "Token" }));
+    fireEvent.contextMenu(screen.getByRole("region", { name: "Claude" }).querySelector("header")!);
+    expect(screen.getByRole("menuitem", { name: "Làm mới Claude" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Ẩn Claude" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Tùy chỉnh…" })).not.toBeInTheDocument();
   });
 
   it("moves between tabs with the arrow keys and Ctrl+Tab", async () => {
