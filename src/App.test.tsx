@@ -138,6 +138,13 @@ describe("popup", () => {
     expect(shareMenu()).toEqual(["Token"]);
   });
 
+  it("draws the Claude and Codex marks in their brand colors", async () => {
+    await renderApp();
+    const mark = (name: string) => screen.getByRole("region", { name }).querySelector("svg.uc-mark");
+    expect(mark("Claude · Công ty")).toHaveAttribute("fill", "#DE7356");
+    expect(mark("Codex")).toHaveAttribute("fill", "#10A37F");
+  });
+
   it("switches every screen to English", async () => {
     await renderApp();
     act(() => updateSettings({ language: "en" }));

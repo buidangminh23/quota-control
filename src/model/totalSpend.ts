@@ -131,10 +131,17 @@ const BRAND_COLORS: Readonly<Record<string, readonly [Hex, Hex]>> = {
 
 const FALLBACK_COLORS: readonly Hex[] = ["#34C759", "#5856D6", "#FF2D55", "#A2845E"];
 
-/** The ring/legend color for a brand in the given appearance. */
-export function brandColor(brand: string, dark: boolean): Hex {
+/** A brand's own color in the given appearance (it also tints the brand's mark), or `null` when the palette has none. */
+export function knownBrandColor(brand: string, dark: boolean): Hex | null {
   const known = BRAND_COLORS[brand];
-  if (known) return dark ? known[1] : known[0];
+  if (!known) return null;
+  return dark ? known[1] : known[0];
+}
+
+/** The ring/legend color for a brand in the given appearance; a brand outside the palette gets a stable stand-in. */
+export function brandColor(brand: string, dark: boolean): Hex {
+  const known = knownBrandColor(brand, dark);
+  if (known) return known;
   let hash = 0;
   for (const char of brand) hash = (hash * 31 + char.codePointAt(0)!) & 0xffff;
   return FALLBACK_COLORS[hash % FALLBACK_COLORS.length]!;

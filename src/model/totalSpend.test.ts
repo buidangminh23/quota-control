@@ -1,7 +1,7 @@
 import { fixtureCatalog, fixtureSnapshots } from "@/lib/fixtures";
 import type { Provider } from "@/lib/types";
 import { ringSectorPath } from "./ringPath";
-import { brandColor, MINIMUM_SLICE_SHARE, projectTotalSpend, ringArcs, totalSpendSlices } from "./totalSpend";
+import { brandColor, knownBrandColor, MINIMUM_SLICE_SHARE, projectTotalSpend, ringArcs, totalSpendSlices } from "./totalSpend";
 
 const providers: Provider[] = fixtureCatalog()
   .filter((entry) => entry.descriptors.some((descriptor) => descriptor.isSpendTile))
@@ -42,6 +42,12 @@ describe("total spend", () => {
     expect(brandColor("claude", false)).toBe("#DE7356");
     expect(brandColor("cursor", true)).toBe("#F5F5F7");
     expect(brandColor("somebody", false)).toBe(brandColor("somebody", true));
+  });
+
+  it("gives a mark its brand color only when the palette knows the brand", () => {
+    expect(knownBrandColor("codex", true)).toBe("#10A37F");
+    expect(knownBrandColor("cursor", false)).toBe("#13120A");
+    expect(knownBrandColor("somebody", false)).toBeNull();
   });
 });
 
