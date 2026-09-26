@@ -106,7 +106,7 @@ export const en: Messages = {
     noAccountsTitle: "Connect an Account to See Limits",
     noAccountsMessage:
       "Add a Claude or Codex account to track session and weekly limits. Spend on this computer is counted without signing in.",
-    noAccountsShort: "No account to show limits for",
+    noAccountsShort: "No accounts yet",
     addAccount: "Add Account",
     openChat: (product) => `Open ${product} in the App`,
     trendRange: (days, first, last) => `${days} days, ${first} – ${last}`,

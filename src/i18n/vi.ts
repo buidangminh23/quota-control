@@ -127,7 +127,7 @@ export const vi: Messages = {
     noAccountsTitle: "Kết nối tài khoản để xem hạn mức",
     noAccountsMessage:
       "Thêm tài khoản Claude hoặc Codex để theo dõi hạn mức phiên và hạn mức tuần. Chi phí dùng trên máy này vẫn được tính mà không cần đăng nhập.",
-    noAccountsShort: "Chưa có tài khoản để xem hạn mức",
+    noAccountsShort: "Chưa có tài khoản",
     addAccount: "Thêm tài khoản",
     openChat: (product) => `Mở ${product} trong ứng dụng`,
     trendRange: (days, first, last) => `${days} ngày, ${first} – ${last}`,

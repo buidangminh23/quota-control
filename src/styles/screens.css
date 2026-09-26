@@ -38,6 +38,10 @@
   opacity: 0.55;
 }
 
+.uc-list-row > .uc-button {
+  flex: none;
+}
+
 .uc-list-row.is-lifted {
   border-radius: var(--uc-card-radius);
   background: var(--uc-card-solid);
