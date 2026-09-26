@@ -18,7 +18,7 @@ import type {
   ProviderEntry,
   UpdateStatus,
 } from "@/lib/types";
-import { reconcileLayout, parseLayout, resetAllLayout, sameLayout, spendCapableProviders, type LayoutDocument } from "@/model/layout";
+import { hasDashboardCard, reconcileLayout, parseLayout, resetAllLayout, sameLayout, type LayoutDocument } from "@/model/layout";
 import { brandName } from "@/model/providerText";
 import { DASHBOARD_TABS, DEFAULT_SETTINGS, enabledProvidersOf, mergeSettingsDocument, parseSettings, type AppSettings, type DashboardTab } from "@/model/settings";
 import { isTransientBanner, updateBannerKey, updateBannerOf } from "@/model/updateBanner";
@@ -111,14 +111,23 @@ export function isProviderEnabled(state: Pick<AppState, "enabledProviders">, pro
   return state.enabledProviders === null || state.enabledProviders.includes(providerId);
 }
 
-/** The dashboard has its Token tab while Total Spend is on and an enabled provider tracks spend. */
-export function hasTokensTab(state: Pick<AppState, "settings" | "layout" | "catalog" | "enabledProviders">): boolean {
-  if (!state.settings.showTotalSpend) return false;
-  return spendCapableProviders(state.layout, state.catalog, (providerId) => isProviderEnabled(state, providerId)).length > 0;
+/** The providers the Token tab reads: local token history, which has no card or switch of its own. */
+export function tokenSourceIds(catalog: readonly ProviderEntry[]): string[] {
+  return catalog
+    .filter((entry) => !hasDashboardCard(entry.provider.id) && entry.descriptors.some((descriptor) => descriptor.isSpendTile))
+    .map((entry) => entry.provider.id);
+}
+
+/**
+ * The dashboard has its Token tab while "Hiện tab Token" is on and the core can read token history.
+ * It never depends on which sources are enabled: `enableTokenSources` turns them back on instead.
+ */
+export function hasTokensTab(state: Pick<AppState, "settings" | "catalog">): boolean {
+  return state.settings.showTotalSpend && tokenSourceIds(state.catalog).length > 0;
 }
 
 /** The dashboard tab on screen: the saved one, or Hạn mức while there is no Token tab. */
-export function visibleDashboardTab(state: Pick<AppState, "settings" | "layout" | "catalog" | "enabledProviders">): DashboardTab {
+export function visibleDashboardTab(state: Pick<AppState, "settings" | "catalog">): DashboardTab {
   return hasTokensTab(state) ? state.settings.dashboardTab : "quota";
 }
 
@@ -158,6 +167,19 @@ function persistLayout(): void {
 export function updateSettings(patch: Partial<AppSettings>): void {
   set({ settings: { ...get().settings, ...patch } });
   persistSettings();
+  if (patch.showTotalSpend) enableTokenSources();
+}
+
+/**
+ * Keep the Token tab's sources enabled while the tab is on. Before 0.1.6 they were dashboard cards,
+ * and hiding such a card disabled its source; with no card or switch left to undo that, the tab
+ * would stay empty (or, in 0.1.6, missing) for good.
+ */
+function enableTokenSources(): void {
+  const { settings, catalog, enabledProviders } = get();
+  if (!settings.showTotalSpend || enabledProviders === null) return;
+  const disabled = tokenSourceIds(catalog).filter((providerId) => !enabledProviders.includes(providerId));
+  if (disabled.length > 0) setProvidersEnabled(disabled, true);
 }
 
 /** Show a dashboard tab; its content slides in from the side the tab sits on. */
@@ -213,14 +235,24 @@ export function resetAllSettings(): void {
 }
 
 export function setProviderEnabled(providerId: string, enabled: boolean): void {
+  setProvidersEnabled([providerId], enabled);
+}
+
+/**
+ * The core rewrites the settings document to record the selection, so the call queues behind any
+ * settings save in flight: that save must not write back the selection it read before this one.
+ */
+function setProvidersEnabled(providerIds: readonly string[], enabled: boolean): void {
   const state = get();
   const all = state.catalog.map((entry) => entry.provider.id);
   const current = new Set(state.enabledProviders ?? all);
-  if (enabled) current.add(providerId);
-  else current.delete(providerId);
+  for (const providerId of providerIds) {
+    if (enabled) current.add(providerId);
+    else current.delete(providerId);
+  }
   const ids = all.filter((id) => current.has(id));
   set({ enabledProviders: ids });
-  void backend().setEnabledProviders(ids).catch(logFailure("Enabling providers"));
+  settingsWrites = settingsWrites.then(() => backend().setEnabledProviders(ids)).catch(logFailure("Enabling providers"));
 }
 
 export function navigate(screen: Screen, customizeProviderId: string | null = null): void {
@@ -412,6 +444,7 @@ async function boot(): Promise<Array<() => void>> {
     update,
   });
   if (!stored || !sameLayout(stored, layout)) persistLayout();
+  enableTokenSources();
   void reloadAccounts();
   void reloadChats();
   return [
@@ -420,7 +453,7 @@ async function boot(): Promise<Array<() => void>> {
     api.onCatalogChanged((next) => {
       applyCatalog(next);
       void reloadAccounts();
-      void reloadEnabledProviders();
+      void reloadEnabledProviders().then(enableTokenSources);
     }),
     api.onPopupVisibility((shown) => {
       set({ popupVisible: shown });

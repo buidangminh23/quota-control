@@ -11,8 +11,10 @@ import { closeMenu } from "./components/ui/menu";
 
 vi.mock("@/strip/useTaskbarStrip", () => ({ useTaskbarStrip: () => {} }));
 
-async function renderApp(strict = false) {
+/** `settings` builds the stored settings document from the catalog's provider ids before the popup boots. */
+async function renderApp({ strict = false, settings }: { strict?: boolean; settings?: (providerIds: string[]) => Record<string, unknown> } = {}) {
   const api = new MockBackend();
+  if (settings) await api.saveDocument("settings", settings((await api.catalog()).map((entry) => entry.provider.id)));
   setBackend(api);
   render(strict ? <StrictMode><App /></StrictMode> : <App />);
   await screen.findByText("Claude · Công ty");
@@ -31,7 +33,7 @@ afterEach(async () => {
 
 describe("popup", () => {
   it("keeps receiving live engine updates under StrictMode's double mount", async () => {
-    const api = await renderApp(true);
+    const api = await renderApp({ strict: true });
     await act(async () => {
       void api.refresh("claude@7c1e");
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -97,6 +99,30 @@ describe("popup", () => {
     expect(screen.getByRole("region", { name: "Claude · Công ty" })).toBeInTheDocument();
     act(() => updateSettings({ showTotalSpend: true }));
     expect(screen.getByRole("tab", { name: "Token" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("brings back the Token tab and its sources when an older version hid the token cards", async () => {
+    const api = await renderApp({ settings: (ids) => ({ enabledProviders: ids.filter((id) => !id.endsWith("-local")) }) });
+    expect(screen.getByRole("tab", { name: "Hạn mức" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(screen.getByRole("tab", { name: "Token" }));
+    expect(screen.getByRole("button", { name: /Chỉ số tổng chi tiêu/ })).toBeInTheDocument();
+    expect(useApp.getState().enabledProviders).toEqual(expect.arrayContaining(["claude-local", "codex-local"]));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 5)));
+    const stored = await api.loadDocument<{ enabledProviders: string[] }>("settings");
+    expect(stored?.enabledProviders).toEqual(expect.arrayContaining(["claude-local", "codex-local", "claude@7c1e"]));
+    expect(screen.queryByText("Claude · Trên máy này")).not.toBeInTheDocument();
+  });
+
+  it("turns the token sources back on together with the Token tab setting", async () => {
+    const api = await renderApp({ settings: (ids) => ({ showTotalSpend: false, enabledProviders: ids.filter((id) => !id.endsWith("-local")) }) });
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(useApp.getState().enabledProviders).not.toContain("claude-local");
+    act(() => updateSettings({ showTotalSpend: true }));
+    expect(screen.getByRole("tab", { name: "Token" })).toBeInTheDocument();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 5)));
+    const stored = await api.loadDocument<{ enabledProviders: string[]; showTotalSpend: boolean }>("settings");
+    expect(stored?.showTotalSpend).toBe(true);
+    expect(stored?.enabledProviders).toEqual(expect.arrayContaining(["claude-local", "codex-local"]));
   });
 
   it("offers the open tab's content in the screenshot menu", async () => {
