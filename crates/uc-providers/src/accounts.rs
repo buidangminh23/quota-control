@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use chrono::{DateTime, Utc};
@@ -70,29 +71,63 @@ pub(crate) fn identity(
     }
 }
 
-pub async fn import_current_account(
-    store: Arc<AccountStore>,
+/// Claude Code keeps the signed-in account's identity in `.claude.json`, beside its credentials.
+pub(crate) fn claude_profile_path() -> PathBuf {
+    uc_core::paths::env_path("CLAUDE_CONFIG_DIR")
+        .map(|root| root.join(".claude.json"))
+        .unwrap_or_else(|| uc_core::paths::home_dir().join(".claude.json"))
+}
+
+/// A login that the Claude Code or Codex CLI on this computer holds right now. Quota Control reads
+/// its file on every refresh and never renews it, so the CLI stays the only owner of the session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CliAccount {
+    pub kind: ProviderKind,
+    pub id: String,
+    pub updated_at: DateTime<Utc>,
+    pub path: PathBuf,
+    pub profile: Option<PathBuf>,
+}
+
+/// The CLI logins on this computer that can show live limits. A CLI that is signed out, or whose
+/// file holds no token (Claude Code inside Claude Desktop keeps its sign-in elsewhere), is left out.
+/// Reads files, so keep it off the async runtime's worker threads where that matters.
+pub fn cli_accounts() -> Vec<CliAccount> {
+    [ProviderKind::Claude, ProviderKind::Codex]
+        .into_iter()
+        .filter_map(|kind| {
+            let path = CredentialStore::discover(kind).path()?.to_path_buf();
+            let profile = (kind == ProviderKind::Claude).then(claude_profile_path);
+            cli_account_from(kind, path, profile).ok()
+        })
+        .collect()
+}
+
+pub fn cli_account_from(
     kind: ProviderKind,
-    label: String,
-) -> Result<AccountRecord, SimpleProviderError> {
-    let credentials = CredentialStore::discover(kind);
-    let profile = if kind == ProviderKind::Claude {
-        Some(
-            uc_core::paths::env_path("CLAUDE_CONFIG_DIR")
-                .map(|root| root.join(".claude.json"))
-                .unwrap_or_else(|| uc_core::paths::home_dir().join(".claude.json")),
-        )
-    } else {
-        None
-    };
-    import_account_from_file(
-        store,
+    path: PathBuf,
+    profile: Option<PathBuf>,
+) -> Result<CliAccount, SimpleProviderError> {
+    let mut document = read_json_file(&path, kind)?;
+    parse_credentials(kind, &document)?;
+    if kind == ProviderKind::Claude {
+        let profile = profile.as_deref().ok_or_else(|| {
+            auth_error("Claude account metadata is unavailable. Connect through the browser.")
+        })?;
+        document["oauthAccount"] = read_json_file(profile, kind)?["oauthAccount"].clone();
+    }
+    let key = identity(kind, &document)?;
+    let updated_at = std::fs::metadata(&path)
+        .and_then(|metadata| metadata.modified())
+        .map(DateTime::<Utc>::from)
+        .unwrap_or_else(|_| Utc::now());
+    Ok(CliAccount {
         kind,
-        label,
-        credentials.path().ok_or_else(account_error)?.to_path_buf(),
+        id: account_id(kind, &key),
+        updated_at,
+        path,
         profile,
-    )
-    .await
+    })
 }
 
 pub async fn import_account_from_file(
@@ -144,30 +179,79 @@ pub(crate) fn account_id(kind: ProviderKind, identity: &str) -> String {
     format!("{}@{hash}", kind.cli())
 }
 
-pub fn managed_runtimes(
-    store: Arc<AccountStore>,
-) -> Result<Vec<Arc<dyn ProviderRuntime>>, SimpleProviderError> {
-    runtimes_with_client(store, ReqwestHttpClient::shared())
+/// An account card the app shows, with where its session comes from.
+#[derive(Clone, Copy, Debug)]
+pub enum VisibleAccount<'a> {
+    Stored(&'a AccountRecord),
+    Cli(&'a CliAccount),
 }
 
+/// The accounts to show. A browser-connected session wins over the same account's CLI login,
+/// because it renews itself; a live CLI login wins over an older imported copy of it.
+pub fn visible_accounts<'a>(
+    records: &'a [AccountRecord],
+    cli: &'a [CliAccount],
+) -> Vec<VisibleAccount<'a>> {
+    let mut visible: Vec<_> = records
+        .iter()
+        .filter(|record| {
+            record.credential_mode != CredentialMode::SharedCli
+                || !cli.iter().any(|login| login.id == record.id)
+        })
+        .map(VisibleAccount::Stored)
+        .collect();
+    visible.extend(
+        cli.iter()
+            .filter(|login| {
+                !records.iter().any(|record| {
+                    record.id == login.id && record.credential_mode == CredentialMode::ManagedOauth
+                })
+            })
+            .map(VisibleAccount::Cli),
+    );
+    visible
+}
+
+pub fn account_runtimes(
+    store: Arc<AccountStore>,
+    cli: &[CliAccount],
+) -> Result<Vec<Arc<dyn ProviderRuntime>>, SimpleProviderError> {
+    account_runtimes_with(store, cli, ReqwestHttpClient::shared())
+}
+
+pub fn account_runtimes_with(
+    store: Arc<AccountStore>,
+    cli: &[CliAccount],
+    http: SharedHttpClient,
+) -> Result<Vec<Arc<dyn ProviderRuntime>>, SimpleProviderError> {
+    let records = store.list().map_err(|_| account_error())?;
+    visible_accounts(&records, cli)
+        .into_iter()
+        .map(|account| match account {
+            VisibleAccount::Stored(record) => {
+                let kind = ProviderKind::parse(&record.provider)
+                    .ok_or_else(|| auth_error("Unsupported account provider."))?;
+                let credentials = CredentialStore::for_account(kind, store.clone(), record.clone());
+                Ok(Arc::new(
+                    LocalProvider::new(kind, credentials, http.clone()).with_account(record),
+                ) as Arc<dyn ProviderRuntime>)
+            }
+            VisibleAccount::Cli(login) => {
+                let credentials = CredentialStore::new(login.kind, login.path.clone());
+                Ok(Arc::new(
+                    LocalProvider::new(login.kind, credentials, http.clone()).with_cli_login(login),
+                ) as Arc<dyn ProviderRuntime>)
+            }
+        })
+        .collect()
+}
+
+/// Runtimes for the stored accounts alone.
 pub fn runtimes_with_client(
     store: Arc<AccountStore>,
     http: SharedHttpClient,
 ) -> Result<Vec<Arc<dyn ProviderRuntime>>, SimpleProviderError> {
-    store
-        .list()
-        .map_err(|_| account_error())?
-        .into_iter()
-        .map(|record| {
-            let kind = ProviderKind::parse(&record.provider)
-                .ok_or_else(|| auth_error("Unsupported account provider."))?;
-            let credentials = CredentialStore::for_account(kind, store.clone(), record.clone());
-            Ok(
-                Arc::new(LocalProvider::new(kind, credentials, http.clone()).with_account(&record))
-                    as Arc<dyn ProviderRuntime>,
-            )
-        })
-        .collect()
+    account_runtimes_with(store, &[], http)
 }
 
 pub(crate) fn refresh_lock(id: &str) -> Arc<tokio::sync::Mutex<()>> {

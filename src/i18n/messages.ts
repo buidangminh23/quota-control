@@ -82,6 +82,7 @@ export interface DashboardMessages {
   localUsageTitle(brand: string): string;
   noAccountsTitle: string;
   noAccountsMessage: string;
+  noAccountsShort: string;
   addAccount: string;
   openChat(product: string): string;
   trendRange(days: number, first: string, last: string): string;
@@ -207,24 +208,26 @@ export interface SettingsMessages {
 export interface AccountsMessages {
   connected: string;
   none: string;
-  mode(mode: "shared_cli" | "managed_oauth"): string;
+  /** `cliName`: Claude Code or the Codex CLI, whose login a `cli` account follows. */
+  mode(mode: "shared_cli" | "managed_oauth" | "cli", cliName: string): string;
   status(kind: "ok" | "refreshing" | "error" | "unknown"): string;
   add: string;
-  labelPlaceholder: string;
-  signIn(brand: string): string;
-  importCurrent(brand: string): string;
-  waitingForBrowser: string;
-  pasteCode: string;
-  codePlaceholder: string;
-  complete: string;
+  signInWithGoogle: string;
+  signInNote(brand: string): string;
+  cliNote: string;
+  starting: string;
+  waiting(brand: string, browser: "chrome" | "default"): string;
+  waitingNote: string;
   cancel: string;
   openSignInPage: string;
+  connectedNotice(brand: string): string;
+  notConnectedNotice(brand: string): string;
+  loginFailed(brand: string, detail: string): string;
   remove: string;
   removeTitle(label: string): string;
   removeMessage: string;
   removeConfirm: string;
   failed(detail: string): string;
-  added(label: string): string;
   chats: string;
   chatsNote: string;
   chatsAuthNote: string;

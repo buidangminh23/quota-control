@@ -22,7 +22,9 @@ afterEach(async () => {
   closeDialog();
   cleanup();
   await act(() => new Promise((resolve) => setTimeout(resolve, 5)));
-  act(() => useApp.setState({ screen: "dashboard", previousScreen: "dashboard", customizeProviderId: null, notice: null }));
+  act(() =>
+    useApp.setState({ screen: "dashboard", previousScreen: "dashboard", customizeProviderId: null, notice: null, accountLogin: null, accountLoginError: null }),
+  );
 });
 
 describe("popup", () => {
@@ -68,12 +70,66 @@ describe("popup", () => {
     expect(screen.getByRole("switch", { name: "Hiện số liệu trên thanh tác vụ" })).toBeChecked();
   });
 
-  it("lists connected accounts with sign-in and in-app chat actions", async () => {
+  it("lists connected accounts with a Google sign-in and in-app chat actions", async () => {
     await renderApp();
     act(() => useApp.setState({ screen: "accounts" }));
     expect(await screen.findByRole("heading", { name: "Tài khoản" })).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /^Xóa / })).toHaveLength(3);
-    expect(screen.getByRole("button", { name: "Đăng nhập Claude…" })).toBeInTheDocument();
+    expect(screen.getByText("Tự động từ Codex CLI trên máy này")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /^Xóa / })).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "Xóa Codex" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Đăng nhập bằng Google" })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Phiên ChatGPT mới/ })).toBeInTheDocument();
+  });
+
+  it("keeps waiting for a browser sign-in while the popup hides and announces the new account", async () => {
+    const api = await renderApp();
+    api.loginDelayMs = null;
+    act(() => useApp.setState({ screen: "accounts" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Đăng nhập bằng Google" }));
+    expect(await screen.findByText("Đang chờ bạn đăng nhập Claude trong Google Chrome…")).toBeInTheDocument();
+    await act(() => api.hidePopup());
+    expect(useApp.getState().screen).toBe("dashboard");
+    expect(screen.getByText("Đang chờ bạn đăng nhập Claude trong Google Chrome…")).toBeInTheDocument();
+    const login = useApp.getState().accountLogin;
+    if (login?.phase !== "waiting") throw new Error("the sign-in should be waiting");
+    await act(async () => {
+      api.finishLogin(login.flowId);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+    expect(useApp.getState().accountLogin).toBeNull();
+    expect(screen.getByText("Đã kết nối Claude")).toBeInTheDocument();
+    expect(useApp.getState().accounts.filter((account) => account.credentialMode === "managed_oauth")).toHaveLength(2);
+  });
+
+  it("explains a failed sign-in and lets a waiting one be cancelled", async () => {
+    const api = await renderApp();
+    api.loginDelayMs = null;
+    act(() => useApp.setState({ screen: "accounts" }));
+    fireEvent.click(await screen.findByRole("radio", { name: "Codex" }));
+    fireEvent.click(screen.getByRole("button", { name: "Đăng nhập bằng Google" }));
+    await screen.findByText("Đang chờ bạn đăng nhập Codex trong Google Chrome…");
+    const login = useApp.getState().accountLogin;
+    if (login?.phase !== "waiting") throw new Error("the sign-in should be waiting");
+    act(() => api.finishLogin(login.flowId, "The browser login was not authorized."));
+    expect(await screen.findByText("Chưa kết nối được Codex: Đăng nhập trong trình duyệt chưa được cho phép.")).toBeInTheDocument();
+    expect(screen.getByText("Chưa kết nối được Codex")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Đăng nhập bằng Google" }));
+    await screen.findByText("Đang chờ bạn đăng nhập Codex trong Google Chrome…");
+    fireEvent.click(screen.getByRole("button", { name: "Hủy" }));
+    expect(await screen.findByRole("button", { name: "Đăng nhập bằng Google" })).toBeInTheDocument();
+    expect(useApp.getState().accountLogin).toBeNull();
+  });
+
+  it("keeps a way to add an account after the onboarding hint is closed", async () => {
+    const api = await renderApp();
+    for (const account of await api.listAccounts()) await act(() => api.removeAccount(account.id));
+    await act(async () => {
+      updateSettings({ accountsHintDismissed: true });
+      useApp.setState({ accounts: [] });
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Thêm tài khoản" }));
+    expect(await screen.findByRole("heading", { name: "Tài khoản" })).toBeInTheDocument();
+    act(() => updateSettings({ accountsHintDismissed: false }));
   });
 });

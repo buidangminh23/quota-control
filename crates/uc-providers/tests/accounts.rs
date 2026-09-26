@@ -13,10 +13,13 @@ use uc_core::{
     RefreshContext,
 };
 use uc_providers::{
-    LocalProvider, ProviderKind,
-    accounts::{import_account_from_file, runtimes_with_client},
+    CliAccount, LocalProvider, ProviderKind, VisibleAccount,
+    accounts::{
+        account_runtimes_with, cli_account_from, import_account_from_file, runtimes_with_client,
+    },
     credentials::CredentialStore,
     oauth::{OAuthEndpoints, OAuthManager},
+    visible_accounts,
 };
 
 fn jwt(claims: Value) -> String {
@@ -195,8 +198,33 @@ async fn managed_refresh_is_serialized_across_distinct_runtime_instances() {
     assert!(saved["claudeAiOauth"]["expiresAt"].as_i64().unwrap() > Utc::now().timestamp_millis());
 }
 
+/// Play the browser coming back to the callback: request `target` on the redirect's port.
+fn return_to(redirect: &str, target: String) -> tokio::task::JoinHandle<String> {
+    let port = url::Url::parse(redirect).unwrap().port().unwrap();
+    tokio::spawn(async move {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        stream
+            .write_all(format!("GET {target} HTTP/1.1\r\nHost: localhost\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        let mut reply = String::new();
+        stream.read_to_string(&mut reply).await.unwrap();
+        reply
+    })
+}
+
+fn query_of(start: &uc_providers::oauth::LoginStart) -> HashMap<String, String> {
+    url::Url::parse(&start.authorization_url)
+        .unwrap()
+        .query_pairs()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect()
+}
+
 #[tokio::test]
-async fn claude_manual_oauth_validates_state_pkce_and_persists_independent_session() {
+async fn claude_loopback_oauth_validates_state_pkce_and_persists_independent_session() {
     let (_dir, store) = store();
     let client = http(
         json!({"access_token":"fixture-new","refresh_token":"fixture-next","expires_in":3600,"scope":"user:profile user:inference"}),
@@ -206,24 +234,19 @@ async fn claude_manual_oauth_validates_state_pkce_and_persists_independent_sessi
         .begin_login(ProviderKind::Claude, "Primary".into())
         .await
         .unwrap();
-    let url = url::Url::parse(&start.authorization_url).unwrap();
-    let query: HashMap<_, _> = url
-        .query_pairs()
-        .map(|(key, value)| (key.to_string(), value.to_string()))
-        .collect();
-    assert_eq!(start.callback_mode, "manual");
+    let query = query_of(&start);
     assert_eq!(
         serde_json::to_value(&start).unwrap()["expiresInSeconds"],
         600
     );
     assert_eq!(query["code_challenge_method"], "S256");
-    let record = manager
-        .complete_login(
-            &start.flow_id,
-            Some(format!("fixture-code#{}", query["state"])),
-        )
-        .await
-        .unwrap();
+    assert!(query["redirect_uri"].starts_with("http://localhost:"));
+    let tab = return_to(
+        &query["redirect_uri"],
+        format!("/callback?code=fixture-code&state={}", query["state"]),
+    );
+    let record = manager.complete_login(&start.flow_id).await.unwrap();
+    assert!(tab.await.unwrap().starts_with("HTTP/1.1 200"));
     assert_eq!(record.credential_mode, CredentialMode::ManagedOauth);
     {
         let requests = client.requests.lock().unwrap();
@@ -233,27 +256,25 @@ async fn claude_manual_oauth_validates_state_pkce_and_persists_independent_sessi
         ));
         assert_eq!(challenge, query["code_challenge"]);
         assert_eq!(payload["state"], query["state"]);
+        assert_eq!(payload["redirect_uri"], query["redirect_uri"]);
     }
     assert_eq!(
         store.credentials(&record.id).unwrap()["claudeAiOauth"]["subscriptionType"],
         "max"
     );
-    assert!(
-        manager
-            .complete_login(&start.flow_id, Some("fixture-code#wrong".into()))
-            .await
-            .is_err()
-    );
+    assert!(manager.complete_login(&start.flow_id).await.is_err());
     let invalid = manager
         .begin_login(ProviderKind::Claude, "Bad".into())
         .await
         .unwrap();
-    assert!(
-        manager
-            .complete_login(&invalid.flow_id, Some("fixture-code#wrong".into()))
-            .await
-            .is_err()
+    let invalid_query = query_of(&invalid);
+    let foreign = return_to(
+        &invalid_query["redirect_uri"],
+        "/callback?code=fixture-code&state=wrong".into(),
     );
+    assert!(foreign.await.unwrap().starts_with("HTTP/1.1 400"));
+    manager.cancel_login(&invalid.flow_id).await.unwrap();
+    assert!(manager.complete_login(&invalid.flow_id).await.is_err());
     assert_eq!(client.requests.lock().unwrap().len(), 2);
     assert_eq!(store.list().unwrap().len(), 1);
 }
@@ -277,29 +298,15 @@ async fn codex_loopback_login_collects_callback_and_creates_account_without_cli_
         .begin_login(ProviderKind::Codex, "Primary".into())
         .await
         .unwrap();
-    let url = url::Url::parse(&start.authorization_url).unwrap();
-    let query: HashMap<_, _> = url
-        .query_pairs()
-        .map(|(key, value)| (key.to_string(), value.to_string()))
-        .collect();
-    let redirect = url::Url::parse(&query["redirect_uri"]).unwrap();
-    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", redirect.port().unwrap()))
-        .await
-        .unwrap();
-    stream
-        .write_all(
-            format!(
-                "GET /auth/callback?code=fixture-code&state={} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
-                query["state"]
-            )
-            .as_bytes(),
-        )
-        .await
-        .unwrap();
-    let mut reply = String::new();
-    stream.read_to_string(&mut reply).await.unwrap();
+    let query = query_of(&start);
+    let tab = return_to(
+        &query["redirect_uri"],
+        format!("/auth/callback?code=fixture-code&state={}", query["state"]),
+    );
+    let record = manager.complete_login(&start.flow_id).await.unwrap();
+    let reply = tab.await.unwrap();
     assert!(reply.starts_with("HTTP/1.1 200"));
-    let record = manager.complete_login(&start.flow_id, None).await.unwrap();
+    assert!(reply.contains("Codex is connected"));
     assert_eq!(record.credential_mode, CredentialMode::ManagedOauth);
     assert_eq!(
         store.credentials(&record.id).unwrap()["tokens"]["account_id"],
@@ -329,17 +336,13 @@ async fn cancelling_while_completing_loopback_releases_listener() {
         .begin_login(ProviderKind::Codex, "Cancel".into())
         .await
         .unwrap();
-    let url = url::Url::parse(&start.authorization_url).unwrap();
-    let redirect = url
-        .query_pairs()
-        .find(|(key, _)| key == "redirect_uri")
+    let port = url::Url::parse(&query_of(&start)["redirect_uri"])
         .unwrap()
-        .1
-        .into_owned();
-    let port = url::Url::parse(&redirect).unwrap().port().unwrap();
+        .port()
+        .unwrap();
     let cloned = manager.clone();
     let id = start.flow_id.clone();
-    let completing = tokio::spawn(async move { cloned.complete_login(&id, None).await });
+    let completing = tokio::spawn(async move { cloned.complete_login(&id).await });
     tokio::task::yield_now().await;
     manager.cancel_login(&start.flow_id).await.unwrap();
     assert!(
@@ -349,12 +352,16 @@ async fn cancelling_while_completing_loopback_releases_listener() {
             .unwrap()
             .is_err()
     );
-    tokio::task::yield_now().await;
-    assert!(
-        tokio::net::TcpListener::bind(("127.0.0.1", port))
+    let released = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while tokio::net::TcpListener::bind(("127.0.0.1", port))
             .await
-            .is_ok()
-    );
+            .is_err()
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(released.is_ok());
 }
 
 #[tokio::test]
@@ -538,4 +545,123 @@ async fn managed_renewal_waits_for_another_process_and_reuses_its_session() {
             .contains(&("Authorization".into(), "Bearer fixture-other".into()))
     }));
     assert_eq!(store.credentials(&record.id).unwrap(), renewed);
+}
+
+fn write_codex_login(dir: &std::path::Path, account: &str) -> std::path::PathBuf {
+    let path = dir.join("auth.json");
+    let document = json!({"tokens":{"access_token":jwt(json!({"exp":2000000000,"https://api.openai.com/auth":{"chatgpt_user_id":"fixture-user"}})),"account_id":account}});
+    std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+    path
+}
+
+#[tokio::test]
+async fn cli_logins_are_read_live_and_a_switched_account_is_refused() {
+    let (dir, store) = store();
+    let path = write_codex_login(dir.path(), "account-one");
+    let login = cli_account_from(ProviderKind::Codex, path.clone(), None).unwrap();
+    let client = http(json!({}));
+    let runtimes =
+        account_runtimes_with(store.clone(), std::slice::from_ref(&login), client.clone()).unwrap();
+    assert_eq!(runtimes.len(), 1);
+    assert_eq!(runtimes[0].provider().id, login.id);
+    assert_eq!(runtimes[0].provider().display_name, "Codex");
+    let live = runtimes[0].refresh(RefreshContext::scheduled()).await;
+    assert_eq!(live.error_category, None);
+    assert_eq!(client.requests.lock().unwrap().len(), 1);
+    let switched_bytes = std::fs::read(write_codex_login(dir.path(), "account-two")).unwrap();
+    let switched = runtimes[0].refresh(RefreshContext::scheduled()).await;
+    assert_eq!(switched.error_category, Some(ErrorCategory::NotAvailable));
+    assert_eq!(client.requests.lock().unwrap().len(), 1);
+    assert_eq!(std::fs::read(&path).unwrap(), switched_bytes);
+    assert!(store.list().unwrap().is_empty());
+}
+
+#[test]
+fn a_claude_cli_without_a_token_is_not_a_login() {
+    let (dir, store) = store();
+    let credentials = dir.path().join(".credentials.json");
+    let profile = dir.path().join(".claude.json");
+    std::fs::write(
+        &profile,
+        serde_json::to_vec(
+            &json!({"oauthAccount":{"accountUuid":"account-a","organizationUuid":"org-a"}}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        &credentials,
+        serde_json::to_vec(
+            &json!({"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0}}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        cli_account_from(
+            ProviderKind::Claude,
+            credentials.clone(),
+            Some(profile.clone())
+        )
+        .is_err()
+    );
+    std::fs::write(
+        &credentials,
+        serde_json::to_vec(&claude_doc(4_000_000_000_000)).unwrap(),
+    )
+    .unwrap();
+    let login = cli_account_from(ProviderKind::Claude, credentials, Some(profile)).unwrap();
+    let imported = store
+        .import(
+            "claude",
+            "Same",
+            "account-a|org-a",
+            &claude_doc(1),
+            CredentialMode::SharedCli,
+        )
+        .unwrap();
+    assert_eq!(login.id, imported.id);
+}
+
+#[test]
+fn a_browser_session_wins_over_the_cli_and_the_cli_wins_over_an_imported_copy() {
+    let (dir, store) = store();
+    let managed = store
+        .import(
+            "codex",
+            "Work",
+            "account-one|fixture-user",
+            &json!({"tokens":{}}),
+            CredentialMode::ManagedOauth,
+        )
+        .unwrap();
+    let copied = store
+        .import(
+            "codex",
+            "Old",
+            "account-two|fixture-user",
+            &json!({"tokens":{}}),
+            CredentialMode::SharedCli,
+        )
+        .unwrap();
+    let records = store.list().unwrap();
+    let login = |id: &str| CliAccount {
+        kind: ProviderKind::Codex,
+        id: id.into(),
+        updated_at: Utc::now(),
+        path: dir.path().join("auth.json"),
+        profile: None,
+    };
+    let logins = vec![login(&managed.id), login(&copied.id), login("codex@other")];
+    let shown: Vec<(String, bool)> = visible_accounts(&records, &logins)
+        .into_iter()
+        .map(|account| match account {
+            VisibleAccount::Stored(record) => (record.id.clone(), false),
+            VisibleAccount::Cli(login) => (login.id.clone(), true),
+        })
+        .collect();
+    assert_eq!(shown.len(), 3);
+    assert!(shown.contains(&(managed.id.clone(), false)));
+    assert!(shown.contains(&(copied.id.clone(), true)));
+    assert!(shown.contains(&("codex@other".to_string(), true)));
 }

@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Backend, DocumentName, Unsubscribe } from "./backend";
-import type { AccountLogin, AccountProvider, AppInfo, ChatSession, CliStatus, ConnectedAccount, EngineState, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
+import type { Language } from "@/i18n/language";
+import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, CliStatus, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
 
 /** Subscribe to a Tauri event synchronously; the returned function tears the listener down. */
 function subscribe<T>(event: string, listener: (payload: T) => void, replay?: () => Promise<T>): Unsubscribe {
@@ -46,20 +47,20 @@ export class TauriBackend implements Backend {
     return invoke("list_accounts");
   }
 
-  importCurrentAccount(provider: AccountProvider, label?: string): Promise<ConnectedAccount> {
-    return invoke("import_current_account", { provider, label: label ?? null });
+  beginAccountLogin(provider: AccountProvider, language: Language): Promise<AccountLogin> {
+    return invoke("begin_account_login", { provider, language });
   }
 
-  beginAccountLogin(provider: AccountProvider, label?: string): Promise<AccountLogin> {
-    return invoke("begin_account_login", { provider, label: label ?? null });
-  }
-
-  completeAccountLogin(flowId: string, callback?: string): Promise<ConnectedAccount> {
-    return invoke("complete_account_login", { flowId, callback: callback ?? null });
+  reopenAccountLogin(flowId: string): Promise<LoginBrowser> {
+    return invoke("reopen_account_login", { flowId });
   }
 
   cancelAccountLogin(flowId: string): Promise<void> {
     return invoke("cancel_account_login", { flowId });
+  }
+
+  onAccountLogin(listener: (result: AccountLoginResult) => void): Unsubscribe {
+    return subscribe<AccountLoginResult>("account-login", listener);
   }
 
   removeAccount(accountId: string): Promise<void> {

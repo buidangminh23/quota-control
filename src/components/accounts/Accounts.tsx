@@ -1,15 +1,16 @@
 /**
  * The Accounts screen: every connected Claude and Codex account (always all of them, each with its
- * own live status), adding one through the browser or from this computer's CLI login, and the saved
- * in-app chat sessions that open the official Claude / ChatGPT sites in their own windows.
+ * own live status), signing in to another one through the browser, and the saved in-app chat
+ * sessions that open the official Claude / ChatGPT sites in their own windows. Claude Code and the
+ * Codex CLI signed in on this computer are listed automatically.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { messagesFor, translate, type Language, type Messages } from "@/i18n";
 import { backend } from "@/lib/backend";
-import type { AccountLogin, AccountProvider, ChatSession, ConnectedAccount, ProviderRuntimeState } from "@/lib/types";
+import type { AccountProvider, ChatSession, ConnectedAccount, ProviderRuntimeState } from "@/lib/types";
 import { brandName, headerNotice } from "@/model/providerText";
 import { useLanguage } from "@/state/hooks";
-import { openChatFor, reloadAccounts, reloadChats, showNotice, useApp } from "@/state/store";
+import { cancelAccountLogin, openChatFor, reloadAccounts, reloadChats, reopenAccountLogin, showNotice, startAccountLogin, useApp } from "@/state/store";
 import { Button } from "../ui/controls";
 import { confirmAction } from "../ui/dialog";
 import { ChatIcon, CloseIcon, PlusIcon, Spinner } from "../ui/icons";
@@ -18,6 +19,7 @@ import { tooltipProps } from "../ui/tooltip";
 
 const PROVIDERS: readonly AccountProvider[] = ["claude", "codex"];
 const CHAT_PRODUCTS: Record<AccountProvider, string> = { claude: "Claude", codex: "ChatGPT" };
+const CLI_PRODUCTS: Record<AccountProvider, string> = { claude: "Claude Code", codex: "Codex CLI" };
 
 function errorText(error: unknown, language: Language): string {
   const raw = error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
@@ -72,7 +74,7 @@ function AccountRow({ account, runtime, messages, language }: { account: Connect
       </span>
       <span className="uc-list-text">
         <span className="uc-list-title uc-truncate">{title}</span>
-        <span className="uc-list-subtitle uc-truncate">{messages.accounts.mode(account.credentialMode)}</span>
+        <span className="uc-list-subtitle uc-truncate">{messages.accounts.mode(account.credentialMode, CLI_PRODUCTS[account.provider])}</span>
         <span className={`uc-account-status is-${status}`} {...tooltipProps(notice)}>
           {status === "refreshing" ? <Spinner size={9} /> : <span className="uc-status-dot" />}
           {messages.accounts.status(status)}
@@ -81,182 +83,74 @@ function AccountRow({ account, runtime, messages, language }: { account: Connect
       <button type="button" className="uc-icon-button" aria-label={messages.dashboard.openChat(CHAT_PRODUCTS[account.provider])} onClick={() => void chat()} {...tooltipProps(messages.dashboard.openChat(CHAT_PRODUCTS[account.provider]))}>
         <ChatIcon size={13} />
       </button>
-      <button type="button" className="uc-icon-button" aria-label={`${messages.accounts.remove} ${title}`} onClick={() => void remove()} {...tooltipProps(messages.accounts.remove)}>
-        <CloseIcon size={11} />
-      </button>
+      {account.credentialMode === "cli" ? null : (
+        <button type="button" className="uc-icon-button" aria-label={`${messages.accounts.remove} ${title}`} onClick={() => void remove()} {...tooltipProps(messages.accounts.remove)}>
+          <CloseIcon size={11} />
+        </button>
+      )}
     </div>
   );
 }
 
-type Flow = { kind: "idle" } | { kind: "busy" } | { kind: "login"; login: AccountLogin; provider: AccountProvider };
-
-function AddAccount({ messages, language }: { messages: Messages; language: Language }) {
-  const [provider, setProvider] = useState<AccountProvider>("claude");
-  const [label, setLabel] = useState("");
-  const [code, setCode] = useState("");
-  const [flow, setFlow] = useState<Flow>({ kind: "idle" });
-  const [error, setError] = useState<string | null>(null);
-  const pending = useRef<string | null>(null);
-  const brand = brandName(provider);
-
-  useEffect(
-    () => () => {
-      if (pending.current) void backend().cancelAccountLogin(pending.current).catch(() => undefined);
-    },
-    [],
-  );
-
-  const labelArgument = () => label.trim() || undefined;
-
-  const finished = async (account: ConnectedAccount) => {
-    pending.current = null;
-    setFlow({ kind: "idle" });
-    setLabel("");
-    setCode("");
-    await reloadAccounts();
-    showNotice(messages.accounts.added(accountTitle(account.provider, account.label)), "positive");
-  };
-
-  const failed = (reason: unknown) => {
-    const flowId = pending.current;
-    pending.current = null;
-    if (flowId) void backend().cancelAccountLogin(flowId).catch(() => undefined);
-    setFlow({ kind: "idle" });
-    setError(messages.accounts.failed(errorText(reason, language)));
-  };
-
-  const importCurrent = async () => {
-    setError(null);
-    setFlow({ kind: "busy" });
-    try {
-      await finished(await backend().importCurrentAccount(provider, labelArgument()));
-    } catch (reason) {
-      failed(reason);
-    }
-  };
-
-  const signIn = async () => {
-    setError(null);
-    setFlow({ kind: "busy" });
-    let flowId: string | null = null;
-    try {
-      const login = await backend().beginAccountLogin(provider, labelArgument());
-      flowId = login.flowId;
-      pending.current = flowId;
-      setFlow({ kind: "login", login, provider });
-      await backend().openUrl(login.authorizationUrl);
-      if (login.callbackMode === "loopback") await finished(await backend().completeAccountLogin(login.flowId));
-    } catch (reason) {
-      if (flowId !== null && pending.current !== flowId) return;
-      failed(reason);
-    }
-  };
-
-  const complete = async () => {
-    if (flow.kind !== "login") return;
-    setError(null);
-    const flowId = flow.login.flowId;
-    setFlow({ kind: "busy" });
-    try {
-      const account = await backend().completeAccountLogin(flowId, code.trim());
-      await finished(account);
-    } catch (reason) {
-      pending.current = null;
-      failed(reason);
-    }
-  };
-
-  const cancel = () => {
-    const flowId = pending.current;
-    pending.current = null;
-    setFlow({ kind: "idle" });
-    setCode("");
-    if (flowId) void backend().cancelAccountLogin(flowId).catch(() => undefined);
-  };
-
-  const busy = flow.kind === "busy";
+/**
+ * The sign-in the core is waiting on. The popup hides while the browser is in front and comes back
+ * by itself once the account is saved, so the waiting state lives in the store.
+ */
+export function LoginProgress({ messages }: { messages: Messages }) {
+  const login = useApp((state) => state.accountLogin);
+  if (!login) return null;
+  const brand = brandName(login.provider);
   return (
     <div className="uc-card uc-add-account">
-      {flow.kind === "login" ? (
-        <div className="uc-login-flow">
-          <div className="uc-login-head">
-            <ProviderMark brand={flow.provider} size={16} />
-            <span className="uc-list-title">{messages.accounts.signIn(brandName(flow.provider))}</span>
-          </div>
-          {flow.login.callbackMode === "manual" ? (
-            <>
-              <p className="uc-settings-note is-flush">{messages.accounts.pasteCode}</p>
-              <input
-                className="uc-text-field"
-                value={code}
-                placeholder={messages.accounts.codePlaceholder}
-                onChange={(event) => setCode(event.target.value)}
-                onKeyDown={(event) => event.key === "Enter" && code.trim() && void complete()}
-                autoFocus
-                spellCheck={false}
-                autoComplete="off"
-                aria-label={messages.accounts.codePlaceholder}
-              />
-            </>
-          ) : (
-            <p className="uc-login-waiting">
-              <Spinner size={11} />
-              <span>{messages.accounts.waitingForBrowser}</span>
-            </p>
-          )}
-          <Button onClick={() => void backend().openUrl(flow.login.authorizationUrl)} className="is-small is-wide">
+      <div className="uc-login-flow" role="status">
+        <div className="uc-login-head">
+          <ProviderMark brand={login.provider} size={16} />
+          <span className="uc-list-title">{brand}</span>
+        </div>
+        <p className="uc-login-waiting">
+          <Spinner size={11} />
+          <span>{login.phase === "waiting" ? messages.accounts.waiting(brand, login.browser) : messages.accounts.starting}</span>
+        </p>
+        <p className="uc-settings-note is-flush">{messages.accounts.waitingNote}</p>
+        <div className="uc-settings-actions is-split">
+          <Button onClick={cancelAccountLogin} className="is-small">
+            {messages.accounts.cancel}
+          </Button>
+          <Button onClick={() => void reopenAccountLogin()} disabled={login.phase !== "waiting"} className="is-small">
             {messages.accounts.openSignInPage}
           </Button>
-          <div className="uc-settings-actions is-split">
-            <Button onClick={cancel} className="is-small">
-              {messages.accounts.cancel}
-            </Button>
-            {flow.login.callbackMode === "manual" ? (
-              <Button variant="prominent" onClick={() => void complete()} disabled={!code.trim()} className="is-small">
-                {messages.accounts.complete}
-              </Button>
-            ) : null}
-          </div>
         </div>
-      ) : (
-        <>
-          <div className="uc-capsule-picker" role="radiogroup" aria-label={messages.accounts.add}>
-            {PROVIDERS.map((candidate) => (
-              <button
-                key={candidate}
-                type="button"
-                role="radio"
-                aria-checked={candidate === provider}
-                className={`uc-capsule-segment${candidate === provider ? " is-selected" : ""}`}
-                onClick={() => setProvider(candidate)}
-                disabled={busy}
-              >
-                {brandName(candidate)}
-              </button>
-            ))}
-          </div>
-          <input
-            className="uc-text-field"
-            value={label}
-            placeholder={messages.accounts.labelPlaceholder}
-            onChange={(event) => setLabel(event.target.value)}
-            maxLength={60}
-            disabled={busy}
-            spellCheck={false}
-            aria-label={messages.accounts.labelPlaceholder}
-          />
-          <div className="uc-settings-actions is-stacked">
-            <Button variant="prominent" onClick={() => void signIn()} disabled={busy} className="is-small is-wide">
-              {busy ? <Spinner size={10} /> : null}
-              <span>{messages.accounts.signIn(brand)}</span>
-            </Button>
-            <Button onClick={() => void importCurrent()} disabled={busy} className="is-small is-wide">
-              {messages.accounts.importCurrent(brand)}
-            </Button>
-          </div>
-        </>
-      )}
-      {error ? <p className="uc-settings-notice is-flush">{error}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function AddAccount({ messages }: { messages: Messages }) {
+  const [provider, setProvider] = useState<AccountProvider>("claude");
+  const login = useApp((state) => state.accountLogin);
+  const error = useApp((state) => state.accountLoginError);
+  if (login) return <LoginProgress messages={messages} />;
+  return (
+    <div className="uc-card uc-add-account">
+      <div className="uc-capsule-picker" role="radiogroup" aria-label={messages.accounts.add}>
+        {PROVIDERS.map((candidate) => (
+          <button
+            key={candidate}
+            type="button"
+            role="radio"
+            aria-checked={candidate === provider}
+            className={`uc-capsule-segment${candidate === provider ? " is-selected" : ""}`}
+            onClick={() => setProvider(candidate)}
+          >
+            {brandName(candidate)}
+          </button>
+        ))}
+      </div>
+      <Button variant="prominent" onClick={() => void startAccountLogin(provider)} className="is-small is-wide">
+        {messages.accounts.signInWithGoogle}
+      </Button>
+      <p className="uc-settings-note is-flush">{messages.accounts.signInNote(brandName(provider))}</p>
+      {error ? <p className="uc-settings-notice is-flush">{messages.accounts.loginFailed(brandName(error.provider), error.text)}</p> : null}
     </div>
   );
 }
@@ -313,7 +207,8 @@ export function Accounts() {
 
       <section className="uc-group">
         <h2 className="uc-group-title">{messages.accounts.add}</h2>
-        <AddAccount messages={messages} language={language} />
+        <AddAccount messages={messages} />
+        <p className="uc-group-note">{messages.accounts.cliNote}</p>
       </section>
 
       <section className="uc-group">

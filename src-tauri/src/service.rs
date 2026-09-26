@@ -24,7 +24,12 @@ pub struct AppInfo {
 }
 
 impl BackendService {
-    pub fn new(runtimes: Vec<Arc<dyn ProviderRuntime>>) -> anyhow::Result<Self> {
+    /// `assumed_new` names cards that settings written before `knownProviders` existed cannot have
+    /// hidden, because those cards did not exist yet.
+    pub fn new(
+        runtimes: Vec<Arc<dyn ProviderRuntime>>,
+        assumed_new: &[String],
+    ) -> anyhow::Result<Self> {
         let config = EngineConfig::default();
         let cache = SnapshotCache::new(SnapshotCache::default_path(), config.refresh_interval);
         let engine = Arc::new(uc_api::build_engine(
@@ -34,18 +39,41 @@ impl BackendService {
             uc_core::system_clock(),
         ));
         let documents = DocumentStore::default_store();
-        Self::with_storage(engine, documents, cache)
+        Self::with_storage(engine, documents, cache, assumed_new)
     }
 
     pub fn with_storage(
         engine: Arc<Engine>,
         documents: DocumentStore,
         cache: SnapshotCache,
+        assumed_new: &[String],
     ) -> anyhow::Result<Self> {
         match documents.load(DocumentName::Settings) {
-            Ok(Some(settings)) => match enabled_ids(&settings) {
-                Ok(Some(ids)) => engine.set_enabled(&ids),
-                Ok(None) => {}
+            Ok(Some(mut settings)) => match enabled_ids(&settings) {
+                Ok(enabled) => {
+                    let ids = engine.provider_ids();
+                    let fallback: Vec<String> = ids
+                        .iter()
+                        .filter(|id| !assumed_new.contains(id))
+                        .cloned()
+                        .collect();
+                    let known = uc_api::settings_list(Some(&settings), "knownProviders");
+                    let selection = uc_api::select_providers(
+                        &ids,
+                        enabled.as_deref(),
+                        known.as_deref(),
+                        &fallback,
+                    );
+                    if enabled.is_some() {
+                        engine.set_enabled(&selection.enabled);
+                    }
+                    let listed = enabled.is_some().then_some(selection.enabled.as_slice());
+                    if record_selection(&mut settings, listed, &selection.known)
+                        && documents.save(DocumentName::Settings, &settings).is_err()
+                    {
+                        tracing::warn!("Provider selection could not be saved");
+                    }
+                }
                 Err(error) => {
                     tracing::warn!("Stored settings are invalid; using defaults: {error}")
                 }
@@ -75,6 +103,11 @@ impl BackendService {
         let documents = self.documents.lock();
         let prior = self.engine();
         let previously_known = prior.provider_ids();
+        let prior_enabled: Vec<String> = previously_known
+            .iter()
+            .filter(|id| prior.is_enabled(id))
+            .cloned()
+            .collect();
         let config = prior.config().clone();
         let next = Arc::new(uc_api::build_engine(
             runtimes,
@@ -82,20 +115,32 @@ impl BackendService {
             config,
             uc_core::system_clock(),
         ));
-        let mut enabled: Vec<_> = next
-            .provider_ids()
-            .into_iter()
-            .filter(|id| !previously_known.contains(id) || prior.is_enabled(id))
-            .collect();
+        let stored = documents.load(DocumentName::Settings);
+        let mut known = stored
+            .as_ref()
+            .ok()
+            .and_then(|settings| uc_api::settings_list(settings.as_ref(), "knownProviders"))
+            .unwrap_or_default();
+        for id in &previously_known {
+            if !known.contains(id) {
+                known.push(id.clone());
+            }
+        }
+        let selection = uc_api::select_providers(
+            &next.provider_ids(),
+            Some(&prior_enabled),
+            Some(&known),
+            &[],
+        );
+        let mut enabled = selection.enabled;
         enabled.sort();
         next.set_enabled(&enabled);
-        if let Ok(Some(mut settings)) = documents.load(DocumentName::Settings)
-            && let Some(object) = settings.as_object_mut() {
-                object.insert("enabledProviders".into(), serde_json::json!(enabled));
-                if documents.save(DocumentName::Settings, &settings).is_err() {
-                    tracing::warn!("Account catalog updated, but provider selection could not be saved");
-                }
-            }
+        if let Ok(Some(mut settings)) = stored
+            && record_selection(&mut settings, Some(&enabled), &selection.known)
+            && documents.save(DocumentName::Settings, &settings).is_err()
+        {
+            tracing::warn!("Account catalog updated, but provider selection could not be saved");
+        }
         for task in self.tasks.lock().drain(..) {
             task.abort();
         }
@@ -217,6 +262,26 @@ fn document_name(name: &str) -> Result<DocumentName, String> {
     DocumentName::parse(name).ok_or_else(|| "Unknown document name".into())
 }
 
+/// Store the enabled cards, when the document keeps a list, and the cards seen so far; true when
+/// the document changed.
+fn record_selection(settings: &mut Value, enabled: Option<&[String]>, known: &[String]) -> bool {
+    let Some(object) = settings.as_object_mut() else {
+        return false;
+    };
+    let mut changed = false;
+    let mut put = |key: &str, value: Value| {
+        if object.get(key) != Some(&value) {
+            object.insert(key.into(), value);
+            changed = true;
+        }
+    };
+    if let Some(enabled) = enabled {
+        put("enabledProviders", serde_json::json!(enabled));
+    }
+    put("knownProviders", serde_json::json!(known));
+    changed
+}
+
 fn enabled_ids(value: &Value) -> Result<Option<Vec<String>>, String> {
     let object = value.as_object().ok_or("Settings must be an object")?;
     object
@@ -282,7 +347,8 @@ mod tests {
             cache.clone(),
             config,
         ));
-        BackendService::with_storage(engine, DocumentStore::new(root.join("config")), cache).unwrap()
+        BackendService::with_storage(engine, DocumentStore::new(root.join("config")), cache, &[])
+            .unwrap()
     }
 
     struct StopTasks<'a>(&'a BackendService);
@@ -375,6 +441,47 @@ mod tests {
         assert!(service.engine().is_enabled("codex@added"));
         assert!(service.load("settings").is_err());
         assert_eq!(std::fs::read(marker).unwrap(), b"existing-data");
+    }
+
+    #[test]
+    fn a_cli_card_that_appeared_while_closed_starts_enabled_and_is_remembered() {
+        let directory = tempfile::tempdir().unwrap();
+        let documents = DocumentStore::new(directory.path().join("config"));
+        documents
+            .save(
+                DocumentName::Settings,
+                &serde_json::json!({"enabledProviders": ["claude-local"], "theme": "dark"}),
+            )
+            .unwrap();
+        let config = EngineConfig::default();
+        let cache =
+            SnapshotCache::new(directory.path().join("cache.json"), config.refresh_interval);
+        let engine = Arc::new(Engine::new(
+            fixture_runtimes(&["codex@cli", "claude-local", "codex-local"]),
+            cache.clone(),
+            config,
+        ));
+        let service = BackendService::with_storage(
+            engine,
+            DocumentStore::new(directory.path().join("config")),
+            cache,
+            &["codex@cli".to_string()],
+        )
+        .unwrap();
+        let engine = service.engine();
+        assert!(engine.is_enabled("codex@cli"));
+        assert!(engine.is_enabled("claude-local"));
+        assert!(!engine.is_enabled("codex-local"));
+        let saved = documents.load(DocumentName::Settings).unwrap().unwrap();
+        assert_eq!(
+            saved["enabledProviders"],
+            serde_json::json!(["codex@cli", "claude-local"])
+        );
+        assert_eq!(
+            saved["knownProviders"],
+            serde_json::json!(["codex@cli", "claude-local", "codex-local"])
+        );
+        assert_eq!(saved["theme"], "dark");
     }
 
     #[test]

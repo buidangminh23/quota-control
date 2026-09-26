@@ -6,6 +6,7 @@
 import type { Backend, DocumentName, Unsubscribe } from "./backend";
 import type {
   AccountLogin,
+  AccountLoginResult,
   AccountProvider,
   AppInfo,
   AvailableUpdate,
@@ -13,6 +14,7 @@ import type {
   CliStatus,
   ConnectedAccount,
   EngineState,
+  LoginBrowser,
   PopoverScreen,
   ProviderEntry,
   UpdateStatus,
@@ -21,6 +23,7 @@ import { accountDescriptors, accountProvider, fixtureAccounts, fixtureCatalog, f
 
 const REFRESH_DELAY_MS = 600;
 const LOGIN_EXPIRY_SECONDS = 600;
+const LOGIN_DELAY_MS = 2_500;
 const UPDATE_STEP_MS = 120;
 const UPDATE_SIZE_BYTES = 12_000_000;
 
@@ -43,13 +46,16 @@ export class MockBackend implements Backend {
   private readonly navigateListeners = new Set<(screen: PopoverScreen) => void>();
   private readonly documents = new Map<DocumentName, unknown>();
   private readonly accounts: ConnectedAccount[] = fixtureAccounts();
-  private readonly pendingLogins = new Map<string, { provider: AccountProvider; label: string }>();
+  private readonly pendingLogins = new Map<string, { provider: AccountProvider; timer?: ReturnType<typeof setTimeout> }>();
+  private readonly loginListeners = new Set<(result: AccountLoginResult) => void>();
   private readonly chatSessions: ChatSession[] = [];
   private shortcut: string | null = null;
   private cli: CliStatus = { state: "notInstalled", command: "usagectl" };
   private version = "0.1.0";
   private updateState: UpdateStatus = { supported: true, currentVersion: "0.1.0", phase: "idle", manual: false, downloaded: 0 };
   private readonly updateListeners = new Set<(status: UpdateStatus) => void>();
+  /** Test hook: how long the simulated browser takes to finish a sign-in; `null` waits for `finishLogin`. */
+  loginDelayMs: number | null = LOGIN_DELAY_MS;
   /** Test hook: the release the next check finds; `null` means the running version is the newest. */
   nextRelease: AvailableUpdate | null = { version: "0.2.0", notes: "Faster refresh and a new update card." };
 
@@ -70,30 +76,43 @@ export class MockBackend implements Backend {
     return structuredClone(this.accounts);
   }
 
-  async importCurrentAccount(provider: AccountProvider, label?: string): Promise<ConnectedAccount> {
-    return this.addAccount(provider, label ?? ACCOUNT_LABELS[provider], "shared_cli");
-  }
-
-  async beginAccountLogin(provider: AccountProvider, label?: string): Promise<AccountLogin> {
+  async beginAccountLogin(provider: AccountProvider): Promise<AccountLogin> {
     const flowId = mockId();
-    this.pendingLogins.set(flowId, { provider, label: label ?? ACCOUNT_LABELS[provider] });
+    const timer = this.loginDelayMs === null ? undefined : setTimeout(() => this.finishLogin(flowId), this.loginDelayMs);
+    this.pendingLogins.set(flowId, { provider, timer });
     return {
       flowId,
       authorizationUrl: `https://example.invalid/oauth/${provider}?flow=${flowId}`,
-      callbackMode: "manual",
       expiresInSeconds: LOGIN_EXPIRY_SECONDS,
+      browser: "chrome",
     };
   }
 
-  async completeAccountLogin(flowId: string): Promise<ConnectedAccount> {
-    const pending = this.pendingLogins.get(flowId);
-    if (!pending) throw new Error("Login flow expired or does not exist");
-    this.pendingLogins.delete(flowId);
-    return this.addAccount(pending.provider, pending.label, "managed_oauth");
+  async reopenAccountLogin(flowId: string): Promise<LoginBrowser> {
+    if (!this.pendingLogins.has(flowId)) throw new Error("This login is no longer active. Start again.");
+    return "chrome";
   }
 
   async cancelAccountLogin(flowId: string): Promise<void> {
-    this.pendingLogins.delete(flowId);
+    const pending = this.takeLogin(flowId);
+    if (pending) this.emitLogin({ flowId, provider: pending.provider, status: "cancelled" });
+  }
+
+  onAccountLogin(listener: (result: AccountLoginResult) => void): Unsubscribe {
+    this.loginListeners.add(listener);
+    return () => this.loginListeners.delete(listener);
+  }
+
+  /** Test hook: end a waiting sign-in as if the browser returned, the way the core reports it. */
+  finishLogin(flowId: string, error?: string): void {
+    const pending = this.takeLogin(flowId);
+    if (!pending) return;
+    if (error !== undefined) {
+      this.emitLogin({ flowId, provider: pending.provider, status: "failed", error });
+      return;
+    }
+    const account = this.addAccount(pending.provider, pending.provider, "managed_oauth");
+    this.emitLogin({ flowId, provider: pending.provider, status: "connected", accountId: account.id });
   }
 
   async removeAccount(accountId: string): Promise<void> {
@@ -302,6 +321,18 @@ export class MockBackend implements Backend {
       });
     }, REFRESH_DELAY_MS);
     return structuredClone(account);
+  }
+
+  private takeLogin(flowId: string): { provider: AccountProvider } | undefined {
+    const pending = this.pendingLogins.get(flowId);
+    if (!pending) return undefined;
+    this.pendingLogins.delete(flowId);
+    clearTimeout(pending.timer);
+    return pending;
+  }
+
+  private emitLogin(result: AccountLoginResult): void {
+    for (const listener of this.loginListeners) listener({ ...result });
   }
 
   private emitCatalog(): void {

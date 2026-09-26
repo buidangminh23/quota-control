@@ -162,23 +162,13 @@ pub async fn read(arguments: &Arguments, environment: Environment) -> Output {
     }
 }
 
-/// The providers the dashboard refreshes; every known one when the settings leave it at the
-/// default or cannot be read, as the app does.
+/// The providers the dashboard refreshes, chosen as the app chooses them; every one when the
+/// settings leave it at the default or cannot be read.
 fn enabled_ids(documents: &DocumentStore, known: &[String]) -> Vec<String> {
-    let stored = documents
-        .load(DocumentName::Settings)
-        .ok()
-        .flatten()
-        .and_then(|settings| settings.get("enabledProviders").cloned())
-        .and_then(|ids| serde_json::from_value::<Vec<String>>(ids).ok());
-    match stored {
-        Some(ids) => known
-            .iter()
-            .filter(|id| ids.contains(id))
-            .cloned()
-            .collect(),
-        None => known.to_vec(),
-    }
+    let settings = documents.load(DocumentName::Settings).ok().flatten();
+    let enabled = crate::settings_list(settings.as_ref(), "enabledProviders");
+    let seen = crate::settings_list(settings.as_ref(), "knownProviders");
+    crate::select_providers(known, enabled.as_deref(), seen.as_deref(), known).enabled
 }
 
 fn saved_order(documents: &DocumentStore) -> Vec<String> {
@@ -432,6 +422,26 @@ mod tests {
         assert_eq!(fixture.work.calls(), 2);
         fixture.run(&[], later + Duration::minutes(6)).await;
         assert_eq!(fixture.work.calls(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_card_the_app_never_saw_is_read_and_a_hidden_one_is_not() {
+        let fixture = Fixture::new();
+        fixture
+            .documents()
+            .save(
+                DocumentName::Settings,
+                &serde_json::json!({
+                    "enabledProviders": ["claude-local"],
+                    "knownProviders": ["claude-local", "codex@aa"]
+                }),
+            )
+            .unwrap();
+        let (json, output) = fixture.run(&[], fixture.now).await;
+        assert_eq!(output.code, 0, "{}", output.stderr);
+        let providers = json["providers"].as_object().unwrap();
+        assert_eq!(providers.keys().collect::<Vec<_>>(), ["claude@bb"]);
+        assert_eq!((fixture.work.calls(), fixture.home.calls()), (0, 1));
     }
 
     #[tokio::test]

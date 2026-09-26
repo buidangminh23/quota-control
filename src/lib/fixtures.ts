@@ -104,7 +104,7 @@ interface FixtureAccount {
 const ACCOUNTS: readonly FixtureAccount[] = [
   { kind: "claude", hash: "7c1e", label: "Công ty", mode: "managed_oauth" },
   { kind: "claude", hash: "a93f", label: "Cá nhân", mode: "shared_cli" },
-  { kind: "codex", hash: "52d0", label: "codex", mode: "shared_cli" },
+  { kind: "codex", hash: "52d0", label: "codex", mode: "cli" },
 ];
 
 export function fixtureAccounts(now = Date.now()): ConnectedAccount[] {

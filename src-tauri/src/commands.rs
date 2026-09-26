@@ -182,6 +182,7 @@ mod tests {
             engine.clone(),
             DocumentStore::new(dir.path().to_path_buf()),
             cache,
+            &[],
         )
         .unwrap();
         let app = mock_builder()

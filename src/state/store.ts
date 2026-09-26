@@ -4,18 +4,22 @@
  * `useApp`; every mutation goes through the actions below so persistence and undo stay in one place.
  */
 import { create } from "zustand";
+import { messagesFor, translate } from "@/i18n";
 import { backend } from "@/lib/backend";
 import type {
+  AccountLoginResult,
   AccountProvider,
   AppInfo,
   ChatSession,
   ConnectedAccount,
   EngineState,
+  LoginBrowser,
   PopoverScreen,
   ProviderEntry,
   UpdateStatus,
 } from "@/lib/types";
 import { reconcileLayout, parseLayout, resetAllLayout, sameLayout, type LayoutDocument } from "@/model/layout";
+import { brandName } from "@/model/providerText";
 import { DEFAULT_SETTINGS, enabledProvidersOf, mergeSettingsDocument, parseSettings, type AppSettings } from "@/model/settings";
 import { isTransientBanner, updateBannerKey, updateBannerOf } from "@/model/updateBanner";
 import type { DisplayOptions } from "@/model/widgetData";
@@ -23,6 +27,16 @@ import type { DisplayOptions } from "@/model/widgetData";
 export type Screen = PopoverScreen | "accounts";
 
 export type NoticeTone = "positive" | "notice";
+
+/** A browser sign-in in progress. It outlives the popup, which hides while the browser is in front. */
+export type AccountLogin =
+  | { phase: "starting"; provider: AccountProvider }
+  | { phase: "waiting"; provider: AccountProvider; flowId: string; browser: LoginBrowser };
+
+export interface AccountLoginError {
+  provider: AccountProvider;
+  text: string;
+}
 
 export interface Notice {
   text: string;
@@ -37,6 +51,9 @@ export interface AppState {
   catalog: ProviderEntry[];
   engine: EngineState | null;
   accounts: ConnectedAccount[];
+  accountLogin: AccountLogin | null;
+  /** Why the last sign-in did not connect, until the next one starts. */
+  accountLoginError: AccountLoginError | null;
   chats: ChatSession[];
   settings: AppSettings;
   /** Providers the core refreshes; `null` means all of them (the core's default). */
@@ -65,6 +82,8 @@ export const useApp = create<AppState>(() => ({
   catalog: [],
   engine: null,
   accounts: [],
+  accountLogin: null,
+  accountLoginError: null,
   chats: [],
   settings: DEFAULT_SETTINGS,
   enabledProviders: null,
@@ -232,6 +251,71 @@ export async function reloadAccounts(): Promise<void> {
   }
 }
 
+function errorText(error: unknown): string {
+  const raw = error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
+  return translate(raw, get().settings.language);
+}
+
+let loginAttempt = 0;
+
+/**
+ * Open the provider's sign-in page. The core waits for the browser, saves the account and reports
+ * the outcome through `account-login`, so nothing here waits for the sign-in itself.
+ */
+export async function startAccountLogin(provider: AccountProvider): Promise<void> {
+  const attempt = ++loginAttempt;
+  const previous = get().accountLogin;
+  if (previous?.phase === "waiting") void backend().cancelAccountLogin(previous.flowId).catch(logFailure("Cancelling the sign-in"));
+  set({ accountLogin: { phase: "starting", provider }, accountLoginError: null });
+  try {
+    const login = await backend().beginAccountLogin(provider, get().settings.language);
+    if (attempt !== loginAttempt) {
+      void backend().cancelAccountLogin(login.flowId).catch(logFailure("Cancelling the sign-in"));
+      return;
+    }
+    set({ accountLogin: { phase: "waiting", provider, flowId: login.flowId, browser: login.browser } });
+  } catch (error) {
+    if (attempt === loginAttempt) set({ accountLogin: null, accountLoginError: { provider, text: errorText(error) } });
+  }
+}
+
+/** Show the waiting login's sign-in page again, in the same browser. */
+export async function reopenAccountLogin(): Promise<void> {
+  const current = get().accountLogin;
+  if (current?.phase !== "waiting") return;
+  try {
+    const browser = await backend().reopenAccountLogin(current.flowId);
+    if (get().accountLogin === current) set({ accountLogin: { ...current, browser } });
+  } catch (error) {
+    if (get().accountLogin === current) set({ accountLogin: null, accountLoginError: { provider: current.provider, text: errorText(error) } });
+  }
+}
+
+export function cancelAccountLogin(): void {
+  const current = get().accountLogin;
+  loginAttempt += 1;
+  set({ accountLogin: null });
+  if (current?.phase === "waiting") void backend().cancelAccountLogin(current.flowId).catch(logFailure("Cancelling the sign-in"));
+}
+
+/** A connected account is announced even when its login is no longer the one shown as waiting. */
+function applyLoginResult(result: AccountLoginResult): void {
+  const messages = messagesFor(get().settings.language).accounts;
+  const brand = brandName(result.provider);
+  if (result.status === "connected") {
+    void reloadAccounts();
+    showNotice(messages.connectedNotice(brand), "positive");
+  }
+  const current = get().accountLogin;
+  if (current?.phase !== "waiting" || current.flowId !== result.flowId) return;
+  set({ accountLogin: null });
+  if (result.status === "failed" || result.status === "expired") {
+    const text = translate(result.error ?? "", get().settings.language);
+    set({ accountLoginError: { provider: result.provider, text } });
+    if (result.status === "failed") showNotice(messages.notConnectedNotice(brand), "notice");
+  }
+}
+
 export async function reloadChats(): Promise<void> {
   try {
     set({ chats: await backend().listChatSessions() });
@@ -313,6 +397,7 @@ async function boot(): Promise<Array<() => void>> {
       else void reloadChats();
     }),
     api.onNavigate((screen) => navigate(screen)),
+    api.onAccountLogin(applyLoginResult),
   ];
 }
 

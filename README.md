@@ -39,12 +39,24 @@ Claude and Codex usage clients feed the Rust refresh engine through Tauri IPC.
 Failed requests keep the last successful snapshot alongside an error. Refreshes
 have timeouts, backoff, and isolated per-provider state.
 
-Connected accounts are stored independently and remain in the catalog when
-offline or signed out. Importing the current CLI login copies its credentials
-without changing the CLI's selected account. Imported sessions are read-only;
-their refresh tokens are never rotated by this app. Connect through the app's
-browser OAuth flow for an independently renewable session. A revoked session
-still requires reconnecting; the account card is retained until explicitly removed.
+Claude Code and the Codex CLI signed in on this computer appear as accounts
+automatically. Their cards read the CLI's current login at every refresh and are
+never copied into the account registry, so signing a CLI in, out, or into another
+account updates the cards within 30 seconds and whenever the popup opens. The app
+never renews a CLI's tokens; the CLI does that itself when it runs.
+
+**Sign In with Google** on the Accounts screen opens the provider's sign-in page in
+Google Chrome (the default browser when Chrome is missing). The page returns to a
+loopback listener on this computer, and the app saves the account by itself, with
+no code to copy. That session renews independently of the CLI; when it belongs to
+the same account as a CLI login, it replaces that CLI's card. Accounts imported
+by earlier versions stay read-only. Connected accounts remain in the catalog when
+offline or signed out; a revoked session still requires reconnecting, and the
+account card is retained until explicitly removed.
+
+Cards the app has never seen start enabled. `knownProviders` in `settings.json`
+records the cards seen so far, so a card hidden in Customize stays hidden when its
+login returns, and a CLI login that appears while the app is closed still shows up.
 Windows protects credential documents with per-user DPAPI. Linux uses owner-only
 directories and files (0700/0600). Credentials are never returned through IPC.
 
@@ -86,18 +98,20 @@ Tauri uses the real backend.
 
 `src/lib/backend.ts` is the frontend boundary. Existing provider commands are
 `catalog`, `engine_state`, `refresh`, and `set_enabled_providers`. The account
-commands are `list_accounts`, `import_current_account`, `begin_account_login`,
-`complete_account_login`, `cancel_account_login`, and `remove_account`.
+commands are `list_accounts`, `begin_account_login`, `reopen_account_login`,
+`cancel_account_login`, and `remove_account`.
 After adding/removing an account the host publishes `catalog-changed` and a new
 `engine-state`; no application restart is needed. Subscribe to both events.
 
-`begin_account_login` returns an authorization URL and a ten-minute flow ID.
-Open that URL through `open_url`. For Codex (`callbackMode: "loopback"`), call
-`complete_account_login` without a callback and await browser completion. For
-Claude (`callbackMode: "manual"`), pass the returned code/state or callback URL.
-Cancel abandoned flows to release their loopback listener. The account list
-contains metadata only; render expired/offline accounts rather than filtering
-them out because a snapshot is missing.
+`begin_account_login(provider, language)` opens the sign-in page itself and
+returns a ten-minute flow ID plus the browser it used (`chrome` or `default`).
+The host waits for the browser in the background, so the popup may hide in the
+meantime. It reports the result as `account-login` with status `connected`,
+`failed`, `cancelled` or `expired`, and shows the popup again for the first two.
+`reopen_account_login` shows the same page again, and `cancel_account_login`
+releases the loopback listener. The account list contains metadata only
+(`credentialMode` is `cli` for a CLI login); render expired/offline accounts
+rather than filtering them out because a snapshot is missing.
 
 Linux tray integrations do not all expose click positions. The tray's **Show
 Quota Control** menu remains available when direct left-click events are absent.

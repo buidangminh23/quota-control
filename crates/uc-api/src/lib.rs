@@ -14,7 +14,10 @@ mod state;
 mod usage;
 mod wire;
 
-pub use assembly::{build_engine, provider_runtimes};
+pub use assembly::{
+    ProviderSelection, build_engine, provider_runtimes, provider_runtimes_with, select_providers,
+    settings_list,
+};
 pub use limits::SCHEMA;
 pub use router::{Response, respond};
 pub use state::ApiState;

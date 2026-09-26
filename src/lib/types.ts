@@ -254,14 +254,28 @@ export interface ConnectedAccount {
   label: string;
   connectedAt: string;
   updatedAt: string;
-  credentialMode: "shared_cli" | "managed_oauth";
+  /** `cli`: the live login of Claude Code or the Codex CLI on this computer, listed automatically. */
+  credentialMode: "shared_cli" | "managed_oauth" | "cli";
 }
+
+/** Where a sign-in page opened: Google Chrome when it is installed, otherwise the default browser. */
+export type LoginBrowser = "chrome" | "default";
 
 export interface AccountLogin {
   flowId: string;
   authorizationUrl: string;
-  callbackMode: "manual" | "loopback";
   expiresInSeconds: number;
+  browser: LoginBrowser;
+}
+
+/** How a browser sign-in ended. The core finishes it on its own and reports it through `account-login`. */
+export interface AccountLoginResult {
+  flowId: string;
+  provider: AccountProvider;
+  /** `expired`: nobody finished the sign-in in the browser in time. */
+  status: "connected" | "cancelled" | "expired" | "failed";
+  accountId?: string;
+  error?: string;
 }
 
 /** The taskbar band the strip frames are rendered for (`taskbar_strip.rs`). */

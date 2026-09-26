@@ -4,7 +4,8 @@
  *
  * Rust command names live in `src-tauri/src/commands.rs`; keep both sides in sync.
  */
-import type { AccountLogin, AccountProvider, AppInfo, ChatSession, CliStatus, ConnectedAccount, EngineState, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
+import type { Language } from "@/i18n/language";
+import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, CliStatus, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
 
 export type Unsubscribe = () => void;
 
@@ -16,10 +17,15 @@ export interface Backend {
   catalog(): Promise<ProviderEntry[]>;
   onCatalogChanged(listener: (catalog: ProviderEntry[]) => void): Unsubscribe;
   listAccounts(): Promise<ConnectedAccount[]>;
-  importCurrentAccount(provider: AccountProvider, label?: string): Promise<ConnectedAccount>;
-  beginAccountLogin(provider: AccountProvider, label?: string): Promise<AccountLogin>;
-  completeAccountLogin(flowId: string, callback?: string): Promise<ConnectedAccount>;
+  /**
+   * Open the provider's sign-in page, in Google Chrome when it is installed. The core finishes the
+   * login itself, even while the popup is hidden, and reports how it ended through `onAccountLogin`.
+   */
+  beginAccountLogin(provider: AccountProvider, language: Language): Promise<AccountLogin>;
+  /** Show the sign-in page of a login that is still waiting. */
+  reopenAccountLogin(flowId: string): Promise<LoginBrowser>;
   cancelAccountLogin(flowId: string): Promise<void>;
+  onAccountLogin(listener: (result: AccountLoginResult) => void): Unsubscribe;
   removeAccount(accountId: string): Promise<void>;
   listChatSessions(): Promise<ChatSession[]>;
   onChatSessionsChanged?(listener: (sessions: ChatSession[]) => void): Unsubscribe;

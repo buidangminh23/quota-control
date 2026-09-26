@@ -3,8 +3,9 @@ pub mod credentials;
 pub mod mapping;
 pub mod oauth;
 
-pub use accounts::{import_current_account, managed_runtimes};
+pub use accounts::{CliAccount, VisibleAccount, account_runtimes, cli_accounts, visible_accounts};
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -54,6 +55,15 @@ pub struct LocalProvider {
     endpoint: String,
     refresh_endpoint: String,
     cooldown: tokio::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>>,
+    cli: Option<CliBinding>,
+}
+
+/// The CLI login a card follows, checked on every refresh so that a CLI that switched accounts
+/// never shows the other account's limits under this card.
+struct CliBinding {
+    id: String,
+    path: PathBuf,
+    profile: Option<PathBuf>,
 }
 
 impl LocalProvider {
@@ -72,6 +82,7 @@ impl LocalProvider {
             endpoint: kind.endpoint().into(),
             refresh_endpoint: accounts::refresh_url(kind).into(),
             cooldown: tokio::sync::Mutex::new(None),
+            cli: None,
         }
     }
 
@@ -86,6 +97,37 @@ impl LocalProvider {
         self
     }
 
+    /// Follow the CLI login `account`; the card takes that account's id, so it keeps its place
+    /// when the same account is later connected through the browser.
+    pub fn with_cli_login(mut self, account: &CliAccount) -> Self {
+        self.provider.id = account.id.clone();
+        self.cli = Some(CliBinding {
+            id: account.id.clone(),
+            path: account.path.clone(),
+            profile: account.profile.clone(),
+        });
+        self
+    }
+
+    async fn check_cli_account(&self) -> Result<(), SimpleProviderError> {
+        let Some(binding) = &self.cli else {
+            return Ok(());
+        };
+        let (kind, path, profile) = (self.kind, binding.path.clone(), binding.profile.clone());
+        let current =
+            uc_core::load_blocking(move || accounts::cli_account_from(kind, path, profile)).await?;
+        if current.id != binding.id {
+            return Err(SimpleProviderError::new(
+                ErrorCategory::NotAvailable,
+                format!(
+                    "The {} CLI on this computer is now signed in to another account.",
+                    self.kind.cli()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     pub fn with_refresh_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.refresh_endpoint = endpoint.into();
         self
@@ -98,6 +140,7 @@ impl LocalProvider {
 
     async fn fetch(&self) -> Result<ProviderSnapshot, SimpleProviderError> {
         let now = (self.clock)();
+        self.check_cli_account().await?;
         let mut credentials = accounts::ready_credentials(
             &self.credentials,
             self.kind,

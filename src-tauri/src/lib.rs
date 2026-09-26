@@ -1,4 +1,5 @@
 mod account_commands;
+mod browser;
 mod chat_commands;
 mod chat_store;
 mod cli_install;
@@ -19,6 +20,10 @@ use tauri::{
 
 use service::{BackendService, safe_error};
 use tauri_plugin_autostart::ManagerExt as _;
+
+/// How often the app looks for a CLI that signed in, out, or into another account. Opening the
+/// popup looks as well.
+const CLI_LOGIN_CHECK: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Keeps the log writer's worker alive; see [`flush_log`].
 static LOG_GUARD: parking_lot::Mutex<Option<tracing_appender::non_blocking::WorkerGuard>> =
@@ -85,9 +90,8 @@ pub fn run() -> anyhow::Result<()> {
             commands::set_tray_icon,
             commands::quit_app,
             account_commands::list_accounts,
-            account_commands::import_current_account,
             account_commands::begin_account_login,
-            account_commands::complete_account_login,
+            account_commands::reopen_account_login,
             account_commands::cancel_account_login,
             account_commands::remove_account,
             chat_commands::list_chat_sessions,
@@ -115,7 +119,8 @@ pub fn run() -> anyhow::Result<()> {
             let accounts = account_commands::Accounts::new(std::sync::Arc::new(
                 uc_accounts::AccountStore::default_store(),
             ));
-            let service = BackendService::new(accounts.runtimes().map_err(anyhow::Error::msg)?)?;
+            let runtimes = accounts.runtimes().map_err(anyhow::Error::msg)?;
+            let service = BackendService::new(runtimes, &accounts.cli_only_ids())?;
             app.manage(accounts);
             app.manage(service);
             app.manage(chat_store::ChatStore::default_store());
@@ -221,6 +226,16 @@ pub fn run() -> anyhow::Result<()> {
             }));
             app.state::<BackendService>().start(app.handle());
             app.state::<updates::Updates>().start(app.handle());
+            let cli_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut ticks = tokio::time::interval(CLI_LOGIN_CHECK);
+                ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                ticks.tick().await;
+                loop {
+                    ticks.tick().await;
+                    account_commands::sync_cli_logins(&cli_app).await;
+                }
+            });
             if let Err(error) = shortcut::restore(app.handle()) {
                 tracing::warn!("The saved global shortcut is unavailable: {error}");
             }
@@ -387,7 +402,7 @@ fn show_tray_menu(app: &AppHandle) -> Result<(), String> {
         .map_err(safe_error)
 }
 
-fn show_popup(app: &AppHandle) -> Result<(), String> {
+pub(crate) fn show_popup(app: &AppHandle) -> Result<(), String> {
     show_popup_at(app, None)
 }
 
@@ -403,6 +418,8 @@ fn show_popup_at(app: &AppHandle, anchor: Option<PhysicalRect<i32, u32>>) -> Res
     window.set_focus().map_err(safe_error)?;
     window.emit("popup-visibility", true).map_err(safe_error)?;
     app.state::<BackendService>().engine().wake();
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move { account_commands::sync_cli_logins(&handle).await });
     Ok(())
 }
 

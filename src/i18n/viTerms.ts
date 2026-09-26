@@ -99,6 +99,29 @@ const EXACT: Readonly<Record<string, string>> = {
   "This login is no longer active. Start again.": "Lần đăng nhập này không còn hiệu lực. Hãy bắt đầu lại.",
   "This login has expired. Start again.": "Lần đăng nhập đã hết hạn. Hãy bắt đầu lại.",
   "Chat session does not exist": "Phiên chat không còn tồn tại",
+  "A stable account identity is unavailable. Connect this account through the browser.":
+    "Không xác định được tài khoản. Hãy kết nối tài khoản này qua trình duyệt.",
+  "Cannot access the saved account. Try connecting it again.": "Không truy cập được tài khoản đã lưu. Hãy thử kết nối lại.",
+  "Cannot renew this account session. Try again later.": "Không gia hạn được phiên của tài khoản này. Hãy thử lại sau.",
+  "Cannot verify the signed-in account. Try connecting again.": "Không xác minh được tài khoản vừa đăng nhập. Hãy thử kết nối lại.",
+  "Claude account metadata is unavailable. Connect through the browser.": "Không có thông tin tài khoản Claude. Hãy kết nối qua trình duyệt.",
+  "Local credentials are invalid. Sign in again.": "Thông tin đăng nhập trên máy không hợp lệ. Hãy đăng nhập lại.",
+  "Saved account credentials are unavailable. Reconnect this account.":
+    "Không còn thông tin đăng nhập đã lưu của tài khoản này. Hãy kết nối lại.",
+  "The ChatGPT user identity is unavailable. Connect this account through the browser.":
+    "Không xác định được người dùng ChatGPT. Hãy kết nối tài khoản này qua trình duyệt.",
+  "The ChatGPT workspace identity is unavailable. Connect this account through the browser.":
+    "Không xác định được không gian làm việc ChatGPT. Hãy kết nối tài khoản này qua trình duyệt.",
+  "The login callback ports are in use. Finish the other login and try again.":
+    "Cổng nhận kết quả đăng nhập đang bận. Hãy hoàn tất lần đăng nhập kia rồi thử lại.",
+  "The login could not be completed. Start a new login and try again.": "Không hoàn tất được lần đăng nhập. Hãy bắt đầu lại.",
+  "The login service rejected this code. Start a new login.": "Dịch vụ đăng nhập từ chối mã này. Hãy đăng nhập lại từ đầu.",
+  "The renewed session belongs to a different account. Reconnect this account.":
+    "Phiên vừa gia hạn thuộc một tài khoản khác. Hãy kết nối lại tài khoản này.",
+  "This account session could not be renewed. Reconnect it if the problem persists.":
+    "Chưa gia hạn được phiên của tài khoản này. Nếu lỗi còn lặp lại, hãy kết nối lại.",
+  "Too many pending logins. Cancel an existing login first.": "Có quá nhiều lần đăng nhập đang chờ. Hãy hủy bớt một lần trước.",
+  "Usage updates are rate limited. Waiting before retrying.": "Đang bị giới hạn số lần cập nhật hạn mức. Sẽ chờ rồi thử lại.",
   Sonnet: "Sonnet",
   Fable: "Fable",
   "Local usage history is incomplete: some files could not be read or scan limits were reached.":
@@ -121,6 +144,9 @@ const PATTERNS: ReadonlyArray<readonly [RegExp, (match: RegExpExecArray) => stri
   [/^From your (.+) usage history \(estimated\)$/, (m) => `Theo lịch sử sử dụng ${m[1]} của bạn (ước tính)`],
   [/^From your (.+) usage history\.?$/, (m) => `Theo lịch sử sử dụng ${m[1]} của bạn.`],
   [/^Refresh timed out after (\d+)s$/, (m) => `Quá thời gian làm mới (${m[1]} giây)`],
+  [/^Session expired\. Sign in with (.+) again\.$/, (m) => `Phiên đăng nhập đã hết hạn. Hãy đăng nhập lại ${m[1]}.`],
+  [/^Sign in with (.+) to load usage\.$/, (m) => `Hãy đăng nhập ${m[1]} để xem hạn mức.`],
+  [/^The (.+) CLI on this computer is now signed in to another account\.$/, (m) => `${m[1]} CLI trên máy này đã chuyển sang tài khoản khác.`],
   [/^Chat session was saved, but its window could not open: (.+)$/, (m) => `Đã lưu phiên chat nhưng không mở được cửa sổ: ${m[1]}`],
   [/^(.+) Weekly$/, (m) => `${m[1]} (tuần)`],
   [/^(.+) Monthly$/, (m) => `${m[1]} (tháng)`],
