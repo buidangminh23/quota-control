@@ -1,4 +1,4 @@
-//! Shared foundation for Usage Control: the normalized metric vocabulary every provider produces,
+//! Shared foundation for Quota Control: the normalized metric vocabulary every provider produces,
 //! the provider runtime contract, HTTP plumbing, formatting, dates, paths and log redaction.
 //!
 //! This is a port of the model layer of OpenUsage (MIT, Robin Ebers). File-level docs name the
@@ -20,6 +20,6 @@ pub use model::*;
 pub use runtime::{Clock, ProviderRuntime, RefreshContext, fixed_clock, load_blocking, system_clock, with_deadline};
 
 /// The app's display name.
-pub const APP_NAME: &str = "Usage Control";
+pub const APP_NAME: &str = "Quota Control";
 /// The version shown in the popup footer.
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");

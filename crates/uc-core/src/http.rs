@@ -249,7 +249,7 @@ pub struct ReqwestHttpClient {
 }
 
 impl ReqwestHttpClient {
-    pub const USER_AGENT: &'static str = concat!("UsageControl/", env!("CARGO_PKG_VERSION"));
+    pub const USER_AGENT: &'static str = concat!("QuotaControl/", env!("CARGO_PKG_VERSION"));
 
     pub fn new(proxy: Option<&ProxyConfig>) -> Result<Self, HttpError> {
         let mut builder = reqwest::Client::builder()

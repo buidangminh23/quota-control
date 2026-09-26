@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Usage Control",
+  "productName": "Quota Control",
   "version": "0.1.0",
   "identifier": "com.buidangminh.usagecontrol",
   "build": {
@@ -21,8 +21,8 @@
     "targets": ["nsis", "msi", "deb", "appimage", "rpm"],
     "category": "Utility",
     "shortDescription": "AI coding subscription limits in your system tray",
-    "longDescription": "Usage Control is an unofficial Windows and Linux port of OpenUsage. It shows session and weekly limits, credits and local spend for Claude, Codex, Cursor and other AI coding tools in a popup that opens from the system tray.",
-    "copyright": "Copyright (c) 2026 Robin Ebers (OpenUsage), Bui Dang Minh (Usage Control)",
+    "longDescription": "Quota Control is an unofficial Windows and Linux port of OpenUsage. It shows session and weekly limits, credits and local spend for Claude, Codex, Cursor and other AI coding tools in a popup that opens from the system tray.",
+    "copyright": "Copyright (c) 2026 Robin Ebers (OpenUsage), Bui Dang Minh (Quota Control)",
     "license": "MIT",
     "icon": [
       "icons/32x32.png",
@@ -35,7 +35,7 @@
     "windows": {
       "nsis": {
         "installMode": "currentUser",
-        "startMenuFolder": "Usage Control"
+        "startMenuFolder": "Quota Control"
       }
     },
     "linux": {

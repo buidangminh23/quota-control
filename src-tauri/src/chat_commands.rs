@@ -44,7 +44,7 @@ fn build_chat_window(
     } else {
         "Claude"
     };
-    let title = format!("{provider_name} · {} · Usage Control", session.label);
+    let title = format!("{provider_name} · {} · Quota Control", session.label);
     let app_handle = app.clone();
     let child_session = session.clone();
     let child_profile = profile.clone();

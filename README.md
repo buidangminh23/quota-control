@@ -1,11 +1,11 @@
-# Usage Control
+# Quota Control
 
 Track your AI coding subscriptions from the Windows and Linux system tray.
 
-Usage Control shows how much of your AI coding plans you have used: session and weekly limits,
+Quota Control shows how much of your AI coding plans you have used: session and weekly limits,
 credits, and local spend, all in one popup that opens when you click the tray icon.
 
-> **Unofficial port.** Usage Control is an independent Windows and Linux port of
+> **Unofficial port.** Quota Control is an independent Windows and Linux port of
 > [OpenUsage](https://github.com/robinebers/openusage) by Robin Ebers, which is a native macOS app.
 > It is not the official OpenUsage, and it is not affiliated with or endorsed by its author.
 > The source code is reused under the MIT license; the OpenUsage name and logo are not used,
@@ -70,7 +70,7 @@ build tools/WebView2, or Linux GTK/WebKit development libraries). To inspect the
 local credential/API/log adapters without opening the UI, run:
 
 ```sh
-cargo run -p usage-control -- --diagnose
+cargo run -p quota-control -- --diagnose
 cargo run -p uc-logscan --example diagnostics
 ```
 
@@ -99,7 +99,7 @@ contains metadata only; render expired/offline accounts rather than filtering
 them out because a snapshot is missing.
 
 Linux tray integrations do not all expose click positions. The tray's **Show
-Usage Control** menu remains available when direct left-click events are absent.
+Quota Control** menu remains available when direct left-click events are absent.
 
 ### Embedded official chat
 
@@ -131,10 +131,18 @@ The host rejects application invokes from every window except the bundled popup,
 retains Tauri's remote-origin checks, and blocks chat navigation to native/local
 origins. Authentication popups inherit their parent's WebView environment.
 
-On Windows, `cargo run -p usage-control --example profile_smoke` runs a bounded
+On Windows, `cargo run -p quota-control --example profile_smoke` runs a bounded
 native WebView2 check with hidden windows and temporary profiles. It verifies
 cookie/localStorage isolation, reopening persistence, and popup inheritance using
 controlled local pages. It does not validate login to the real AI websites.
+
+## Upgrade compatibility
+
+Quota Control retains the previous application storage directories, credential protection,
+WebView profiles and application identifier so existing accounts and settings remain available.
+The `usagectl` integration command also remains supported. Legacy names in these stable
+identifiers are intentional; the application and build executable are named Quota Control
+and `quota-control` respectively.
 
 ## License
 

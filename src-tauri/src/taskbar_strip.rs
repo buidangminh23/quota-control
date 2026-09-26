@@ -566,8 +566,8 @@ mod platform {
         });
     }
 
-    const HOST_CLASS: &str = "UsageControlTaskbarHost";
-    const STRIP_CLASS: &str = "UsageControlTaskbarStrip";
+    const HOST_CLASS: &str = "QuotaControlTaskbarHost";
+    const STRIP_CLASS: &str = "QuotaControlTaskbarStrip";
 
     fn register_classes() -> bool {
         let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
@@ -590,7 +590,7 @@ mod platform {
     fn create_window(taskbar: HWND) -> Option<Window> {
         let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
         let class = wide(STRIP_CLASS);
-        let title = wide("Usage Control");
+        let title = wide("Quota Control");
         let strip = unsafe {
             CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_NOACTIVATE,

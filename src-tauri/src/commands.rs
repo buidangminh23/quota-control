@@ -225,7 +225,7 @@ mod tests {
         );
         assert_eq!(
             invoke("app_info", serde_json::json!({})).unwrap()["name"],
-            "Usage Control"
+            "Quota Control"
         );
         invoke(
             "set_enabled_providers",

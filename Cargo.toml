@@ -6,7 +6,7 @@ members = ["crates/*", "src-tauri"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/buidangminh23/usage-control"
+repository = "https://github.com/buidangminh23/quota-control"
 authors = ["Bui Dang Minh"]
 rust-version = "1.90"
 

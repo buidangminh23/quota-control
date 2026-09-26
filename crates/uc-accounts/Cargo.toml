@@ -1,6 +1,6 @@
 [package]
 name = "uc-accounts"
-description = "Persistent account metadata and protected credentials for Usage Control"
+description = "Persistent account metadata and protected credentials for Quota Control"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

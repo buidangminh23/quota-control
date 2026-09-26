@@ -1,6 +1,6 @@
 [package]
 name = "uc-core"
-description = "Shared models, provider runtime contract and platform helpers for Usage Control"
+description = "Shared models, provider runtime contract and platform helpers for Quota Control"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

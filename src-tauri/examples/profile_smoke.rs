@@ -181,7 +181,7 @@ fn main() -> anyhow::Result<()> {
         "This smoke harness requires Windows WebView2"
     );
     let profiles = tempfile::Builder::new()
-        .prefix("usage-control-profile-smoke-")
+        .prefix("quota-control-profile-smoke-")
         .tempdir()?;
     let a = profiles.path().join("profile-a");
     let b = profiles.path().join("profile-b");

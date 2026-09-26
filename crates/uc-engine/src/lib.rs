@@ -1,4 +1,4 @@
-//! The long-lived side of Usage Control: refresh orchestration, the persisted snapshot cache and
+//! The long-lived side of Quota Control: refresh orchestration, the persisted snapshot cache and
 //! the documents the popup owns. Shared by the tray app and the one-shot CLI.
 
 pub mod cache;

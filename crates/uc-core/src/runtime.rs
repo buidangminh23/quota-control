@@ -28,7 +28,7 @@ impl RefreshContext {
     }
 }
 
-/// One AI provider Usage Control can track.
+/// One AI provider Quota Control can track.
 #[async_trait]
 pub trait ProviderRuntime: Send + Sync {
     fn provider(&self) -> &Provider;

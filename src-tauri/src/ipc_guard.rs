@@ -5,7 +5,7 @@ pub fn trusted_handler<R: tauri::Runtime>(
         if invoke.message.webview_ref().label() != "popup" {
             invoke
                 .resolver
-                .reject("Application commands are only available from the Usage Control dashboard");
+                .reject("Application commands are only available from the Quota Control dashboard");
             return true;
         }
         handler(invoke)
@@ -72,7 +72,7 @@ mod tests {
         let (result, calls) = invoke("chat-session", local_url());
         assert_eq!(
             result.unwrap_err(),
-            "Application commands are only available from the Usage Control dashboard"
+            "Application commands are only available from the Quota Control dashboard"
         );
         assert_eq!(calls, 0);
     }

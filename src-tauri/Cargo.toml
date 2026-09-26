@@ -1,20 +1,20 @@
 [package]
-name = "usage-control"
-description = "Usage Control: AI coding subscription limits in the Windows and Linux system tray"
+name = "quota-control"
+description = "Quota Control: AI coding subscription limits in the Windows and Linux system tray"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-default-run = "usage-control"
+default-run = "quota-control"
 
 [lib]
-name = "usage_control_lib"
+name = "quota_control_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "usage-control"
+name = "quota-control"
 path = "src/main.rs"
 
 [build-dependencies]

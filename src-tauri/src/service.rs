@@ -148,7 +148,7 @@ impl BackendService {
 
     pub fn info(&self) -> AppInfo {
         AppInfo {
-            name: "Usage Control",
+            name: "Quota Control",
             version: env!("CARGO_PKG_VERSION"),
             platform: std::env::consts::OS,
             log_file: uc_core::paths::log_file().to_string_lossy().into_owned(),

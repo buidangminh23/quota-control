@@ -14,6 +14,7 @@ use tauri::{
 };
 
 use service::{BackendService, safe_error};
+use tauri_plugin_autostart::ManagerExt as _;
 
 pub fn run() -> anyhow::Result<()> {
     if std::env::args().any(|arg| arg == "--diagnose") {
@@ -41,7 +42,7 @@ pub fn run() -> anyhow::Result<()> {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_autostart::Builder::new().build())
+        .plugin(tauri_plugin_autostart::Builder::new().app_name("Usage Control").build())
         .invoke_handler(ipc_guard::trusted_handler(tauri::generate_handler![
             commands::app_info,
             commands::catalog,
@@ -70,6 +71,11 @@ pub fn run() -> anyhow::Result<()> {
             taskbar_strip::set_taskbar_strip,
         ]))
         .setup(|app| {
+            if !cfg!(debug_assertions) && app.autolaunch().is_enabled().unwrap_or(false) {
+                if let Err(error) = app.autolaunch().enable() {
+                    tracing::warn!("Could not refresh launch-at-login path: {error}");
+                }
+            }
             let accounts = account_commands::Accounts::new(std::sync::Arc::new(
                 uc_accounts::AccountStore::default_store(),
             ));
@@ -81,7 +87,7 @@ pub fn run() -> anyhow::Result<()> {
             app.manage(PopupAnchor::default());
             let window =
                 WebviewWindowBuilder::new(app, "popup", WebviewUrl::App("index.html".into()))
-                    .title("Usage Control")
+                    .title("Quota Control")
                     .inner_size(320.0, 400.0)
                     .resizable(false)
                     .decorations(false)
@@ -107,7 +113,7 @@ pub fn run() -> anyhow::Result<()> {
                         .cloned()
                         .ok_or("Missing app icon")?,
                 )
-                .tooltip("Usage Control")
+                .tooltip("Quota Control")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -134,7 +140,7 @@ pub fn run() -> anyhow::Result<()> {
                             if result.is_err() {
                                 use tauri_plugin_notification::NotificationExt;
                                 let _ = app.notification().builder()
-                                    .title("Usage Control")
+                                    .title("Quota Control")
                                     .body("Không mở được phiên chat. Phiên đã lưu vẫn được giữ nguyên.")
                                     .show();
                             }
@@ -190,7 +196,7 @@ fn tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
     let show = MenuItem::with_id(
         app,
         "show",
-        text("Mở Usage Control", "Show Usage Control"),
+        text("Mở Quota Control", "Show Quota Control"),
         true,
         None::<&str>,
     )

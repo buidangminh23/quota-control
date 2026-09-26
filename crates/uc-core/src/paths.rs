@@ -1,4 +1,4 @@
-//! Where Usage Control keeps its files on each platform.
+//! Where Quota Control keeps its files on each platform.
 //!
 //! | Purpose | Windows | Linux |
 //! |---|---|---|

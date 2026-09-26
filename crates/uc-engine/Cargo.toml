@@ -1,6 +1,6 @@
 [package]
 name = "uc-engine"
-description = "Refresh orchestration, snapshot cache and persisted documents for Usage Control"
+description = "Refresh orchestration, snapshot cache and persisted documents for Quota Control"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

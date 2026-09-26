@@ -495,12 +495,12 @@ async fn listen_for_callback(
         let (status, body) = if valid {
             (
                 "200 OK",
-                "Login received. Return to Usage Control to finish connecting your account.",
+                "Login received. Return to Quota Control to finish connecting your account.",
             )
         } else {
             (
                 "400 Bad Request",
-                "This callback does not match an active Usage Control login.",
+                "This callback does not match an active Quota Control login.",
             )
         };
         let response = format!(
