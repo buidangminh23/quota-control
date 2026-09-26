@@ -117,9 +117,24 @@ export interface InsightsMessages {
   lastReset(ago: string): string;
   forecastTitle: string;
   horizon(days: ForecastHorizon): string;
-  forecastNote(count: string, halfLife: number): string;
+  forecastNote(count: string): string;
   forecastUnavailable: string;
   forecastDisclaimer: string;
+  waitLine(waited: string, percent: string): string;
+  medianMark(gap: string, time: string): string;
+  medianMarkPassed(gap: string, time: string): string;
+  scheduledIn(duration: string): string;
+  scheduledOverdue(ago: string): string;
+  calendarTitle(weeks: number): string;
+  calendarToday: string;
+  calendarDay(date: string, kinds: string): string;
+  monthShort(month: number): string;
+  patternTitle: string;
+  patternWeekdays: string;
+  patternHours: string;
+  patternNote(count: string): string;
+  weekdayShort: string[];
+  hourBlock(startHour: number): string;
   statsTitle: string;
   statTotal: string;
   statKinds(regular: string, banked: string): string;
@@ -143,6 +158,7 @@ export interface InsightsMessages {
   notifyCodexResetsNote: string;
   notifyResetTitle: string;
   notifyScheduledTitle: string;
+  notifyWatchTitle(level: "elevated" | "strong"): string;
 }
 
 const CATALOGS: Record<Language, InsightsMessages> = { vi: insightsVi, en: insightsEn };

@@ -17,6 +17,10 @@ use uc_core::{HttpRequest, ReqwestHttpClient, SharedHttpClient};
 
 const TIMEOUT: Duration = Duration::from_secs(20);
 const MANUAL_REFRESH_GAP_SECONDS: i64 = 60;
+/// The reset history is read page by page (100 per page); more than this is left unread.
+const MAX_RESET_PAGES: usize = 5;
+/// A `Retry-After` longer than this is trusted only this far.
+const RETRY_AFTER_CAP_SECONDS: i64 = 6 * 3600;
 const ARENA_ROOT: &str =
     "https://raw.githubusercontent.com/oolong-tea-2026/arena-ai-leaderboards/main/data";
 /// The Arena leaderboards the popup knows how to label; any other name in the index is ignored.
@@ -117,6 +121,9 @@ struct StoredFeed {
     fetched_at: Option<DateTime<Utc>>,
     checked_at: Option<DateTime<Utc>>,
     error: Option<String>,
+    /// The source asked (`Retry-After`) not to be called again before this time.
+    #[serde(default)]
+    retry_after: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -180,7 +187,8 @@ impl PublicFeeds {
         )
     }
 
-    /// Whether the feed is due: never checked, past its interval, or past its retry wait.
+    /// Whether the feed is due: never checked, past its interval, or past its retry wait, and
+    /// past any `Retry-After` the source asked for.
     pub async fn due(&self, name: FeedName) -> bool {
         let feeds = self.feeds.lock().await;
         let stored = feeds.get(&name).cloned().unwrap_or_default();
@@ -190,9 +198,11 @@ impl PublicFeeds {
         } else {
             name.interval()
         };
-        stored
-            .checked_at
-            .is_none_or(|checked| now.signed_duration_since(checked) >= wait)
+        let held = stored.retry_after.is_some_and(|until| now < until);
+        !held
+            && stored
+                .checked_at
+                .is_none_or(|checked| now.signed_duration_since(checked) >= wait)
     }
 
     /// Fetch the feed now. A manual refresh within a minute of the last check is answered from
@@ -212,6 +222,7 @@ impl PublicFeeds {
         }
         let mut next = previous.clone();
         next.checked_at = Some(now);
+        next.retry_after = None;
         match self.fetch(name, previous.etag.as_deref()).await {
             Ok(Fetched::Unchanged) => next.error = None,
             Ok(Fetched::Body { body, etag }) => {
@@ -220,7 +231,10 @@ impl PublicFeeds {
                 next.fetched_at = Some((self.clock)());
                 next.error = None;
             }
-            Err(error) => next.error = Some(error),
+            Err(failure) => {
+                next.error = Some(failure.message);
+                next.retry_after = failure.retry_after.map(|wait| now + wait);
+            }
         }
         let changed = next.body != previous.body;
         if let Ok(bytes) = serde_json::to_vec(&next) {
@@ -233,12 +247,13 @@ impl PublicFeeds {
         (snapshot(name, next, (self.clock)()), changed)
     }
 
-    async fn fetch(&self, name: FeedName, etag: Option<&str>) -> Result<Fetched, String> {
+    async fn fetch(&self, name: FeedName, etag: Option<&str>) -> Result<Fetched, FetchFailure> {
         if name == FeedName::Arena {
             return self
                 .fetch_arena()
                 .await
-                .map(|body| Fetched::Body { body, etag: None });
+                .map(|body| Fetched::Body { body, etag: None })
+                .map_err(FetchFailure::from);
         }
         let mut request = HttpRequest::get(name.url()).timeout(TIMEOUT);
         if let Some(etag) = etag {
@@ -248,7 +263,10 @@ impl PublicFeeds {
         if response.status == 304 && etag.is_some() {
             return Ok(Fetched::Unchanged);
         }
-        let body = successful_text(&response, name.max_bytes())?;
+        let mut body = successful_text(&response, name.max_bytes())?;
+        if name == FeedName::CodexResets {
+            body = self.follow_reset_pages(body).await?;
+        }
         if !valid(name, &body) {
             return Err("The source answered with data in an unexpected shape".into());
         }
@@ -256,6 +274,44 @@ impl PublicFeeds {
             body,
             etag: response.header("etag").map(str::to_owned),
         })
+    }
+
+    /// The reset list is paginated by an opaque cursor. The first page's text is kept verbatim
+    /// when it is the only one, so its ETag still describes the stored body; further pages are
+    /// merged into one list under the first page's `meta`.
+    async fn follow_reset_pages(&self, first: String) -> Result<String, FetchFailure> {
+        let invalid = || FetchFailure::from("The source answered with data that is not JSON");
+        let mut page: Value = serde_json::from_str(&first).map_err(|_| invalid())?;
+        let meta = page["meta"].clone();
+        let mut rows = page["data"].as_array().cloned().unwrap_or_default();
+        let mut pages = 1;
+        loop {
+            let cursor = page["pagination"]["next_cursor"]
+                .as_str()
+                .filter(|cursor| is_cursor(cursor))
+                .map(str::to_owned);
+            let Some(cursor) = cursor.filter(|_| page["pagination"]["has_more"] == true) else {
+                break;
+            };
+            if pages >= MAX_RESET_PAGES {
+                break;
+            }
+            let url = format!("{}&cursor={cursor}", FeedName::CodexResets.url());
+            let response = self.get(HttpRequest::get(url).timeout(TIMEOUT)).await?;
+            let text = successful_text(&response, FeedName::CodexResets.max_bytes())?;
+            page = serde_json::from_str(&text).map_err(|_| invalid())?;
+            rows.extend(page["data"].as_array().cloned().unwrap_or_default());
+            pages += 1;
+        }
+        if pages == 1 {
+            return Ok(first);
+        }
+        Ok(serde_json::json!({
+            "data": rows,
+            "pagination": { "has_more": false, "next_cursor": Value::Null },
+            "meta": meta,
+        })
+        .to_string())
     }
 
     async fn fetch_arena(&self) -> Result<String, String> {
@@ -304,9 +360,50 @@ enum Fetched {
     Body { body: String, etag: Option<String> },
 }
 
-fn successful_text(response: &uc_core::HttpResponse, max_bytes: usize) -> Result<String, String> {
+/// Why a fetch failed, and how long the source asked to be left alone (`Retry-After`), if it did.
+struct FetchFailure {
+    message: String,
+    retry_after: Option<chrono::Duration>,
+}
+
+impl From<String> for FetchFailure {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            retry_after: None,
+        }
+    }
+}
+
+impl From<&str> for FetchFailure {
+    fn from(message: &str) -> Self {
+        Self::from(message.to_owned())
+    }
+}
+
+impl From<FetchFailure> for String {
+    fn from(failure: FetchFailure) -> Self {
+        failure.message
+    }
+}
+
+/// `Retry-After` in seconds (the date form is ignored), clamped to a sane range.
+fn retry_after(response: &uc_core::HttpResponse) -> Option<chrono::Duration> {
+    let seconds = response.header("retry-after")?.trim().parse::<i64>().ok()?;
+    Some(chrono::Duration::seconds(
+        seconds.clamp(1, RETRY_AFTER_CAP_SECONDS),
+    ))
+}
+
+fn successful_text(
+    response: &uc_core::HttpResponse,
+    max_bytes: usize,
+) -> Result<String, FetchFailure> {
     if !response.is_success() {
-        return Err(format!("HTTP {}", response.status));
+        return Err(FetchFailure {
+            message: format!("HTTP {}", response.status),
+            retry_after: retry_after(response),
+        });
     }
     if response.body.len() > max_bytes {
         return Err("The source answered with more data than expected".into());
@@ -317,6 +414,16 @@ fn successful_text(response: &uc_core::HttpResponse, max_bytes: usize) -> Result
 
 fn is_day(value: &str) -> bool {
     value.len() == 10 && chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok()
+}
+
+/// A pagination cursor as the API defines it: `[A-Za-z0-9_-]{1,1024}`, so it can only ever be a
+/// query value, never a path or another query parameter.
+fn is_cursor(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 1024
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
 }
 
 fn valid(name: FeedName, body: &str) -> bool {
@@ -426,6 +533,29 @@ mod tests {
         })
     }
 
+    fn status_with(code: u16, header: &str, value: &str) -> Result<HttpResponse, HttpError> {
+        Ok(HttpResponse {
+            status: code,
+            headers: HashMap::from([(header.to_owned(), value.to_owned())]),
+            body: Vec::new(),
+        })
+    }
+
+    fn page(rows: &[&str], next_cursor: Option<&str>) -> String {
+        let data = rows
+            .iter()
+            .map(|id| format!(r#"{{"id":"{id}","reset_type":"regular","announced_at":"2026-09-12T08:09:17.000Z","text":"Reset all propagated.","source":{{"type":"x_post","author":"thsottiaux","url":"https://x.com/thsottiaux/status/{id}"}}}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let pagination = match next_cursor {
+            Some(cursor) => format!(r#"{{"has_more":true,"next_cursor":"{cursor}"}}"#),
+            None => r#"{"has_more":false,"next_cursor":null}"#.to_owned(),
+        };
+        format!(
+            r#"{{"data":[{data}],"pagination":{pagination},"meta":{{"api_version":"v1","generated_at":"2026-09-26T09:12:55Z"}}}}"#
+        )
+    }
+
     fn feeds(root: &std::path::Path, http: Arc<Script>, seconds: Arc<AtomicI64>) -> PublicFeeds {
         PublicFeeds::new(root.to_path_buf())
             .with_http(http)
@@ -508,6 +638,76 @@ mod tests {
         seconds.store(60, Ordering::SeqCst);
         store.refresh(FeedName::CodexResetStatus, true).await;
         assert_eq!(http.seen.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn reset_history_follows_cursors_and_keeps_a_single_page_verbatim() {
+        let root = tempfile::tempdir().unwrap();
+        let seconds = Arc::new(AtomicI64::new(0));
+        let url = FeedName::CodexResets.url();
+        let single = page(&["1"], None);
+        let http = Script::new(vec![
+            (
+                url.to_owned(),
+                ok(&page(&["3", "2"], Some("abc_DEF-9")), Some("\"p1\"")),
+            ),
+            (
+                format!("{url}&cursor=abc_DEF-9"),
+                ok(&page(&["1"], None), None),
+            ),
+            (url.to_owned(), ok(&single, Some("\"p2\""))),
+            (url.to_owned(), ok(&page(&["9"], Some("../evil?x=1")), None)),
+        ]);
+        let store = feeds(root.path(), http.clone(), seconds.clone());
+        let (merged, _) = store.refresh(FeedName::CodexResets, false).await;
+        let body: Value = serde_json::from_str(merged.body.as_deref().unwrap()).unwrap();
+        let ids: Vec<&str> = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["3", "2", "1"]);
+        assert_eq!(body["pagination"]["has_more"], false);
+        assert_eq!(body["meta"]["api_version"], "v1");
+
+        seconds.store(1800, Ordering::SeqCst);
+        let (one_page, _) = store.refresh(FeedName::CodexResets, false).await;
+        assert_eq!(one_page.body.as_deref(), Some(single.as_str()));
+        assert_eq!(
+            http.seen.lock().unwrap()[2].headers,
+            vec![("If-None-Match".to_owned(), "\"p1\"".to_owned())]
+        );
+
+        seconds.store(3600, Ordering::SeqCst);
+        let (unsafe_cursor, _) = store.refresh(FeedName::CodexResets, false).await;
+        let body: Value = serde_json::from_str(unsafe_cursor.body.as_deref().unwrap()).unwrap();
+        assert_eq!(body["data"].as_array().unwrap().len(), 1);
+        assert_eq!(http.seen.lock().unwrap().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn a_rate_limit_is_honoured_for_as_long_as_retry_after_says() {
+        let root = tempfile::tempdir().unwrap();
+        let seconds = Arc::new(AtomicI64::new(0));
+        let url = FeedName::CodexResetStatus.url();
+        let http = Script::new(vec![
+            (url, status_with(429, "retry-after", "3600")),
+            (url, ok(STATUS, None)),
+        ]);
+        let store = feeds(root.path(), http, seconds.clone());
+        let (limited, _) = store.refresh(FeedName::CodexResetStatus, false).await;
+        assert_eq!(limited.error.as_deref(), Some("HTTP 429"));
+        seconds.store(5 * 60, Ordering::SeqCst);
+        assert!(!store.due(FeedName::CodexResetStatus).await);
+        seconds.store(3599, Ordering::SeqCst);
+        assert!(!store.due(FeedName::CodexResetStatus).await);
+        seconds.store(3600, Ordering::SeqCst);
+        assert!(store.due(FeedName::CodexResetStatus).await);
+        let (recovered, changed) = store.refresh(FeedName::CodexResetStatus, false).await;
+        assert!(changed && recovered.error.is_none());
+        seconds.store(3600 + 5 * 60, Ordering::SeqCst);
+        assert!(store.due(FeedName::CodexResetStatus).await);
     }
 
     #[tokio::test]

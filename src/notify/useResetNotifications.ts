@@ -1,12 +1,13 @@
 /**
- * Desktop notifications for Codex resets: one when codex-resets.com records a new reset and one when
- * a reset is announced ahead of time. The ids already seen are kept in the webview's storage so a
- * restart does not repeat them, and the first run only records what is there.
+ * Desktop notifications for Codex resets: one when codex-resets.com records a new reset, one when
+ * a reset is announced ahead of time and one when the site sees signs of a reset (its watch). The
+ * ids already seen are kept in the webview's storage so a restart does not repeat them, and the
+ * first run only records what is there.
  */
 import { announceOnIsland } from "@/glance/alerts";
 import { useEffect } from "react";
 import { insightsFor } from "@/i18n/insights";
-import { parseResetStatus } from "@/model/insights/resets";
+import { activeWatch, parseResetStatus, type ResetWatch } from "@/model/insights/resets";
 import { notify } from "@/platform/system";
 import { ensureFeed, useInsights } from "@/state/insights";
 import { useApp } from "@/state/store";
@@ -19,6 +20,13 @@ const EXCERPT_LENGTH = 160;
 interface Seen {
   latest: string | null;
   scheduled: string | null;
+  /** The watch's level and start, since a watch has no id of its own. */
+  watch: string | null;
+}
+
+/** A watch is the same one for as long as its level and start do not change. */
+export function watchKey(watch: ResetWatch | null): string | null {
+  return watch ? `${watch.level}@${watch.observedAt.toISOString()}` : null;
 }
 
 function readSeen(): Seen | null {
@@ -26,7 +34,8 @@ function readSeen(): Seen | null {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const value = JSON.parse(raw) as Partial<Seen>;
-    return { latest: typeof value.latest === "string" ? value.latest : null, scheduled: typeof value.scheduled === "string" ? value.scheduled : null };
+    const text = (item: unknown) => (typeof item === "string" ? item : null);
+    return { latest: text(value.latest), scheduled: text(value.scheduled), watch: text(value.watch) };
   } catch {
     return null;
   }
@@ -60,7 +69,12 @@ export function useResetNotifications(): void {
     const status = parseResetStatus(body);
     if (!status) return;
     const seen = readSeen();
-    const next: Seen = { latest: status.latest?.id ?? seen?.latest ?? null, scheduled: status.scheduled?.id ?? seen?.scheduled ?? null };
+    const watch = activeWatch(status, new Date());
+    const next: Seen = {
+      latest: status.latest?.id ?? seen?.latest ?? null,
+      scheduled: status.scheduled?.id ?? seen?.scheduled ?? null,
+      watch: watchKey(watch) ?? seen?.watch ?? null,
+    };
     writeSeen(next);
     if (!seen) return;
     const text = insightsFor(language);
@@ -72,5 +86,6 @@ export function useResetNotifications(): void {
       void send(text.notifyResetTitle, status.latest.text);
     }
     if (status.scheduled && status.scheduled.id !== seen.scheduled) void send(text.notifyScheduledTitle, status.scheduled.text);
+    if (watch && watchKey(watch) !== seen.watch) void send(text.notifyWatchTitle(watch.level), watch.text);
   }, [enabled, body, language]);
 }
