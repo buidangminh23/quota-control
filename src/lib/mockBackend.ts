@@ -11,7 +11,6 @@ import type {
   AppInfo,
   AvailableUpdate,
   ChatSession,
-  CliStatus,
   ConnectedAccount,
   EngineState,
   LoginBrowser,
@@ -50,7 +49,6 @@ export class MockBackend implements Backend {
   private readonly loginListeners = new Set<(result: AccountLoginResult) => void>();
   private readonly chatSessions: ChatSession[] = [];
   private shortcut: string | null = null;
-  private cli: CliStatus = { state: "notInstalled", command: "usagectl" };
   private version = "0.1.0";
   private updateState: UpdateStatus = { supported: true, currentVersion: "0.1.0", phase: "idle", manual: false, downloaded: 0 };
   private readonly updateListeners = new Set<(status: UpdateStatus) => void>();
@@ -225,20 +223,6 @@ export class MockBackend implements Backend {
   }
 
   async pauseGlobalShortcut(): Promise<void> {}
-
-  async cliStatus(): Promise<CliStatus> {
-    return { ...this.cli };
-  }
-
-  async installCli(): Promise<CliStatus> {
-    this.cli = { state: "installed", command: "usagectl", location: "~/.local/bin/usagectl" };
-    return { ...this.cli };
-  }
-
-  async uninstallCli(): Promise<CliStatus> {
-    this.cli = { state: "notInstalled", command: "usagectl" };
-    return { ...this.cli };
-  }
 
   async updateStatus(): Promise<UpdateStatus> {
     return structuredClone(this.updateState);

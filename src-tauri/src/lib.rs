@@ -106,9 +106,6 @@ pub fn run() -> anyhow::Result<()> {
             shortcut::global_shortcut,
             shortcut::set_global_shortcut,
             shortcut::pause_global_shortcut,
-            cli_install::cli_status,
-            cli_install::install_cli,
-            cli_install::uninstall_cli,
             updates::update_status,
             updates::check_for_update,
             updates::install_update,
@@ -250,7 +247,7 @@ pub fn run() -> anyhow::Result<()> {
             if let Err(error) = shortcut::restore(app.handle()) {
                 tracing::warn!("The saved global shortcut is unavailable: {error}");
             }
-            cli_install::sync_at_launch(app.handle());
+            cli_install::sync_at_launch();
             let api_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 match uc_api::server::bind().await {

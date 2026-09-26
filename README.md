@@ -166,13 +166,16 @@ invalid argument or unknown provider, and 4 a failed refresh: the JSON is still 
 failure in its `errors` and a warning on stderr. Output is ASCII-escaped, so Windows PowerShell 5.1
 parses it correctly.
 
-**Settings → Command line → Install** puts the command on PATH:
+The app puts the command on PATH by itself every time it starts; there is no setting for it:
 
 - Windows copies `usagectl.exe` from the installation into `%LOCALAPPDATA%\UsageControl\bin` and
-  adds that folder to the user PATH; open a new terminal afterwards. The app keeps the copy current
+  adds that folder to the user PATH; terminals opened afterwards find it. The copy is refreshed
   after upgrades, and uninstalling the app removes both the copy and the PATH entry.
-- The Linux `.deb` installs `/usr/bin/usagectl` itself, so Settings shows it as installed with the package.
+- The Linux `.deb` installs `/usr/bin/usagectl` itself, so the app leaves it alone.
 - The AppImage writes a small launcher, `~/.local/bin/usagectl`, that runs the AppImage with `--cli`.
+
+A file Quota Control did not create is never replaced, and development builds leave the
+installed command alone.
 
 ## Local HTTP API
 

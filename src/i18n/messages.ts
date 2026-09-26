@@ -2,7 +2,7 @@
  * The shape every language catalog implements. Parameterized entries are functions so each language
  * controls word order (English "95% left" vs Vietnamese "Còn 95%").
  */
-import type { CliState, ErrorCategory, UpdateFailureReason, UpdateFailureStage } from "@/lib/types";
+import type { ErrorCategory, UpdateFailureReason, UpdateFailureStage } from "@/lib/types";
 import type { TaskbarDisplay } from "@/model/settings";
 
 export type DisplayModeKey = "used" | "remaining";
@@ -150,7 +150,7 @@ export interface CustomizeMessages {
   undo: string;
 }
 
-export type SettingsSectionKey = "general" | "appearance" | "usageDisplay" | "taskbar" | "notifications" | "updates" | "commandLine" | "advanced";
+export type SettingsSectionKey = "general" | "appearance" | "usageDisplay" | "taskbar" | "notifications" | "updates" | "advanced";
 export type NotificationKey = "almostOut" | "cuttingItClose" | "willRunOut";
 
 export interface SettingsMessages {
@@ -167,13 +167,6 @@ export interface SettingsMessages {
   shortcutNeedsModifier(platform: "windows" | "linux" | "other"): string;
   shortcutUnsupported: string;
   shortcutUnavailable: string;
-  terminalHelper: string;
-  installCli: string;
-  uninstallCli: string;
-  cliNote: string;
-  cliStatus(state: CliState, location: string | undefined): string | null;
-  cliFailed: string;
-  localApiNote(url: string): string;
   theme: string;
   themeOption(theme: "system" | "light" | "dark"): string;
   density: string;

@@ -210,7 +210,6 @@ export const vi: Messages = {
         taskbar: "Thanh tác vụ",
         notifications: "Thông báo",
         updates: "Cập nhật ứng dụng",
-        commandLine: "Dòng lệnh",
         advanced: "Nâng cao",
       })[key],
     language: "Ngôn ngữ",
@@ -225,26 +224,6 @@ export const vi: Messages = {
     shortcutNeedsModifier: (platform) => `Hãy nhấn kèm Ctrl, Alt, Shift hoặc ${platform === "windows" ? "Win" : "Super"}.`,
     shortcutUnsupported: "Không dùng được phím này cho phím tắt.",
     shortcutUnavailable: "Không đặt được phím tắt này. Có thể một ứng dụng khác đang dùng nó.",
-    terminalHelper: "Lệnh cho terminal",
-    installCli: "Cài đặt",
-    uninstallCli: "Gỡ",
-    cliNote: "Thêm lệnh usagectl dùng được ở mọi nơi để agent theo dõi hạn mức.",
-    cliStatus: (state, location) => {
-      switch (state) {
-        case "installed":
-          return "Đã cài. Mở terminal mới để dùng lệnh.";
-        case "managed":
-          return `Đã có sẵn cùng gói cài đặt tại ${location ?? "usagectl"}.`;
-        case "conflict":
-          return `${location ?? "usagectl"} đã tồn tại và không do Quota Control tạo.`;
-        case "unavailable":
-          return "Bản dựng này không kèm lệnh usagectl.";
-        default:
-          return null;
-      }
-    },
-    cliFailed: "Không thay đổi được lệnh cho terminal.",
-    localApiNote: (url) => `Khi Quota Control đang chạy, ứng dụng khác trên máy này đọc được cùng số liệu hạn mức tại ${url}.`,
     theme: "Chủ đề",
     themeOption: (theme) => ({ system: "Theo hệ thống", light: "Sáng", dark: "Tối" })[theme],
     density: "Mật độ",

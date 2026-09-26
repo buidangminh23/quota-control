@@ -336,16 +336,6 @@ export interface StripFrame {
   tooltip: string;
 }
 
-/** Where `usagectl` stands on this computer (`cli_install.rs`). */
-export type CliState = "unavailable" | "managed" | "installed" | "notInstalled" | "conflict";
-
-export interface CliStatus {
-  state: CliState;
-  command: string;
-  /** The installed command, the package's copy, or the file in the way. */
-  location?: string;
-}
-
 /** Where the app's self-update stands (`updates.rs`). */
 export type UpdatePhase = "idle" | "checking" | "upToDate" | "available" | "downloading" | "installing" | "failed";
 export type UpdateFailureStage = "check" | "download" | "install";

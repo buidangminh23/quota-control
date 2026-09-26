@@ -7,8 +7,8 @@ ${UnStrLoc}
 ; template only removes "${PRODUCTNAME}".
 !define LEGACY_AUTOSTART_NAME "Usage Control"
 
-; Take usagectl off PATH and delete the copy Settings installed. The saved choice is kept,
-; so reinstalling the app restores the command.
+; Take usagectl off PATH and delete the copy the app installed. Reinstalling the app puts it
+; back at the next launch.
 !macro NSIS_HOOK_PREUNINSTALL
   ${If} $UpdateMode <> 1
     nsExec::Exec '"$INSTDIR\${MAINBINARYNAME}.exe" --unregister-cli'

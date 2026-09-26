@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { Backend, DocumentName, Unsubscribe } from "./backend";
 import type { ExchangeRate, UsageGroupRow, UsageLedgerInfo, UsageQuery } from "./types";
 import type { Language } from "@/i18n/language";
-import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, CliStatus, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
+import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
 
 /** Subscribe to a Tauri event synchronously; the returned function tears the listener down. */
 function subscribe<T>(event: string, listener: (payload: T) => void, replay?: () => Promise<T>): Unsubscribe {
@@ -174,18 +174,6 @@ export class TauriBackend implements Backend {
 
   pauseGlobalShortcut(paused: boolean): Promise<void> {
     return invoke("pause_global_shortcut", { paused });
-  }
-
-  cliStatus(): Promise<CliStatus> {
-    return invoke<CliStatus>("cli_status");
-  }
-
-  installCli(): Promise<CliStatus> {
-    return invoke<CliStatus>("install_cli");
-  }
-
-  uninstallCli(): Promise<CliStatus> {
-    return invoke<CliStatus>("uninstall_cli");
   }
 
   updateStatus(): Promise<UpdateStatus> {

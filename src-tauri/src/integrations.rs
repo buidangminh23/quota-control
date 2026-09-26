@@ -1,6 +1,6 @@
-//! Native integrations the core owns: the global shortcut and whether `usagectl` is on PATH. They
-//! live in their own document so the popup's settings saves, which merge a stale copy onto the
-//! stored one, can never revert them.
+//! Native integrations the core owns, such as the global shortcut. They live in their own document
+//! so the popup's settings saves, which merge a stale copy onto the stored one, can never revert
+//! them.
 
 use std::path::PathBuf;
 
@@ -15,9 +15,6 @@ pub struct Integrations {
     /// An accelerator such as `Ctrl+Alt+KeyU`; `None` leaves the popup without a shortcut.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub global_shortcut: Option<String>,
-    /// The user installed `usagectl` from Settings; the app keeps that copy current.
-    #[serde(default)]
-    pub command_line_tool: bool,
 }
 
 pub struct IntegrationStore {
@@ -76,17 +73,13 @@ mod tests {
         let store = IntegrationStore::open(path.clone());
         assert_eq!(store.get(), Integrations::default());
         store
-            .update(|integrations| {
-                integrations.global_shortcut = Some("Ctrl+Alt+KeyU".into());
-                integrations.command_line_tool = true;
-            })
+            .update(|integrations| integrations.global_shortcut = Some("Ctrl+Alt+KeyU".into()))
             .unwrap();
         let reopened = IntegrationStore::open(path.clone());
         assert_eq!(
             reopened.get().global_shortcut.as_deref(),
             Some("Ctrl+Alt+KeyU")
         );
-        assert!(reopened.get().command_line_tool);
 
         std::fs::write(&path, b"{broken").unwrap();
         assert_eq!(
@@ -94,5 +87,23 @@ mod tests {
             Integrations::default()
         );
         assert_eq!(std::fs::read(&path).unwrap(), b"{broken");
+    }
+
+    #[test]
+    fn documents_from_older_versions_keep_their_shortcut() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("integrations.json");
+        std::fs::write(
+            &path,
+            br#"{"globalShortcut":"Ctrl+Alt+KeyU","commandLineTool":false}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            IntegrationStore::open(path)
+                .get()
+                .global_shortcut
+                .as_deref(),
+            Some("Ctrl+Alt+KeyU")
+        );
     }
 }

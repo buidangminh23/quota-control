@@ -127,17 +127,9 @@ describe("taskbar", () => {
 });
 
 describe("command line", () => {
-  it("installs and removes the terminal helper and names the local API", async () => {
+  it("has no section, because usagectl installs itself", async () => {
     await openSettings();
-    expect(screen.getByRole("heading", { name: "Dòng lệnh" })).toBeInTheDocument();
-    expect(screen.getByText(/http:\/\/127\.0\.0\.1:6736\/v1\/limits/)).toBeInTheDocument();
-    await act(async () => {
-      fireEvent.click(await screen.findByRole("button", { name: "Cài đặt" }));
-    });
-    expect(await screen.findByText("Đã cài. Mở terminal mới để dùng lệnh.")).toBeInTheDocument();
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Gỡ" }));
-    });
-    expect(await screen.findByRole("button", { name: "Cài đặt" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Dòng lệnh" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/usagectl/)).not.toBeInTheDocument();
   });
 });

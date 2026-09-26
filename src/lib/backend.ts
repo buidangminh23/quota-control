@@ -5,7 +5,7 @@
  * Rust command names live in `src-tauri/src/commands.rs`; keep both sides in sync.
  */
 import type { Language } from "@/i18n/language";
-import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, CliStatus, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
+import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
 
 import type { ExchangeRate, UsageGroupRow, UsageLedgerInfo, UsageQuery } from "./types";
 
@@ -66,9 +66,6 @@ export interface Backend {
   setGlobalShortcut?(shortcut: string | null): Promise<string | null>;
   /** Release the accelerator while Settings records one, so pressing it records instead of toggling. */
   pauseGlobalShortcut?(paused: boolean): Promise<void>;
-  cliStatus?(): Promise<CliStatus>;
-  installCli?(): Promise<CliStatus>;
-  uninstallCli?(): Promise<CliStatus>;
   /** The app's self-update state; absent where the core has no updater. */
   updateStatus?(): Promise<UpdateStatus>;
   onUpdateStatus?(listener: (status: UpdateStatus) => void): Unsubscribe;

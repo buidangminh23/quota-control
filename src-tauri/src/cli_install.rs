@@ -1,4 +1,5 @@
-//! Put `usagectl` on the user's PATH from Settings (upstream `CommandLineToolInstaller`).
+//! Keep `usagectl` on the user's PATH (upstream `CommandLineToolInstaller`). There is no setting:
+//! every launch of a release build installs the command or brings it up to date.
 //!
 //! - Windows copies the bundled console program into `%LOCALAPPDATA%\UsageControl\bin` and adds that
 //!   directory, and nothing else, to the user PATH. The install directory also holds the uninstaller,
@@ -6,16 +7,11 @@
 //! - Linux packages already install `/usr/bin/usagectl`. Other builds link it into `~/.local/bin`;
 //!   an AppImage gets a small script that runs the AppImage with `--cli`.
 
-use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
-
-use crate::integrations::IntegrationStore;
 use crate::service::safe_error;
 
 pub const COMMAND: &str = "usagectl";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CliState {
     /// This build ships no `usagectl` (a development run or an unsupported platform).
     Unavailable,
@@ -25,72 +21,30 @@ pub enum CliState {
     Installed,
     NotInstalled,
     /// Something Quota Control did not create already holds the command's name.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Conflict,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CliStatus {
-    pub state: CliState,
-    pub command: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub location: Option<String>,
-}
-
-impl CliStatus {
-    fn new(state: CliState, location: Option<std::path::PathBuf>) -> Self {
-        Self {
-            state,
-            command: COMMAND,
-            location: location.map(|path| path.to_string_lossy().into_owned()),
-        }
-    }
-}
-
-#[tauri::command]
-pub async fn cli_status() -> Result<CliStatus, String> {
-    tauri::async_runtime::spawn_blocking(platform::status)
-        .await
-        .map_err(safe_error)
-}
-
-#[tauri::command]
-pub async fn install_cli(store: State<'_, IntegrationStore>) -> Result<CliStatus, String> {
-    let status = tauri::async_runtime::spawn_blocking(platform::install)
-        .await
-        .map_err(safe_error)??;
-    store.update(|integrations| integrations.command_line_tool = true)?;
-    Ok(status)
-}
-
-#[tauri::command]
-pub async fn uninstall_cli(store: State<'_, IntegrationStore>) -> Result<CliStatus, String> {
-    let status = tauri::async_runtime::spawn_blocking(platform::uninstall)
-        .await
-        .map_err(safe_error)??;
-    store.update(|integrations| integrations.command_line_tool = false)?;
-    Ok(status)
-}
-
-/// At launch: when the user installed the command, bring the copy up to date with this version.
-pub fn sync_at_launch(app: &AppHandle) {
-    if !app.state::<IntegrationStore>().get().command_line_tool {
+/// At launch: install the command, or bring the copy up to date with this version. A development
+/// run leaves the installed command alone, and a name something else holds is never taken.
+pub fn sync_at_launch() {
+    if cfg!(debug_assertions) {
         return;
     }
     tauri::async_runtime::spawn_blocking(|| {
-        if platform::status().state == CliState::Conflict {
+        if platform::status() != CliState::NotInstalled {
             return;
         }
         if let Err(error) = platform::install() {
-            tracing::warn!("usagectl could not be refreshed: {error}");
+            tracing::warn!("usagectl could not be installed: {error}");
         }
     });
 }
 
-/// For the uninstaller: take the command off PATH. The user's choice is kept, so reinstalling or
-/// upgrading restores it.
+/// For the uninstaller: take the command off PATH. Reinstalling the app puts it back at the next
+/// launch.
 pub fn unregister() -> Result<(), String> {
-    platform::uninstall().map(|_| ())
+    platform::uninstall()
 }
 
 /// `path_list` with `directory` appended, or `None` when an entry already names it. A trailing
@@ -200,7 +154,7 @@ mod platform {
         HWND_BROADCAST, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_SETTINGCHANGE,
     };
 
-    use super::{CliState, CliStatus, bundled, same_directory, with_entry, without_entry};
+    use super::{CliState, bundled, same_directory, with_entry, without_entry};
 
     fn wide(text: &str) -> Vec<u16> {
         text.encode_utf16().chain(std::iter::once(0)).collect()
@@ -374,25 +328,19 @@ mod platform {
         Ok(())
     }
 
-    pub fn status() -> CliStatus {
-        let copy = copy_path();
+    pub fn status() -> CliState {
         let Some(source) = bundled() else {
-            let state = if copy.is_file() && on_user_path() {
-                CliState::Installed
-            } else {
-                CliState::Unavailable
-            };
-            return CliStatus::new(state, copy.is_file().then_some(copy));
+            return CliState::Unavailable;
         };
-        let state = if copy.is_file() && on_user_path() && same_file(&source, &copy) {
+        let copy = copy_path();
+        if copy.is_file() && on_user_path() && same_file(&source, &copy) {
             CliState::Installed
         } else {
             CliState::NotInstalled
-        };
-        CliStatus::new(state, Some(copy))
+        }
     }
 
-    pub fn install() -> Result<CliStatus, String> {
+    pub fn install() -> Result<(), String> {
         let source = bundled().ok_or("This build of Quota Control does not include usagectl.")?;
         let copy = copy_path();
         if !same_file(&source, &copy) {
@@ -407,10 +355,10 @@ mod platform {
             }
             None => write_user_path(&key, &directory_text(), REG_EXPAND_SZ)?,
         }
-        Ok(status())
+        Ok(())
     }
 
-    pub fn uninstall() -> Result<CliStatus, String> {
+    pub fn uninstall() -> Result<(), String> {
         let key = environment_key()?;
         if let Some((value, kind)) = read_user_path(&key)?
             && let Some(next) = without_entry(&value, &directory_text(), ';')
@@ -427,7 +375,7 @@ mod platform {
         if let Some(directory) = copy.parent() {
             let _ = std::fs::remove_dir(directory);
         }
-        Ok(status())
+        Ok(())
     }
 }
 
@@ -436,7 +384,7 @@ mod platform {
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
 
-    use super::{COMMAND, CliState, CliStatus, bundled, same_directory};
+    use super::{COMMAND, CliState, bundled, same_directory};
 
     /// First line after the shebang of the AppImage wrapper, so uninstall only removes its own file.
     const MARKER: &str = "# Installed by Usage Control";
@@ -512,29 +460,28 @@ mod platform {
         }
     }
 
-    pub fn status() -> CliStatus {
+    pub fn status() -> CliState {
         let link = link_path();
         if appimage().is_none() {
             let Some(source) = bundled() else {
-                return CliStatus::new(CliState::Unavailable, None);
+                return CliState::Unavailable;
             };
             if source.parent().is_some_and(on_path) {
-                return CliStatus::new(CliState::Managed, Some(source));
+                return CliState::Managed;
             }
         }
-        let state = match existing(&link) {
+        match existing(&link) {
             Link::Missing => CliState::NotInstalled,
             Link::Foreign => CliState::Conflict,
             Link::Ours if current(&link) => CliState::Installed,
             Link::Ours => CliState::NotInstalled,
-        };
-        CliStatus::new(state, Some(link))
+        }
     }
 
-    pub fn install() -> Result<CliStatus, String> {
+    pub fn install() -> Result<(), String> {
         let link = link_path();
-        match status().state {
-            CliState::Managed | CliState::Installed => return Ok(status()),
+        match status() {
+            CliState::Managed | CliState::Installed => return Ok(()),
             CliState::Unavailable => {
                 return Err("This build of Quota Control does not include usagectl.".into());
             }
@@ -563,15 +510,15 @@ mod platform {
                 std::os::unix::fs::symlink(source, &link).map_err(super::safe_error)?;
             }
         }
-        Ok(status())
+        Ok(())
     }
 
-    pub fn uninstall() -> Result<CliStatus, String> {
+    pub fn uninstall() -> Result<(), String> {
         let link = link_path();
         if matches!(existing(&link), Link::Ours) {
             std::fs::remove_file(&link).map_err(super::safe_error)?;
         }
-        Ok(status())
+        Ok(())
     }
 
     #[cfg(test)]
@@ -616,18 +563,18 @@ mod platform {
 
 #[cfg(not(any(windows, target_os = "linux")))]
 mod platform {
-    use super::{CliState, CliStatus};
+    use super::CliState;
 
-    pub fn status() -> CliStatus {
-        CliStatus::new(CliState::Unavailable, None)
+    pub fn status() -> CliState {
+        CliState::Unavailable
     }
 
-    pub fn install() -> Result<CliStatus, String> {
+    pub fn install() -> Result<(), String> {
         Err("usagectl is not available on this platform.".into())
     }
 
-    pub fn uninstall() -> Result<CliStatus, String> {
-        Ok(status())
+    pub fn uninstall() -> Result<(), String> {
+        Ok(())
     }
 }
 

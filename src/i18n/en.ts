@@ -188,7 +188,6 @@ export const en: Messages = {
         taskbar: "Taskbar",
         notifications: "Notifications",
         updates: "App Updates",
-        commandLine: "Command Line",
         advanced: "Advanced",
       })[key],
     language: "Language",
@@ -203,26 +202,6 @@ export const en: Messages = {
     shortcutNeedsModifier: (platform) => `Add Ctrl, Alt, Shift or ${platform === "windows" ? "Win" : "Super"} to the key.`,
     shortcutUnsupported: "That key can't be used in a shortcut.",
     shortcutUnavailable: "Couldn't use this shortcut. Another app may already use it.",
-    terminalHelper: "Terminal Helper",
-    installCli: "Install",
-    uninstallCli: "Uninstall",
-    cliNote: "Adds a global usagectl command agents can use to monitor limits.",
-    cliStatus: (state, location) => {
-      switch (state) {
-        case "installed":
-          return "Installed. Open a new terminal to use it.";
-        case "managed":
-          return `Installed with the package at ${location ?? "usagectl"}.`;
-        case "conflict":
-          return `${location ?? "usagectl"} already exists and wasn't installed by Quota Control.`;
-        case "unavailable":
-          return "This build doesn't include usagectl.";
-        default:
-          return null;
-      }
-    },
-    cliFailed: "Couldn't change the terminal helper.",
-    localApiNote: (url) => `While Quota Control runs, other apps on this computer can read the same limits at ${url}.`,
     theme: "Theme",
     themeOption: (theme) => ({ system: "System", light: "Light", dark: "Dark" })[theme],
     density: "Density",
