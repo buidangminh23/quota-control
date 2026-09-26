@@ -6,6 +6,7 @@ pub mod ledger;
 mod parser;
 mod presentation;
 mod project;
+pub mod quality;
 
 use std::collections::BTreeMap;
 use std::fs::{self, Metadata};

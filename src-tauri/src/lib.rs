@@ -5,9 +5,11 @@ mod chat_store;
 mod cli_install;
 mod commands;
 pub mod exchange_rate;
+mod insights_commands;
 mod integrations;
 mod ipc_guard;
 mod limit_resets;
+pub mod public_feeds;
 mod service;
 mod shortcut;
 mod taskbar_strip;
@@ -83,6 +85,10 @@ pub fn run() -> anyhow::Result<()> {
             usage_commands::usage_ledger_info,
             usage_commands::exchange_rate,
             usage_commands::context_windows,
+            insights_commands::model_quality,
+            insights_commands::rescan_model_quality,
+            insights_commands::public_feed,
+            insights_commands::refresh_public_feed,
             commands::catalog,
             commands::engine_state,
             commands::refresh,
@@ -122,6 +128,7 @@ pub fn run() -> anyhow::Result<()> {
             }
             app.manage(integrations::IntegrationStore::default_store());
             app.manage(usage_commands::UsageService::new()?);
+            app.manage(insights_commands::InsightsService::new());
             let accounts = account_commands::Accounts::new(std::sync::Arc::new(
                 uc_accounts::AccountStore::default_store(),
             ));
@@ -234,6 +241,7 @@ pub fn run() -> anyhow::Result<()> {
             app.state::<BackendService>().start(app.handle());
             app.state::<updates::Updates>().start(app.handle());
             usage_commands::start(app.handle());
+            insights_commands::start(app.handle());
             let label_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 account_commands::backfill_account_labels(&label_app).await;
