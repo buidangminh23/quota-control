@@ -250,7 +250,7 @@ STAGE="$1"
 SRC="$HOME/build/qc-release-src"
 export CARGO_TARGET_DIR="$HOME/build/qc-target"
 export CI=true
-rm -rf "$SRC" "$STAGE/bundle"
+rm -rf "$SRC" "$STAGE/bundle" "$CARGO_TARGET_DIR/release/bundle/deb" "$CARGO_TARGET_DIR/release/bundle/appimage"
 mkdir -p "$SRC" "$CARGO_TARGET_DIR" "$STAGE/bundle"
 tar -xf "$STAGE/source.tar" -C "$SRC"
 cd "$SRC"
@@ -286,8 +286,9 @@ async function local(options) {
     env.TAURI_SIGNING_PRIVATE_KEY = readFileSync(DEFAULT_KEY, "utf8").trim();
   }
   const target = targetDir();
-  run("pnpm", ["tauri", "build", "--ci", "--bundles", "nsis", "--config", UPDATER_CONFIG], { env });
   const bundles = [join(target, "release", "bundle", "nsis")];
+  rmSync(bundles[0], { recursive: true, force: true });
+  run("pnpm", ["tauri", "build", "--ci", "--bundles", "nsis", "--config", UPDATER_CONFIG], { env });
   if (!options["skip-linux"]) bundles.push(buildLinux(env, options.distro ?? process.env.QUOTA_CONTROL_WSL_DISTRO, target));
   const tag = `v${version}`;
   const assembled = assemble({ ...options, tag, out: join(target, "release-assets", tag), "allow-missing": options["skip-linux"] }, bundles);
