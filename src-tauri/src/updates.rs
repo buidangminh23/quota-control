@@ -391,9 +391,10 @@ impl Updates {
         }
     }
 
-    /// Record a failed download or install. A failed Windows handover has already hidden the
-    /// popup and removed the tray icon, so the app restarts instead and the kept marker makes the
-    /// next launch report the failure.
+    /// Record a failed download or install and drop the offer, so a retry reads the release again
+    /// instead of fetching the same file and signature. A failed Windows handover has already
+    /// hidden the popup and removed the tray icon, so the app restarts instead and the kept marker
+    /// makes the next launch report the failure.
     fn fail(
         &self,
         app: &AppHandle,
@@ -404,6 +405,7 @@ impl Updates {
         if stage == FailureStage::Install && cfg!(windows) {
             app.restart();
         }
+        self.pending.lock().take();
         PendingInstall::remove();
         tracing::warn!(target: "updates", "update {stage:?} failed: {message}");
         self.publish(app, |status| {
