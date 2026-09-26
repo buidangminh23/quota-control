@@ -218,10 +218,20 @@ impl BackendService {
             None
         };
         let documents = self.documents.lock();
+        let mut value = value.clone();
         if let Some(ids) = &ids {
             self.validate_provider_ids(ids)?;
+            let stored = documents.load(DocumentName::Settings).map_err(safe_error)?;
+            let known = uc_api::settings_list(stored.as_ref(), "knownProviders");
+            let selection = uc_api::select_providers(
+                &self.engine().provider_ids(),
+                Some(ids),
+                known.as_deref(),
+                &[],
+            );
+            record_selection(&mut value, Some(ids), &selection.known);
         }
-        documents.save(name, value).map_err(safe_error)?;
+        documents.save(name, &value).map_err(safe_error)?;
         if let Some(ids) = ids {
             self.engine().set_enabled(&ids);
         }
@@ -235,10 +245,17 @@ impl BackendService {
             .load(DocumentName::Settings)
             .map_err(safe_error)?
             .unwrap_or_else(|| serde_json::json!({}));
-        let object = settings
-            .as_object_mut()
-            .ok_or("Settings must be an object")?;
-        object.insert("enabledProviders".into(), serde_json::json!(ids));
+        if !settings.is_object() {
+            return Err("Settings must be an object".into());
+        }
+        let known = uc_api::settings_list(Some(&settings), "knownProviders");
+        let selection = uc_api::select_providers(
+            &self.engine().provider_ids(),
+            Some(ids),
+            known.as_deref(),
+            &[],
+        );
+        record_selection(&mut settings, Some(ids), &selection.known);
         documents
             .save(DocumentName::Settings, &settings)
             .map_err(safe_error)?;
@@ -482,6 +499,58 @@ mod tests {
             serde_json::json!(["codex@cli", "claude-local", "codex-local"])
         );
         assert_eq!(saved["theme"], "dark");
+    }
+
+    #[test]
+    fn a_cli_card_hidden_before_the_first_settings_file_stays_hidden() {
+        assert_hidden_cli_survives_restart(false);
+    }
+
+    #[test]
+    fn a_cli_card_hidden_by_saving_settings_stays_hidden() {
+        assert_hidden_cli_survives_restart(true);
+    }
+
+    fn assert_hidden_cli_survives_restart(save_document: bool) {
+        let directory = tempfile::tempdir().unwrap();
+        let make_service = || {
+            let config = EngineConfig::default();
+            let cache =
+                SnapshotCache::new(directory.path().join("cache.json"), config.refresh_interval);
+            BackendService::with_storage(
+                Arc::new(Engine::new(
+                    fixture_runtimes(&["codex@cli", "claude-local"]),
+                    cache.clone(),
+                    config,
+                )),
+                DocumentStore::new(directory.path().join("config")),
+                cache,
+                &["codex@cli".to_string()],
+            )
+            .unwrap()
+        };
+        let service = make_service();
+        if save_document {
+            service
+                .save(
+                    "settings",
+                    &serde_json::json!({
+                        "enabledProviders": ["claude-local"],
+                        "theme": "dark"
+                    }),
+                )
+                .unwrap();
+        } else {
+            service.set_enabled(&["claude-local".to_string()]).unwrap();
+        }
+        assert!(!service.engine().is_enabled("codex@cli"));
+        drop(service);
+        let restarted = make_service();
+        assert!(
+            !restarted.engine().is_enabled("codex@cli"),
+            "save_document={save_document}"
+        );
+        assert!(restarted.engine().is_enabled("claude-local"));
     }
 
     #[test]
