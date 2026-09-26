@@ -18,7 +18,7 @@ import {
   setProviderOpen,
   type ProviderMetrics,
 } from "@/model/layout";
-import { accountLabelOf, headerNotice, providerBrand, providerTitle, stalenessHint } from "@/model/providerText";
+import { accountEmailOf, accountLabelOf, brandName, headerNotice, providerBrand, providerTitle, stalenessHint } from "@/model/providerText";
 import { condensedTextRowOffsets, widgetDataFor, type DisplayOptions, type WidgetData } from "@/model/widgetData";
 import { copyScreenshot } from "@/share/screenshot";
 import { navigate, openChatFor, refresh, setProviderEnabled, showNotice, updateLayout, useApp } from "@/state/store";
@@ -77,6 +77,8 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
   const messages = messagesFor(language);
   const providerId = group.provider.id;
   const title = providerTitle(group.provider, language);
+  const email = isLocalHistoryCard(providerId) ? null : accountEmailOf(group.provider);
+  const heading = email ? brandName(providerBrand(group.provider)) : title;
   const sectionRef = useRef<HTMLElement>(null);
   const layout = useApp((state) => state.layout);
   const catalog = useApp((state) => state.catalog);
@@ -144,46 +146,53 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
   return (
     <section ref={sectionRef} className="uc-section" aria-label={title} data-provider-section={providerId}>
       <header
-        className="uc-section-header"
+        className="uc-section-head"
         onContextMenu={(event) => {
           event.preventDefault();
           openMenu({ entries: headerEntries(), anchor: { x: event.clientX, y: event.clientY } });
         }}
       >
-        <span className="uc-section-mark">
-          <ProviderMark brand={providerBrand(group.provider)} size={16} />
-        </span>
-        <span className="uc-section-titles">
-          <span className="uc-section-name" {...truncatedTooltipProps(title)}>
-            {title}
+        <div className="uc-section-header">
+          <span className="uc-section-mark">
+            <ProviderMark brand={providerBrand(group.provider)} size={16} />
           </span>
-          {plan ? <span className="uc-section-plan">{translate(plan, language)}</span> : null}
-          {stale && !refreshing ? (
-            <span className="uc-section-stale" {...tooltipProps(stale.tooltip)}>
-              {stale.label}
+          <span className="uc-section-titles">
+            <span className="uc-section-name" {...truncatedTooltipProps(heading)}>
+              {heading}
+            </span>
+            {plan ? <span className="uc-section-plan">{translate(plan, language)}</span> : null}
+            {stale && !refreshing ? (
+              <span className="uc-section-stale" {...tooltipProps(stale.tooltip)}>
+                {stale.label}
+              </span>
+            ) : null}
+          </span>
+          {refreshing ? (
+            <span className="uc-section-status uc-secondary" aria-label={messages.dashboard.refreshing}>
+              <Spinner size={11} />
+            </span>
+          ) : notice ? (
+            <span className="uc-section-status" style={{ color: "var(--uc-orange)" }} role="img" aria-label={notice} {...tooltipProps(notice)}>
+              <WarningTriangle size={11} />
             </span>
           ) : null}
-        </span>
-        {refreshing ? (
-          <span className="uc-section-status uc-secondary" aria-label={messages.dashboard.refreshing}>
-            <Spinner size={11} />
-          </span>
-        ) : notice ? (
-          <span className="uc-section-status" style={{ color: "var(--uc-orange)" }} role="img" aria-label={notice} {...tooltipProps(notice)}>
-            <WarningTriangle size={11} />
-          </span>
+          <span className="uc-spacer" />
+          <button
+            type="button"
+            className="uc-icon-button is-reveal"
+            data-share-exclude="true"
+            aria-label={messages.dashboard.copyScreenshot(title)}
+            onClick={() => void share(sectionRef.current, messages)}
+            {...tooltipProps(messages.dashboard.copyScreenshot(title))}
+          >
+            <ShareIcon size={12} />
+          </button>
+        </div>
+        {email ? (
+          <div className="uc-section-account" data-share-exclude="true" {...truncatedTooltipProps(email)}>
+            {email}
+          </div>
         ) : null}
-        <span className="uc-spacer" />
-        <button
-          type="button"
-          className="uc-icon-button is-reveal"
-          data-share-exclude="true"
-          aria-label={messages.dashboard.copyScreenshot(title)}
-          onClick={() => void share(sectionRef.current, messages)}
-          {...tooltipProps(messages.dashboard.copyScreenshot(title))}
-        >
-          <ShareIcon size={12} />
-        </button>
       </header>
       <div className="uc-card uc-metric-card">
         {always.map(renderRow)}

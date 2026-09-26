@@ -39,6 +39,12 @@ export function accountLabelOf(provider: Provider): string | null {
   return index >= 0 ? provider.displayName.slice(index + LABEL_SEPARATOR.length) : null;
 }
 
+/** An account card's label when it is an email address; the card header shows it on its own line. */
+export function accountEmailOf(provider: Provider): string | null {
+  const label = accountLabelOf(provider)?.trim();
+  return label && /^[^\s@]+@[^\s@]+$/.test(label) ? label : null;
+}
+
 /**
  * The card header title. Account cards drop a label that only repeats the family (the default label
  * is the CLI name, e.g. `Claude · claude`); local-history cards read as "this computer".

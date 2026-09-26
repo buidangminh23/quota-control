@@ -70,6 +70,22 @@ describe("popup", () => {
     expect(screen.getByRole("switch", { name: "Hiện số liệu trên thanh tác vụ" })).toBeChecked();
   });
 
+  it("shows an account's email on its own line under the name and plan", async () => {
+    await renderApp();
+    const catalog = structuredClone(useApp.getState().catalog);
+    const work = catalog.find((entry) => entry.provider.id === "claude@7c1e");
+    if (!work) throw new Error("fixture card missing");
+    work.provider.displayName = "Claude · someone@example.com";
+    act(() => useApp.setState({ catalog }));
+    const card = await screen.findByRole("region", { name: "Claude · someone@example.com" });
+    const email = within(card).getByText("someone@example.com");
+    expect(email).toHaveClass("uc-section-account");
+    expect(email).toHaveAttribute("data-share-exclude", "true");
+    expect(within(card).getByText("Claude")).toHaveClass("uc-section-name");
+    expect(within(card).queryByText("Claude · someone@example.com")).not.toBeInTheDocument();
+    expect(screen.getByText("Claude · Cá nhân")).toHaveClass("uc-section-name");
+  });
+
   it("lists connected accounts with a Google sign-in and in-app chat actions", async () => {
     await renderApp();
     act(() => useApp.setState({ screen: "accounts" }));
