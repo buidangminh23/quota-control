@@ -80,6 +80,23 @@ describe("reconcileLayout", () => {
     expect(order.indexOf("claude@beef")).toBe(order.indexOf("claude-local") - 1);
   });
 
+  it("keeps Codex's free limit resets at the end of the card, above the caret", () => {
+    const group = displayGroups(layout, catalog, all).find((entry) => entry.provider.id === CODEX)!;
+    expect(group.always.map((descriptor) => descriptor.id)).toEqual([`${CODEX}.session`, `${CODEX}.weekly`, `${CODEX}.rateLimitResets`]);
+    expect(group.onDemand.map((descriptor) => descriptor.id)).not.toContain(`${CODEX}.rateLimitResets`);
+  });
+
+  it("brings a layout saved before a revision in line once, then leaves the user's choice alone", () => {
+    const saved = { ...layout, onDemand: [...layout.onDemand, `${CODEX}.rateLimitResets`], revisions: [] };
+    const revisedLayout = reconcileLayout(parseLayout(JSON.parse(JSON.stringify(saved))), catalog);
+    expect(revisedLayout.onDemand).not.toContain(`${CODEX}.rateLimitResets`);
+    expect(revisedLayout.revisions).toEqual(layout.revisions);
+    const movedBack = { ...revisedLayout, onDemand: [...revisedLayout.onDemand, `${CODEX}.rateLimitResets`] };
+    expect(reconcileLayout(movedBack, catalog).onDemand).toContain(`${CODEX}.rateLimitResets`);
+    const turnedOff = { ...saved, placed: saved.placed.filter((id) => id !== `${CODEX}.rateLimitResets`) };
+    expect(reconcileLayout(turnedOff, catalog).placed).not.toContain(`${CODEX}.rateLimitResets`);
+  });
+
   it("round-trips through parseLayout and rejects foreign documents", () => {
     expect(parseLayout(JSON.parse(JSON.stringify(layout)))).toEqual(layout);
     expect(parseLayout({ version: 99 })).toBeNull();
@@ -127,10 +144,10 @@ describe("layout views and edits", () => {
 
   it("promotes a card whose every metric is On Demand above the caret", () => {
     let next = layout;
-    for (const suffix of ["session", "weekly"]) next = setMetricEnabled(next, `${CODEX}.${suffix}`, false);
+    for (const suffix of ["session", "weekly", "rateLimitResets"]) next = setMetricEnabled(next, `${CODEX}.${suffix}`, false);
     const group = displayGroups(next, catalog, all).find((entry) => entry.provider.id === CODEX)!;
     expect(group.onDemand).toEqual([]);
-    expect(group.always.map((descriptor) => descriptor.id)).toEqual([`${CODEX}.spark`, `${CODEX}.sparkWeekly`, `${CODEX}.credits`, `${CODEX}.rateLimitResets`]);
+    expect(group.always.map((descriptor) => descriptor.id)).toEqual([`${CODEX}.spark`, `${CODEX}.sparkWeekly`, `${CODEX}.credits`]);
   });
 
   it("caps stars at two per provider", () => {

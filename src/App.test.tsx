@@ -66,6 +66,14 @@ describe("popup", () => {
     expect(within(work).queryByText(/^Hồi lại lúc /)).not.toBeInTheDocument();
   });
 
+  it("shows Codex's free limit resets as the last row of its card with the caret closed", async () => {
+    await renderApp();
+    const codex = screen.getByRole("region", { name: "Codex" });
+    expect(within(codex).getByRole("button", { name: "Xem thêm" })).toHaveAttribute("aria-expanded", "false");
+    const titles = within(codex).getAllByText(/^(Phiên|Tuần|Spark|Tín dụng|Lượt đặt lại hạn mức)$/).map((element) => element.textContent);
+    expect(titles).toEqual(["Phiên", "Tuần", "Lượt đặt lại hạn mức"]);
+  });
+
   it("shows the token total, then each source's trend and periods, on the Token tab and remembers the choice", async () => {
     await renderApp();
     fireEvent.click(screen.getByRole("tab", { name: "Token" }));

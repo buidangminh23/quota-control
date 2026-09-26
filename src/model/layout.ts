@@ -7,7 +7,8 @@
  * The catalog is the source of truth for what exists. Account cards (`claude@…`) inherit their
  * family's defaults like upstream `DefaultLayout.expandingAccounts`; local-history cards
  * (`claude-local`) have their own. Defaults reach each descriptor exactly once (`offered`), so a
- * metric the user turned off stays off, while a metric shipped later still appears.
+ * metric the user turned off stays off, while a metric shipped later still appears. A later change
+ * to a default reaches saved layouts through `LAYOUT_REVISIONS`, once each.
  */
 import type { Provider, ProviderEntry, WidgetDescriptor } from "@/lib/types";
 
@@ -32,6 +33,8 @@ export interface LayoutDocument {
   onDemandWhenEnabled: string[];
   /** Descriptor ids the defaults were already applied to. */
   offered: string[];
+  /** Ids of the `LAYOUT_REVISIONS` this document already went through. */
+  revisions: string[];
 }
 
 interface FamilyDefaults {
@@ -55,7 +58,7 @@ const FAMILY_DEFAULTS: Readonly<Record<string, FamilyDefaults>> = {
   },
   codex: {
     enabled: ["session", "weekly", "spark", "sparkWeekly", "trend", "credits", "rateLimitResets", "today", "yesterday", "last30"],
-    onDemand: ["spark", "sparkWeekly", "credits", "rateLimitResets", "today", "yesterday", "last30"],
+    onDemand: ["spark", "sparkWeekly", "credits", "today", "yesterday", "last30"],
     pinned: ["session", "weekly"],
   },
   "claude-local": LOCAL_HISTORY_DEFAULTS,
@@ -71,6 +74,25 @@ const FAMILY_DEFAULTS: Readonly<Record<string, FamilyDefaults>> = {
     pinned: [],
   },
 };
+
+interface LayoutRevision {
+  id: string;
+  apply(layout: LayoutDocument): LayoutDocument;
+}
+
+/**
+ * Changes to the defaults that also reach layouts saved before them, each applied once. They only
+ * move metrics between sections, so a metric the user turned off stays off.
+ */
+const LAYOUT_REVISIONS: readonly LayoutRevision[] = [
+  {
+    id: "codex-rate-limit-resets-always-visible",
+    apply: (layout) => ({
+      ...layout,
+      onDemand: layout.onDemand.filter((id) => !(layoutFamily(descriptorProviderId(id)) === "codex" && id.endsWith(".rateLimitResets"))),
+    }),
+  },
+];
 
 /** Established providers lead (upstream AGENTS.md "Default order"); the rest follow alphabetically. */
 const LEADING_BRANDS = ["claude", "codex", "cursor"];
@@ -154,6 +176,7 @@ export function emptyLayout(): LayoutDocument {
     openProviders: [],
     onDemandWhenEnabled: [],
     offered: [],
+    revisions: LAYOUT_REVISIONS.map((revision) => revision.id),
   };
 }
 
@@ -181,7 +204,17 @@ export function parseLayout(raw: unknown): LayoutDocument | null {
     openProviders: stringList(stored.openProviders),
     onDemandWhenEnabled: stringList(stored.onDemandWhenEnabled),
     offered: stringList(stored.offered),
+    revisions: stringList(stored.revisions),
   };
+}
+
+/** A saved layout with the revisions it has not gone through yet applied and recorded. */
+function revised(layout: LayoutDocument): LayoutDocument {
+  const done = new Set(layout.revisions);
+  const pending = LAYOUT_REVISIONS.filter((revision) => !done.has(revision.id));
+  if (pending.length === 0) return layout;
+  const next = pending.reduce((current, revision) => revision.apply(current), layout);
+  return { ...next, revisions: [...layout.revisions, ...pending.map((revision) => revision.id)] };
 }
 
 function insertProvider(order: string[], id: string, defaultOrder: readonly string[]): string[] {
@@ -229,7 +262,7 @@ export function descriptorProviderId(descriptorId: string): string {
 
 /** Bring a stored layout (or none) in line with the catalog, applying defaults to new metrics once. */
 export function reconcileLayout(stored: LayoutDocument | null, catalog: readonly ProviderEntry[]): LayoutDocument {
-  const layout = stored ? structuredClone(stored) : emptyLayout();
+  const layout = stored ? revised(structuredClone(stored)) : emptyLayout();
   const defaultOrder = defaultProviderOrder(catalog);
   for (const id of defaultOrder) {
     if (!layout.providerOrder.includes(id)) layout.providerOrder = insertProvider(layout.providerOrder, id, defaultOrder);
