@@ -24,16 +24,20 @@
  *       macOS only: build the app bundle and DMG here, signed with ~/.tauri/quota-control.key (or
  *       TAURI_SIGNING_PRIVATE_KEY), and assemble them into target/release-assets/vX.Y.Z-macos.
  *       --publish adds them to the release, which may already hold the Windows and Linux installers.
+ *   node scripts/release.mjs ship [--notes-file FILE]
+ *       The usual way to release: push the tag vX.Y.Z for the pushed HEAD (FILE becomes the notes of
+ *       its draft), wait while the Release workflow builds and signs the Windows, Linux and macOS
+ *       packages and publishes them together, then check latest.json serves all three.
  *
  * Publishing merges with what the release already holds: latest.json keeps the other platforms'
  * entries and SHA256SUMS the other files' lines, so a release can be assembled from several machines.
- * Installed apps only see it once --latest publishes it, and that requires every installer kind the
- * current release serves, plus Windows and Linux.
+ * Installed apps only see it once --latest publishes it, and that requires the Windows, Linux and
+ * macOS packages alike, so installed copies on every system are offered the same version.
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -48,9 +52,8 @@ const ARCH = { x64: "x86_64", amd64: "x86_64", x86: "i686", i386: "i686", arm64:
 const DARWIN_ARCHES = { aarch64: ["aarch64"], x86_64: ["x86_64"], universal: ["aarch64", "x86_64"] };
 /**
  * Installer kinds, the updater targets each one serves (`{os}-{arch}-{bundle}` first), and the
- * architecture every published release must serve for it. A kind marked `onceServed` (macOS, which
- * came after Windows and Linux) is required only once a published release has served it, so the
- * releases before the first macOS one do not wait for a Mac build.
+ * architecture every published release must serve for it. Every release carries all of them, so the
+ * Windows, Linux and macOS copies are always offered the same version.
  */
 const KINDS = [
   { id: "nsis", pattern: /_(x64|x86|arm64)-setup\.exe$/, targets: (arch) => [`windows-${arch}-nsis`, `windows-${arch}`], required: "x86_64" },
@@ -61,13 +64,22 @@ const KINDS = [
     pattern: /_(aarch64|x64|universal)\.app\.tar\.gz$/,
     targets: (arch) => DARWIN_ARCHES[arch].flatMap((darwin) => [`darwin-${darwin}-app`, `darwin-${darwin}`]),
     required: "aarch64",
-    onceServed: true,
   },
 ];
 /** Downloads that are not updater packages: the macOS disk image people open by hand. */
 const DOWNLOADS = [{ id: "dmg", pattern: /_(aarch64|x64|universal)\.dmg$/ }];
 const PUBLISHED_POLL_ATTEMPTS = 12;
 const PUBLISHED_POLL_DELAY_MS = 5000;
+const SIGNING_SECRET = "TAURI_SIGNING_PRIVATE_KEY";
+const RELEASE_WORKFLOW = "release.yml";
+const RUN_APPEAR_ATTEMPTS = 24;
+const RUN_APPEAR_DELAY_MS = 5000;
+const RUN_POLL_DELAY_MS = 30_000;
+const RUN_TIMEOUT_MS = 90 * 60_000;
+const EVERY_PLATFORM =
+  "every release ships Windows, Linux and macOS together so installed copies stay on one version. Release with " +
+  "`node scripts/release.mjs ship` (the Release workflow builds all three), or upload the missing packages to the " +
+  "draft from the machines that build them (`local --publish` on Windows, `mac --publish` on a Mac) and publish with --latest last";
 
 class ReleaseError extends Error {}
 
@@ -162,15 +174,22 @@ export function findInstallers(directories, version) {
 }
 
 /**
- * The updater targets a published release must serve: one per installer kind. A kind marked
- * `onceServed` counts only when `current`, the latest.json installed apps read now, serves it;
- * without `current` every kind counts.
+ * The updater targets `document` lacks among those a published release must serve, one per
+ * installer kind in `kinds` (every kind unless narrowed).
  */
-export function missingTargets(document, current) {
-  const serves = (kind) => kind.targets(kind.required).some((target) => current.platforms?.[target]);
-  return KINDS.filter((kind) => !kind.onceServed || !current || serves(kind))
+export function missingTargets(document, kinds = KINDS.map((kind) => kind.id)) {
+  return KINDS.filter((kind) => kinds.includes(kind.id))
     .map((kind) => kind.targets(kind.required)[0])
-    .filter((target) => !document.platforms?.[target]);
+    .filter((target) => !document?.platforms?.[target]);
+}
+
+/** The newest Release run that a push of `tag` at commit `head` started, among `gh run list` rows. */
+export function pickRun(runs, tag, head) {
+  return (
+    runs
+      .filter((run) => run.event === "push" && run.headBranch === tag && run.headSha === head)
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0] ?? null
+  );
 }
 
 /** This version's disk images under `directories`, renamed like the installers. */
@@ -295,12 +314,8 @@ async function publish(options) {
     mergeWithRelease(slug, options.tag, dir);
   }
   const document = JSON.parse(readFileSync(join(dir, "latest.json"), "utf8"));
-  const current = await currentManifest(slug);
-  const missing = missingTargets(document, current);
-  if (missing.length > 0 && options.latest) {
-    const unread = current ? "" : "; the current release's latest.json could not be read, so every kind counts";
-    fail(`latest.json has no ${missing.join(", ")}; publishing needs every installer kind the current release serves${unread} (add them, then publish with --latest)`);
-  }
+  const missing = missingTargets(document);
+  if (missing.length > 0 && options.latest) fail(`latest.json has no ${missing.join(", ")}; ${EVERY_PLATFORM}`);
   if (missing.length > 0) console.log(`The draft has no ${missing.join(", ")} yet; add them before publishing.`);
   if (!existing.ok) {
     const create = ["release", "create", options.tag, "-R", slug, "--draft", "--title", `Quota Control ${version}`];
@@ -332,10 +347,7 @@ async function publish(options) {
  */
 function checkDraftTarget(slug, tag) {
   const head = capture("git", ["rev-parse", "HEAD"]).stdout;
-  const remote = capture("git", ["ls-remote", "--tags", "origin", `refs/tags/${tag}`, `refs/tags/${tag}^{}`]).stdout;
-  const lines = remote.split("\n").filter(Boolean).map((line) => line.split(/\s+/));
-  const tagged = (lines.find(([, ref]) => ref.endsWith("^{}")) ?? lines[0])?.[0];
-  let expected = tagged ?? "";
+  let expected = remoteTagCommit(tag);
   if (!expected) {
     const view = capture("gh", ["release", "view", tag, "-R", slug, "--json", "targetCommitish"]);
     const target = view.ok ? JSON.parse(view.stdout).targetCommitish ?? "" : "";
@@ -369,11 +381,114 @@ function mergeWithRelease(slug, tag, dir) {
   rmSync(previous, { recursive: true, force: true });
 }
 
-/** The latest.json installed apps read now, or null when it cannot be read. */
-async function currentManifest(slug) {
-  const url = `https://github.com/${slug}/releases/latest/download/latest.json`;
-  const response = await fetch(url, { headers: { accept: "application/json" } }).catch(() => null);
-  return response?.ok ? await response.json().catch(() => null) : null;
+/** The commit a tag on origin points at (through an annotated tag), or "" when origin has no such tag. */
+function remoteTagCommit(tag) {
+  const remote = capture("git", ["ls-remote", "--tags", "origin", `refs/tags/${tag}`, `refs/tags/${tag}^{}`]).stdout;
+  const lines = remote.split("\n").filter(Boolean).map((line) => line.split(/\s+/));
+  return (lines.find(([, ref]) => ref.endsWith("^{}")) ?? lines[0])?.[0] ?? "";
+}
+
+/**
+ * The tag's release: null when there is none, otherwise whether it is still a draft and the
+ * latest.json it holds for `version` (null when it holds none).
+ */
+function releaseState(slug, tag, version) {
+  const view = capture("gh", ["release", "view", tag, "-R", slug, "--json", "isDraft,assets"]);
+  if (!view.ok) {
+    if (/not found/i.test(view.stderr)) return null;
+    fail(`cannot read the ${tag} release: ${view.stderr}`);
+  }
+  const { isDraft, assets } = JSON.parse(view.stdout);
+  if (!assets.some((asset) => asset.name === "latest.json")) return { isDraft, document: null };
+  const folder = mkdtempSync(join(tmpdir(), "qc-release-"));
+  try {
+    const download = capture("gh", ["release", "download", tag, "-R", slug, "-D", folder, "-p", "latest.json", "--clobber"]);
+    if (!download.ok) fail(`cannot download latest.json from ${tag}: ${download.stderr}`);
+    const document = JSON.parse(readFileSync(join(folder, "latest.json"), "utf8"));
+    return { isDraft, document: document.version === version ? document : null };
+  } finally {
+    rmSync(folder, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Stop before a long build when --latest cannot succeed from this machine: every installer kind it
+ * does not build (`built` lists those it does) must already be in the tag's draft.
+ */
+function requireRestInDraft(options, version, built) {
+  if (!options.publish || !options.latest) return;
+  const tag = `v${version}`;
+  const state = releaseState(repositorySlug(), tag, version);
+  if (state && !state.isDraft) fail(`${tag} is already published; bump the version for a new release`);
+  const missing = missingTargets(state?.document, KINDS.map((kind) => kind.id).filter((id) => !built.includes(id)));
+  if (missing.length > 0) {
+    fail(`this machine does not build ${missing.join(", ")} and the ${tag} draft does not hold ${missing.length > 1 ? "them" : "it"} yet; ${EVERY_PLATFORM}`);
+  }
+}
+
+function sleep(milliseconds) {
+  return new Promise((done) => setTimeout(done, milliseconds));
+}
+
+/** Wait for the Release run the tag push started, printing each job as it ends; fail unless it succeeds. */
+async function waitForRun(slug, tag, head) {
+  let started = null;
+  for (let attempt = 1; attempt <= RUN_APPEAR_ATTEMPTS && !started; attempt += 1) {
+    const list = capture("gh", ["run", "list", "-R", slug, "--workflow", RELEASE_WORKFLOW, "--event", "push", "--limit", "20", "--json", "databaseId,event,headBranch,headSha,createdAt,url"]);
+    started = list.ok ? pickRun(JSON.parse(list.stdout), tag, head) : null;
+    if (!started) await sleep(RUN_APPEAR_DELAY_MS);
+  }
+  if (!started) fail(`no Release run started for ${tag}; see https://github.com/${slug}/actions`);
+  console.log(`Waiting for the Release run: ${started.url}`);
+  const reported = new Set();
+  const deadline = Date.now() + RUN_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const view = capture("gh", ["run", "view", String(started.databaseId), "-R", slug, "--json", "status,conclusion,jobs"]);
+    if (view.ok) {
+      const { status, conclusion, jobs } = JSON.parse(view.stdout);
+      for (const job of jobs.filter((job) => job.status === "completed" && !reported.has(job.name))) {
+        reported.add(job.name);
+        console.log(`  ${job.name}: ${job.conclusion}`);
+      }
+      if (status === "completed") {
+        if (conclusion !== "success") fail(`the Release run ended ${conclusion}, so nothing was published: ${started.url}`);
+        return;
+      }
+    }
+    await sleep(RUN_POLL_DELAY_MS);
+  }
+  fail(`the Release run is still going after ${RUN_TIMEOUT_MS / 60_000} minutes: ${started.url}`);
+}
+
+/**
+ * Release the pushed HEAD through the Release workflow, which builds and signs every system's
+ * packages from that one commit and publishes them together.
+ */
+async function ship(options) {
+  const version = appVersion();
+  const tag = `v${version}`;
+  const slug = repositorySlug();
+  if (capture("git", ["status", "--porcelain"]).stdout) fail("commit your changes first: the workflow builds the pushed commit");
+  const secrets = capture("gh", ["secret", "list", "-R", slug, "--json", "name"]);
+  if (!secrets.ok) fail(`cannot list the repository secrets: ${secrets.stderr}`);
+  if (!JSON.parse(secrets.stdout).some((secret) => secret.name === SIGNING_SECRET)) {
+    fail(`the ${SIGNING_SECRET} secret is not set, so the workflow cannot sign the installers; the owner sets it once (README → Releases → Signing key)`);
+  }
+  run("git", ["fetch", "--quiet", "origin"]);
+  const head = capture("git", ["rev-parse", "HEAD"]).stdout;
+  if (!capture("git", ["branch", "-r", "--contains", head]).stdout) fail(`HEAD ${head.slice(0, 7)} is not pushed; push it before shipping`);
+  const tagged = remoteTagCommit(tag);
+  if (tagged && tagged !== head) fail(`${tag} already points at ${tagged.slice(0, 7)}, not HEAD ${head.slice(0, 7)}; bump the version`);
+  const state = releaseState(slug, tag, version);
+  if (state && !state.isDraft) fail(`${tag} is already published; bump the version for a new release`);
+  if (options["notes-file"]) {
+    const notes = resolve(options["notes-file"]);
+    if (state) run("gh", ["release", "edit", tag, "-R", slug, "--notes-file", notes]);
+    else run("gh", ["release", "create", tag, "-R", slug, "--draft", "--title", `${PRODUCT} ${version}`, "--notes-file", notes, "--target", head]);
+  }
+  if (!tagged) run("git", ["push", "origin", `${head}:refs/tags/${tag}`]);
+  await waitForRun(slug, tag, head);
+  await verifyPublished(slug, version);
 }
 
 async function verifyPublished(slug, version) {
@@ -382,6 +497,8 @@ async function verifyPublished(slug, version) {
     const response = await fetch(url, { headers: { accept: "application/json" } }).catch(() => null);
     const body = response?.ok ? await response.json().catch(() => null) : null;
     if (body?.version === version) {
+      const missing = missingTargets(body);
+      if (missing.length > 0) fail(`${url} announces ${version} without ${missing.join(", ")}, so those copies stay behind`);
       for (const [target, platform] of Object.entries(body.platforms)) {
         const asset = await fetch(platform.url, { method: "HEAD" }).catch(() => null);
         if (!asset?.ok) fail(`${target} points at ${platform.url}, which answers ${asset?.status ?? "nothing"}`);
@@ -389,7 +506,7 @@ async function verifyPublished(slug, version) {
       console.log(`Installed apps now see ${version}: ${url} lists ${Object.keys(body.platforms).join(", ")}.`);
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, PUBLISHED_POLL_DELAY_MS));
+    await sleep(PUBLISHED_POLL_DELAY_MS);
   }
   fail(`${url} still does not announce ${version}`);
 }
@@ -436,6 +553,7 @@ async function local(options) {
   if (!options["allow-dirty"] && capture("git", ["status", "--porcelain"]).stdout) {
     fail("commit your changes first: the Linux packages are built from the committed tree");
   }
+  requireRestInDraft(options, version, ["nsis", "deb", "appimage"]);
   const env = { ...process.env, TAURI_SIGNING_PRIVATE_KEY_PASSWORD: process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?? "" };
   if (!env.TAURI_SIGNING_PRIVATE_KEY) {
     if (!existsSync(DEFAULT_KEY)) fail(`no signing key: set TAURI_SIGNING_PRIVATE_KEY or create ${DEFAULT_KEY}`);
@@ -472,6 +590,7 @@ async function mac(options) {
   if (!options["allow-dirty"] && capture("git", ["status", "--porcelain"]).stdout) {
     fail("commit your changes first: a release is built from the committed tree");
   }
+  requireRestInDraft(options, version, ["app"]);
   const env = macBuildEnv();
   if (!env.TAURI_SIGNING_PRIVATE_KEY) {
     if (!existsSync(DEFAULT_KEY)) fail(`no signing key: set TAURI_SIGNING_PRIVATE_KEY or create ${DEFAULT_KEY}`);
@@ -525,8 +644,11 @@ async function main() {
     case "mac":
       await mac(values);
       return;
+    case "ship":
+      await ship(values);
+      return;
     default:
-      fail("usage: node scripts/release.mjs version|assemble|publish|local|stage-macos|mac [options] (see the header of this file)");
+      fail("usage: node scripts/release.mjs version|assemble|publish|local|stage-macos|mac|ship [options] (see the header of this file)");
   }
 }
 

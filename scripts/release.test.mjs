@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findDownloads, findInstallers, manifest, mergeManifest, mergeSums, missingTargets, signedVersion, stageMacos } from "./release.mjs";
+import { findDownloads, findInstallers, manifest, mergeManifest, mergeSums, missingTargets, pickRun, signedVersion, stageMacos } from "./release.mjs";
 
 function signature(trustedComment) {
   const text = ["untrusted comment: signature from tauri secret key", "RUTkeyid", `trusted comment: ${trustedComment}`, "globalsig", ""].join("\n");
@@ -137,21 +137,33 @@ describe("missingTargets", () => {
   const windowsAndLinux = { "windows-x86_64-nsis": {}, "windows-x86_64": {}, "linux-x86_64-deb": {}, "linux-x86_64-appimage": {}, "linux-x86_64": {} };
   const macos = { "darwin-aarch64-app": {}, "darwin-aarch64": {} };
 
-  it("asks for macOS only once a published release has served it", () => {
-    const release = { version: "0.1.14", platforms: windowsAndLinux };
-    expect(missingTargets(release, { version: "0.1.13", platforms: windowsAndLinux })).toEqual([]);
-    expect(missingTargets(release, { version: "0.2.0", platforms: { ...windowsAndLinux, ...macos } })).toEqual(["darwin-aarch64-app"]);
-  });
-
-  it("asks for every kind when the current release cannot be read", () => {
-    expect(missingTargets({ version: "0.1.14", platforms: windowsAndLinux }, null)).toEqual(["darwin-aarch64-app"]);
+  it("asks for macOS in every release, including the first one to carry it", () => {
+    expect(missingTargets({ version: "0.1.14", platforms: windowsAndLinux })).toEqual(["darwin-aarch64-app"]);
+    expect(missingTargets({ version: "0.1.14", platforms: { ...windowsAndLinux, ...macos } })).toEqual([]);
   });
 
   it("always asks for Windows and Linux", () => {
-    expect(missingTargets({ version: "0.2.1", platforms: macos }, { version: "0.2.0", platforms: macos })).toEqual([
-      "windows-x86_64-nsis",
-      "linux-x86_64-deb",
-      "linux-x86_64-appimage",
-    ]);
+    expect(missingTargets({ version: "0.2.1", platforms: macos })).toEqual(["windows-x86_64-nsis", "linux-x86_64-deb", "linux-x86_64-appimage"]);
+  });
+
+  it("checks only the kinds it is given, and treats a missing manifest as empty", () => {
+    expect(missingTargets({ version: "0.2.1", platforms: macos }, ["app"])).toEqual([]);
+    expect(missingTargets(null, ["app"])).toEqual(["darwin-aarch64-app"]);
+    expect(missingTargets(null, ["nsis", "deb", "appimage"])).toEqual(["windows-x86_64-nsis", "linux-x86_64-deb", "linux-x86_64-appimage"]);
+  });
+});
+
+describe("pickRun", () => {
+  const head = "a".repeat(40);
+  const run = (id, overrides) => ({ databaseId: id, event: "push", headBranch: "v0.1.14", headSha: head, createdAt: "2026-09-26T15:00:00Z", ...overrides });
+
+  it("takes the newest run the tag push started at that commit", () => {
+    const runs = [run(1), run(3, { createdAt: "2026-09-26T15:30:00Z" }), run(2, { createdAt: "2026-09-26T15:10:00Z" })];
+    expect(pickRun(runs, "v0.1.14", head)?.databaseId).toBe(3);
+  });
+
+  it("ignores manual runs, other tags and other commits", () => {
+    const runs = [run(1, { event: "workflow_dispatch" }), run(2, { headBranch: "v0.1.13" }), run(3, { headSha: "b".repeat(40) })];
+    expect(pickRun(runs, "v0.1.14", head)).toBeNull();
   });
 });

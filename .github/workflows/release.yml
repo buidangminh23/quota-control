@@ -1,7 +1,8 @@
-# Builds signed installers for a version tag (Windows, Linux and Apple Silicon macOS) and drafts the
-# GitHub release that the in-app updater reads (latest.json). Publishing the draft is left to a person: installed apps only see a release
-# once it is published as the latest. A manual run builds the installers without releasing them.
-# A tag whose release is already published, for example by `scripts/release.mjs local`, is left alone.
+# Builds signed installers for a version tag (Windows, Linux and Apple Silicon macOS) and publishes
+# them together as the latest GitHub release, whose latest.json the in-app updater reads. Nothing is
+# published unless all three builds succeed, so installed copies on every system are offered the same
+# version. `node scripts/release.mjs ship` pushes the tag and waits for this run. A manual run builds
+# the installers without releasing them. A tag whose release is already published is left alone.
 name: Release
 
 on:
@@ -104,7 +105,7 @@ jobs:
           retention-days: 14
 
   release:
-    name: Draft the release
+    name: Publish the release
     needs: build
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
@@ -118,7 +119,7 @@ jobs:
           path: bundles
       - name: Assemble installers and latest.json
         run: node scripts/release.mjs assemble --tag "${{ github.ref_name }}" --out release bundles
-      - name: Upload to a draft release
+      - name: Publish Windows, Linux and macOS together
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/release.mjs publish --tag "${{ github.ref_name }}" --dir release
+        run: node scripts/release.mjs publish --tag "${{ github.ref_name }}" --dir release --latest

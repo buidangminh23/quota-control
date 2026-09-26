@@ -345,29 +345,32 @@ WebKitGTK 4.1, GTK 3 and Ayatana AppIndicator, and installs `/usr/bin/quota-cont
 
 A release is a GitHub release carrying the Windows setup, the `.deb`, the AppImage and the macOS
 app archive with their `.sig` files, the macOS DMG, `latest.json` (the manifest installed apps read)
-and `SHA256SUMS`. Installed apps see it only once it is published as the latest release, and
-publishing refuses a release that lacks the Windows or Linux packages, or the macOS archive once a
-published release has carried one (so the releases before the first macOS one do not wait for it).
+and `SHA256SUMS`. Every release carries all three systems: publishing refuses a release that lacks
+the Windows, Linux or macOS package, so installed copies on every system are offered the same
+version at the same time.
 
 1. Set the same version in `package.json`, `src-tauri/tauri.conf.json` and `Cargo.toml`
-   (`[workspace.package]`), commit, then push a matching tag: `git tag v0.2.0 && git push origin v0.2.0`.
-2. The **Release** workflow checks the tag against the three versions, builds and signs the Windows,
-   Linux and macOS packages, and uploads everything to a **draft** release.
-3. Publish the draft on GitHub, or run `gh release edit v0.2.0 --draft=false --latest`. From then
-   on, installed apps offer the update.
+   (`[workspace.package]`), commit and push.
+2. Run `node scripts/release.mjs ship`, optionally with `--notes-file notes.md`. It pushes the tag
+   `v0.2.0` for the pushed commit, and the **Release** workflow checks the tag against the three
+   versions, builds and signs the Windows, Linux and macOS packages from that commit and publishes
+   them together as the latest release. `ship` waits for the run, then reads `latest.json` back
+   from GitHub and checks every system and download link.
 
-Without GitHub Actions, `node scripts/release.mjs local` releases from Windows: it builds the NSIS
-setup here and the `.deb` and AppImage in WSL from the committed tree, then assembles them into
-`target/release-assets/v0.2.0`. `--publish` uploads that folder to a draft release, and `--latest`
-publishes it, then reads `latest.json` back from GitHub and checks every download link.
+Nothing is published unless all three builds succeed. Pushing the tag by hand
+(`git push origin HEAD:refs/tags/v0.2.0`) releases the same way without waiting. A manual run of
+the workflow builds the installers without releasing them.
+
+Without GitHub Actions the packages come from two machines. `node scripts/release.mjs local` on
+Windows builds the NSIS setup there and the `.deb` and AppImage in WSL from the committed tree into
+`target/release-assets/v0.2.0`; `node scripts/release.mjs mac` on a Mac builds the app bundle and the
+DMG (signed with `~/.tauri/quota-control.key` or `TAURI_SIGNING_PRIVATE_KEY`) into
+`target/release-assets/v0.2.0-macos`. `--publish` uploads either folder to the draft release, and
+every upload merges with it: `latest.json` keeps the other platforms and `SHA256SUMS` the other
+files. The machine that uploads last adds `--latest` to publish; either command stops before
+building when `--latest` could not succeed because the draft lacks the other system's packages.
 Publishing creates the tag, and the Release workflow then finds the release published and builds
 nothing. `--skip-linux` builds only the Windows setup; such a partial build cannot be published.
-
-On a Mac, `node scripts/release.mjs mac` builds the app bundle and the DMG (signed with
-`~/.tauri/quota-control.key` or `TAURI_SIGNING_PRIVATE_KEY`) into `target/release-assets/v0.2.0-macos`;
-`--publish` adds them to the draft the other machine uploaded and `--latest` then publishes it.
-Every upload merges with the release: `latest.json` keeps the other platforms and `SHA256SUMS` the
-other files, so the packages can come from different machines.
 
 ### Signing key
 
@@ -376,8 +379,10 @@ kept outside the repository, in `%USERPROFILE%\.tauri\quota-control.key`, where 
 reads it. The workflow reads it from the `TAURI_SIGNING_PRIVATE_KEY` secret:
 
 ```powershell
-Get-Content "$env:USERPROFILE\.tauri\quota-control.key" -Raw | gh secret set TAURI_SIGNING_PRIVATE_KEY -R buidangminh23/quota-control
+(Get-Content "$env:USERPROFILE\.tauri\quota-control.key" -Raw).Trim() | gh secret set TAURI_SIGNING_PRIVATE_KEY -R buidangminh23/quota-control
 ```
+
+Without that secret the workflow cannot sign a release, and `ship` stops before pushing the tag.
 
 Keep a backup of the key. Without it, no further update can be signed: a new key needs a new public
 key in `tauri.conf.json`, and installed apps only receive that through a manual reinstall. The key
