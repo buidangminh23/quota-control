@@ -1,0 +1,60 @@
+name: Update casks
+
+on:
+  schedule:
+    - cron: "17 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to point the cask at (default the latest release)
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-casks
+  cancel-in-progress: false
+
+jobs:
+  quota-control:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Point the cask at the newest release with a DMG
+        id: update
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [ -n "$TAG" ]; then
+            version="$(scripts/update-quota-control.sh --tag "$TAG")"
+          else
+            version="$(scripts/update-quota-control.sh)"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if git diff --quiet -- Casks/quota-control.rb; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "quota-control is already at $version"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check the cask
+        if: steps.update.outputs.changed == 'true'
+        run: |
+          ruby -c Casks/quota-control.rb
+          brew style Casks/quota-control.rb
+
+      - name: Commit
+        if: steps.update.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.update.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/quota-control.rb
+          git commit -m "quota-control $VERSION"
+          git push
