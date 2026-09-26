@@ -136,6 +136,86 @@ native WebView2 check with hidden windows and temporary profiles. It verifies
 cookie/localStorage isolation, reopening persistence, and popup inheritance using
 controlled local pages. It does not validate login to the real AI websites.
 
+## Command line
+
+```sh
+usagectl                 # every enabled provider
+usagectl claude          # one family, or an exact card id such as codex@1a2b...
+usagectl codex --force   # refresh even when the cached snapshot is still fresh
+```
+
+`usagectl` prints the same `openusage.limits.v1` JSON as the local HTTP API and exits.
+It shares the app's accounts, settings and snapshot cache, reuses snapshots younger than
+five minutes, and works while the app is closed. Exit code 0 means every read succeeded, 2 an
+invalid argument or unknown provider, and 4 a failed refresh: the JSON is still printed, with the
+failure in its `errors` and a warning on stderr. Output is ASCII-escaped, so Windows PowerShell 5.1
+parses it correctly.
+
+**Settings → Command line → Install** puts the command on PATH:
+
+- Windows copies `usagectl.exe` from the installation into `%LOCALAPPDATA%\UsageControl\bin` and
+  adds that folder to the user PATH; open a new terminal afterwards. The app keeps the copy current
+  after upgrades, and uninstalling the app removes both the copy and the PATH entry.
+- The Linux `.deb` installs `/usr/bin/usagectl` itself, so Settings shows it as installed with the package.
+- The AppImage writes a small launcher, `~/.local/bin/usagectl`, that runs the AppImage with `--cli`.
+
+## Local HTTP API
+
+While the app runs it serves the same routes as OpenUsage on `http://127.0.0.1:6736`, loopback only:
+
+| Route | Returns |
+|---|---|
+| `GET /v1/limits` | `openusage.limits.v1` for every enabled provider that reports limits |
+| `GET /v1/limits/{provider}` | one family or card id; `404 provider_not_found` for anything else |
+| `GET /v1/usage`, `GET /v1/usage/{provider}` | the legacy snapshot shape, including local history cards |
+
+Responses allow any origin (CORS `*`), as upstream does, so any program or web page on this computer
+can read your limits while the app runs. More than 16 simultaneous connections receive
+`503 server_busy`. If the port is already taken, the app keeps running without the API.
+
+## Global shortcut
+
+**Settings → General → Global shortcut** records a key combination that shows or hides the popup
+from any app. It needs at least one of Ctrl, Alt, Shift or the Windows key, unless it is a function
+key (F1–F24). A combination another app already holds is refused with a message, and ✕ clears it.
+The shortcut is released while it is being recorded and registered again when the app starts.
+
+## Installers
+
+Build on the platform you are packaging for. The installers are not code-signed, so Windows
+SmartScreen asks for confirmation the first time.
+
+**Windows** (per-user; no administrator rights):
+
+```sh
+pnpm install
+pnpm tauri build
+```
+
+The result is `target/release/bundle/nsis/Quota Control_0.1.0_x64-setup.exe`. It installs into
+`%LOCALAPPDATA%\Quota Control` with `usagectl.exe` next to the app and adds a Start menu entry.
+`/S` installs or uninstalls silently. Uninstalling removes the `usagectl` PATH entry and copy,
+and the launch-at-login entry when it points at this installation. Accounts and settings stay in
+`%APPDATA%\UsageControl` and caches in `%LOCALAPPDATA%\UsageControl`, even when **Delete the
+application data** is ticked, because that option only clears the web view data; delete those
+folders to remove them.
+
+**Linux** (Ubuntu 24.04 or newer, including WSL):
+
+```sh
+sudo apt install build-essential curl wget file libssl-dev libwebkit2gtk-4.1-dev libxdo-dev \
+  libayatana-appindicator3-dev librsvg2-dev patchelf rustup
+rustup default stable
+pnpm install
+pnpm tauri build
+```
+
+The results are `target/release/bundle/deb/Quota Control_0.1.0_amd64.deb` and
+`target/release/bundle/appimage/Quota Control_0.1.0_amd64.AppImage`. The `.deb` depends on
+WebKitGTK 4.1, GTK 3 and Ayatana AppIndicator, and installs `/usr/bin/quota-control` and
+`/usr/bin/usagectl`. The AppImage carries its own libraries; run `Quota Control_0.1.0_amd64.AppImage --cli`
+for the command line. Without FUSE 2, set `APPIMAGE_EXTRACT_AND_RUN=1`.
+
 ## Upgrade compatibility
 
 Quota Control retains the previous application storage directories, credential protection,

@@ -18,8 +18,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi", "deb", "appimage", "rpm"],
+    "targets": ["nsis", "deb", "appimage"],
     "category": "Utility",
+    "publisher": "Bui Dang Minh",
     "shortDescription": "AI coding subscription limits in your system tray",
     "longDescription": "Quota Control is an unofficial Windows and Linux port of OpenUsage. It shows session and weekly limits, credits and local spend for Claude, Codex, Cursor and other AI coding tools in a popup that opens from the system tray.",
     "copyright": "Copyright (c) 2026 Robin Ebers (OpenUsage), Bui Dang Minh (Quota Control)",
@@ -35,12 +36,8 @@
     "windows": {
       "nsis": {
         "installMode": "currentUser",
-        "startMenuFolder": "Quota Control"
-      }
-    },
-    "linux": {
-      "deb": {
-        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+        "startMenuFolder": "Quota Control",
+        "installerHooks": "windows/installer-hooks.nsh"
       }
     }
   }

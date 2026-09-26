@@ -17,10 +17,12 @@ const MAX_PNG_BYTES: usize = 4 * 1_048_576;
 const MAX_TEXT_CHARS: usize = 512;
 const MAX_TOOLTIP_CHARS: usize = 1024;
 /// Popup event carrying a changed [`TaskbarInfo`].
+#[cfg_attr(not(windows), allow(dead_code))]
 pub const TASKBAR_INFO_EVENT: &str = "taskbar-info";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub enum TaskbarTheme {
     Light,
     Dark,
@@ -28,6 +30,7 @@ pub enum TaskbarTheme {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub enum TaskbarEdge {
     Bottom,
     Top,
@@ -50,6 +53,7 @@ pub struct TaskbarInfo {
 }
 
 impl TaskbarInfo {
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     pub const UNSUPPORTED: TaskbarInfo = TaskbarInfo {
         supported: false,
         height: 0,
@@ -150,6 +154,7 @@ pub fn premultiplied_bgra(rgba: &[u8]) -> Vec<u8> {
 
 /// Where the strip sits inside the taskbar's client area: just left of the notification area,
 /// vertically centered, never past the taskbar's left edge.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn strip_origin(
     taskbar_height: i32,
     notify_left: i32,
