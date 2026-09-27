@@ -281,11 +281,12 @@ impl Engine {
     }
 
     pub fn catalog(&self) -> Vec<ProviderEntry> {
+        let inner = self.inner.lock();
         self.runtimes
             .iter()
             .map(|runtime| ProviderEntry {
                 provider: runtime.provider().clone(),
-                descriptors: runtime.widget_descriptors(),
+                descriptors: runtime.descriptors_for(inner.snapshots.get(&runtime.provider().id)),
             })
             .collect()
     }

@@ -134,6 +134,48 @@ Costs are explicitly estimated API-equivalent usage, not subscription charges.
 See [scanner accounting](crates/uc-logscan/README.md) and
 [pricing provenance](crates/uc-pricing/README.md).
 
+### Other AI services
+
+<!-- services:start -->
+
+Besides Claude and Codex, the `uc-services` crate reads these services. A login is read
+from the files the service's own CLI, IDE or desktop app saved, never written and never
+renewed when its refresh token rotates; keys and pasted session cookies are saved
+encrypted for the current user (DPAPI on Windows) and never leave the computer except to
+the service itself. Every service is its own cargo feature; `all` is the default.
+
+| Service | Connects with |
+| --- | --- |
+| Gemini | the Gemini CLI login on this computer |
+| Antigravity | the Antigravity login on this computer |
+| Copilot | the GitHub Copilot login on this computer |
+| Cursor | the Cursor login on this computer |
+| Kiro | the Kiro login on this computer |
+| Grok | the Grok CLI login on this computer |
+| OpenCode | the OpenCode login on this computer; or an API key (or `OPENCODE_API_KEY`) |
+| Ollama | the Ollama login on this computer; or an API key (or `OLLAMA_API_KEY`) (card starts hidden) |
+| Devin | the Devin login on this computer |
+| Zed | the Zed login on this computer |
+| Qoder | the Qoder login on this computer; or an API key (or `QODER_PERSONAL_ACCESS_TOKEN`) |
+| CodeBuddy | an API key (or `CODEBUDDY_API_KEY`, `CODEBUDDY_AUTH_TOKEN`) |
+| Z.ai | an API key (or `ZAI_API_KEY`, `Z_AI_API_KEY`, `GLM_API_KEY`, `ZHIPUAI_API_KEY`) |
+| MiniMax | an API key (or `MINIMAX_API_KEY`) |
+| Kimi | the Kimi Code login on this computer; or an API key (or `KIMI_API_KEY`, `KIMI_CODE_API_KEY`) |
+| DeepSeek | an API key (or `DEEPSEEK_API_KEY`) |
+| OpenRouter | an API key (or `OPENROUTER_API_KEY`, `OPENROUTER_KEY`) |
+| Groq | an API key (or `GROQ_API_KEY`) |
+| Vercel AI Gateway | an API key (or `AI_GATEWAY_API_KEY`) |
+| SiliconFlow | an API key (or `SILICONFLOW_API_KEY`) |
+| Chutes | an API key (or `CHUTES_API_KEY`) |
+| Command Code | an API key (or `COMMANDCODE_API_KEY`) |
+| xAI | a pasted management key with Team ID (or `XAI_MANAGEMENT_API_KEY`) |
+| OpenAI | an API key (or `OPENAI_ADMIN_KEY`) |
+| Anthropic | an API key (or `ANTHROPIC_ADMIN_KEY`) |
+
+Not readable yet: ai&, Aixy, Atlas Cloud, Bifrost, ClawRouter, Cline, Deepgram, DeepInfra, DevPass, ElevenLabs, Fireworks, GitKraken AI, Helmcode, Hugging Face, Charm Hyper, LiteLLM, llmman, LLM Proxy, Manus, Moonshot, Muse Code, Neuralwatt, Nous Portal, Perplexity, Poe, Raycast, Replicate, Sakana AI, sub2api, Synthetic, T3 Chat, TypeSafe, v0, Venice, xKiro, ZenMux, Abacus AI, Alibaba Model Studio, Amp, Augment, AWS Bedrock, CodeRabbit, Codebuff, Doubao, Droid, JetBrains AI, Kilo, LongCat, Xiaomi MiMo, Mistral, Notion AI, Qwen Cloud, StepFun, Vertex AI, Warp, Wayfinder, Windsurf, ZoomMate, IBM Bob, Cerebras, Cloudflare Workers AI, Novita AI, NanoGPT, Hyperbolic, OpenAI-compatible relay.
+
+<!-- services:end -->
+
 ### Development and validation
 
 ```sh

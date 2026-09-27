@@ -5,7 +5,7 @@
  * Rust command names live in `src-tauri/src/commands.rs`; keep both sides in sync.
  */
 import type { Language } from "@/i18n/language";
-import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
+import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, SavedKey, ServiceEntry, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
 
 import type { ContextWindowSession, ExchangeRate, UsageGroupRow, UsageLedgerInfo, UsageQuery } from "./types";
 import type { LimitResetResult } from "./types";
@@ -38,6 +38,11 @@ export interface Backend {
   cancelAccountLogin(flowId: string): Promise<void>;
   onAccountLogin(listener: (result: AccountLoginResult) => void): Unsubscribe;
   removeAccount(accountId: string): Promise<void>;
+  /** Every service beyond Claude and Codex, with the logins found on this computer and the keys saved. */
+  listServices(): Promise<ServiceEntry[]>;
+  /** Save an API key (and the values its service asks for beside it) and add its card. */
+  addApiKey(serviceId: string, key: string, label?: string, fields?: Record<string, string>): Promise<SavedKey>;
+  removeApiKey(keyId: string): Promise<void>;
   listChatSessions(): Promise<ChatSession[]>;
   onChatSessionsChanged?(listener: (sessions: ChatSession[]) => void): Unsubscribe;
   createChatSession(provider: AccountProvider, label?: string): Promise<ChatSession>;

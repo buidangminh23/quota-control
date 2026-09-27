@@ -2,11 +2,13 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
-use uc_accounts::{AccountStore, CredentialMode};
+use uc_accounts::{AccountStore, CredentialMode, KeyRecord, KeyStore};
 use uc_core::ProviderRuntime;
 use uc_providers::oauth::{LoginLanguage, OAuthManager, is_cancelled, is_expired};
 use uc_providers::{CliAccount, ProviderKind, VisibleAccount};
+use uc_services::{Detected, Roots, ServiceInfo};
 
 use crate::browser::{LoginBrowser, open_login_page};
 use crate::service::{BackendService, safe_error};
@@ -18,16 +20,20 @@ pub struct Accounts {
     changes: tokio::sync::Mutex<()>,
     /// The CLI logins the current cards were built from.
     cli: parking_lot::Mutex<Vec<CliAccount>>,
+    /// The other services' logins and keys the current cards were built from.
+    services: parking_lot::Mutex<uc_api::ServiceCards>,
 }
 
 impl Accounts {
-    pub fn new(store: Arc<AccountStore>) -> Self {
+    /// Reads the services' logins and keys once, so the first cards include them.
+    pub fn new(store: Arc<AccountStore>, keys: KeyStore) -> Self {
         Self {
             oauth: OAuthManager::new(store.clone()),
             label_backfill: uc_providers::accounts::AccountLabelBackfill::new(store.clone()),
             store,
             changes: tokio::sync::Mutex::new(()),
             cli: parking_lot::Mutex::new(Vec::new()),
+            services: parking_lot::Mutex::new(uc_api::ServiceCards::scan(keys, Roots::system())),
         }
     }
 
@@ -36,22 +42,32 @@ impl Accounts {
     pub fn runtimes(&self) -> Result<Vec<Arc<dyn ProviderRuntime>>, String> {
         let previous = self.cli.lock().clone();
         let cli = uc_providers::cli_accounts_keeping(&previous);
-        let runtimes =
-            uc_api::provider_runtimes_with(self.store.clone(), &cli).map_err(safe_error)?;
+        let services = self.services.lock().clone();
+        let runtimes = uc_api::provider_runtimes_with(self.store.clone(), &cli, &services)
+            .map_err(safe_error)?;
         *self.cli.lock() = cli;
         Ok(runtimes)
     }
 
-    /// Cards of CLI logins that no stored account covers. Before CLI logins became cards, none of
-    /// them existed, so settings written by an older version cannot have hidden them.
-    pub fn cli_only_ids(&self) -> Vec<String> {
+    /// Cards that settings written by an older version cannot have hidden, because those cards did
+    /// not exist yet: CLI logins no stored account covers, and the other services' cards.
+    pub fn new_card_ids(&self) -> Vec<String> {
         let records = self.store.list().unwrap_or_default();
-        self.cli
+        let mut ids: Vec<String> = self
+            .cli
             .lock()
             .iter()
             .filter(|login| !records.iter().any(|record| record.id == login.id))
             .map(|login| login.id.clone())
-            .collect()
+            .collect();
+        let services = self.services.lock();
+        ids.extend(services.detected.iter().map(|found| found.id.clone()));
+        ids.extend(services.saved.iter().map(|record| record.id.clone()));
+        ids
+    }
+
+    fn keys(&self) -> KeyStore {
+        self.services.lock().store.clone()
     }
 
     fn entries(&self) -> Result<Vec<AccountEntry>, String> {
@@ -138,6 +154,168 @@ fn kind(provider: &str) -> Result<ProviderKind, String> {
 #[tauri::command]
 pub async fn list_accounts(accounts: State<'_, Accounts>) -> Result<Vec<AccountEntry>, String> {
     accounts.entries()
+}
+
+/// A service as the Accounts screen lists it, with the cards it has.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceEntry {
+    #[serde(flatten)]
+    info: ServiceInfo,
+    /// Logins other apps keep on this computer, and keys in environment variables.
+    detected: Vec<Detected>,
+    /// Keys saved in Quota Control; the keys themselves never leave the store.
+    keys: Vec<KeyRecord>,
+}
+
+#[tauri::command]
+pub async fn list_services(accounts: State<'_, Accounts>) -> Result<Vec<ServiceEntry>, String> {
+    let cards = accounts.services.lock().clone();
+    Ok(service_entries(&cards))
+}
+
+fn service_entries(cards: &uc_api::ServiceCards) -> Vec<ServiceEntry> {
+    uc_services::service_infos()
+        .into_iter()
+        .map(|info| ServiceEntry {
+            detected: cards
+                .detected
+                .iter()
+                .filter(|found| found.service == info.id)
+                .cloned()
+                .collect(),
+            keys: cards
+                .saved
+                .iter()
+                .filter(|record| record.service == info.id)
+                .cloned()
+                .collect(),
+            info,
+        })
+        .collect()
+}
+
+const MAX_FIELD_LENGTH: usize = 512;
+const MAX_KEY_LENGTH: usize = 8192;
+const MAX_LABEL_LENGTH: usize = 256;
+
+/** A pasted key without the spaces around it; one with spaces or line breaks inside was cut or joined. */
+fn api_key(raw: &str) -> Result<String, String> {
+    let key = raw.trim();
+    if key.is_empty()
+        || key.len() > MAX_KEY_LENGTH
+        || key
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+    {
+        return Err("Paste the whole API key, without spaces or line breaks".into());
+    }
+    Ok(key.to_string())
+}
+
+/** The card's label: what the user typed, or the service's name. */
+fn key_label(raw: Option<&str>, service_name: &str) -> Result<String, String> {
+    let label = raw.map(str::trim).unwrap_or_default();
+    if label.len() > MAX_LABEL_LENGTH || label.chars().any(char::is_control) {
+        return Err("The label is too long or has control characters".into());
+    }
+    Ok(if label.is_empty() {
+        service_name.to_string()
+    } else {
+        label.to_string()
+    })
+}
+
+/// The extra values a service asks for beside its key (an xAI team id): only the fields it
+/// declares, trimmed, blanks left out.
+fn key_fields(
+    declared: &[(&'static str, &'static str)],
+    fields: Option<serde_json::Map<String, Value>>,
+) -> Result<Value, String> {
+    let mut extra = serde_json::Map::new();
+    for (name, value) in fields.unwrap_or_default() {
+        if !declared.iter().any(|(field, _)| *field == name) {
+            return Err("This service does not ask for that value".into());
+        }
+        let text = match &value {
+            Value::String(text) => text.trim(),
+            Value::Null => "",
+            _ => return Err("Values beside the key must be text".into()),
+        };
+        if text.len() > MAX_FIELD_LENGTH || text.chars().any(char::is_control) {
+            return Err("A value beside the key is too long or has control characters".into());
+        }
+        if !text.is_empty() {
+            extra.insert(name, Value::String(text.into()));
+        }
+    }
+    Ok(Value::Object(extra))
+}
+
+/// Save an API key for a service and add its card.
+#[tauri::command]
+pub async fn add_api_key(
+    app: AppHandle,
+    accounts: State<'_, Accounts>,
+    service: State<'_, BackendService>,
+    service_id: String,
+    label: Option<String>,
+    key: String,
+    fields: Option<serde_json::Map<String, Value>>,
+) -> Result<KeyRecord, String> {
+    let known = uc_services::service(&service_id).ok_or("Unsupported service")?;
+    let help = known
+        .connection()
+        .api_key
+        .ok_or("This service connects through its app's login, not an API key")?;
+    let extra = key_fields(help.fields, fields)?;
+    let key = api_key(&key)?;
+    let label = key_label(label.as_deref(), known.name())?;
+    let _changes = accounts.changes.lock().await;
+    let keys = accounts.keys();
+    let record = tauri::async_runtime::spawn_blocking(move || {
+        keys.add(&service_id, &label, &key, &extra)
+    })
+    .await
+    .map_err(safe_error)?
+    .map_err(safe_error)?;
+    rescan_services(&accounts).await;
+    service.replace_runtimes(accounts.runtimes()?, &app)?;
+    Ok(record)
+}
+
+/// Forget a saved API key and remove its card.
+#[tauri::command]
+pub async fn remove_api_key(
+    app: AppHandle,
+    accounts: State<'_, Accounts>,
+    service: State<'_, BackendService>,
+    key_id: String,
+) -> Result<(), String> {
+    let _changes = accounts.changes.lock().await;
+    let keys = accounts.keys();
+    tauri::async_runtime::spawn_blocking(move || keys.remove(&key_id))
+        .await
+        .map_err(safe_error)?
+        .map_err(safe_error)?;
+    rescan_services(&accounts).await;
+    service.replace_runtimes(accounts.runtimes()?, &app)
+}
+
+/// Read the services' logins and keys again; true when the cards they give changed.
+async fn rescan_services(accounts: &Accounts) -> bool {
+    let keys = accounts.keys();
+    let Ok(scanned) = tauri::async_runtime::spawn_blocking(move || {
+        uc_api::ServiceCards::scan(keys, Roots::system())
+    })
+    .await
+    else {
+        return false;
+    };
+    let mut current = accounts.services.lock();
+    let changed = scanned.fingerprint() != current.fingerprint();
+    *current = scanned;
+    changed
 }
 
 /// Open the provider's sign-in page and finish the login in the background: it keeps going while
@@ -271,8 +449,8 @@ fn bindings(logins: &[CliAccount]) -> Vec<(String, uc_providers::CliLocation)> {
 }
 
 /// Rebuild the cards when a CLI signed in, out, into another account, or moved its login since
-/// they were built.
-pub async fn sync_cli_logins(app: &AppHandle) {
+/// they were built, or when another service's login or key came or went.
+pub async fn sync_logins(app: &AppHandle) {
     let accounts = app.state::<Accounts>();
     let previous = accounts.cli.lock().clone();
     let Ok(detected) = tauri::async_runtime::spawn_blocking(move || {
@@ -282,15 +460,17 @@ pub async fn sync_cli_logins(app: &AppHandle) {
     else {
         return;
     };
-    if detected == accounts.cli_bindings() {
+    let cli_changed = detected != accounts.cli_bindings();
+    let _changes = accounts.changes.lock().await;
+    let services_changed = rescan_services(&accounts).await;
+    if !cli_changed && !services_changed {
         return;
     }
-    let _changes = accounts.changes.lock().await;
     if let Err(error) = accounts.runtimes().and_then(|runtimes| {
         app.state::<BackendService>()
             .replace_runtimes(runtimes, app)
     }) {
-        tracing::warn!("CLI logins changed, but the cards were not rebuilt: {error}");
+        tracing::warn!("Logins changed, but the cards were not rebuilt: {error}");
     }
 }
 
@@ -315,6 +495,36 @@ mod tests {
         assert!(kind("codex").is_ok());
         assert!(kind("claude").is_ok());
         assert!(kind("../accounts").is_err());
+    }
+
+    #[test]
+    fn a_pasted_key_is_trimmed_and_a_broken_one_refused() {
+        assert_eq!(api_key("  sk-abc123\n").unwrap(), "sk-abc123");
+        assert!(api_key("").is_err());
+        assert!(api_key("sk-abc 123").is_err());
+        assert!(api_key("sk-abc\n123").is_err());
+        assert_eq!(key_label(Some("  Work "), "OpenRouter").unwrap(), "Work");
+        assert_eq!(key_label(Some(" "), "OpenRouter").unwrap(), "OpenRouter");
+        assert_eq!(key_label(None, "OpenRouter").unwrap(), "OpenRouter");
+        assert!(key_label(Some("a\u{7}b"), "OpenRouter").is_err());
+    }
+
+    #[test]
+    fn only_the_values_a_service_declares_are_kept_beside_its_key() {
+        let declared = [("teamId", "Team ID")];
+        let fields = |value: Value| value.as_object().cloned();
+        assert_eq!(
+            key_fields(&declared, fields(serde_json::json!({"teamId": "  team-1 "}))).unwrap(),
+            serde_json::json!({"teamId": "team-1"})
+        );
+        assert_eq!(
+            key_fields(&declared, fields(serde_json::json!({"teamId": ""}))).unwrap(),
+            serde_json::json!({})
+        );
+        assert!(key_fields(&declared, fields(serde_json::json!({"apiKey": "x"}))).is_err());
+        assert!(key_fields(&declared, fields(serde_json::json!({"teamId": 3}))).is_err());
+        assert!(key_fields(&declared, fields(serde_json::json!({"teamId": "a\nb"}))).is_err());
+        assert_eq!(key_fields(&declared, None).unwrap(), serde_json::json!({}));
     }
 
     #[test]

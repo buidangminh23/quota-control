@@ -15,6 +15,7 @@ import type {
   Provider,
   ProviderEntry,
   ProviderSnapshot,
+  ServiceEntry,
   TokenUsage,
   WidgetDescriptor,
   WidgetTemplate,
@@ -294,4 +295,37 @@ export function fixtureEngineState(now = Date.now()): EngineState {
     lastRefreshAt: iso(-2 * 60_000, now),
     refreshIntervalMs: 5 * 60_000,
   };
+}
+
+/** Services beyond Claude and Codex as the core lists them: one found through its app's login, one with a saved key. */
+export function fixtureServices(): ServiceEntry[] {
+  const service = (id: string, name: string, extra: Partial<ServiceEntry> = {}): ServiceEntry => ({
+    id,
+    name,
+    loginFrom: null,
+    takesApiKey: true,
+    keyLabel: "API key",
+    keyUrl: `https://example.invalid/${id}/keys`,
+    keyEnv: [`${id.toUpperCase()}_API_KEY`],
+    keyFields: [],
+    startsHidden: false,
+    detected: [],
+    keys: [],
+    ...extra,
+  });
+  return [
+    service("gemini", "Gemini", {
+      loginFrom: "Gemini CLI",
+      takesApiKey: false,
+      keyUrl: null,
+      keyEnv: [],
+      detected: [{ id: `gemini@${"1".repeat(64)}`, service: "gemini", label: "minh@example.com", origin: "Gemini CLI" }],
+    }),
+    service("openrouter", "OpenRouter", {
+      keys: [{ id: `openrouter@${"2".repeat(64)}`, service: "openrouter", label: "OpenRouter", addedAt: "2026-09-20T08:00:00Z", hint: "9f3a" }],
+    }),
+    service("deepseek", "DeepSeek"),
+    service("xai", "xAI", { keyFields: [["teamId", "Team ID"]] }),
+    service("ollama", "Ollama", { loginFrom: "Ollama", takesApiKey: false, keyUrl: null, keyEnv: [], startsHidden: true }),
+  ];
 }

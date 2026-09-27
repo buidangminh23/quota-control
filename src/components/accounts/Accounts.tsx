@@ -1,45 +1,34 @@
 /**
  * The Accounts screen: every connected Claude and Codex account (always all of them, each with its
- * own live status), signing in to another one through the browser, and the saved in-app chat
- * sessions that open the official Claude / ChatGPT sites in their own windows. Claude Code and the
- * Codex CLI signed in on this computer are listed automatically.
+ * own live status), signing in to another one through the browser, the other AI providers (their
+ * apps' logins on this computer and API keys), and the saved in-app chat sessions that open the
+ * official Claude / ChatGPT sites in their own windows. Claude Code and the Codex CLI signed in on
+ * this computer are listed automatically.
  */
 import { useEffect, useState } from "react";
-import { messagesFor, translate, type Language, type Messages } from "@/i18n";
+import { messagesFor, type Language, type Messages } from "@/i18n";
 import { backend } from "@/lib/backend";
 import type { AccountProvider, ChatSession, ConnectedAccount, ProviderRuntimeState } from "@/lib/types";
 import { brandName, headerNotice } from "@/model/providerText";
 import { deviceTimeZone } from "@/model/timeZone";
 import { useLanguage } from "@/state/hooks";
-import { cancelAccountLogin, openChatFor, reloadAccounts, reloadChats, reopenAccountLogin, showNotice, startAccountLogin, useApp } from "@/state/store";
+import { cancelAccountLogin, openChatFor, reloadAccounts, reloadChats, reloadServices, reopenAccountLogin, showNotice, startAccountLogin, useApp } from "@/state/store";
 import { Button } from "../ui/controls";
 import { confirmAction } from "../ui/dialog";
 import { ChatIcon, CloseIcon, PlusIcon, Spinner } from "../ui/icons";
 import { ProviderMark } from "../ui/ProviderMark";
 import { tooltipProps, truncatedTooltipProps } from "../ui/tooltip";
+import { AddServiceKey, detectedApps, ServiceCards } from "./Services";
+import { errorText, statusOf } from "./status";
 
 const PROVIDERS: readonly AccountProvider[] = ["claude", "codex"];
 const CHAT_PRODUCTS: Record<AccountProvider, string> = { claude: "Claude", codex: "ChatGPT" };
 const CLI_PRODUCTS: Record<AccountProvider, string> = { claude: "Claude Code", codex: "Codex CLI" };
 
-function errorText(error: unknown, language: Language): string {
-  const raw = error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
-  return translate(raw, language);
-}
-
 /** `Claude · Công ty`, or just the brand when the label is the default CLI name. */
 function accountTitle(provider: AccountProvider, label: string): string {
   const trimmed = label.trim();
   return trimmed === "" || trimmed.toLowerCase() === provider ? brandName(provider) : `${brandName(provider)} · ${trimmed}`;
-}
-
-type Status = "ok" | "refreshing" | "error" | "unknown";
-
-function statusOf(runtime: ProviderRuntimeState | undefined): Status {
-  if (!runtime) return "unknown";
-  if (runtime.refreshing) return "refreshing";
-  if (runtime.error || runtime.snapshot?.errorCategory) return "error";
-  return runtime.snapshot ? "ok" : "unknown";
 }
 
 function formatDate(iso: string, language: Language): string {
@@ -184,9 +173,12 @@ export function Accounts() {
   const accounts = useApp((state) => state.accounts);
   const chats = useApp((state) => state.chats);
   const engine = useApp((state) => state.engine);
+  const services = useApp((state) => state.services);
+  const apps = detectedApps(services);
 
   useEffect(() => {
     void reloadAccounts();
+    void reloadServices();
     void reloadChats();
   }, []);
 
@@ -212,6 +204,17 @@ export function Accounts() {
         <h2 className="uc-group-title">{messages.accounts.add}</h2>
         <AddAccount messages={messages} />
         <p className="uc-group-note">{messages.accounts.cliNote}</p>
+      </section>
+
+      <section className="uc-group">
+        <h2 className="uc-group-title">{messages.accounts.otherServices}</h2>
+        <ServiceCards messages={messages} language={language} />
+        {apps.length > 0 ? <p className="uc-group-note">{messages.accounts.detectedNote(apps.join(", "))}</p> : null}
+      </section>
+
+      <section className="uc-group">
+        <h2 className="uc-group-title">{messages.accounts.addKey}</h2>
+        <AddServiceKey messages={messages} language={language} />
       </section>
 
       <section className="uc-group">

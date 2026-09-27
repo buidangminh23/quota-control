@@ -18,9 +18,11 @@ import type {
   LoginBrowser,
   PopoverScreen,
   ProviderEntry,
+  SavedKey,
+  ServiceEntry,
   UpdateStatus,
 } from "./types";
-import { accountDescriptors, accountProvider, fixtureAccounts, fixtureCatalog, fixtureEngineState } from "./fixtures";
+import { accountDescriptors, accountProvider, fixtureAccounts, fixtureCatalog, fixtureEngineState, fixtureServices } from "./fixtures";
 import { FEED_FIXTURES } from "./insightsFeedFixtures";
 import { mockQualityHistory, mockQualitySummary } from "./insightsMock";
 import type { PublicFeedName, PublicFeedSnapshot, QualityInfo, QualityQuery, QualitySummary } from "./insightsTypes";
@@ -67,6 +69,7 @@ export class MockBackend implements Backend {
   private readonly pendingLogins = new Map<string, { provider: AccountProvider; timer?: ReturnType<typeof setTimeout> }>();
   private readonly loginListeners = new Set<(result: AccountLoginResult) => void>();
   private readonly chatSessions: ChatSession[] = [];
+  private readonly services: ServiceEntry[] = fixtureServices();
   private shortcut: string | null = null;
   private version = "0.1.0";
   private updateState: UpdateStatus = { supported: true, currentVersion: "0.1.0", phase: "idle", manual: false, downloaded: 0 };
@@ -141,6 +144,33 @@ export class MockBackend implements Backend {
     }
     const account = this.addAccount(pending.provider, pending.provider, "managed_oauth");
     this.emitLogin({ flowId, provider: pending.provider, status: "connected", accountId: account.id });
+  }
+
+  async listServices(): Promise<ServiceEntry[]> {
+    return structuredClone(this.services);
+  }
+
+  async addApiKey(serviceId: string, key: string, label?: string): Promise<SavedKey> {
+    const service = this.services.find((candidate) => candidate.id === serviceId);
+    if (!service?.takesApiKey) throw new Error("Unsupported service");
+    const trimmed = key.trim();
+    if (trimmed === "" || /\s/.test(trimmed)) throw new Error("The credentials are not valid for this account");
+    const saved: SavedKey = {
+      id: `${serviceId}@${mockId().replace(/-/g, "").padEnd(64, "0").slice(0, 64)}`,
+      service: serviceId,
+      label: label?.trim() || service.name,
+      addedAt: new Date().toISOString(),
+      hint: trimmed.slice(-4),
+    };
+    service.keys.push(saved);
+    return structuredClone(saved);
+  }
+
+  async removeApiKey(keyId: string): Promise<void> {
+    for (const service of this.services) {
+      const index = service.keys.findIndex((key) => key.id === keyId);
+      if (index >= 0) service.keys.splice(index, 1);
+    }
   }
 
   async removeAccount(accountId: string): Promise<void> {

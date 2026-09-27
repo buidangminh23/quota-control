@@ -344,7 +344,8 @@ describe("popup", () => {
     act(() => useApp.setState({ screen: "accounts" }));
     expect(await screen.findByRole("heading", { name: "Tài khoản" })).toBeInTheDocument();
     expect(screen.getByText("Tự động từ Codex CLI trên máy này")).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /^Xóa / })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: /^Xóa (?!OpenRouter)/ })).toHaveLength(2);
+    expect(screen.getByRole("button", { name: /^Xóa OpenRouter/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Xóa Codex" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Đăng nhập bằng Google" })).toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();

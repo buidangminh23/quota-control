@@ -47,6 +47,8 @@ pub struct ServiceInfo {
     pub login_from: Option<&'static str>,
     /// Whether an API key connects it.
     pub takes_api_key: bool,
+    /// What the key field asks for, in English ("API key", "Session cookie (…)").
+    pub key_label: &'static str,
     /// Where to create a key.
     pub key_url: Option<&'static str>,
     /// Environment variables read for a key.
@@ -67,6 +69,7 @@ pub fn service_infos() -> Vec<ServiceInfo> {
                 name: service.name(),
                 login_from: connection.login_from,
                 takes_api_key: connection.api_key.is_some(),
+                key_label: service.key_label(),
                 key_url: connection.api_key.map(|help| help.url),
                 key_env: connection
                     .api_key

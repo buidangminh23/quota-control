@@ -332,6 +332,34 @@
   color: var(--uc-secondary);
 }
 
+.uc-service-results {
+  display: flex;
+  flex-direction: column;
+  max-height: 176px;
+  margin: 0 -4px;
+  overflow-y: auto;
+}
+
+.uc-service-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 6px;
+  border-radius: 6px;
+  font-size: var(--uc-label-size);
+  text-align: left;
+}
+
+.uc-service-result:hover,
+.uc-service-result:focus-visible {
+  background: var(--uc-card-hover);
+}
+
+.uc-key-change {
+  margin-left: auto;
+}
+
 .uc-account-status {
   display: inline-flex;
   align-items: center;

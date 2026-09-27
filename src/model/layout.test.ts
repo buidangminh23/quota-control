@@ -10,6 +10,7 @@ import {
   displayGroups,
   hasDashboardCard,
   isLocalHistoryCard,
+  isModelMetric,
   isTokenMetric,
   layoutFamily,
   MAX_PINS_PER_PROVIDER,
@@ -95,6 +96,20 @@ describe("reconcileLayout", () => {
     expect(reconcileLayout(movedBack, catalog).onDemand).toContain(`${CODEX}.rateLimitResets`);
     const turnedOff = { ...saved, placed: saved.placed.filter((id) => id !== `${CODEX}.rateLimitResets`) };
     expect(reconcileLayout(turnedOff, catalog).placed).not.toContain(`${CODEX}.rateLimitResets`);
+  });
+
+  it("turns on a provider's per-model rows behind the caret, the provider's own meters above it", () => {
+    const provider = { id: "gemini@1a2b", displayName: "Gemini · me@example.com", icon: "gemini" };
+    const template = catalog[0]!.descriptors[0]!;
+    const descriptor = (suffix: string) => ({ ...template, id: `gemini@1a2b.${suffix}`, providerId: "gemini@1a2b" });
+    const next: ProviderEntry[] = [...catalog, { provider, descriptors: [descriptor("pro"), descriptor("m-gemini-2-5-pro")] }];
+    expect(isModelMetric("gemini@1a2b.m-gemini-2-5-pro")).toBe(true);
+    expect(isModelMetric("gemini@1a2b.pro")).toBe(false);
+    const reconciled = reconcileLayout(layout, next);
+    expect(reconciled.placed).toEqual(expect.arrayContaining(["gemini@1a2b.pro", "gemini@1a2b.m-gemini-2-5-pro"]));
+    const group = displayGroups(reconciled, next, all).find((entry) => entry.provider.id === "gemini@1a2b")!;
+    expect(group.always.map((entry) => entry.id)).toEqual(["gemini@1a2b.pro"]);
+    expect(group.onDemand.map((entry) => entry.id)).toEqual(["gemini@1a2b.m-gemini-2-5-pro"]);
   });
 
   it("round-trips through parseLayout and rejects foreign documents", () => {

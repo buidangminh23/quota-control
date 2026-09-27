@@ -1,5 +1,6 @@
 import { act, cleanup, render } from "@testing-library/react";
 import { useApp } from "@/state/store";
+import { PROVIDER_MARKS } from "@/assets/providerMarks";
 import { ProviderMark } from "./ProviderMark";
 
 function setTheme(theme: "light" | "dark" | "system"): void {
@@ -35,7 +36,9 @@ describe("ProviderMark", () => {
     expect(fill("cursor")).toBe("#F5F5F7");
   });
 
-  it("keeps the surrounding text color for a brand the palette does not know", () => {
-    expect(fill("ollama")).toBe("currentColor");
+  it("draws every brand that has a mark in its own color", () => {
+    setTheme("light");
+    const uncolored = Object.keys(PROVIDER_MARKS).filter((brand) => fill(brand) === "currentColor");
+    expect(uncolored).toEqual([]);
   });
 });

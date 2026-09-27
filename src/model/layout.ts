@@ -156,13 +156,26 @@ interface DefaultIds {
   pinned: string[];
 }
 
+/**
+ * A row the core derives for one model from a provider's reading (`gemini@1a2b.m-gemini-2-5-pro`),
+ * next to the provider's own meters. Such rows start on, behind the caret.
+ */
+export function isModelMetric(descriptorId: string): boolean {
+  return descriptorId.slice(descriptorProviderId(descriptorId).length + 1).startsWith("m-");
+}
+
 function defaultIds(entry: ProviderEntry): DefaultIds {
   const id = entry.provider.id;
   const valid = new Set(entry.descriptors.map((descriptor) => descriptor.id));
+  const models = [...valid].filter(isModelMetric);
   const defaults = FAMILY_DEFAULTS[layoutFamily(id)];
-  if (!defaults) return { enabled: valid, onDemand: new Set(), pinned: [] };
+  if (!defaults) return { enabled: valid, onDemand: new Set(models), pinned: [] };
   const ids = (suffixes: readonly string[]) => suffixes.map((suffix) => `${id}.${suffix}`).filter((candidate) => valid.has(candidate));
-  return { enabled: new Set(ids(defaults.enabled)), onDemand: new Set(ids(defaults.onDemand)), pinned: ids(defaults.pinned) };
+  return {
+    enabled: new Set([...ids(defaults.enabled), ...models]),
+    onDemand: new Set([...ids(defaults.onDemand), ...models]),
+    pinned: ids(defaults.pinned),
+  };
 }
 
 export function emptyLayout(): LayoutDocument {

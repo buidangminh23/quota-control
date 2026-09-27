@@ -60,6 +60,12 @@ pub trait ProviderRuntime: Send + Sync {
     /// The widgets this provider feeds, in their default declaration order.
     fn widget_descriptors(&self) -> Vec<WidgetDescriptor>;
 
+    /// The widgets given the provider's latest snapshot: providers whose rows depend on the account
+    /// (one meter per model it can use) add them here. Must be cheap and must not block.
+    fn descriptors_for(&self, _snapshot: Option<&ProviderSnapshot>) -> Vec<WidgetDescriptor> {
+        self.widget_descriptors()
+    }
+
     /// Whether stored local spending still has usable account ownership for this card.
     fn allows_cached_local_history(&self) -> bool {
         true

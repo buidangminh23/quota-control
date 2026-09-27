@@ -333,6 +333,47 @@ export interface ConnectedAccount {
   credentialMode: "shared_cli" | "managed_oauth" | "cli";
 }
 
+/** A card of a service beyond Claude and Codex that this computer has without anything saved in Quota Control. */
+export interface DetectedCard {
+  id: string;
+  service: string;
+  /** The account's email or name, when the login tells. */
+  label: string | null;
+  /** The app whose login it is ("Gemini CLI"), or the environment variable holding the key. */
+  origin: string;
+}
+
+/** An API key saved in Quota Control; the key itself never reaches the popup. */
+export interface SavedKey {
+  id: string;
+  service: string;
+  label: string;
+  addedAt: string;
+  /** The key's last four characters. */
+  hint: string;
+}
+
+/** A service beyond Claude and Codex, with the cards it has (`list_services`). */
+export interface ServiceEntry {
+  id: string;
+  name: string;
+  /** The app whose login on this computer the service reads, when it reads one. */
+  loginFrom: string | null;
+  takesApiKey: boolean;
+  /** What the key field asks for, in English: "API key", or a session cookie's name for a web login. */
+  keyLabel: string;
+  /** Where to create a key. */
+  keyUrl: string | null;
+  /** Environment variables read for a key. */
+  keyEnv: string[];
+  /** Other values asked for beside the key, as `[field, English label]`. */
+  keyFields: [string, string][];
+  /** Its cards start hidden until turned on in Customize. */
+  startsHidden: boolean;
+  detected: DetectedCard[];
+  keys: SavedKey[];
+}
+
 /** Where a sign-in page opened: Google Chrome when it is installed, otherwise the default browser. */
 export type LoginBrowser = "chrome" | "default";
 

@@ -311,6 +311,13 @@ pub trait Service: Send + Sync + 'static {
         false
     }
 
+    /// What the Accounts screen asks the user to paste as this service's key, in English: "API
+    /// key", or for a service reached with a browser session, the session cookie it needs
+    /// ("Session cookie (session_token)").
+    fn key_label(&self) -> &'static str {
+        "API key"
+    }
+
     /// The logins the service's own apps saved under `roots`. Reads files only, never the network,
     /// and never writes: renewing a login stays the app's job.
     fn discover(&self, _roots: &Roots) -> Vec<Login> {

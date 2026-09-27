@@ -2,6 +2,7 @@
 //! reading app state from SQLite or the credential store, renewing OAuth tokens in memory.
 
 pub mod apps;
+pub mod endpoint;
 pub mod http;
 pub mod jwt;
 pub mod keyring;

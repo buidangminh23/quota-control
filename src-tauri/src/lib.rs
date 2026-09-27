@@ -111,6 +111,9 @@ pub fn run() -> anyhow::Result<()> {
             account_commands::reopen_account_login,
             account_commands::cancel_account_login,
             account_commands::remove_account,
+            account_commands::list_services,
+            account_commands::add_api_key,
+            account_commands::remove_api_key,
             chat_commands::list_chat_sessions,
             chat_commands::create_chat_session,
             chat_commands::open_chat_session,
@@ -136,11 +139,12 @@ pub fn run() -> anyhow::Result<()> {
             app.manage(integrations::IntegrationStore::default_store());
             app.manage(usage_commands::UsageService::new()?);
             app.manage(insights_commands::InsightsService::new());
-            let accounts = account_commands::Accounts::new(std::sync::Arc::new(
-                uc_accounts::AccountStore::default_store(),
-            ));
+            let accounts = account_commands::Accounts::new(
+                std::sync::Arc::new(uc_accounts::AccountStore::default_store()),
+                uc_accounts::KeyStore::default_store(),
+            );
             let runtimes = accounts.runtimes().map_err(anyhow::Error::msg)?;
-            let service = BackendService::new(runtimes, &accounts.cli_only_ids())?;
+            let service = BackendService::new(runtimes, &accounts.new_card_ids())?;
             app.manage(accounts);
             app.manage(service);
             app.manage(chat_store::ChatStore::default_store());
@@ -272,7 +276,7 @@ pub fn run() -> anyhow::Result<()> {
                 ticks.tick().await;
                 loop {
                     ticks.tick().await;
-                    account_commands::sync_cli_logins(&cli_app).await;
+                    account_commands::sync_logins(&cli_app).await;
                 }
             });
             if let Err(error) = shortcut::restore(app.handle()) {
@@ -502,7 +506,7 @@ fn show_popup_at(app: &AppHandle, anchor: Option<PhysicalRect<i32, u32>>) -> Res
     window.emit("popup-visibility", true).map_err(safe_error)?;
     app.state::<BackendService>().engine().wake();
     let handle = app.clone();
-    tauri::async_runtime::spawn(async move { account_commands::sync_cli_logins(&handle).await });
+    tauri::async_runtime::spawn(async move { account_commands::sync_logins(&handle).await });
     Ok(())
 }
 
@@ -694,6 +698,11 @@ fn diagnose() -> anyhow::Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(async {
         let mut runtimes = uc_providers::default_runtimes();
+        let services = uc_api::ServiceCards::scan(
+            uc_accounts::KeyStore::default_store(),
+            uc_services::Roots::system(),
+        );
+        runtimes.extend(services.runtimes());
         runtimes.push(std::sync::Arc::new(uc_logscan::LocalHistoryRuntime::new(
             uc_logscan::LogSource::Claude,
         )));

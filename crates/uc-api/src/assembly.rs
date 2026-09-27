@@ -1,30 +1,96 @@
 use std::sync::Arc;
 
 use serde_json::Value;
-use uc_accounts::AccountStore;
-use uc_core::{Clock, ProviderRuntime, SimpleProviderError};
+use uc_accounts::{AccountStore, KeyRecord, KeyStore};
+use uc_core::{Clock, ProviderRuntime, ReqwestHttpClient, SimpleProviderError};
 use uc_engine::{Engine, EngineConfig, SnapshotCache};
 use uc_logscan::{LocalHistoryRuntime, LogSource};
 use uc_providers::CliAccount;
+use uc_services::{Detected, Roots};
 
-/// The providers the app shows: every connected account and every CLI login on this computer, then
-/// this machine's Claude and Codex log history. The app and `usagectl` build the same set, so they
-/// share one snapshot cache.
+/// The providers the app shows: every connected account and every CLI login on this computer, the
+/// other services' logins and API keys, then this machine's Claude and Codex log history. The app
+/// and `usagectl` build the same set, so they share one snapshot cache.
 pub fn provider_runtimes(
     store: Arc<AccountStore>,
 ) -> Result<Vec<Arc<dyn ProviderRuntime>>, SimpleProviderError> {
-    provider_runtimes_with(store, &uc_providers::cli_accounts())
+    let services = ServiceCards::scan(KeyStore::default_store(), Roots::system());
+    provider_runtimes_with(store, &uc_providers::cli_accounts(), &services)
 }
 
-/// [`provider_runtimes`] for CLI logins the caller already read.
+/// [`provider_runtimes`] for CLI logins and service cards the caller already read.
 pub fn provider_runtimes_with(
     store: Arc<AccountStore>,
     cli: &[CliAccount],
+    services: &ServiceCards,
 ) -> Result<Vec<Arc<dyn ProviderRuntime>>, SimpleProviderError> {
     let mut runtimes = uc_providers::account_runtimes(store, cli)?;
+    runtimes.extend(services.runtimes());
     runtimes.push(Arc::new(LocalHistoryRuntime::new(LogSource::Claude)));
     runtimes.push(Arc::new(LocalHistoryRuntime::new(LogSource::Codex)));
     Ok(runtimes)
+}
+
+/// What the other services' cards are built from: the API keys saved in Quota Control, and the
+/// logins and environment keys this computer has.
+#[derive(Clone, Debug)]
+pub struct ServiceCards {
+    pub store: KeyStore,
+    pub roots: Roots,
+    pub saved: Vec<KeyRecord>,
+    pub detected: Vec<Detected>,
+}
+
+impl ServiceCards {
+    /// Read the saved keys and look for logins and environment keys under `roots`. It reads other
+    /// apps' files and credential entries, so callers on an async runtime run it off the runtime.
+    pub fn scan(store: KeyStore, roots: Roots) -> Self {
+        let saved = store.list().unwrap_or_else(|error| {
+            tracing::warn!("Saved API keys could not be read: {error}");
+            Vec::new()
+        });
+        let detected = uc_services::detect(&roots, &saved);
+        Self {
+            store,
+            roots,
+            saved,
+            detected,
+        }
+    }
+
+    /// Each card's id and label: the cards are rebuilt when a rescan finds these changed.
+    pub fn fingerprint(&self) -> Vec<(String, Option<String>)> {
+        let mut cards: Vec<(String, Option<String>)> = self
+            .detected
+            .iter()
+            .map(|found| (found.id.clone(), found.label.clone()))
+            .chain(
+                self.saved
+                    .iter()
+                    .map(|record| (record.id.clone(), Some(record.label.clone()))),
+            )
+            .collect();
+        cards.sort();
+        cards
+    }
+
+    /// A runtime for each card.
+    pub fn runtimes(&self) -> Vec<Arc<dyn ProviderRuntime>> {
+        uc_services::runtimes(
+            &self.detected,
+            &self.store,
+            &self.saved,
+            &self.roots,
+            ReqwestHttpClient::shared(),
+        )
+    }
+}
+
+/// Whether a card starts hidden the first time it appears: the service reads a login that every
+/// install of its app has, signed in or not (Ollama), so the card waits to be turned on.
+pub fn starts_hidden(id: &str) -> bool {
+    let family = id.split('@').next().unwrap_or(id);
+    uc_services::service(family).is_some_and(|service| service.starts_hidden())
 }
 
 /// Which cards are enabled, and which card ids to remember as seen (`knownProviders`).
@@ -39,6 +105,7 @@ pub struct ProviderSelection {
 /// cards are remembered while present; a hidden card is also remembered while absent, so it returns
 /// hidden, and a visible one is forgotten, so it returns visible. `known` of `None` predates that
 /// record; `fallback_known` then stands in for it. Without an `enabled` list every card is enabled.
+/// A card that [`starts_hidden`] is enabled only once listed.
 pub fn select_providers(
     ids: &[String],
     enabled: Option<&[String]>,
@@ -48,13 +115,13 @@ pub fn select_providers(
     let known_before = known.unwrap_or(fallback_known);
     let Some(enabled) = enabled else {
         return ProviderSelection {
-            enabled: ids.to_vec(),
+            enabled: ids.iter().filter(|id| !starts_hidden(id)).cloned().collect(),
             known: ids.to_vec(),
         };
     };
     let selected = ids
         .iter()
-        .filter(|id| enabled.contains(id) || !known_before.contains(id))
+        .filter(|id| enabled.contains(id) || (!known_before.contains(id) && !starts_hidden(id)))
         .cloned()
         .collect();
     let mut remembered = ids.to_vec();
@@ -149,6 +216,28 @@ mod tests {
         assert_eq!(selection.enabled, ids(&["codex@cli", "claude-local"]));
         let unchanged = select_providers(&present, Some(&enabled), None, &present);
         assert_eq!(unchanged.enabled, enabled);
+    }
+
+    #[test]
+    fn a_card_that_starts_hidden_waits_to_be_turned_on() {
+        let ollama = format!("ollama@{}", "a".repeat(64));
+        if !starts_hidden(&ollama) {
+            return;
+        }
+        let present = vec![ollama.clone(), "claude-local".to_string()];
+        let fresh = select_providers(&present, None, None, &[]);
+        assert_eq!(fresh.enabled, ids(&["claude-local"]));
+        let appeared = select_providers(
+            &present,
+            Some(&ids(&["claude-local"])),
+            Some(&ids(&["claude-local"])),
+            &[],
+        );
+        assert_eq!(appeared.enabled, ids(&["claude-local"]));
+        assert_eq!(appeared.known, present);
+        let turned_on = select_providers(&present, Some(&present), Some(&present), &[]);
+        assert_eq!(turned_on.enabled, present);
+        assert!(!starts_hidden("claude@abc"));
     }
 
     #[test]

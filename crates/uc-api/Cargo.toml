@@ -20,6 +20,7 @@ uc-core.workspace = true
 uc-engine.workspace = true
 uc-logscan.workspace = true
 uc-providers.workspace = true
+uc-services.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true

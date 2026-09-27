@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Backend, DocumentName, Unsubscribe } from "./backend";
-import type { ContextWindowSession, ExchangeRate, UsageGroupRow, UsageLedgerInfo, UsageQuery } from "./types";
+import type { ContextWindowSession, ExchangeRate, SavedKey, ServiceEntry, UsageGroupRow, UsageLedgerInfo, UsageQuery } from "./types";
 import type { LimitResetResult } from "./types";
 import type { PublicFeedName, PublicFeedSnapshot, QualityInfo, QualityQuery, QualitySummary } from "./insightsTypes";
 import type { Language } from "@/i18n/language";
@@ -89,6 +89,18 @@ export class TauriBackend implements Backend {
 
   removeAccount(accountId: string): Promise<void> {
     return invoke("remove_account", { accountId });
+  }
+
+  listServices(): Promise<ServiceEntry[]> {
+    return invoke("list_services");
+  }
+
+  addApiKey(serviceId: string, key: string, label?: string, fields?: Record<string, string>): Promise<SavedKey> {
+    return invoke("add_api_key", { serviceId, key, label: label ?? null, fields: fields ?? null });
+  }
+
+  removeApiKey(keyId: string): Promise<void> {
+    return invoke("remove_api_key", { keyId });
   }
 
   listChatSessions(): Promise<ChatSession[]> {

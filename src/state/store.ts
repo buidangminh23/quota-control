@@ -17,6 +17,7 @@ import type {
   LoginBrowser,
   PopoverScreen,
   ProviderEntry,
+  ServiceEntry,
   UpdateStatus,
   UsageLedgerInfo,
 } from "@/lib/types";
@@ -60,6 +61,8 @@ export interface AppState {
   /** The core's engine state, with every limit window whose reset has passed shown as reset. */
   engine: EngineState | null;
   accounts: ConnectedAccount[];
+  /** Services beyond Claude and Codex, with their cards. */
+  services: ServiceEntry[];
   accountLogin: AccountLogin | null;
   /** Why the last sign-in did not connect, until the next one starts. */
   accountLoginError: AccountLoginError | null;
@@ -101,6 +104,7 @@ export const useApp = create<AppState>(() => ({
   catalog: [],
   engine: null,
   accounts: [],
+  services: [],
   accountLogin: null,
   accountLoginError: null,
   chats: [],
@@ -387,6 +391,14 @@ export async function reloadAccounts(): Promise<void> {
   }
 }
 
+export async function reloadServices(): Promise<void> {
+  try {
+    set({ services: await backend().listServices() });
+  } catch (error) {
+    logFailure("Listing services")(error);
+  }
+}
+
 function errorText(error: unknown): string {
   const raw = error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
   return translate(raw, get().settings.language);
@@ -569,6 +581,7 @@ async function boot(): Promise<Array<() => void>> {
   if (!stored || !sameLayout(stored, layout)) persistLayout();
   enableTokenSources();
   void reloadAccounts();
+  void reloadServices();
   void reloadChats();
   void reloadLedgerInfo();
   void reloadExchangeRate();
@@ -579,6 +592,7 @@ async function boot(): Promise<Array<() => void>> {
     api.onCatalogChanged((next) => {
       applyCatalog(next);
       void reloadAccounts();
+      void reloadServices();
       void reloadEnabledProviders().then(enableTokenSources);
     }),
     api.onPopupVisibility((shown) => {

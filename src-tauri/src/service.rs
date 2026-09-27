@@ -64,7 +64,7 @@ impl BackendService {
                         known.as_deref(),
                         &fallback,
                     );
-                    if enabled.is_some() {
+                    if enabled.is_some() || selection.enabled.len() < ids.len() {
                         engine.set_enabled(&selection.enabled);
                     }
                     let listed = enabled.is_some().then_some(selection.enabled.as_slice());
@@ -78,7 +78,13 @@ impl BackendService {
                     tracing::warn!("Stored settings are invalid; using defaults: {error}")
                 }
             },
-            Ok(None) => {}
+            Ok(None) => {
+                let ids = engine.provider_ids();
+                let selection = uc_api::select_providers(&ids, None, None, &[]);
+                if selection.enabled.len() < ids.len() {
+                    engine.set_enabled(&selection.enabled);
+                }
+            }
             Err(_) => tracing::warn!(
                 "Stored settings could not be read; using defaults and preserving the file"
             ),
@@ -162,6 +168,7 @@ impl BackendService {
         let handle = app.clone();
         let event_engine = engine.clone();
         let _ = app.emit_to("popup", "engine-state", engine.state());
+        let mut rows = catalog_rows(&engine.catalog());
         tasks.push(tauri::async_runtime::spawn(async move {
             loop {
                 let state = match events.recv().await {
@@ -173,6 +180,14 @@ impl BackendService {
                 };
                 if let Err(error) = handle.emit_to("popup", "engine-state", state) {
                     tracing::warn!("Engine event delivery failed: {error}");
+                }
+                let catalog = event_engine.catalog();
+                let next = catalog_rows(&catalog);
+                if next != rows {
+                    rows = next;
+                    if handle.emit_to("popup", "catalog-changed", catalog).is_err() {
+                        tracing::warn!("Could not publish the updated catalog");
+                    }
                 }
             }
         }));
@@ -269,6 +284,24 @@ impl BackendService {
         }
         Ok(())
     }
+}
+
+/// Each card's metric ids. A reading can add rows (one per model a plan lists), and the popup
+/// learns of them through `catalog-changed`.
+fn catalog_rows(catalog: &[uc_engine::ProviderEntry]) -> Vec<(String, Vec<String>)> {
+    catalog
+        .iter()
+        .map(|entry| {
+            (
+                entry.provider.id.clone(),
+                entry
+                    .descriptors
+                    .iter()
+                    .map(|descriptor| descriptor.id.clone())
+                    .collect(),
+            )
+        })
+        .collect()
 }
 
 pub fn safe_error(error: impl std::fmt::Display) -> String {

@@ -289,6 +289,29 @@ export interface AccountsMessages {
   open: string;
   chatOpenFailed: string;
   createdOn(date: string): string;
+  /** Where a service card reads its credentials: an app's login, an environment variable, a saved key. */
+  serviceSource(kind: "login" | "env" | "key", detail: string): string;
+  otherServices: string;
+  otherServicesNone: string;
+  /** `apps`: the apps whose logins on this computer are picked up automatically. */
+  detectedNote(apps: string): string;
+  addKey: string;
+  searchService: string;
+  noServiceMatch: string;
+  keyLabel: string;
+  keyPlaceholder: string;
+  /** The key field's hint for a value other than an API key (a session cookie). */
+  pasteValue(what: string): string;
+  getKey: string;
+  saveKey: string;
+  keySaved(service: string): string;
+  keyStoredNote: string;
+  keyEnvNote(variables: string): string;
+  changeService: string;
+  hiddenNote: string;
+  removeKeyTitle(label: string): string;
+  removeKeyMessage: string;
+  removeKeyConfirm: string;
 }
 
 export interface StripMessages {

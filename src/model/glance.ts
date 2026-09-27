@@ -6,6 +6,7 @@
  * Swift side only lays it out and ticks the countdowns.
  */
 import { PROVIDER_MARKS, type ProviderMark } from "@/assets/providerMarks";
+import { knownBrandColor } from "./totalSpend";
 import { messagesFor, type Language } from "@/i18n";
 import type { Provider, WidgetDescriptor } from "@/lib/types";
 import { brandOf, type ProviderMetrics } from "./layout";
@@ -183,7 +184,7 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
     const brand = brandOf(source.icon || source.id);
     const mark = PROVIDER_MARKS[brand];
     const about = input.describe(source);
-    const entry: GlanceProvider = { id: source.id, name: about.name, brand, color: BRAND_COLORS[brand] ?? PLAIN_MARK_COLOR, metrics };
+    const entry: GlanceProvider = { id: source.id, name: about.name, brand, color: BRAND_COLORS[brand] ?? knownBrandColor(brand, true) ?? PLAIN_MARK_COLOR, metrics };
     if (mark) entry.mark = mark;
     if (about.account) entry.account = about.account;
     if (about.plan) entry.plan = about.plan;

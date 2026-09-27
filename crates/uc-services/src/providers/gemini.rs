@@ -225,13 +225,66 @@ fn meters(body: &Value) -> Vec<uc_core::MetricLine> {
             tightest[index] = Some((used, reset));
         }
     }
-    FAMILIES
+    let mut meters: Vec<uc_core::MetricLine> = FAMILIES
         .iter()
         .zip(tightest)
         .filter_map(|((_, title, _), found)| {
             found.map(|(used, reset)| lines::percent(title, used, reset, Some(lines::DAY_MS)))
         })
+        .collect();
+    meters.extend(model_meters(&buckets));
+    meters
+}
+
+/// One meter per model the quota lists (its tightest bucket), after the family meters, so every
+/// model the plan covers can be shown on its own.
+fn model_meters(buckets: &[Value]) -> Vec<uc_core::MetricLine> {
+    let mut models: Vec<(String, f64, Option<DateTime<Utc>>)> = Vec::new();
+    for bucket in buckets {
+        let (Some(model), Some(remaining)) = (
+            value::text(bucket, "/modelId"),
+            value::number(bucket, "/remainingFraction"),
+        ) else {
+            continue;
+        };
+        let label = model_label(model);
+        let used = (1.0 - remaining.clamp(0.0, 1.0)) * 100.0;
+        let reset = value::time(bucket, "/resetTime");
+        match models.iter_mut().find(|(known, _, _)| *known == label) {
+            Some(entry) if used > entry.1 => *entry = (label, used, reset),
+            Some(_) => {}
+            None => models.push((label, used, reset)),
+        }
+    }
+    models.sort_by_key(|(label, _, _)| label.to_lowercase());
+    models
+        .into_iter()
+        .map(|(label, used, reset)| lines::percent(&label, used, reset, Some(lines::DAY_MS)))
         .collect()
+}
+
+/// A model id as people write it: `gemini-2.5-flash-lite` becomes `Gemini 2.5 Flash Lite`.
+fn model_label(model: &str) -> String {
+    const UPPER: [&str; 4] = ["tts", "oss", "gpt", "api"];
+    model
+        .trim()
+        .trim_start_matches("models/")
+        .split(['-', '_', ' '])
+        .filter(|word| !word.is_empty())
+        .map(|word| {
+            let lower = word.to_ascii_lowercase();
+            if UPPER.contains(&lower.as_str()) {
+                lower.to_ascii_uppercase()
+            } else {
+                let mut characters = lower.chars();
+                characters
+                    .next()
+                    .map(|first| first.to_uppercase().chain(characters).collect())
+                    .unwrap_or_default()
+            }
+        })
+        .collect::<Vec<String>>()
+        .join(" ")
 }
 
 #[cfg(test)]
@@ -286,7 +339,19 @@ mod tests {
             Some("Gemini Code Assist for individuals")
         );
         let meters: Vec<_> = reading.lines.iter().map(progress).collect();
-        assert_eq!(meters.len(), 3);
+        assert_eq!(meters.len(), 7);
+        let models: Vec<&str> = meters[3..].iter().map(|meter| meter.0).collect();
+        assert_eq!(
+            models,
+            [
+                "Gemini 2.5 Flash",
+                "Gemini 2.5 Flash Lite",
+                "Gemini 2.5 Pro",
+                "Gemini 3 Pro Preview"
+            ]
+        );
+        assert!((meters[6].1 - 60.0).abs() < 1e-9);
+        assert!((meters[5].1 - 25.0).abs() < 1e-9);
         assert_eq!(meters[0].0, "Flash Lite");
         assert!((meters[0].1 - 10.0).abs() < 1e-9);
         assert_eq!(
@@ -357,7 +422,7 @@ mod tests {
             );
         let scope = context_at(&http, secret(now() + Duration::minutes(30)), now());
         let reading = Gemini.fetch(&scope.context()).await.unwrap();
-        assert_eq!(reading.lines.len(), 3);
+        assert_eq!(reading.lines.len(), 7);
         let urls: Vec<_> = http
             .requests()
             .into_iter()
@@ -391,6 +456,22 @@ mod tests {
         let scope = context_at(&http, secret(now() + Duration::minutes(30)), now());
         let error = Gemini.fetch(&scope.context()).await.unwrap_err();
         assert_eq!(error.category, ErrorCategory::NotAvailable);
+    }
+
+    #[test]
+    fn model_ids_read_as_people_write_them() {
+        assert_eq!(
+            model_label("gemini-2.5-flash-lite"),
+            "Gemini 2.5 Flash Lite"
+        );
+        assert_eq!(
+            model_label("models/gemini-3-pro-preview"),
+            "Gemini 3 Pro Preview"
+        );
+        assert_eq!(
+            model_label("gemini-2.5-flash-preview-tts"),
+            "Gemini 2.5 Flash Preview TTS"
+        );
     }
 
     #[test]

@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uc_accounts::KeyStore;
 use uc_core::{
-    Clock, ErrorCategory, Provider, ProviderRuntime, ProviderSnapshot, RefreshContext,
-    SharedHttpClient, SimpleProviderError, WidgetDescriptor, system_clock,
+    Clock, ErrorCategory, MetricLine, ProgressFormat, Provider, ProviderRuntime, ProviderSnapshot,
+    RefreshContext, SharedHttpClient, SimpleProviderError, WidgetDescriptor, system_clock,
 };
 
 use crate::catalog::identity_hash;
@@ -145,6 +145,15 @@ impl ProviderRuntime for ServiceRuntime {
         self.service.descriptors(&self.provider)
     }
 
+    fn descriptors_for(&self, snapshot: Option<&ProviderSnapshot>) -> Vec<WidgetDescriptor> {
+        let mut descriptors = self.service.descriptors(&self.provider);
+        if let Some(snapshot) = snapshot {
+            let extra = model_descriptors(&self.provider, &descriptors, snapshot);
+            descriptors.extend(extra);
+        }
+        descriptors
+    }
+
     fn allows_cached_local_history(&self) -> bool {
         false
     }
@@ -169,5 +178,155 @@ impl ProviderRuntime for ServiceRuntime {
 
     async fn has_local_credentials(&self) -> bool {
         self.secret().await.is_ok()
+    }
+}
+
+/// The id suffix of a row the service did not declare: `m-` and the label's lowercase words.
+pub fn model_suffix(label: &str) -> String {
+    let mut slug = String::new();
+    for character in label.chars().flat_map(char::to_lowercase) {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character);
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug: String = slug.trim_end_matches('-').chars().take(48).collect();
+    format!("m-{}", slug.trim_end_matches('-'))
+}
+
+/// One row per line of `snapshot` that no declared widget reads (a model the account can use),
+/// after the declared ones. Error snapshots add none.
+fn model_descriptors(
+    provider: &Provider,
+    declared: &[WidgetDescriptor],
+    snapshot: &ProviderSnapshot,
+) -> Vec<WidgetDescriptor> {
+    if snapshot.is_error() {
+        return Vec::new();
+    }
+    let mut seen: std::collections::HashSet<String> = declared
+        .iter()
+        .map(|descriptor| descriptor.id.clone())
+        .collect();
+    let labels: std::collections::HashSet<&str> = declared
+        .iter()
+        .map(|descriptor| descriptor.metric_label.as_str())
+        .collect();
+    let mut rows = Vec::new();
+    for line in &snapshot.lines {
+        let label = line.label();
+        if label.trim().is_empty() || labels.contains(label) {
+            continue;
+        }
+        let suffix = model_suffix(label);
+        let id = format!("{}.{suffix}", provider.id);
+        if suffix == "m-" || !seen.insert(id.clone()) {
+            continue;
+        }
+        let descriptor = match line {
+            MetricLine::Progress(progress) => match &progress.format {
+                ProgressFormat::Percent => {
+                    WidgetDescriptor::percent(id, provider, label, None, None)
+                        .exporting_progress(&suffix, "percent")
+                }
+                ProgressFormat::Count { suffix: unit } => WidgetDescriptor::bounded_count(
+                    id,
+                    provider,
+                    label,
+                    None,
+                    progress.limit,
+                    unit,
+                    progress.period_duration_ms,
+                ),
+                ProgressFormat::Dollars => WidgetDescriptor::bounded_dollars(
+                    id,
+                    provider,
+                    label,
+                    None,
+                    progress.limit,
+                    None,
+                    None,
+                ),
+            },
+            MetricLine::Values(values) => {
+                let first = values.values.first();
+                WidgetDescriptor::values(
+                    id,
+                    provider,
+                    label,
+                    None,
+                    first.map(|value| value.kind),
+                    first.and_then(|value| value.label.as_deref()),
+                    false,
+                    None,
+                    false,
+                )
+            }
+            MetricLine::Badge(_) | MetricLine::Text(_) | MetricLine::Chart(_) => continue,
+        };
+        rows.push(descriptor);
+    }
+    rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::support::lines;
+    use chrono::TimeZone;
+
+    fn provider() -> Provider {
+        Provider::new("antigravity@abc", "Antigravity")
+    }
+
+    #[test]
+    fn model_suffixes_are_stable_slugs_without_dots() {
+        assert_eq!(
+            model_suffix("Gemini 3.1 Pro (High)"),
+            "m-gemini-3-1-pro-high"
+        );
+        assert_eq!(model_suffix("  Claude Sonnet 4.6 "), "m-claude-sonnet-4-6");
+        assert_eq!(model_suffix("!!!"), "m-");
+    }
+
+    #[test]
+    fn undeclared_lines_become_rows_after_the_declared_ones() {
+        let provider = provider();
+        let declared = vec![WidgetDescriptor::percent(
+            format!("{}.weekly", provider.id),
+            &provider,
+            "Weekly",
+            None,
+            None,
+        )];
+        let now = Utc.with_ymd_and_hms(2026, 9, 27, 10, 0, 0).unwrap();
+        let snapshot = ProviderSnapshot::make(
+            &provider,
+            None,
+            vec![
+                lines::percent("Weekly", 10.0, None, None),
+                lines::percent("Gemini 3.1 Pro (High)", 25.0, None, None),
+                lines::count("Claude Opus 4.6", 3.0, 10.0, "requests", None, None),
+                lines::dollar_value("Balance Left", 4.0),
+                lines::badge("Status", "ok"),
+                lines::percent("Gemini 3.1 Pro (High)", 30.0, None, None),
+            ],
+            now,
+        );
+        let rows = model_descriptors(&provider, &declared, &snapshot);
+        let ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "antigravity@abc.m-gemini-3-1-pro-high",
+                "antigravity@abc.m-claude-opus-4-6",
+                "antigravity@abc.m-balance-left",
+            ]
+        );
+        assert_eq!(rows[0].metric_label, "Gemini 3.1 Pro (High)");
+        assert_eq!(rows[1].template.limit, Some(10.0));
+        let error = ProviderSnapshot::error_message(&provider, "down", None);
+        assert!(model_descriptors(&provider, &declared, &error).is_empty());
     }
 }

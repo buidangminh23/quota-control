@@ -42,6 +42,7 @@ uc-core.workspace = true
 uc-accounts.workspace = true
 uc-engine.workspace = true
 uc-providers.workspace = true
+uc-services.workspace = true
 uc-logscan.workspace = true
 url.workspace = true
 uuid.workspace = true

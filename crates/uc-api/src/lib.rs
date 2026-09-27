@@ -15,8 +15,8 @@ mod usage;
 mod wire;
 
 pub use assembly::{
-    ProviderSelection, build_engine, provider_runtimes, provider_runtimes_with, select_providers,
-    settings_list,
+    ProviderSelection, ServiceCards, build_engine, provider_runtimes, provider_runtimes_with,
+    select_providers, settings_list, starts_hidden,
 };
 pub use limits::SCHEMA;
 pub use router::{Response, respond};
