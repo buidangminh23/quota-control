@@ -27,6 +27,7 @@ import { brandName } from "@/model/providerText";
 import { DASHBOARD_TABS, DEFAULT_SETTINGS, enabledProvidersOf, mergeSettingsDocument, parseSettings, type AppSettings, type DashboardTab } from "@/model/settings";
 import { isTransientBanner, updateBannerKey, updateBannerOf } from "@/model/updateBanner";
 import type { DisplayOptions } from "@/model/widgetData";
+import { nextWindowReset, rollOverPassedWindows } from "@/model/windowReset";
 
 export type Screen = PopoverScreen | "accounts";
 
@@ -56,6 +57,7 @@ export interface AppState {
   ready: boolean;
   info: AppInfo | null;
   catalog: ProviderEntry[];
+  /** The core's engine state, with every limit window whose reset has passed shown as reset. */
   engine: EngineState | null;
   accounts: ConnectedAccount[];
   accountLogin: AccountLogin | null;
@@ -318,6 +320,40 @@ export function refresh(providerId?: string): void {
   void backend().refresh(providerId).catch(logFailure("Refresh"));
 }
 
+/** The engine state as the core last sent it; the store's `engine` is this with passed resets rolled over. */
+let coreEngine: EngineState | null = null;
+let windowResetTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Longest single wait for the next reset, so time lost to sleep or a clock change is caught up. */
+const WINDOW_RESET_MAX_WAIT_MS = 60 * 60_000;
+
+function applyEngineState(state: EngineState | null): void {
+  coreEngine = state;
+  clearTimeout(windowResetTimer);
+  if (!state) {
+    set({ engine: null });
+    return;
+  }
+  const now = new Date();
+  set({ engine: rollOverPassedWindows(state, now) });
+  watchWindowResets(state, now);
+}
+
+/** Roll the next window over when its reset arrives, even when no reading comes in around then. */
+function watchWindowResets(state: EngineState, now: Date): void {
+  const next = nextWindowReset(state, now);
+  if (!next) return;
+  windowResetTimer = setTimeout(
+    () => {
+      if (coreEngine !== state) return;
+      const later = new Date();
+      if (later.getTime() >= next.getTime()) applyEngineState(state);
+      else watchWindowResets(state, later);
+    },
+    Math.min(next.getTime() - now.getTime(), WINDOW_RESET_MAX_WAIT_MS),
+  );
+}
+
 /** Look for a new release now; the result shows on the update card and in Settings. */
 export function checkForUpdates(): void {
   const api = backend();
@@ -520,11 +556,11 @@ async function boot(): Promise<Array<() => void>> {
   ]);
   const stored = parseLayout(layoutDoc);
   const layout = reconcileLayout(stored, catalog);
+  applyEngineState(engine);
   set({
     ready: true,
     info,
     catalog,
-    engine,
     settings: parseSettings(settingsDoc),
     enabledProviders: enabledProvidersOf(settingsDoc),
     layout,
@@ -538,7 +574,8 @@ async function boot(): Promise<Array<() => void>> {
   void reloadExchangeRate();
   return [
     api.onUpdateStatus?.((next) => set({ update: next })) ?? (() => {}),
-    api.onEngineState((state) => set({ engine: state })),
+    api.onEngineState(applyEngineState),
+    () => clearTimeout(windowResetTimer),
     api.onCatalogChanged((next) => {
       applyCatalog(next);
       void reloadAccounts();

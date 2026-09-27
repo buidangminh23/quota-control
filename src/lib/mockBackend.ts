@@ -408,6 +408,11 @@ export class MockBackend implements Backend {
     for (const listener of this.engineListeners) listener(next);
   }
 
+  /** Test hook: change the engine state and publish it the way the core pushes `engine-state`. */
+  editEngineState(mutate: (state: EngineState) => void): void {
+    this.update(mutate);
+  }
+
   private readonly ledger = sampleLedger(localDay());
   private readonly ledgerListeners = new Set<(info: UsageLedgerInfo) => void>();
   /** Test hook: the rate `exchangeRate` returns; `null` means none was ever fetched. */

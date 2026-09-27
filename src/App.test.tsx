@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { setBackend } from "@/lib/backend";
 import { localDay } from "@/lib/days";
+import type { EngineState } from "@/lib/types";
 import { MockBackend } from "@/lib/mockBackend";
 import { updateSettings, useApp } from "@/state/store";
 import { App } from "./App";
@@ -11,13 +12,26 @@ import { closeMenu } from "./components/ui/menu";
 vi.mock("@/strip/useTaskbarStrip", () => ({ useTaskbarStrip: () => {} }));
 
 /** `settings` builds the stored settings document from the catalog's provider ids before the popup boots. */
-async function renderApp({ strict = false, settings }: { strict?: boolean; settings?: (providerIds: string[]) => Record<string, unknown> } = {}) {
+async function renderApp({
+  strict = false,
+  settings,
+  engine,
+}: { strict?: boolean; settings?: (providerIds: string[]) => Record<string, unknown>; engine?: (state: EngineState) => void } = {}) {
   const api = new MockBackend();
   if (settings) await api.saveDocument("settings", settings((await api.catalog()).map((entry) => entry.provider.id)));
+  if (engine) api.editEngineState(engine);
   setBackend(api);
   render(strict ? <StrictMode><App /></StrictMode> : <App />);
   await screen.findByText("Claude · Công ty");
   return api;
+}
+
+/** Use up the Công ty account's five-hour session, resetting `resetInMs` from now (negative: already past). */
+function spendWorkSession(state: EngineState, resetInMs: number): void {
+  const session = state.providers["claude@7c1e"]?.snapshot?.lines.find((line) => line.label === "Session");
+  if (session?.type !== "progress") throw new Error("the fixture has no Session meter");
+  session.used = 100;
+  session.resetsAt = new Date(Date.now() + resetInMs).toISOString();
 }
 
 afterEach(async () => {
@@ -65,6 +79,32 @@ describe("popup", () => {
     fireEvent.click(countdowns[0]!);
     expect(within(work).getAllByText(/^Đặt lại lúc /)).toHaveLength(countdowns.length);
     expect(within(work).queryByText(/^Hồi lại lúc /)).not.toBeInTheDocument();
+  });
+
+  it("shows a limit window whose reset has passed as reset before the next reading comes in", async () => {
+    const api = await renderApp();
+    const work = screen.getByRole("region", { name: "Claude · Công ty" });
+    act(() => api.editEngineState((state) => spendWorkSession(state, -1_000)));
+    expect(within(work).getByText("Còn 100%")).toBeInTheDocument();
+    expect(within(work).getByText("Chưa bắt đầu")).toBeInTheDocument();
+    expect(within(work).queryByText("Còn 0%")).not.toBeInTheDocument();
+  });
+
+  it("opens with a window that reset while the app was closed already shown as reset", async () => {
+    await renderApp({ engine: (state) => spendWorkSession(state, -60_000) });
+    const work = screen.getByRole("region", { name: "Claude · Công ty" });
+    expect(within(work).getByText("Còn 100%")).toBeInTheDocument();
+    expect(within(work).getByText("Chưa bắt đầu")).toBeInTheDocument();
+  });
+
+  it("rolls a spent window over the moment its reset arrives, with no new reading", async () => {
+    const api = await renderApp();
+    const work = screen.getByRole("region", { name: "Claude · Công ty" });
+    act(() => api.editEngineState((state) => spendWorkSession(state, 120)));
+    expect(within(work).getByText("Còn 0%")).toBeInTheDocument();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 250)));
+    expect(within(work).getByText("Còn 100%")).toBeInTheDocument();
+    expect(within(work).queryByText("Còn 0%")).not.toBeInTheDocument();
   });
 
   it("shows Codex's free limit resets as the last row of its card with the caret closed", async () => {
