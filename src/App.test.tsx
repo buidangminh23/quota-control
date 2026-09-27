@@ -339,7 +339,7 @@ describe("popup", () => {
     expect(personal.querySelector("header")).not.toHaveClass("has-term");
   });
 
-  it("lists connected accounts with a Google sign-in and in-app chat actions", async () => {
+  it("lists connected accounts with a Google sign-in and a chat button each, without a sessions list", async () => {
     await renderApp();
     act(() => useApp.setState({ screen: "accounts" }));
     expect(await screen.findByRole("heading", { name: "Tài khoản" })).toBeInTheDocument();
@@ -349,7 +349,9 @@ describe("popup", () => {
     expect(screen.queryByRole("button", { name: "Xóa Codex" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Đăng nhập bằng Google" })).toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Phiên ChatGPT mới/ })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Mở Claude trong ứng dụng" }).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Phiên chat trong ứng dụng")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Phiên (Claude|ChatGPT) mới/ })).not.toBeInTheDocument();
   });
 
   it("tells how to copy a session cookie or a whole Cookie header for web-session providers", async () => {

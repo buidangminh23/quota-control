@@ -1,21 +1,19 @@
 /**
  * The Accounts screen: every connected Claude and Codex account (always all of them, each with its
- * own live status), signing in to another one through the browser, the other AI providers (their
- * apps' logins on this computer and API keys), and the saved in-app chat sessions that open the
- * official Claude / ChatGPT sites in their own windows. Claude Code and the Codex CLI signed in on
- * this computer are listed automatically.
+ * own live status and a button that opens its product's official site in the app), signing in to
+ * another one through the browser, and the other AI providers (their apps' logins on this computer
+ * and API keys). Claude Code and the Codex CLI signed in on this computer are listed automatically.
  */
 import { useEffect, useState } from "react";
 import { messagesFor, type Language, type Messages } from "@/i18n";
 import { backend } from "@/lib/backend";
-import type { AccountProvider, ChatSession, ConnectedAccount, ProviderRuntimeState } from "@/lib/types";
+import type { AccountProvider, ConnectedAccount, ProviderRuntimeState } from "@/lib/types";
 import { brandName, headerNotice } from "@/model/providerText";
-import { deviceTimeZone } from "@/model/timeZone";
 import { useLanguage } from "@/state/hooks";
-import { cancelAccountLogin, openChatFor, reloadAccounts, reloadChats, reloadServices, reopenAccountLogin, showNotice, startAccountLogin, useApp } from "@/state/store";
+import { cancelAccountLogin, openChatFor, reloadAccounts, reloadServices, reopenAccountLogin, showNotice, startAccountLogin, useApp } from "@/state/store";
 import { Button } from "../ui/controls";
 import { confirmAction } from "../ui/dialog";
-import { ChatIcon, CloseIcon, PlusIcon, Spinner } from "../ui/icons";
+import { ChatIcon, CloseIcon, Spinner } from "../ui/icons";
 import { ProviderMark } from "../ui/ProviderMark";
 import { tooltipProps, truncatedTooltipProps } from "../ui/tooltip";
 import { AddServiceKey, detectedApps, ServiceCards } from "./Services";
@@ -29,11 +27,6 @@ const CLI_PRODUCTS: Record<AccountProvider, string> = { claude: "Claude Code", c
 function accountTitle(provider: AccountProvider, label: string): string {
   const trimmed = label.trim();
   return trimmed === "" || trimmed.toLowerCase() === provider ? brandName(provider) : `${brandName(provider)} · ${trimmed}`;
-}
-
-function formatDate(iso: string, language: Language): string {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString(language === "vi" ? "vi-VN" : "en-US", { timeZone: deviceTimeZone() });
 }
 
 function AccountRow({ account, runtime, messages, language }: { account: ConnectedAccount; runtime: ProviderRuntimeState | undefined; messages: Messages; language: Language }) {
@@ -147,31 +140,10 @@ function AddAccount({ messages }: { messages: Messages }) {
   );
 }
 
-function ChatRow({ chat, messages, language }: { chat: ChatSession; messages: Messages; language: Language }) {
-  const open = () => backend().openChatSession(chat.id).catch(() => showNotice(messages.accounts.chatOpenFailed, "notice"));
-  return (
-    <div className="uc-list-row is-account">
-      <span className="uc-list-mark">
-        <ProviderMark brand={chat.provider} size={16} />
-      </span>
-      <span className="uc-list-text">
-        <span className="uc-list-title uc-truncate">
-          {chat.label.trim().toLowerCase() === chat.provider ? CHAT_PRODUCTS[chat.provider] : `${CHAT_PRODUCTS[chat.provider]} · ${chat.label}`}
-        </span>
-        <span className="uc-list-subtitle">{messages.accounts.createdOn(formatDate(chat.createdAt, language))}</span>
-      </span>
-      <Button onClick={() => void open()} className="is-small">
-        {messages.accounts.open}
-      </Button>
-    </div>
-  );
-}
-
 export function Accounts() {
   const language = useLanguage();
   const messages = messagesFor(language);
   const accounts = useApp((state) => state.accounts);
-  const chats = useApp((state) => state.chats);
   const engine = useApp((state) => state.engine);
   const services = useApp((state) => state.services);
   const apps = detectedApps(services);
@@ -179,14 +151,7 @@ export function Accounts() {
   useEffect(() => {
     void reloadAccounts();
     void reloadServices();
-    void reloadChats();
   }, []);
-
-  const newChat = (provider: AccountProvider) =>
-    backend()
-      .createChatSession(provider)
-      .then(() => reloadChats())
-      .catch(() => showNotice(messages.accounts.chatOpenFailed, "notice"));
 
   return (
     <div className="uc-stack">
@@ -215,26 +180,6 @@ export function Accounts() {
       <section className="uc-group">
         <h2 className="uc-group-title">{messages.accounts.addKey}</h2>
         <AddServiceKey messages={messages} language={language} />
-      </section>
-
-      <section className="uc-group">
-        <h2 className="uc-group-title">{messages.accounts.chats}</h2>
-        <div className="uc-card uc-list-card">
-          {chats.length === 0 ? <p className="uc-card-empty">{messages.accounts.noChats}</p> : null}
-          {chats.map((chat) => (
-            <ChatRow key={chat.id} chat={chat} messages={messages} language={language} />
-          ))}
-          <div className="uc-settings-actions is-column">
-            {PROVIDERS.map((provider) => (
-              <Button key={provider} onClick={() => void newChat(provider)} className="is-small is-wide">
-                <PlusIcon size={10} />
-                <span>{messages.accounts.newChat(CHAT_PRODUCTS[provider])}</span>
-              </Button>
-            ))}
-          </div>
-        </div>
-        <p className="uc-group-note">{messages.accounts.chatsNote}</p>
-        <p className="uc-group-note">{messages.accounts.chatsAuthNote}</p>
       </section>
     </div>
   );

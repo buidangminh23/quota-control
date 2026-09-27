@@ -288,14 +288,13 @@ Quota Control** menu remains available when direct left-click events are absent.
 
 ### Embedded official chat
 
-Chat sessions live in the popup: the Accounts screen's **In-App Chat Sessions**
-section lists them and starts a **New Claude Session** or **New ChatGPT Session**,
-and an account card's menu opens its product in the app; the tray menu has no chat
+Each account opens its product's official website in the app: the chat button on
+its row in the Accounts screen, or **Open Claude in the App** (or ChatGPT) in its
+card's menu. The popup keeps no list of sessions and the tray menu has no chat
 entries. Each session opens the official website in its own native window and
 persists a separate WebView profile under the app configuration directory. Closing
-a window preserves its session; opening an existing session focuses its window or
-reuses its saved profile. Session rows are independent of quota refresh and remain
-visible while offline.
+a window preserves its session; opening it again focuses its window or reuses its
+saved profile.
 
 `list_chat_sessions`, `create_chat_session`, and `open_chat_session` expose this
 workflow to the popup. Creation persists metadata before opening the window;

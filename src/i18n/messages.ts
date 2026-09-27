@@ -281,14 +281,7 @@ export interface AccountsMessages {
   removeMessage: string;
   removeConfirm: string;
   failed(detail: string): string;
-  chats: string;
-  chatsNote: string;
-  chatsAuthNote: string;
-  newChat(product: string): string;
-  noChats: string;
-  open: string;
   chatOpenFailed: string;
-  createdOn(date: string): string;
   /** Where a service card reads its credentials: an app's login, an environment variable, a saved key. */
   serviceSource(kind: "login" | "env" | "key", detail: string): string;
   otherServices: string;
