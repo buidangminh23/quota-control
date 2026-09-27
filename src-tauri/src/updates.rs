@@ -13,6 +13,9 @@
 //! or the .deb goes through pkexec, and on macOS the `.app` bundle is replaced in place (asking for
 //! an administrator password only when its folder is not writable); then the app restarts itself. A marker written before the
 //! handover lets the next launch confirm the new version or report an install that never finished.
+//! A launch while that installer still runs steps aside (`update_installing`): the installer
+//! relaunches the new version itself, and a running copy would hold the executable it is writing
+//! and read the marker meant for the new version.
 //! Builds the updater cannot replace (development runs, other packages) report `supported: false`,
 //! and the popup links to the releases page instead.
 
@@ -44,6 +47,8 @@ const MARKER_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 const AUTOMATIC_CHECKS_KEY: &str = "automaticUpdateChecks";
 /// The version the previous launch ran, next to the pending-install marker.
 const LAST_RUN_FILE: &str = "last-version";
+/// `productName` in `tauri.conf.json`, which names the updater's installer file.
+const PRODUCT_NAME: &str = "Quota Control";
 const STATUS_EVENT: &str = "update-status";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -707,6 +712,12 @@ impl PendingInstall {
         uc_core::paths::write_atomic(&path, &bytes)
     }
 
+    /// Read the marker and leave it in place.
+    fn read() -> Option<Self> {
+        let bytes = std::fs::read(Self::path()).ok()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+
     /// Read and delete the marker.
     fn take() -> Option<Self> {
         let path = Self::path();
@@ -751,6 +762,91 @@ fn relaunch_outcome(
     } else {
         Relaunch::Unfinished { to: marker.to }
     })
+}
+
+/// The version an update installer is putting in place right now, when this launch should step
+/// aside for it: a marker younger than a day names another version, and that version's installer
+/// is running.
+fn installing_version(
+    marker: Option<PendingInstall>,
+    current: &str,
+    now: DateTime<Utc>,
+    installer_running: impl Fn(&str) -> bool,
+) -> Option<String> {
+    let marker = marker?;
+    let age = now.signed_duration_since(marker.started_at).to_std().ok()?;
+    if age > MARKER_MAX_AGE {
+        return None;
+    }
+    let target = marker.to.trim_start_matches('v');
+    let same = match (
+        semver::Version::parse(target),
+        semver::Version::parse(current),
+    ) {
+        (Ok(target), Ok(current)) => target == current,
+        _ => target == current,
+    };
+    if same {
+        return None;
+    }
+    installer_running(&installer_image(target)).then(|| target.to_owned())
+}
+
+/// The file name the updater gives a downloaded Windows installer.
+fn installer_image(version: &str) -> String {
+    format!("{PRODUCT_NAME}-{version}-installer.exe")
+}
+
+/// The version being installed when this launch must step aside for its installer, checked
+/// before the app starts anything. Only Windows runs a separate installer.
+pub fn update_installing() -> Option<String> {
+    installing_version(
+        PendingInstall::read(),
+        env!("CARGO_PKG_VERSION"),
+        Utc::now(),
+        process_running,
+    )
+}
+
+/// Whether a process whose executable is named `image` is running.
+#[cfg(windows)]
+fn process_running(image: &str) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+    // SAFETY: the snapshot handle is checked before use and closed once; the entry is a plain
+    // struct the API fills, with `dwSize` set as it requires.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return false;
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut found = false;
+        let mut more = Process32FirstW(snapshot, &mut entry) != 0;
+        while more {
+            let length = entry
+                .szExeFile
+                .iter()
+                .position(|unit| *unit == 0)
+                .unwrap_or(entry.szExeFile.len());
+            if String::from_utf16_lossy(&entry.szExeFile[..length]).eq_ignore_ascii_case(image) {
+                found = true;
+                break;
+            }
+            more = Process32NextW(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+        found
+    }
+}
+
+#[cfg(not(windows))]
+fn process_running(_image: &str) -> bool {
+    false
 }
 
 #[tauri::command]
@@ -965,6 +1061,53 @@ mod tests {
             serde_json::to_value(&status).unwrap()["updatedFrom"],
             "0.3.0"
         );
+    }
+
+    #[test]
+    fn a_launch_steps_aside_while_the_installer_of_another_version_runs() {
+        let now = Utc::now();
+        let running = |image: &str| image == "Quota Control-0.3.2-installer.exe";
+        assert_eq!(
+            installing_version(Some(marker("0.3.2", 1)), "0.3.1", now, running),
+            Some("0.3.2".into())
+        );
+        assert_eq!(
+            installing_version(Some(marker("v0.3.2", 1)), "0.3.1", now, running),
+            Some("0.3.2".into())
+        );
+        assert_eq!(
+            installing_version(Some(marker("0.3.2", 1)), "0.3.1", now, |_: &str| false),
+            None
+        );
+        assert_eq!(
+            installing_version(Some(marker("0.3.2", 1)), "0.3.2", now, running),
+            None
+        );
+        assert_eq!(
+            installing_version(Some(marker("0.3.2", 25 * 60)), "0.3.1", now, running),
+            None
+        );
+        assert_eq!(installing_version(None, "0.3.1", now, running), None);
+    }
+
+    #[test]
+    fn the_installer_is_named_after_the_product() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(config["productName"], PRODUCT_NAME);
+        assert_eq!(
+            installer_image("0.3.2"),
+            "Quota Control-0.3.2-installer.exe"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_running_process_is_found_by_its_executable_name() {
+        let own = std::env::current_exe().unwrap();
+        let name = own.file_name().unwrap().to_string_lossy().to_uppercase();
+        assert!(process_running(&name));
+        assert!(!process_running("Quota Control-0.0.0-installer.exe"));
     }
 
     #[test]

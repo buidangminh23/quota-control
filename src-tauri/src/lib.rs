@@ -71,6 +71,11 @@ pub fn run() -> anyhow::Result<()> {
         )
         .try_init()
         .ok();
+    if let Some(version) = updates::update_installing() {
+        tracing::info!(target: "updates", "the update to {version} is still installing; this launch steps aside");
+        flush_log();
+        return Ok(());
+    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
