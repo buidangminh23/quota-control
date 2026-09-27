@@ -146,7 +146,7 @@ export const insightsEn: InsightsMessages = {
   watchChance: (percent, window) => (window ? `Codex Resets estimates ${percent} within ${window}` : `Codex Resets estimates ${percent}`),
   watchUntil: (time) => `Watching until ${time}`,
   quietTitle: "No new reset announced",
-  lastReset: (ago) => `Last one ${ago} ago`,
+  latestTitle: "Latest reset",
   forecastTitle: "Chance of a reset soon (this app's own estimate)",
   horizon: (days) => ({ 1: "next 24 hours", 3: "next 3 days", 7: "next 7 days" })[days],
   forecastNote: (count) => `Based on ${count} recorded resets; recent ones count more than old ones.`,

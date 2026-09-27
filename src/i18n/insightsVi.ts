@@ -147,7 +147,7 @@ export const insightsVi: InsightsMessages = {
   watchChance: (percent, window) => (window ? `Codex Resets ước tính ${percent} trong ${window}` : `Codex Resets ước tính ${percent}`),
   watchUntil: (time) => `Theo dõi đến ${time}`,
   quietTitle: "Chưa có thông báo reset mới",
-  lastReset: (ago) => `Lần gần nhất ${ago} trước`,
+  latestTitle: "Lần reset gần nhất",
   forecastTitle: "Khả năng sắp có reset (ứng dụng tự ước tính)",
   horizon: (days) => ({ 1: "24 giờ tới", 3: "3 ngày tới", 7: "7 ngày tới" })[days],
   forecastNote: (count) => `Tính từ ${count} lần reset đã ghi nhận; lần gần đây được tính nặng hơn lần cũ.`,

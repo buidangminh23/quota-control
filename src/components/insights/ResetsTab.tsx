@@ -1,13 +1,13 @@
 /**
- * The Reset tab: whether a Codex reset is announced or hinted at (codex-resets.com, which follows
- * @thsottiaux on X), this app's estimate of the chance of one soon with how long the current wait
+ * The Reset tab: when the latest Codex reset was, whether another is announced or hinted at
+ * (codex-resets.com, which follows @thsottiaux on X), this app's estimate of the chance of one soon with how long the current wait
  * is against past gaps, a calendar of the last weeks, when in the week and the day announcements
  * land, the history's statistics and the latest resets with links to their posts.
  */
 import { Fragment, useMemo, useState } from "react";
 import { insightsFor, type InsightsMessages } from "@/i18n/insights";
 import type { Language } from "@/i18n";
-import { compactDuration, shortTime, type TimeFormat } from "@/model/format";
+import { compactDuration, shortTime, timeOnDayLabel, type TimeFormat } from "@/model/format";
 import {
   activeWatch,
   announcementPattern,
@@ -29,7 +29,7 @@ import { useNow, useSettings } from "@/state/hooks";
 import { useInsights } from "@/state/insights";
 import { tooltipProps } from "../ui/tooltip";
 import { useFeeds } from "./data";
-import { agoText, dateText, Disclosure, FeedStatus, LinkButton, numberText, percentText, RateBar, SourceLine } from "./parts";
+import { agoText, dateText, Disclosure, FeedStatus, LinkButton, numberText, percentText, RateBar, sinceText, SourceLine } from "./parts";
 
 const HISTORY_PREVIEW = 8;
 const SITE_URL = "https://codex-resets.com";
@@ -69,12 +69,24 @@ function dueLine(due: Date, now: Date, language: Language, text: InsightsMessage
   return ago ? text.scheduledOverdue(ago) : null;
 }
 
+/** The latest reset the way codex-resets.com leads with it: how long ago in large type, then when. */
+function LatestReset({ reset, language, timeFormat, text }: { reset: CodexReset; language: Language; timeFormat: TimeFormat; text: InsightsMessages }) {
+  const now = useNow();
+  const moment = timeOnDayLabel(reset.announcedAt, now, timeFormat, language, false);
+  return (
+    <article className="uc-card uc-reset-latest">
+      <span className="uc-reset-latest-title">{text.latestTitle}</span>
+      <span className="uc-reset-latest-ago">{sinceText(reset.announcedAt, now, language)}</span>
+      <span className="uc-reset-meta uc-num">{reset.kind === "banked" ? `${moment} · ${text.kind("banked")}` : moment}</span>
+    </article>
+  );
+}
+
 function StatusCards({ status, resets, language, timeFormat, text }: { status: ResetStatus | null; resets: CodexReset[]; language: Language; timeFormat: TimeFormat; text: InsightsMessages }) {
   const now = useNow();
   const watch = activeWatch(status, now);
   const scheduled = status?.scheduled ?? null;
   const last = resets[0] ?? null;
-  const lastAgo = last ? agoText(last.announcedAt, now, language) : null;
   const due = scheduled?.scheduledFor ? dueLine(scheduled.scheduledFor, now, language, text) : null;
 
   return (
@@ -105,7 +117,6 @@ function StatusCards({ status, resets, language, timeFormat, text }: { status: R
       {!scheduled && !watch && (status || last) ? (
         <article className="uc-card uc-reset-status">
           <span className="uc-reset-status-title">{text.quietTitle}</span>
-          {lastAgo ? <span className="uc-reset-meta">{text.lastReset(lastAgo)}</span> : null}
         </article>
       ) : null}
     </>
@@ -319,6 +330,7 @@ export function ResetsTab() {
       {!loaded ? <p className="uc-empty">{text.loading}</p> : null}
       {empty ? <p className="uc-insight-error">{text.failed(error ?? "")}</p> : null}
       {stale && !empty ? <p className="uc-insight-note">{text.staleNote}</p> : null}
+      {resets[0] ? <LatestReset reset={resets[0]} language={language} timeFormat={timeFormat} text={text} /> : null}
       <StatusCards status={status} resets={resets} language={language} timeFormat={timeFormat} text={text} />
       {resets.length > 0 ? (
         <>

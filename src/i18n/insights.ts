@@ -115,7 +115,7 @@ export interface InsightsMessages {
   watchChance(percent: string, window: string): string;
   watchUntil(time: string): string;
   quietTitle: string;
-  lastReset(ago: string): string;
+  latestTitle: string;
   forecastTitle: string;
   horizon(days: ForecastHorizon): string;
   forecastNote(count: string): string;

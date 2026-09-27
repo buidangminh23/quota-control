@@ -181,6 +181,10 @@ describe("Reset tab", () => {
     await renderApp();
     openTab("Reset");
     expect(await screen.findByText("Đã hẹn reset")).toBeInTheDocument();
+    const latest = screen.getByText("Lần reset gần nhất").closest("article")!;
+    expect(within(latest).getByText(/^\d+ (phút|giờ|ngày) trước$/)).toBeInTheDocument();
+    expect(within(latest).getByText(/^\d{1,2}:\d{2} · (T[2-7]|CN) \d{2}\/\d{2} · Lượt để dành$/)).toBeInTheDocument();
+    expect(latest.compareDocumentPosition(screen.getByText("Đã hẹn reset")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByText(/we’ll reset usage limits for all paid users/)).toBeInTheDocument();
     expect(screen.getByText("Khả năng sắp có reset (ứng dụng tự ước tính)")).toBeInTheDocument();
     for (const horizon of ["24 giờ tới", "3 ngày tới", "7 ngày tới"]) expect(screen.getByText(horizon)).toBeInTheDocument();

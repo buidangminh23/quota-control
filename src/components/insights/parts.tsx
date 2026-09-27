@@ -6,7 +6,7 @@
 import { useState, type ReactNode } from "react";
 import type { Language } from "@/i18n";
 import type { InsightsMessages } from "@/i18n/insights";
-import { decimal } from "@/i18n/numbers";
+import { decimal, localeOf } from "@/i18n/numbers";
 import { backend } from "@/lib/backend";
 import type { PublicFeedName, PublicFeedSnapshot } from "@/lib/insightsTypes";
 import { compactDuration } from "@/model/format";
@@ -150,6 +150,16 @@ export function agoText(iso: string | Date | null | undefined, now: Date, langua
   const time = iso instanceof Date ? iso.getTime() : new Date(iso).getTime();
   if (Number.isNaN(time)) return null;
   return compactDuration(Math.max(60, (now.getTime() - time) / 1000), language);
+}
+
+/** How long ago in its largest whole unit, the way a feed says it: `15 giờ trước`, `3 days ago`. */
+export function sinceText(date: Date, now: Date, language: Language): string {
+  const minutes = Math.max(1, Math.floor((now.getTime() - date.getTime()) / 60_000));
+  const hours = Math.floor(minutes / 60);
+  const format = new Intl.RelativeTimeFormat(localeOf(language), { numeric: "always" });
+  if (hours < 1) return format.format(-minutes, "minute");
+  if (hours < 24) return format.format(-hours, "hour");
+  return format.format(-Math.floor(hours / 24), "day");
 }
 
 /** A calendar date in the device's zone (or `timeZone`): `26/09/2026` or `9/26/2026`. */
