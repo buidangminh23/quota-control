@@ -376,7 +376,8 @@ pub async fn begin_account_login(
 }
 
 /// Start a service's browser sign-in: its page opens, and the account is saved beside the API keys
-/// once the browser finished.
+/// once the browser finished. The sign-in is followed to its end even when its page cannot open, so
+/// one whose account was already being saved still reports and leaves the open sign-ins.
 async fn begin_service_login(
     app: AppHandle,
     accounts: &Accounts,
@@ -390,6 +391,11 @@ async fn begin_service_login(
         .begin(known.id(), method, language)
         .await
         .map_err(safe_error)?;
+    tauri::async_runtime::spawn(finish_service_login(
+        app.clone(),
+        started.flow_id.clone(),
+        known.id(),
+    ));
     let browser = match open_login_page(&app, &started.authorization_url) {
         Ok(browser) => browser,
         Err(error) => {
@@ -397,11 +403,6 @@ async fn begin_service_login(
             return Err(error);
         }
     };
-    tauri::async_runtime::spawn(finish_service_login(
-        app.clone(),
-        started.flow_id.clone(),
-        known.id(),
-    ));
     Ok(LoginOpened {
         flow_id: started.flow_id,
         authorization_url: started.authorization_url,
