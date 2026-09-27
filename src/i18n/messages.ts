@@ -303,10 +303,16 @@ export interface AccountsMessages {
   /** The key field's hint for a value other than an API key (a session cookie). */
   pasteValue(what: string): string;
   getKey: string;
+  /** The button that opens the page a session cookie or another kind of key is copied from. */
+  openServicePage(service: string): string;
   saveKey: string;
   keySaved(service: string): string;
   keyStoredNote: string;
   keyEnvNote(variables: string): string;
+  /** How to copy one session cookie's value from the browser. */
+  cookieNote: string;
+  /** How to copy a request's whole Cookie header from the browser. */
+  cookieHeaderNote: string;
   changeService: string;
   hiddenNote: string;
   removeKeyTitle(label: string): string;

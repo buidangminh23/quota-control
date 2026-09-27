@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 use serde_json::Value;
 use uc_core::{
     MetricLine, PlanTerm, Provider, ProviderLink, SharedHttpClient, SimpleProviderError,
@@ -130,6 +131,61 @@ pub struct ApiKeyHelp {
     /// Other values the Accounts screen asks for beside the key, as `(field, English label)`;
     /// they reach the service in the secret next to `apiKey` (`/teamId`).
     pub fields: &'static [(&'static str, &'static str)],
+}
+
+/// The longest key the Accounts screen keeps.
+pub const MAX_KEY_LENGTH: usize = 8192;
+
+/// What a service's key is, so the Accounts screen takes it the way it is copied.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KeyFormat {
+    /// One token without spaces: an API key or an access token.
+    #[default]
+    Token,
+    /// One cookie's value from a signed-in browser session; the key label names the cookie.
+    Cookie,
+    /// A browser's whole `Cookie` request header, `name=value; other=value`, for a service whose
+    /// web session needs every cookie of its site.
+    CookieHeader,
+}
+
+impl KeyFormat {
+    /// The key `raw` stands for, or `None` when it cannot be one. A token must have no spaces
+    /// or line breaks inside, which would mean it was cut or joined. A Cookie header, pasted with
+    /// or without its `Cookie:` name, becomes its `name=value` pairs joined by `; `.
+    pub fn normalize(self, raw: &str) -> Option<String> {
+        let text = raw.trim();
+        let key = match self {
+            KeyFormat::Token | KeyFormat::Cookie => (!text
+                .chars()
+                .any(|character| character.is_whitespace() || character.is_control()))
+            .then(|| text.to_string())?,
+            KeyFormat::CookieHeader => cookie_header(text)?,
+        };
+        (!key.is_empty() && key.len() <= MAX_KEY_LENGTH).then_some(key)
+    }
+}
+
+fn cookie_header(text: &str) -> Option<String> {
+    let body = match text.get(..7) {
+        Some(name) if name.eq_ignore_ascii_case("cookie:") => &text[7..],
+        _ => text,
+    };
+    let pairs: Vec<&str> = body
+        .split(';')
+        .map(str::trim)
+        .filter(|pair| !pair.is_empty())
+        .collect();
+    let valid = !pairs.is_empty()
+        && pairs.iter().all(|pair| {
+            pair.split_once('=')
+                .is_some_and(|(name, _)| !name.is_empty())
+                && !pair
+                    .chars()
+                    .any(|character| character.is_whitespace() || character.is_control())
+        });
+    valid.then(|| pairs.join("; "))
 }
 
 /// The folders logins are read from. Tests point them at a temporary directory.
@@ -318,6 +374,12 @@ pub trait Service: Send + Sync + 'static {
         "API key"
     }
 
+    /// What the key field takes: one token, or for a web session that needs every cookie of its
+    /// site, the whole Cookie header.
+    fn key_format(&self) -> KeyFormat {
+        KeyFormat::Token
+    }
+
     /// The logins the service's own apps saved under `roots`. Reads files only, never the network,
     /// and never writes: renewing a login stays the app's job.
     fn discover(&self, _roots: &Roots) -> Vec<Login> {
@@ -329,4 +391,49 @@ pub trait Service: Send + Sync + 'static {
 
     /// The account's current usage.
     async fn fetch(&self, context: &FetchContext<'_>) -> Result<Reading, SimpleProviderError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_token_keeps_no_inner_spaces() {
+        let token = KeyFormat::Token;
+        assert_eq!(
+            token.normalize("  sk-abc123\n").as_deref(),
+            Some("sk-abc123")
+        );
+        assert_eq!(token.normalize(""), None);
+        assert_eq!(token.normalize("sk-abc 123"), None);
+        assert_eq!(token.normalize("sk-abc\n123"), None);
+        assert_eq!(token.normalize(&"k".repeat(MAX_KEY_LENGTH + 1)), None);
+        assert_eq!(
+            KeyFormat::Cookie.normalize(" eyJhbGciOi.x ").as_deref(),
+            Some("eyJhbGciOi.x")
+        );
+        assert_eq!(KeyFormat::Cookie.normalize("a=1; b=2"), None);
+    }
+
+    #[test]
+    fn a_cookie_header_is_kept_as_its_pairs() {
+        let header = KeyFormat::CookieHeader;
+        assert_eq!(
+            header
+                .normalize(" Cookie: session=a1;  theme=dark ; ")
+                .as_deref(),
+            Some("session=a1; theme=dark")
+        );
+        assert_eq!(header.normalize("cookie:sid=x").as_deref(), Some("sid=x"));
+        assert_eq!(
+            header.normalize("session=a=b==").as_deref(),
+            Some("session=a=b==")
+        );
+        assert_eq!(header.normalize(""), None);
+        assert_eq!(header.normalize("Cookie:"), None);
+        assert_eq!(header.normalize("just-a-token"), None);
+        assert_eq!(header.normalize("=value"), None);
+        assert_eq!(header.normalize("a=1; b 2=3"), None);
+        assert_eq!(header.normalize("a=1\nb=2"), None);
+    }
 }

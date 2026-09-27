@@ -242,7 +242,7 @@ fn read(body: &Value, now: DateTime<Utc>) -> Result<Reading, SimpleProviderError
         return Err(if code.starts_with("AuthFailure") {
             http::expired("CodeBuddy refused the saved key. Replace it in Accounts.")
         } else {
-            http::not_available(format!("CodeBuddy could not return usage (error {code})."))
+            http::not_available("CodeBuddy could not return usage. Try again later.")
         });
     }
     let packages: Vec<Package> = response
@@ -357,6 +357,39 @@ fn meters(packages: &[Package], now: DateTime<Utc>) -> Vec<MetricLine> {
     meters.extend(allowance(MONTHLY, &monthly, lines::MONTH_MS, now));
     meters.extend(allowance(DAILY, &daily, lines::DAY_MS, now));
     meters.push(bonus(&one_shot));
+    let mut names = std::collections::HashMap::<String, usize>::new();
+    for package in packages {
+        let base = package.name.as_deref().unwrap_or("Credit Package");
+        let base = if [MONTHLY, DAILY, BONUS].contains(&base) {
+            format!("Package: {base}")
+        } else {
+            base.to_string()
+        };
+        let seen = names.entry(base.clone()).or_default();
+        *seen += 1;
+        let label = if *seen == 1 {
+            base
+        } else {
+            format!("{base} ({seen})")
+        };
+        meters.push(if package.refills {
+            lines::count(
+                &label,
+                package.used,
+                package.size,
+                UNIT,
+                package.cycle_end,
+                package.cycle(),
+            )
+        } else {
+            MetricLine::Values(ValuesLine {
+                label,
+                values: vec![MetricValue::count(package.left, UNIT)],
+                expiries_at: package.expires.into_iter().collect(),
+                ..ValuesLine::default()
+            })
+        });
+    }
     meters
 }
 
@@ -610,7 +643,21 @@ mod tests {
         let reading = CodeBuddy.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan.as_deref(), Some("Pro"));
         let labels: Vec<&str> = reading.lines.iter().map(MetricLine::label).collect();
-        assert_eq!(labels, ["Monthly", "Daily", "Bonus Credits"]);
+        assert_eq!(
+            labels,
+            [
+                "Monthly",
+                "Daily",
+                "Bonus Credits",
+                "Pro",
+                "Free Base",
+                "Daily Bonus",
+                "Activity Gift",
+                "Top-up Pack",
+                "Used Gift"
+            ]
+        );
+        assert_eq!(progress(&reading.lines[3]).1, 320.25);
 
         let (_, used, limit, resets_at, period) = progress(&reading.lines[0]);
         assert!((used - 326.79).abs() < 1e-9);
@@ -680,7 +727,7 @@ mod tests {
             .on("POST", CHINA, 200, &answer(packages()));
         let scope = context_at(&http, key(), now());
         let reading = CodeBuddy.fetch(&scope.context()).await.unwrap();
-        assert_eq!(reading.lines.len(), 3);
+        assert_eq!(reading.lines.len(), 9);
         CodeBuddy.fetch(&scope.context()).await.unwrap();
         let requests = http.requests();
         let urls: Vec<&str> = requests
@@ -829,7 +876,7 @@ mod tests {
         assert_eq!(error.category, ErrorCategory::NotAvailable);
         assert_eq!(
             error.message,
-            "CodeBuddy could not return usage (error InternalError)."
+            "CodeBuddy could not return usage. Try again later."
         );
     }
 
@@ -859,7 +906,7 @@ mod tests {
         let reading = CodeBuddy.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan.as_deref(), Some("Free Base"));
         let labels: Vec<&str> = reading.lines.iter().map(MetricLine::label).collect();
-        assert_eq!(labels, ["Monthly", "Bonus Credits"]);
+        assert_eq!(labels, ["Monthly", "Bonus Credits", "Free Base"]);
         let MetricLine::Values(bonus) = &reading.lines[1] else {
             panic!("expected a values line")
         };

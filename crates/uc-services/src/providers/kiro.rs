@@ -352,6 +352,42 @@ async fn usage_limits(
 /// The card's meters: plan credits, bonus credits and overage from the `CREDIT` breakdown, or the
 /// first request allowance of an account still on request-based plans.
 fn meters(body: &Value, now: DateTime<Utc>) -> Vec<MetricLine> {
+    let mut rows = aggregate_meters(body, now);
+    for entry in body
+        .get("usageBreakdownList")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(kind) =
+            value::text(entry, "/resourceType").filter(|kind| !kind.eq_ignore_ascii_case("CREDIT"))
+        else {
+            continue;
+        };
+        let Some(used) = amount(entry, "currentUsage").filter(|used| *used >= 0.0) else {
+            continue;
+        };
+        let label = value::text(entry, "/displayName")
+            .map(str::to_string)
+            .or_else(|| lines::plan_name(kind))
+            .unwrap_or_else(|| kind.to_string());
+        let unit = value::text(entry, "/unit").unwrap_or("requests");
+        let reset = value::time(entry, "/nextDateReset")
+            .or_else(|| value::time(body, "/nextDateReset"))
+            .or_else(|| value::time(body, "/resetDate"));
+        rows.push(
+            match amount(entry, "usageLimit").filter(|limit| *limit > 0.0) {
+                Some(limit) => {
+                    lines::count(&label, used, limit, unit, reset, Some(lines::MONTH_MS))
+                }
+                None => lines::count_value(&label, used, unit),
+            },
+        );
+    }
+    rows
+}
+
+fn aggregate_meters(body: &Value, now: DateTime<Utc>) -> Vec<MetricLine> {
     let entries: &[Value] = body
         .get("usageBreakdownList")
         .and_then(Value::as_array)
@@ -1000,7 +1036,7 @@ mod tests {
             {"resourceType": "VIBE", "currentUsage": 12, "usageLimit": 50}
         ]});
         assert_eq!(
-            rows(&meters(&body, now())),
+            rows(&aggregate_meters(&body, now())),
             vec![(
                 "Requests".into(),
                 12.0,
@@ -1009,6 +1045,20 @@ mod tests {
                 october(1),
                 Some(lines::MONTH_MS)
             )]
+        );
+        let all = meters(&body, now());
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[1], lines::count_value("Spec", 3.0, "requests"));
+        assert_eq!(
+            all[2],
+            lines::count(
+                "Vibe",
+                12.0,
+                50.0,
+                "requests",
+                october(1),
+                Some(lines::MONTH_MS)
+            )
         );
     }
 

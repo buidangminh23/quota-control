@@ -303,6 +303,33 @@ fn read_limits(data: &Value, now: DateTime<Utc>) -> Result<Vec<MetricLine>, Simp
         })
         .collect();
     meters.extend(searches);
+    let mut resources = std::collections::BTreeMap::<String, f64>::new();
+    for entry in limits {
+        for detail in entry
+            .get("usageDetails")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let (Some(model), Some(used)) = (
+                value::text(detail, "/modelCode"),
+                value::number(detail, "/usage").filter(|used| *used >= 0.0),
+            ) {
+                let label = match model {
+                    "search-prime" => "Search Prime",
+                    "web-reader" => "Web Reader",
+                    "zread" => "Zread",
+                    other => other,
+                };
+                *resources.entry(label.to_string()).or_default() += used;
+            }
+        }
+    }
+    meters.extend(
+        resources
+            .into_iter()
+            .map(|(label, used)| lines::count_value(&label, used, "calls")),
+    );
     MetricLine::append_no_data_if_needed(&mut meters);
     Ok(meters)
 }
@@ -543,6 +570,9 @@ mod tests {
                     at(1785292686976),
                     Some(lines::MONTH_MS)
                 ),
+                lines::count_value("Search Prime", 0.0, "calls"),
+                lines::count_value("Web Reader", 0.0, "calls"),
+                lines::count_value("Zread", 0.0, "calls"),
             ]
         );
         let requests = http.requests();

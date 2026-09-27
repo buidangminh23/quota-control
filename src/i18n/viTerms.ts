@@ -165,7 +165,400 @@ const EXACT: Readonly<Record<string, string>> = {
   "xAI deducts this month's spend from this balance after the month closes.":
     "xAI trừ khoản chi của tháng này vào số dư sau khi hết tháng.",
   "The saved API key could not be read. Add it again in Accounts.": "Không đọc được API key đã lưu. Hãy thêm lại trong Tài khoản.",
+  Activity: "Hoạt động",
+  "API Keys": "API key",
+  Billing: "Thanh toán",
+  Cost: "Chi phí",
+  Dashboard: "Bảng điều khiển",
+  Limits: "Hạn mức",
+  Plans: "Các gói",
+  Usage: "Mức dùng",
+  "Actual Cost": "Chi phí thực tế",
+  "Add-on": "Gói bổ sung",
+  "Agent Hours": "Giờ agent",
+  "Agent Session": "Agent (phiên)",
+  "Amount Owed": "Số tiền còn nợ",
+  Audio: "Âm thanh",
+  "Billable Audio": "Âm thanh tính phí",
+  "Billable Usage": "Mức dùng tính phí",
+  "Billing Cycle": "Kỳ thanh toán",
+  Bonus: "Thưởng",
+  Budget: "Ngân sách",
+  "Budget Pool": "Quỹ ngân sách",
+  Cash: "Tiền mặt",
+  "Cash Balance": "Số dư tiền mặt",
+  Characters: "Ký tự",
+  "Core Session": "Phiên Core",
+  "Credit limit": "Hạn mức tín dụng",
+  "Credit Package": "Gói tín dụng",
+  "Credit-funded tokens": "Token trả bằng tín dụng",
+  "Credits Used": "Tín dụng đã dùng",
+  "Daily Images": "Ảnh mỗi ngày",
+  "Daily Input Tokens": "Token đầu vào mỗi ngày",
+  "Daily Neurons": "Neuron mỗi ngày",
+  Energy: "Năng lượng",
+  Event: "Sự kiện",
+  "Flex Credits": "Tín dụng Flex",
+  "Flow Actions": "Lượt Flow Action",
+  General: "Chung",
+  "Gross Inference Usage": "Tổng mức dùng suy luận",
+  "Image Generation": "Tạo ảnh",
+  "Image to Video": "Ảnh thành video",
+  Inactive: "Không hoạt động",
+  "Included Inference Amount": "Mức suy luận kèm gói",
+  Input: "Đầu vào",
+  Output: "Đầu ra",
+  "Key Allowance": "Hạn mức của key",
+  "Key Status": "Trạng thái key",
+  Lifetime: "Từ trước đến nay",
+  "Lifetime Cost": "Chi phí từ trước đến nay",
+  "Lifetime Energy": "Năng lượng từ trước đến nay",
+  "Lifetime Requests": "Yêu cầu từ trước đến nay",
+  "Lifetime Tokens": "Token từ trước đến nay",
+  Loaded: "Đã nạp",
+  Memory: "Bộ nhớ",
+  Messages: "Tin nhắn",
+  Model: "Mô hình",
+  "Monthly Budget": "Ngân sách tháng",
+  "Music Generation": "Tạo nhạc",
+  Neurons: "Neuron",
+  "Next Credit Refill": "Lần nạp tín dụng tới",
+  "No allowance": "Không có hạn mức",
+  "Outstanding invoices": "Hóa đơn chưa thanh toán",
+  "Overdraft limit": "Hạn mức thấu chi",
+  "Pending charges": "Khoản phí đang chờ",
+  Personal: "Cá nhân",
+  "Personal Budget": "Ngân sách cá nhân",
+  Premium: "Cao cấp",
+  "Professional Voices": "Giọng chuyên nghiệp",
+  Provider: "Nhà cung cấp",
+  Purchased: "Đã mua",
+  Quota: "Hạn mức",
+  "Quota Usage (24h Peak)": "Mức dùng hạn mức (đỉnh 24 giờ)",
+  Refresh: "Làm mới",
+  "Requests Per Day": "Yêu cầu mỗi ngày",
+  "Requests Per Hour": "Yêu cầu mỗi giờ",
+  "Requests Per Minute": "Yêu cầu mỗi phút",
+  "Rest of Organization": "Phần còn lại của tổ chức",
+  Savings: "Tiết kiệm được",
+  "Secondary Budget": "Ngân sách phụ",
+  Shared: "Dùng chung",
+  "Shared Pool": "Quỹ dùng chung",
+  Standard: "Tiêu chuẩn",
+  Stored: "Đã lưu",
+  Subscription: "Gói đăng ký",
+  Custom: "Tùy chỉnh",
+  "Team Budget": "Ngân sách nhóm",
+  "Team Spend": "Chi tiêu nhóm",
+  "Text to Speech": "Văn bản thành giọng nói",
+  "Text to Video": "Văn bản thành video",
+  "This Month": "Tháng này",
+  "This Month Cost": "Chi phí tháng này",
+  "This Month Energy": "Năng lượng tháng này",
+  "This Month Requests": "Yêu cầu tháng này",
+  "This Month Tokens": "Token tháng này",
+  Tokens: "Token",
+  "Tokens Per Day": "Token mỗi ngày",
+  "Tokens Per Hour": "Token mỗi giờ",
+  "Tokens Per Minute": "Token mỗi phút",
+  "Trial Tokens": "Token dùng thử",
+  Unavailable: "Không khả dụng",
+  Unknown: "Không rõ",
+  "Unknown Model": "Mô hình không rõ",
+  Used: "Đã dùng",
+  Version: "Phiên bản",
+  Video: "Video",
+  "Voice Slots": "Số giọng tùy chỉnh",
+  "Voucher Balance": "Số dư voucher",
+  "Weekly Input Tokens": "Token đầu vào mỗi tuần",
+  "Weekly Spend": "Chi tiêu tuần",
+  "Your Shared Usage": "Mức dùng chung của bạn",
+  bytes: "byte",
+  calls: "lượt gọi",
+  characters: "ký tự",
+  hours: "giờ",
+  images: "ảnh",
+  messages: "tin nhắn",
+  models: "mô hình",
+  neurons: "neuron",
+  points: "điểm",
+  units: "đơn vị",
+  voices: "giọng",
+  "Access token": "access token",
+  "API key (optional for local daemon)": "API key (không bắt buộc với daemon trên máy)",
+  "Atlas Cloud API key": "API key Atlas Cloud",
+  "Charm Hyper API key": "API key Charm Hyper",
+  "Coding Plan API key": "API key Coding Plan",
+  "Connection label (not sent)": "tên gợi nhớ kết nối (không gửi đi)",
+  "DevPass API key": "API key DevPass",
+  "GitKraken access token": "access token GitKraken",
+  "Google OAuth access token": "access token Google OAuth",
+  "Hugging Face access token": "access token Hugging Face",
+  "Management API key": "API key quản lý",
+  "Secret access key": "secret access key",
+  "Session bearer token (Authorization)": "bearer token của phiên (Authorization)",
+  "Session token": "token phiên",
+  "Virtual key": "virtual key",
+  "Account ID": "ID tài khoản",
+  "Account slug": "Slug tài khoản",
+  "Account username": "Tên người dùng tài khoản",
+  "API organization ID": "ID tổ chức API",
+  "API URL (optional)": "Địa chỉ API (không bắt buộc)",
+  "AWS region": "Vùng AWS",
+  "CSRF cookie (csrftoken)": "Cookie CSRF (csrftoken)",
+  "CSRF cookie (login_aliyunid_csrf)": "Cookie CSRF (login_aliyunid_csrf)",
+  "CSRF token (optional)": "CSRF token (không bắt buộc)",
+  "Dashboard (default: cloud.helmcode.com, or cloud.nan.builders)": "Trang quản lý (mặc định: cloud.helmcode.com, hoặc cloud.nan.builders)",
+  "Google Cloud project ID": "ID dự án Google Cloud",
+  "Organization account (true or false)": "Tài khoản tổ chức (true hoặc false)",
+  "Portal URL": "Địa chỉ Portal",
+  "Project ID (optional)": "ID dự án (không bắt buộc)",
+  "Region (default: cn-beijing)": "Vùng (mặc định: cn-beijing)",
+  "Scope (optional)": "Phạm vi (không bắt buộc)",
+  "Security token (sec_token)": "Mã bảo mật (sec_token)",
+  "Server address": "Địa chỉ máy chủ",
+  "Session token (optional)": "Token phiên (không bắt buộc)",
+  "Show model activity (true or false)": "Hiện hoạt động theo mô hình (true hoặc false)",
+  "User ID cookie (userId)": "Cookie ID người dùng (userId)",
+  "Workspace ID": "ID không gian làm việc",
+  "Paste only the cookie's value, without spaces or line breaks": "Chỉ dán phần giá trị của cookie, không có khoảng trắng hay xuống dòng",
+  "Paste the whole Cookie header: name=value pairs separated by semicolons":
+    "Dán nguyên Cookie header: các cặp name=value cách nhau bằng dấu chấm phẩy",
+  "Could not report how the sign-in ended": "Không báo được kết quả đăng nhập",
+  "Unsupported account provider": "Nhà cung cấp tài khoản không được hỗ trợ",
+  "Anthropic refused this Admin API key; it may have expired or been disabled. Create a new one at platform.claude.com/settings/admin-keys.":
+    "Anthropic từ chối Admin API key này; key có thể đã hết hạn hoặc bị vô hiệu hóa. Hãy tạo key mới tại platform.claude.com/settings/admin-keys.",
+  "Anthropic shares costs only with an Admin API key (sk-ant-admin…). Create one at platform.claude.com/settings/admin-keys.":
+    "Anthropic chỉ cho xem chi phí bằng Admin API key (sk-ant-admin…). Hãy tạo một key tại platform.claude.com/settings/admin-keys.",
+  "Antigravity sign-in expired. Open Antigravity or run agy to renew it.":
+    "Phiên đăng nhập Antigravity đã hết hạn. Hãy mở Antigravity hoặc chạy agy để gia hạn.",
+  "Bifrost virtual key is inactive and has no quotas to display.": "Virtual key Bifrost đang không hoạt động nên không có hạn mức để hiện.",
+  "Cannot read the Zed login from the system keychain. Allow access when the system asks again.":
+    "Không đọc được thông tin đăng nhập Zed trong kho khóa của hệ thống. Hãy cho phép truy cập khi hệ thống hỏi lại.",
+  "Cerebras did not provide readable rate-limit headers on its model list. No inference request was sent.":
+    "Cerebras không trả về thông tin giới hạn tốc độ đọc được trong danh sách mô hình. Không có yêu cầu suy luận nào được gửi đi.",
+  "Check the Doubao access key ID and region.": "Hãy kiểm tra access key ID và vùng của Doubao.",
+  "Chutes refused this API key. Check it, or create a key with account access.":
+    "Chutes từ chối API key này. Hãy kiểm tra lại, hoặc tạo key có quyền truy cập tài khoản.",
+  "Cloudflare could not provide Workers AI analytics for this account.":
+    "Cloudflare chưa cung cấp được số liệu Workers AI cho tài khoản này.",
+  "Cloudflare did not expose the Workers AI neuron analytics fields required by this reader.":
+    "Cloudflare không trả về các trường số liệu neuron Workers AI mà ứng dụng cần.",
+  "Cloudflare model details may be truncated; the daily total includes all models.":
+    "Chi tiết theo mô hình của Cloudflare có thể bị cắt bớt; tổng trong ngày vẫn gồm mọi mô hình.",
+  "Cloudflare refused analytics access. Add Account Analytics Read permission for this account to the API token.":
+    "Cloudflare từ chối quyền xem số liệu. Hãy thêm quyền Account Analytics Read của tài khoản này vào API token.",
+  "CloudWatch activity is unavailable or incomplete; monthly spend is current.":
+    "Hoạt động CloudWatch chưa có hoặc chưa đầy đủ; chi tiêu tháng vẫn là mới nhất.",
+  "CodeBuddy could not return usage. Try again later.": "CodeBuddy chưa trả về được mức dùng. Hãy thử lại sau.",
+  "CodeRabbit usage currently requires launching its CLI; no verified read-only HTTP usage endpoint is available.":
+    "Hiện chỉ xem được mức dùng CodeRabbit bằng cách chạy CLI của họ; chưa có địa chỉ HTTP chỉ đọc nào được xác minh.",
+  "Command Code refused this API key. Check it or copy a new one from commandcode.ai/studio.":
+    "Command Code từ chối API key này. Hãy kiểm tra lại hoặc chép key mới từ commandcode.ai/studio.",
+  "Copilot usage data is unavailable for this account.": "Tài khoản này không có dữ liệu mức dùng Copilot.",
+  "Cost Explorer returned more pages than this refresh can safely read. No partial spend is shown.":
+    "Cost Explorer trả về nhiều trang hơn mức một lần làm mới đọc an toàn được. Không hiện chi tiêu dở dang.",
+  "Couldn't read your Command Code plan, so its monthly allowance may be missing. Usage below is still up to date.":
+    "Chưa đọc được gói Command Code của bạn nên có thể thiếu hạn mức tháng. Mức dùng bên dưới vẫn là mới nhất.",
+  "Couldn't read your Ollama plan. Usage below is still up to date.":
+    "Chưa đọc được gói Ollama của bạn. Mức dùng bên dưới vẫn là mới nhất.",
+  "Couldn't read ~/.ollama/id_ed25519. Check the file's permissions.":
+    "Không đọc được ~/.ollama/id_ed25519. Hãy kiểm tra quyền truy cập tệp.",
+  "Cursor request-based usage data unavailable. Try again later.": "Chưa có dữ liệu mức dùng theo yêu cầu của Cursor. Hãy thử lại sau.",
+  "DeepInfra has suspended this account. Check the billing dashboard.":
+    "DeepInfra đã tạm khóa tài khoản này. Hãy kiểm tra trang thanh toán.",
+  "Devin quota data unavailable. Try again later.": "Chưa có dữ liệu hạn mức Devin. Hãy thử lại sau.",
+  "Doubao could not return plan usage. Try again later.": "Doubao chưa trả về được mức dùng của gói. Hãy thử lại sau.",
+  "Doubao refused the access key or its plan permissions. Check the saved credentials.":
+    "Doubao từ chối access key hoặc quyền xem gói. Hãy kiểm tra thông tin đã lưu.",
+  "Enter a Volcengine access key ID and secret access key. Ark API keys cannot read plan usage here.":
+    "Hãy nhập access key ID và secret access key của Volcengine. API key Ark không xem được mức dùng gói ở đây.",
+  "Enter the Bifrost virtual key.": "Hãy nhập virtual key Bifrost.",
+  "Enter the Doubao secret access key.": "Hãy nhập secret access key Doubao.",
+  "Enter the Notion workspace ID.": "Hãy nhập ID không gian làm việc Notion.",
+  "Enter the Qwen Cloud sec_token from a signed-in usage request.":
+    "Hãy nhập sec_token của Qwen Cloud lấy từ một yêu cầu xem mức dùng khi đã đăng nhập.",
+  "Enterprise usage data unavailable. Try again later.": "Chưa có dữ liệu mức dùng Enterprise. Hãy thử lại sau.",
+  "Fireworks account discovery needs more pages. Enter the account slug.":
+    "Cần đọc thêm trang để tìm tài khoản Fireworks. Hãy nhập slug tài khoản.",
+  "Fireworks has no rated billing costs for the last 30 days.": "Fireworks chưa có chi phí nào được tính trong 30 ngày qua.",
+  "Fireworks returned multiple currencies. Only the first currency is shown.":
+    "Fireworks trả về nhiều loại tiền tệ. Chỉ hiện loại đầu tiên.",
+  "GitHub refused Copilot usage for this login. Check that the account has Copilot, or sign in again.":
+    "GitHub từ chối cho xem mức dùng Copilot với lần đăng nhập này. Hãy kiểm tra tài khoản có Copilot, hoặc đăng nhập lại.",
+  "GitHub reports usage for organization-managed Copilot seats only in the organization's billing.":
+    "GitHub chỉ báo mức dùng của ghế Copilot do tổ chức quản lý trong trang thanh toán của tổ chức.",
+  "Google Monitoring returned no matching Vertex AI quota usage and limits.":
+    "Google Monitoring không trả về mức dùng và hạn mức Vertex AI nào khớp.",
+  "Groq reported no rate limits for this key.": "Groq không báo giới hạn tốc độ nào cho key này.",
+  "IBM Bob returned an untrusted regional API address.": "IBM Bob trả về địa chỉ API theo vùng không đáng tin.",
+  "IBM Bob returned no subscription teams for this key.": "IBM Bob không trả về nhóm đăng ký nào cho key này.",
+  "Invalid Fireworks account slug. Check the account slug in Settings.":
+    "Slug tài khoản Fireworks không hợp lệ. Hãy kiểm tra slug tài khoản trong Cài đặt.",
+  "Invalid GitKraken organization ID. Enter a single ID without whitespace.":
+    "ID tổ chức GitKraken không hợp lệ. Hãy nhập một ID duy nhất, không có khoảng trắng.",
+  "Invalid GitKraken token. Paste only the value after Bearer.": "Token GitKraken không hợp lệ. Hãy chỉ dán phần giá trị sau Bearer.",
+  "JetBrains AI has no positive quota in its local snapshot.": "Bản ghi trên máy của JetBrains AI không có hạn mức nào lớn hơn 0.",
+  "Kimi refused the API key. Use a Kimi Code key; Moonshot platform keys have no Kimi Code quota.":
+    "Kimi từ chối API key. Hãy dùng key Kimi Code; key của nền tảng Moonshot không có hạn mức Kimi Code.",
+  "LiteLLM model activity is incomplete.": "Hoạt động theo mô hình của LiteLLM chưa đầy đủ.",
+  "Manus did not include a credit balance or quota.": "Manus không trả về số dư tín dụng hay hạn mức.",
+  "MiniMax refused this API key. Use a Token Plan key, not a pay-as-you-go key.":
+    "MiniMax từ chối API key này. Hãy dùng key Token Plan, không dùng key trả theo mức dùng.",
+  "MiniMax returned no Token Plan quota for this key.": "MiniMax không trả về hạn mức Token Plan nào cho key này.",
+  "Missing Hugging Face access token.": "Thiếu access token Hugging Face.",
+  "Moonshot refused this API key in both regions.": "Moonshot từ chối API key này ở cả hai vùng.",
+  "Muse Code did not include quota in this login response. Browser team quota is not supported.":
+    "Muse Code không trả về hạn mức trong lần đăng nhập này. Chưa hỗ trợ hạn mức nhóm trên trình duyệt.",
+  "Muse Code requires a device-code login token starting with dca:.": "Muse Code cần token đăng nhập bằng mã thiết bị, bắt đầu bằng dca:.",
+  "Muse Code requires a payment method. Finish billing at https://dev.meta.ai":
+    "Muse Code cần phương thức thanh toán. Hãy hoàn tất thanh toán tại https://dev.meta.ai",
+  "NanoGPT did not provide subscription usage.": "NanoGPT không trả về mức dùng gói đăng ký.",
+  "No active Cursor subscription.": "Không có gói Cursor nào đang hoạt động.",
+  "No active Doubao Coding or Agent Plan quota is available.": "Không có hạn mức Coding Plan hay Agent Plan Doubao nào đang hoạt động.",
+  "No Coding Plan quotas were returned. Token Plan usage requires a browser session that this API key reader does not support.":
+    "Không có hạn mức Coding Plan nào được trả về. Mức dùng Token Plan cần phiên trình duyệt mà cách đọc bằng API key này chưa hỗ trợ.",
+  "No Deepgram projects are available for this key.": "Key này không có dự án Deepgram nào.",
+  "No Muse Code subscription is active on this login.": "Lần đăng nhập này không có gói Muse Code nào đang hoạt động.",
+  "No OpenCode API key is saved for this account.": "Tài khoản này chưa lưu API key OpenCode.",
+  "No OpenCode Go subscription on this key. Zen balance is only shown on opencode.ai.":
+    "Key này không có gói OpenCode Go. Số dư Zen chỉ hiện trên opencode.ai.",
+  "Not signed in to Ollama Cloud. Run ollama signin to see usage.": "Chưa đăng nhập Ollama Cloud. Hãy chạy ollama signin để xem mức dùng.",
+  "Ollama refused the API key. Create a new one at ollama.com/settings/keys.":
+    "Ollama từ chối API key. Hãy tạo key mới tại ollama.com/settings/keys.",
+  "Only the first three Deepgram projects are shown. Enter a Project ID to select one.":
+    "Chỉ hiện ba dự án Deepgram đầu tiên. Hãy nhập ID dự án để chọn một dự án.",
+  "Only the first three IBM Bob teams are included in this reading.": "Lần đọc này chỉ gồm ba nhóm IBM Bob đầu tiên.",
+  "OpenAI refused this Admin API key. Check it or create a new one.":
+    "OpenAI từ chối Admin API key này. Hãy kiểm tra lại hoặc tạo key mới.",
+  "OpenAI usage needs an Admin API key. Project and service account keys cannot read organization costs.":
+    "Xem mức dùng OpenAI cần Admin API key. Key của dự án và tài khoản dịch vụ không xem được chi phí của tổ chức.",
+  "OpenCode rejected its saved key. Run opencode auth login to sign in again.":
+    "OpenCode từ chối key đã lưu. Hãy chạy opencode auth login để đăng nhập lại.",
+  "OpenCode rejected this API key. Create a new one at opencode.ai/auth.":
+    "OpenCode từ chối API key này. Hãy tạo key mới tại opencode.ai/auth.",
+  "OpenRouter rejected this API key. Check it at openrouter.ai/settings/keys.":
+    "OpenRouter từ chối API key này. Hãy kiểm tra tại openrouter.ai/settings/keys.",
+  "Paste the LongCat Cookie header from a signed-in quota request.":
+    "Hãy dán Cookie header LongCat lấy từ một yêu cầu xem hạn mức khi đã đăng nhập.",
+  "Paste the Manus session_id cookie value.": "Hãy dán giá trị cookie session_id của Manus.",
+  "Paste the Mistral ory_session cookie header.": "Hãy dán cookie header ory_session của Mistral.",
+  "Poe history is partial because the usage request limit was reached.": "Lịch sử Poe chưa đầy đủ vì đã chạm giới hạn số lần hỏi mức dùng.",
+  "Poe point history is unavailable; the balance is current.": "Chưa có lịch sử điểm Poe; số dư vẫn là mới nhất.",
+  "Qwen Cloud rejected the session. Sign in and paste fresh session values.":
+    "Qwen Cloud từ chối phiên. Hãy đăng nhập rồi dán các giá trị phiên mới.",
+  "Set the Fireworks account slug to select one billing account.": "Hãy đặt slug tài khoản Fireworks để chọn một tài khoản thanh toán.",
+  "Some NanoGPT subscription counters are temporarily unavailable.": "Một số bộ đếm gói NanoGPT tạm thời chưa có.",
+  "Team request-based usage data unavailable. Try again later.": "Chưa có dữ liệu mức dùng theo yêu cầu của nhóm. Hãy thử lại sau.",
+  "The Amp API key was rejected.": "API key Amp bị từ chối.",
+  "The AWS access key ID is missing.": "Thiếu access key ID AWS.",
+  "The AWS region is invalid.": "Vùng AWS không hợp lệ.",
+  "The balance is not enough for DeepSeek API calls. Top up to continue.": "Số dư không đủ để gọi API DeepSeek. Hãy nạp thêm để tiếp tục.",
+  "The Cloudflare account ID is missing.": "Thiếu ID tài khoản Cloudflare.",
+  "The Cloudflare account ID must contain 32 hexadecimal characters.": "ID tài khoản Cloudflare phải gồm 32 ký tự thập lục phân.",
+  "The Cloudflare API token is missing.": "Thiếu API token Cloudflare.",
+  "The Devin login expired. Run devin auth login or sign in to Devin again.":
+    "Phiên đăng nhập Devin đã hết hạn. Hãy chạy devin auth login hoặc đăng nhập lại Devin.",
+  "The Devin login has no API key. Run devin auth login or sign in to Devin.":
+    "Phiên đăng nhập Devin không có API key. Hãy chạy devin auth login hoặc đăng nhập Devin.",
+  "The ElevenLabs API key needs the user_read permission.": "API key ElevenLabs cần quyền user_read.",
+  "The GitHub CLI login expired. Run gh auth login to renew it.":
+    "Phiên đăng nhập GitHub CLI đã hết hạn. Hãy chạy gh auth login để gia hạn.",
+  "The GitHub Copilot login expired. Sign in to Copilot in your editor again.":
+    "Phiên đăng nhập GitHub Copilot đã hết hạn. Hãy đăng nhập lại Copilot trong trình soạn thảo.",
+  "The Google Cloud project ID contains invalid characters.": "ID dự án Google Cloud có ký tự không hợp lệ.",
+  "The Google Cloud project ID is missing.": "Thiếu ID dự án Google Cloud.",
+  "The Grok CLI login expired. Run grok once to renew it.": "Phiên đăng nhập Grok CLI đã hết hạn. Hãy chạy grok một lần để gia hạn.",
+  "The Grok CLI login has no access token. Run grok login again.":
+    "Phiên đăng nhập Grok CLI không có access token. Hãy chạy lại grok login.",
+  "The Helmcode Cookie header is missing. Add it again in Accounts.": "Thiếu Cookie header Helmcode. Hãy thêm lại trong Tài khoản.",
+  "The Helmcode dashboard must be cloud.helmcode.com or cloud.nan.builders.":
+    "Trang quản lý Helmcode phải là cloud.helmcode.com hoặc cloud.nan.builders.",
+  "The Helmcode dashboard session expired. Sign in again and paste a fresh Cookie header.":
+    "Phiên trang quản lý Helmcode đã hết hạn. Hãy đăng nhập lại rồi dán Cookie header mới.",
+  "The Hugging Face token lacks billing access. Use a classic read token or enable Billing read on a fine-grained token.":
+    "Token Hugging Face không có quyền xem thanh toán. Hãy dùng token đọc kiểu classic hoặc bật quyền Billing read trên token fine-grained.",
+  "The included usage is used up and the balance is empty, so paid models will refuse requests.":
+    "Đã dùng hết phần kèm gói và số dư đã cạn, nên các mô hình trả phí sẽ từ chối yêu cầu.",
+  "The Kilo key or token is missing.": "Thiếu key hoặc token Kilo.",
+  "The last 30 days are only partially available within the four-request limit.":
+    "Trong giới hạn bốn yêu cầu, chỉ lấy được một phần của 30 ngày qua.",
+  "The MiMo session expired. Sign in and paste fresh cookies.": "Phiên MiMo đã hết hạn. Hãy đăng nhập rồi dán cookie mới.",
+  "The MiMo userId cookie is missing or invalid.": "Cookie userId của MiMo bị thiếu hoặc không hợp lệ.",
+  "The Notion token_v2 cookie is missing or invalid.": "Cookie token_v2 của Notion bị thiếu hoặc không hợp lệ.",
+  "The Sakana AI session expired. Sign in again and replace the session cookie.":
+    "Phiên Sakana AI đã hết hạn. Hãy đăng nhập lại và thay cookie phiên.",
+  "The saved Zed login is incomplete. Sign in to Zed again.": "Thông tin đăng nhập Zed đã lưu chưa đầy đủ. Hãy đăng nhập lại Zed.",
+  "The StepFun session token is missing or invalid.": "Token phiên StepFun bị thiếu hoặc không hợp lệ.",
+  "The StepFun token has an invalid device ID.": "Token StepFun có ID thiết bị không hợp lệ.",
+  "The StepFun token has no device ID. Paste the complete Oasis-Token value.":
+    "Token StepFun không có ID thiết bị. Hãy dán nguyên giá trị Oasis-Token.",
+  "The Venice balance is unavailable for API calls.": "Số dư Venice chưa dùng được cho lệnh gọi API.",
+  "The Vertex AI access token expired. Save a fresh access token.": "Access token Vertex AI đã hết hạn. Hãy lưu access token mới.",
+  "The xAI Management key is missing. Add it again in Accounts.": "Thiếu khóa quản lý xAI. Hãy thêm lại trong Tài khoản.",
+  "The xAI Team ID is missing. Add the key again in Accounts with its Team ID, or set XAI_TEAM_ID.":
+    "Thiếu ID nhóm xAI. Hãy thêm lại key trong Tài khoản kèm ID nhóm, hoặc đặt XAI_TEAM_ID.",
+  "The xAI Team ID is not valid. Copy it from the team settings in the xAI Console.":
+    "ID nhóm xAI không hợp lệ. Hãy chép từ phần cài đặt nhóm trong xAI Console.",
+  "The ZenMux Management API key is missing.": "Thiếu API key quản lý ZenMux.",
+  "The ZoomMate session expired. Sign in and paste a fresh bearer token.":
+    "Phiên ZoomMate đã hết hạn. Hãy đăng nhập rồi dán bearer token mới.",
+  "The ZoomMate session token is missing.": "Thiếu token phiên ZoomMate.",
+  "This Aixy gateway does not provide usage. Update it or check the server address.":
+    "Cổng Aixy này không cung cấp mức dùng. Hãy cập nhật hoặc kiểm tra địa chỉ máy chủ.",
+  "This CodeBuddy account has no active credit packages.": "Tài khoản CodeBuddy này không có gói tín dụng nào đang hoạt động.",
+  "This GitHub Copilot login holds no GitHub token. Sign in to Copilot again.":
+    "Phiên đăng nhập GitHub Copilot này không có token GitHub. Hãy đăng nhập lại Copilot.",
+  "This Google account has no Gemini Code Assist project yet. Run gemini once to set it up.":
+    "Tài khoản Google này chưa có dự án Gemini Code Assist. Hãy chạy gemini một lần để thiết lập.",
+  "This key cannot read the team's prepaid credit.": "Key này không xem được tín dụng trả trước của nhóm.",
+  "This key cannot read the team's usage, so Spend This Month is missing.":
+    "Key này không xem được mức dùng của nhóm nên thiếu Chi tiêu tháng này.",
+  "This key's account has no active GLM Coding Plan, so there is no quota to show.":
+    "Tài khoản của key này không có GLM Coding Plan đang hoạt động nên không có hạn mức để hiện.",
+  "This key's account has no active MiniMax Token Plan, so there is no quota to show.":
+    "Tài khoản của key này không có MiniMax Token Plan đang hoạt động nên không có hạn mức để hiện.",
+  "This Kimi account has no Kimi Code subscription, so there is no quota to show.":
+    "Tài khoản Kimi này không có gói Kimi Code nên không có hạn mức để hiện.",
+  "This Notion workspace has no tracked AI allowance.": "Không gian làm việc Notion này không có hạn mức AI được theo dõi.",
+  "This relay's billing endpoints do not identify whether amounts are USD, CNY or tokens. Balance cannot be displayed safely.":
+    "Các địa chỉ thanh toán của relay này không cho biết số tiền tính bằng USD, CNY hay token. Không thể hiện số dư một cách an toàn.",
+  "This Zed account has overdue invoices. Zed may block usage until they are paid.":
+    "Tài khoản Zed này có hóa đơn quá hạn. Zed có thể chặn sử dụng cho tới khi thanh toán.",
+  "TypeSafe billing requires a browser session and a dynamically discovered page action that this reader cannot safely obtain.":
+    "Xem thanh toán TypeSafe cần phiên trình duyệt và một thao tác trang được tìm động mà ứng dụng không lấy được một cách an toàn.",
+  "Vercel AI Gateway does not let this key read the team's credit balance.":
+    "Vercel AI Gateway không cho key này xem số dư tín dụng của nhóm.",
+  "Vercel AI Gateway no longer accepts this OIDC token. OIDC tokens last 12 hours; save an AI Gateway API key instead.":
+    "Vercel AI Gateway không còn chấp nhận token OIDC này. Token OIDC chỉ dùng được 12 giờ; hãy lưu API key AI Gateway thay thế.",
+  "Vertex AI monitoring returned more pages than this refresh can include.":
+    "Số liệu giám sát Vertex AI có nhiều trang hơn mức một lần làm mới đọc được.",
+  "Vertex AI needs a saved access token. This version cannot renew refresh-only gcloud credentials.":
+    "Vertex AI cần access token đã lưu. Phiên bản này chưa gia hạn được thông tin gcloud chỉ có refresh token.",
+  "Windsurf has no cached usage. Open Windsurf and refresh its plan.": "Windsurf chưa có mức dùng lưu sẵn. Hãy mở Windsurf và làm mới gói.",
+  "xAI found no team with this ID. Check the Team ID saved with the key.":
+    "xAI không tìm thấy nhóm có ID này. Hãy kiểm tra ID nhóm đã lưu cùng key.",
+  "xAI refused this key for this team. Use a Management key of this team with billing access.":
+    "xAI từ chối key này cho nhóm này. Hãy dùng khóa quản lý của chính nhóm này, có quyền xem thanh toán.",
+  "xAI refused this key. Use a Management key from the xAI Console (Settings > Management Keys), not an API key.":
+    "xAI từ chối key này. Hãy dùng khóa quản lý từ xAI Console (Settings > Management Keys), không dùng API key.",
+  "xAI returned only part of this month's usage.": "xAI chỉ trả về một phần mức dùng của tháng này.",
+  "xAI shows no prepaid credit for this team.": "xAI không có tín dụng trả trước cho nhóm này.",
+  "Z.ai refused this API key. Check the key or create a new one.": "Z.ai từ chối API key này. Hãy kiểm tra key hoặc tạo key mới.",
+  "Zed refused the saved login. Sign in to Zed again.": "Zed từ chối thông tin đăng nhập đã lưu. Hãy đăng nhập lại Zed.",
+  "~/.ollama/id_ed25519 isn't a usable Ollama signing key.": "~/.ollama/id_ed25519 không phải khóa ký Ollama dùng được.",
 };
+
+const CHUTES_PARTS: Readonly<Record<string, string>> = {
+  "subscription usage": "mức dùng gói",
+  "daily quota": "hạn mức ngày",
+  balance: "số dư",
+};
+
+/** The Vietnamese of an English part of a composed label, or the part itself. */
+function term(text: string | undefined): string {
+  return text === undefined ? "" : (EXACT[text] ?? text);
+}
 
 const LOCAL_SOURCE_NOTE =
   /^(Today\. )?All local sessions on this machine; not account-scoped\. Input includes cached tokens; output is model-generated\. Costs estimate API-equivalent usage using bundled (\d{4})-(\d{2})-(\d{2}) prices, not subscription charges\.$/;
@@ -202,6 +595,38 @@ const PATTERNS: ReadonlyArray<readonly [RegExp, (match: RegExpExecArray) => stri
   [/^The (.+) server address cannot have a query or fragment\.$/, (m) => `Địa chỉ máy chủ ${m[1]} không được có phần truy vấn hay dấu #.`],
   [/^The (.+) server address must start with https:\/\/\.$/, (m) => `Địa chỉ máy chủ ${m[1]} phải bắt đầu bằng https://.`],
   [/^(.+) is not supported yet\.$/, (m) => `${m[1]} chưa được hỗ trợ.`],
+  [/^The (.+) server address must use https:\/\/, or http:\/\/ to this computer\.$/, (m) => `Địa chỉ máy chủ ${m[1]} phải dùng https://, hoặc http:// tới chính máy này.`],
+  [/^The (.+) server address must use https:\/\/, or http:\/\/ to a private network\.$/, (m) => `Địa chỉ máy chủ ${m[1]} phải dùng https://, hoặc http:// tới mạng nội bộ.`],
+  [/^The (.+) API key is missing\.$/, (m) => `Thiếu API key ${m[1]}.`],
+  [/^The (.+) session cookie is missing\.$/, (m) => `Thiếu cookie phiên ${m[1]}.`],
+  [/^The (.+) session cookie is missing or invalid\.$/, (m) => `Cookie phiên ${m[1]} bị thiếu hoặc không hợp lệ.`],
+  [/^The (.+) CSRF cookie is invalid\.$/, (m) => `Cookie CSRF của ${m[1]} không hợp lệ.`],
+  [/^The (.+) session expired\. Sign in and paste fresh session cookies\.$/, (m) => `Phiên ${m[1]} đã hết hạn. Hãy đăng nhập rồi dán cookie phiên mới.`],
+  [/^(.+) refused this API key\. Check it or create a new one\.$/, (m) => `${m[1]} từ chối API key này. Hãy kiểm tra lại hoặc tạo key mới.`],
+  [/^The (.+) login expired\. Open (.+) and sign in to GitHub again\.$/, (m) => `Phiên đăng nhập ${m[1]} đã hết hạn. Hãy mở ${m[2]} rồi đăng nhập lại GitHub.`],
+  [/^The (.+) login expired\. Sign in to (.+) again\.$/, (m) => `Phiên đăng nhập ${m[1]} đã hết hạn. Hãy đăng nhập lại ${m[2]}.`],
+  [/^Enter the (.+) API key\.$/, (m) => `Hãy nhập API key ${m[1]}.`],
+  [/^(.+) could not return usage \(error (.+)\)\.$/, (m) => `${m[1]} chưa trả về được mức dùng (lỗi ${m[2]}).`],
+  [/^(.+) could not report usage right now \(error (.+)\)\.$/, (m) => `${m[1]} tạm thời chưa báo được mức dùng (lỗi ${m[2]}).`],
+  [/^(.+) did not return usage \(error (.+)\)\.$/, (m) => `${m[1]} không trả về mức dùng (lỗi ${m[2]}).`],
+  [/^SiliconFlow no longer reports this account's balance through its API\. Check it at (.+)\.$/, (m) => `SiliconFlow không còn báo số dư của tài khoản này qua API. Hãy xem tại ${m[1]}.`],
+  [/^The SiliconFlow balance is (.+) below zero\. Unless the account has a credit line, model calls and coupons stay paused until you top up\.$/, (m) => `Số dư SiliconFlow đang âm ${m[1]}. Trừ khi tài khoản có hạn mức tín dụng, lệnh gọi mô hình và phiếu giảm giá sẽ tạm dừng cho tới khi nạp thêm.`],
+  [/^Could not read the Chutes (.+) this time\.$/, (m) => `Lần này chưa đọc được ${(m[1] ?? "").split(" and ").map((part) => CHUTES_PARTS[part] ?? part).join(" và ")} của Chutes.`],
+  [/^Account connected, but the cards were not rebuilt: (.+)$/, (m) => `Đã kết nối tài khoản nhưng chưa dựng lại được các thẻ: ${m[1]}`],
+  [/^Logins changed, but the cards were not rebuilt: (.+)$/, (m) => `Thông tin đăng nhập đã thay đổi nhưng chưa dựng lại được các thẻ: ${m[1]}`],
+  [/^Session cookie \((.+)\)$/, (m) => `cookie phiên (${m[1]})`],
+  [/^Model: (.+)$/, (m) => `Mô hình: ${m[1]}`],
+  [/^Provider: (.+)$/, (m) => `Nhà cung cấp: ${m[1]}`],
+  [/^Package: (.+)$/, (m) => `Gói: ${m[1]}`],
+  [/^Credit Pool (.+)$/, (m) => `Quỹ tín dụng ${m[1]}`],
+  [/^Pool (.+)$/, (m) => `Quỹ ${m[1]}`],
+  [/^Bonus Grant (.+)$/, (m) => `Tín dụng thưởng ${m[1]}`],
+  [/^(.+) · (.+) · (Shared|Personal) · (Hard|Monitor)$/, (m) => `${term(m[1])} · ${term(m[2])} · ${m[3] === "Shared" ? "Dùng chung" : "Cá nhân"} · ${m[4] === "Hard" ? "Chặn khi vượt" : "Chỉ theo dõi"}`],
+  [/^(.+) Refill$/, (m) => `${term(m[1])} (nạp lại)`],
+  [/^(.+) Daily$/, (m) => `${m[1]} (ngày)`],
+  [/^(.+) Cost$/, (m) => `Chi phí ${m[1]}`],
+  [/^(.+) Requests$/, (m) => `Yêu cầu ${m[1]}`],
+  [/^(.+) Tokens$/, (m) => `Token ${m[1]}`],
   [/^(.+) Weekly$/, (m) => `${m[1]} (tuần)`],
   [/^(.+) Monthly$/, (m) => `${m[1]} (tháng)`],
 ];

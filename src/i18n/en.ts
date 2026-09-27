@@ -376,10 +376,15 @@ export const en: Messages = {
     keyPlaceholder: "Paste the API key",
     pasteValue: (what) => `Paste the ${what}`,
     getKey: "Get an API key",
+    openServicePage: (service) => `Open ${service}`,
     saveKey: "Save key",
     keySaved: (service) => `Added ${service}`,
     keyStoredNote: "The key is stored protected on this computer and sent only to that provider.",
     keyEnvNote: (variables) => `Or set ${variables}; that key appears here too.`,
+    cookieNote:
+      "Open the provider's site while signed in, press F12, go to Application → Cookies, pick the cookie named above and copy its value.",
+    cookieHeaderNote:
+      "Open the provider's site while signed in, press F12, choose the Network tab, pick a request to the site and copy the whole Cookie value under Request Headers.",
     changeService: "Change provider",
     hiddenNote: "This card starts hidden; turn it on in Customize when needed.",
     removeKeyTitle: (label) => `Remove the key ${label}?`,

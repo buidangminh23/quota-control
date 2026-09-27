@@ -8,7 +8,7 @@ use uc_accounts::{AccountStore, CredentialMode, KeyRecord, KeyStore};
 use uc_core::ProviderRuntime;
 use uc_providers::oauth::{LoginLanguage, OAuthManager, is_cancelled, is_expired};
 use uc_providers::{CliAccount, ProviderKind, VisibleAccount};
-use uc_services::{Detected, Roots, ServiceInfo};
+use uc_services::{Detected, KeyFormat, Roots, ServiceInfo};
 
 use crate::browser::{LoginBrowser, open_login_page};
 use crate::service::{BackendService, safe_error};
@@ -196,21 +196,20 @@ fn service_entries(cards: &uc_api::ServiceCards) -> Vec<ServiceEntry> {
 }
 
 const MAX_FIELD_LENGTH: usize = 512;
-const MAX_KEY_LENGTH: usize = 8192;
 const MAX_LABEL_LENGTH: usize = 256;
 
-/** A pasted key without the spaces around it; one with spaces or line breaks inside was cut or joined. */
-fn api_key(raw: &str) -> Result<String, String> {
-    let key = raw.trim();
-    if key.is_empty()
-        || key.len() > MAX_KEY_LENGTH
-        || key
-            .chars()
-            .any(|character| character.is_whitespace() || character.is_control())
-    {
-        return Err("Paste the whole API key, without spaces or line breaks".into());
-    }
-    Ok(key.to_string())
+/** A pasted key as the service takes it, or what to paste instead. */
+fn api_key(raw: &str, format: KeyFormat) -> Result<String, String> {
+    format.normalize(raw).ok_or_else(|| {
+        match format {
+            KeyFormat::Token => "Paste the whole API key, without spaces or line breaks",
+            KeyFormat::Cookie => "Paste only the cookie's value, without spaces or line breaks",
+            KeyFormat::CookieHeader => {
+                "Paste the whole Cookie header: name=value pairs separated by semicolons"
+            }
+        }
+        .into()
+    })
 }
 
 /** The card's label: what the user typed, or the service's name. */
@@ -269,16 +268,15 @@ pub async fn add_api_key(
         .api_key
         .ok_or("This service connects through its app's login, not an API key")?;
     let extra = key_fields(help.fields, fields)?;
-    let key = api_key(&key)?;
+    let key = api_key(&key, known.key_format())?;
     let label = key_label(label.as_deref(), known.name())?;
     let _changes = accounts.changes.lock().await;
     let keys = accounts.keys();
-    let record = tauri::async_runtime::spawn_blocking(move || {
-        keys.add(&service_id, &label, &key, &extra)
-    })
-    .await
-    .map_err(safe_error)?
-    .map_err(safe_error)?;
+    let record =
+        tauri::async_runtime::spawn_blocking(move || keys.add(&service_id, &label, &key, &extra))
+            .await
+            .map_err(safe_error)?
+            .map_err(safe_error)?;
     rescan_services(&accounts).await;
     service.replace_runtimes(accounts.runtimes()?, &app)?;
     Ok(record)
@@ -499,10 +497,21 @@ mod tests {
 
     #[test]
     fn a_pasted_key_is_trimmed_and_a_broken_one_refused() {
-        assert_eq!(api_key("  sk-abc123\n").unwrap(), "sk-abc123");
-        assert!(api_key("").is_err());
-        assert!(api_key("sk-abc 123").is_err());
-        assert!(api_key("sk-abc\n123").is_err());
+        assert_eq!(
+            api_key("  sk-abc123\n", KeyFormat::Token).unwrap(),
+            "sk-abc123"
+        );
+        assert!(api_key("", KeyFormat::Token).is_err());
+        assert!(api_key("sk-abc 123", KeyFormat::Token).is_err());
+        assert!(api_key("sk-abc\n123", KeyFormat::Token).is_err());
+        assert_eq!(
+            api_key("Cookie: session=a1; theme=dark", KeyFormat::CookieHeader).unwrap(),
+            "session=a1; theme=dark"
+        );
+        assert_eq!(
+            api_key("sk-abc", KeyFormat::CookieHeader).unwrap_err(),
+            "Paste the whole Cookie header: name=value pairs separated by semicolons"
+        );
         assert_eq!(key_label(Some("  Work "), "OpenRouter").unwrap(), "Work");
         assert_eq!(key_label(Some(" "), "OpenRouter").unwrap(), "OpenRouter");
         assert_eq!(key_label(None, "OpenRouter").unwrap(), "OpenRouter");
@@ -514,7 +523,11 @@ mod tests {
         let declared = [("teamId", "Team ID")];
         let fields = |value: Value| value.as_object().cloned();
         assert_eq!(
-            key_fields(&declared, fields(serde_json::json!({"teamId": "  team-1 "}))).unwrap(),
+            key_fields(
+                &declared,
+                fields(serde_json::json!({"teamId": "  team-1 "}))
+            )
+            .unwrap(),
             serde_json::json!({"teamId": "team-1"})
         );
         assert_eq!(

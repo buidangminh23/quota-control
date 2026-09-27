@@ -352,6 +352,31 @@ describe("popup", () => {
     expect(screen.getByRole("button", { name: /Phiên ChatGPT mới/ })).toBeInTheDocument();
   });
 
+  it("tells how to copy a session cookie or a whole Cookie header for web-session providers", async () => {
+    await renderApp();
+    act(() => useApp.setState({ screen: "accounts" }));
+    await screen.findByRole("heading", { name: "Tài khoản" });
+    const pick = (name: string) => {
+      fireEvent.change(screen.getByRole("searchbox", { name: "Tìm nhà cung cấp…" }), { target: { value: name } });
+      fireEvent.click(screen.getByRole("option", { name }));
+    };
+    pick("LongCat");
+    expect(screen.getByLabelText("Dán Cookie header")).toBeInTheDocument();
+    expect(screen.getByText(/chép nguyên giá trị Cookie trong Request Headers/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mở trang LongCat" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Lấy API key" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Đổi nhà cung cấp" }));
+    pick("Perplexity");
+    expect(screen.getByLabelText("Dán cookie phiên (__Secure-authjs.session-token)")).toBeInTheDocument();
+    expect(screen.getByText(/Application → Cookies/)).toBeInTheDocument();
+    expect(screen.queryByText(/Request Headers/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Đổi nhà cung cấp" }));
+    pick("DeepSeek");
+    expect(screen.getByLabelText("Dán API key")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Lấy API key" })).toBeInTheDocument();
+    expect(screen.queryByText(/F12/)).not.toBeInTheDocument();
+  });
+
   it("keeps waiting for a browser sign-in while the popup hides and announces the new account", async () => {
     const api = await renderApp();
     api.loginDelayMs = null;

@@ -675,12 +675,6 @@ fn lane_meters(lanes: &[Lane], now: DateTime<Utc>) -> Vec<MetricLine> {
             None => named.push((label, interval, week)),
         }
     }
-    let daily = named
-        .iter()
-        .any(|(_, interval, _)| interval.is_some_and(|meter| !meter.is_session(now)));
-    if named.len() < 2 && !daily {
-        return Vec::new();
-    }
     named
         .into_iter()
         .flat_map(|(label, interval, week)| {
@@ -734,7 +728,7 @@ fn lane_label(name: &str) -> Option<String> {
         "" => return None,
         "general" => "General",
         "video" => "Video",
-        _ if is_text_lane(&lower) => "Text Generation",
+        _ if is_text_lane(&lower) => return Some(name.to_string()),
         _ if lower.contains("speech") => "Text to Speech",
         _ if lower.contains("hailuo") && lower.contains("fast") => "Image to Video",
         _ if lower.contains("hailuo") => "Text to Video",
@@ -948,8 +942,9 @@ mod tests {
         let scope = context_at(&http, key(), at_seconds(1_780_282_340));
         let reading = MiniMax.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan.as_deref(), Some("Plus"));
+        assert_eq!(reading.lines[2].label(), "General");
         assert_eq!(
-            reading.lines,
+            reading.lines[..2],
             vec![
                 lines::percent(
                     "Session",
@@ -1057,7 +1052,7 @@ mod tests {
         let scope = context_at(&http, key(), now());
         let reading = MiniMax.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan.as_deref(), Some("Max"));
-        assert_eq!(reading.lines.len(), 2);
+        assert_eq!(reading.lines.len(), 4);
         assert_eq!(
             progress(&reading.lines[0]),
             ("Session", 75.0, Some(today(13)), Some(5 * lines::HOUR_MS))
@@ -1087,7 +1082,7 @@ mod tests {
         let scope = context_at(&http, key(), now());
         let reading = MiniMax.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan, None);
-        assert_eq!(reading.lines.len(), 2);
+        assert_eq!(reading.lines.len(), 4);
         let session = progress(&reading.lines[0]);
         assert_eq!(session.0, "Session");
         assert!((session.1 - 151.0 / 15.0).abs() < 1e-9);
@@ -1106,8 +1101,9 @@ mod tests {
         let scope = context_at(&http, key(), at_seconds(1_780_347_620));
         let reading = MiniMax.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan.as_deref(), Some("Plus"));
+        assert_eq!(reading.lines[2].label(), "General");
         assert_eq!(
-            reading.lines,
+            reading.lines[..2],
             vec![
                 lines::percent(
                     "Session",
@@ -1139,8 +1135,9 @@ mod tests {
         let scope = context_at(&http, key(), now());
         let reading = MiniMax.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan.as_deref(), Some("Plus"));
+        assert_eq!(reading.lines[2].label(), "General");
         assert_eq!(
-            reading.lines,
+            reading.lines[..2],
             vec![
                 lines::percent("Session", 4.0, Some(today(13)), Some(5 * lines::HOUR_MS)),
                 lines::percent("Weekly", 1.0, Some(week_end()), Some(lines::WEEK_MS)),
@@ -1365,7 +1362,7 @@ mod tests {
         let cases = [
             ("general", "General"),
             ("video", "Video"),
-            ("MiniMax-M2.7", "Text Generation"),
+            ("MiniMax-M2.7", "MiniMax-M2.7"),
             ("speech-2.8-hd", "Text to Speech"),
             ("MiniMax-Hailuo-2.3-Fast", "Image to Video"),
             ("MiniMax-Hailuo-2.3", "Text to Video"),

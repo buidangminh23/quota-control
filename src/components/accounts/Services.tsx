@@ -227,7 +227,7 @@ export function AddServiceKey({ messages, language }: { messages: Messages; lang
       <div className="uc-settings-actions is-split">
         {selected.keyUrl ? (
           <Button onClick={() => void backend().openUrl(selected.keyUrl!)} className="is-small">
-            {messages.accounts.getKey}
+            {selected.keyLabel === "API key" ? messages.accounts.getKey : messages.accounts.openServicePage(selected.name)}
           </Button>
         ) : (
           <span />
@@ -237,6 +237,8 @@ export function AddServiceKey({ messages, language }: { messages: Messages; lang
           <span>{messages.accounts.saveKey}</span>
         </Button>
       </div>
+      {selected.keyFormat === "cookie" ? <p className="uc-settings-note is-flush">{messages.accounts.cookieNote}</p> : null}
+      {selected.keyFormat === "cookieHeader" ? <p className="uc-settings-note is-flush">{messages.accounts.cookieHeaderNote}</p> : null}
       <p className="uc-settings-note is-flush">{messages.accounts.keyStoredNote}</p>
       {selected.keyEnv.length > 0 ? <p className="uc-settings-note is-flush">{messages.accounts.keyEnvNote(selected.keyEnv.join(", "))}</p> : null}
     </div>

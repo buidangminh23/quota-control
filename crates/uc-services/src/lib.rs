@@ -22,5 +22,6 @@ pub use catalog::{
 };
 pub use runtime::{CredentialSource, ServiceRuntime};
 pub use service::{
-    ApiKeyHelp, Connection, FetchContext, Login, Memo, Reading, Roots, Secret, Service,
+    ApiKeyHelp, Connection, FetchContext, KeyFormat, Login, MAX_KEY_LENGTH, Memo, Reading, Roots,
+    Secret, Service,
 };

@@ -414,10 +414,15 @@ export const vi: Messages = {
     keyPlaceholder: "Dán API key",
     pasteValue: (what) => `Dán ${what}`,
     getKey: "Lấy API key",
+    openServicePage: (service) => `Mở trang ${service}`,
     saveKey: "Lưu key",
     keySaved: (service) => `Đã thêm ${service}`,
     keyStoredNote: "Key được lưu bảo vệ trên máy này và chỉ gửi tới chính nhà cung cấp đó.",
     keyEnvNote: (variables) => `Hoặc đặt biến môi trường ${variables}, key đó cũng tự hiện ở đây.`,
+    cookieNote:
+      "Mở trang của nhà cung cấp khi đã đăng nhập, nhấn F12, vào Application → Cookies, chọn cookie có tên ghi ở ô trên và chép phần giá trị.",
+    cookieHeaderNote:
+      "Mở trang của nhà cung cấp khi đã đăng nhập, nhấn F12, vào tab Network, chọn một yêu cầu tới trang đó và chép nguyên giá trị Cookie trong Request Headers.",
     changeService: "Đổi nhà cung cấp",
     hiddenNote: "Thẻ này ẩn lúc đầu, bật trong Tùy chỉnh khi cần.",
     removeKeyTitle: (label) => `Xóa key ${label}?`,

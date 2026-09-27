@@ -171,8 +171,70 @@ the service itself. Every service is its own cargo feature; `all` is the default
 | xAI | a pasted management key with Team ID (or `XAI_MANAGEMENT_API_KEY`) |
 | OpenAI | an API key (or `OPENAI_ADMIN_KEY`) |
 | Anthropic | an API key (or `ANTHROPIC_ADMIN_KEY`) |
+| ai& | an API key (or `AIAND_API_KEY`) |
+| Aixy | an API key with Server address (or `AIXY_API_KEY`) |
+| Atlas Cloud | a pasted Atlas Cloud API key (or `ATLASCLOUD_API_KEY`) |
+| Bifrost | a pasted virtual key with Server address |
+| ClawRouter | an API key with Server address (or `CLAWROUTER_API_KEY`) |
+| Cline | the Cline login on this computer; or an API key (or `CLINE_API_KEY`, `CLINEPASS_API_KEY`) |
+| Deepgram | an API key with Project ID (optional), API URL (optional) (or `DEEPGRAM_API_KEY`) |
+| DeepInfra | an API key (or `DEEPINFRA_API_KEY`) |
+| DevPass | a pasted DevPass API key (or `DEVPASS_API_KEY`) |
+| ElevenLabs | an API key with API URL (optional) (or `ELEVENLABS_API_KEY`) |
+| Fireworks | an API key with Account slug (or `FIREWORKS_API_KEY`) |
+| GitKraken AI | a pasted GitKraken access token with API organization ID (or `GITKRAKEN_API_TOKEN`) |
+| Helmcode | a pasted cookie header with Dashboard (default: cloud.helmcode.com, or cloud.nan.builders) |
+| Hugging Face | the Hugging Face CLI login on this computer; or a pasted Hugging Face access token (or `HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`) |
+| Charm Hyper | a pasted Charm Hyper API key (or `HYPER_API_KEY`) |
+| LiteLLM | an API key with Server address, Show model activity (true or false) |
+| llmman | an API key (optional for local daemon) with Server address |
+| LLM Proxy | an API key with Server address |
+| Manus | a pasted session cookie (session_id) |
+| Moonshot / Kimi Open Platform | an API key (or `MOONSHOT_API_KEY`, `MOONSHOT_KEY`) |
+| Muse Code | a pasted session token (or `MUSE_DEVICE_TOKEN`) |
+| Neuralwatt | an API key with Server address (or `NEURALWATT_API_KEY`) |
+| Nous Portal | the Hermes Agent login on this computer; or a pasted access token with Portal URL (or `NOUS_PORTAL_ACCESS_TOKEN`) |
+| Perplexity | a pasted session cookie (__Secure-authjs.session-token) |
+| Poe | an API key (or `POE_API_KEY`) |
+| Raycast | a pasted session cookie (__raycast_session) with CSRF token (optional) |
+| Replicate | a pasted session cookie (sessionid) with Account username, Organization account (true or false) |
+| Sakana AI | a pasted session cookie (session) |
+| sub2api | an API key with Server address |
+| Synthetic | an API key (or `SYNTHETIC_API_KEY`) |
+| T3 Chat | a pasted session cookie (session) |
+| v0 | an API key with Scope (optional) (or `V0_API_KEY`) |
+| Venice | an API key (or `VENICE_API_KEY`) |
+| xKiro | an API key (or `XKIRO_API_KEY`) |
+| ZenMux | a pasted management API key (or `ZENMUX_MANAGEMENT_API_KEY`) |
+| Abacus AI | a pasted session cookie (sessionid) |
+| Alibaba Model Studio | a pasted Coding Plan API key (or `ALIBABA_CODING_PLAN_API_KEY`, `DASHSCOPE_API_KEY`) |
+| Amp | an API key (or `AMP_API_KEY`) |
+| Augment | a pasted session cookie (session) |
+| AWS Bedrock | the AWS CLI login on this computer; or a pasted secret access key with Access key ID, AWS region, Session token (optional) |
+| Codebuff | the Codebuff login on this computer; or an API key (or `CODEBUFF_API_KEY`) |
+| Doubao | a pasted secret access key with Access key ID, Region (default: cn-beijing) |
+| Droid | the Droid login on this computer; or an API key (or `FACTORY_API_KEY`) |
+| JetBrains AI | the JetBrains IDE login on this computer |
+| Kilo | the Kilo login on this computer; or an API key (or `KILO_API_KEY`) |
+| LongCat | a pasted cookie header |
+| Xiaomi MiMo | a pasted session cookie (api-platform_serviceToken) with User ID cookie (userId) |
+| Mistral | a pasted cookie header (ory_session_*) with CSRF cookie (csrftoken) |
+| Notion AI | a pasted session cookie (token_v2) with Workspace ID |
+| Qwen Cloud | a pasted session cookie (login_aliyunid_ticket) with Security token (sec_token), CSRF cookie (login_aliyunid_csrf) |
+| StepFun | a pasted session cookie (Oasis-Token) (or `STEPFUN_TOKEN`) |
+| Vertex AI | the gcloud ADC login on this computer; or a pasted Google OAuth access token with Google Cloud project ID |
+| Warp | an API key (or `WARP_API_KEY`, `WARP_TOKEN`) |
+| Wayfinder | a pasted connection label (not sent) with Server address |
+| Windsurf | the Windsurf login on this computer |
+| ZoomMate | a pasted session bearer token (Authorization) |
+| IBM Bob | an API key (or `BOBSHELL_API_KEY`) |
+| Cerebras | an API key (or `CEREBRAS_API_KEY`) |
+| Cloudflare Workers AI | an API token with Account ID (or `CLOUDFLARE_API_TOKEN`) |
+| Novita AI | an API key (or `NOVITA_API_KEY`) |
+| NanoGPT | an API key (or `NANOGPT_API_KEY`) |
+| Hyperbolic | an API key (or `HYPERBOLIC_API_KEY`) |
 
-Not readable yet: ai&, Aixy, Atlas Cloud, Bifrost, ClawRouter, Cline, Deepgram, DeepInfra, DevPass, ElevenLabs, Fireworks, GitKraken AI, Helmcode, Hugging Face, Charm Hyper, LiteLLM, llmman, LLM Proxy, Manus, Moonshot, Muse Code, Neuralwatt, Nous Portal, Perplexity, Poe, Raycast, Replicate, Sakana AI, sub2api, Synthetic, T3 Chat, TypeSafe, v0, Venice, xKiro, ZenMux, Abacus AI, Alibaba Model Studio, Amp, Augment, AWS Bedrock, CodeRabbit, Codebuff, Doubao, Droid, JetBrains AI, Kilo, LongCat, Xiaomi MiMo, Mistral, Notion AI, Qwen Cloud, StepFun, Vertex AI, Warp, Wayfinder, Windsurf, ZoomMate, IBM Bob, Cerebras, Cloudflare Workers AI, Novita AI, NanoGPT, Hyperbolic, OpenAI-compatible relay.
+Not readable yet: TypeSafe (its billing needs a page action discovered at run time), CodeRabbit (it shows usage only through its CLI), OpenAI-compatible relay (its billing does not say whether amounts are dollars, yuan or tokens).
 
 <!-- services:end -->
 

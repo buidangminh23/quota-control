@@ -44,8 +44,14 @@ pub fn secret(roots: &Roots, app: &str, extension: &str, key: &str) -> Option<St
     let item_key = format!("secret://{{\"extensionId\":\"{extension}\",\"key\":\"{key}\"}}");
     let stored = item(roots, app, &item_key)?;
     let bytes = buffer_bytes(&stored)?;
-    let master = master_key(&roots.app_data.join(app).join("Local State"))?;
-    decrypt(&master, &bytes)
+    let plain = unseal(&roots.app_data.join(app).join("Local State"), &bytes)?;
+    String::from_utf8(plain).ok()
+}
+
+/// Bytes an Electron app sealed with `safeStorage`, opened with the key in its `Local State`.
+/// Windows only, like [`secret`].
+pub fn unseal(local_state: &Path, sealed: &[u8]) -> Option<Vec<u8>> {
+    open_sealed(&master_key(local_state)?, sealed)
 }
 
 /// The bytes of a Node `Buffer` serialized as JSON (`{"type":"Buffer","data":[...]}`).
@@ -112,7 +118,7 @@ fn dpapi_unprotect(bytes: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// Electron `safeStorage` on Windows: `v10` + 12-byte nonce + AES-256-GCM ciphertext and tag.
-fn decrypt(master: &[u8], bytes: &[u8]) -> Option<String> {
+pub(crate) fn open_sealed(master: &[u8], bytes: &[u8]) -> Option<Vec<u8>> {
     use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
     let body = bytes.strip_prefix(b"v10")?;
     if body.len() < 12 + 16 {
@@ -128,7 +134,7 @@ fn decrypt(master: &[u8], bytes: &[u8]) -> Option<String> {
             &mut buffer,
         )
         .ok()?;
-    String::from_utf8(plain.to_vec()).ok()
+    Some(plain.to_vec())
 }
 
 /// The first of `paths` that is a file.
@@ -157,11 +163,11 @@ mod tests {
         blob.extend_from_slice(&nonce);
         blob.extend_from_slice(&sealed);
         assert_eq!(
-            decrypt(&master, &blob).as_deref(),
-            Some("[{\"accessToken\":\"gho_x\"}]")
+            open_sealed(&master, &blob).as_deref(),
+            Some(b"[{\"accessToken\":\"gho_x\"}]".as_slice())
         );
-        assert_eq!(decrypt(&[8u8; 32], &blob), None);
-        assert_eq!(decrypt(&master, b"v11abc"), None);
+        assert_eq!(open_sealed(&[8u8; 32], &blob), None);
+        assert_eq!(open_sealed(&master, b"v11abc"), None);
     }
 
     #[test]

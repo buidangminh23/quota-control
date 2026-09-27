@@ -92,9 +92,9 @@ impl KeyStore {
         validate(service, label)?;
         if key.is_empty()
             || key.len() > MAX_KEY_LENGTH
-            || key
-                .chars()
-                .any(|character| character.is_whitespace() || character.is_control())
+            || key.chars().any(|character| {
+                character.is_control() || (character.is_whitespace() && character != ' ')
+            })
         {
             return Err(AccountError::InvalidCredentials);
         }
@@ -308,9 +308,17 @@ mod tests {
         assert!(store.add("-x", "x", "k", &Value::Null).is_err());
         assert!(store.add("zai", " ", "k", &Value::Null).is_err());
         assert!(store.add("zai", "x", "", &Value::Null).is_err());
-        assert!(store.add("zai", "x", "has space", &Value::Null).is_err());
+        assert!(store.add("zai", "x", "has\ttab", &Value::Null).is_err());
+        assert!(store.add("zai", "x", "line\nbreak", &Value::Null).is_err());
         assert!(store.add("zai", "x", "k", &json!("not an object")).is_err());
         assert!(store.list().unwrap().is_empty());
+        let header = store
+            .add("longcat", "x", "session=a1; theme=dark", &Value::Null)
+            .unwrap();
+        assert_eq!(
+            store.secret(&header.id).unwrap()["apiKey"],
+            "session=a1; theme=dark"
+        );
     }
 
     #[test]

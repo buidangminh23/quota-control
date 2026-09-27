@@ -37,9 +37,8 @@ const TODAY: &str = "Today";
 
 /// Daily buckets asked for per page: Anthropic's maximum, which holds any month.
 const DAYS_PER_PAGE: &str = "31";
-/// Pages read in one refresh. The month fits one page; five pages still cover it at Anthropic's
-/// default of seven days per page.
-const MAX_PAGES: usize = 5;
+/// Pages read in one refresh. The month fits one page at the requested size.
+const MAX_PAGES: usize = 4;
 
 const ADMIN_KEY: &str = "sk-ant-admin";
 /// Claude.ai and Claude Code OAuth tokens, which the cost report never takes as a key.
@@ -176,8 +175,10 @@ fn rfc3339(time: DateTime<Utc>) -> String {
 /// The cursor of the next page, `None` on the last one. A page that says more follows without
 /// naming a cursor cannot be continued, and a total without the rest would be short.
 fn next_page(body: &Value) -> Result<Option<String>, SimpleProviderError> {
-    if value::flag(body, "/has_more") != Some(true) {
-        return Ok(None);
+    match value::flag(body, "/has_more") {
+        Some(false) => return Ok(None),
+        Some(true) => {}
+        None => return Err(http::decoding(NAME)),
     }
     value::text(body, "/next_page")
         .map(|cursor| Some(cursor.to_string()))
@@ -269,6 +270,16 @@ fn in_dollars(result: &Value) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn missing_pagination_state_cannot_claim_a_complete_total() {
+        assert_eq!(
+            super::next_page(&serde_json::json!({"data":[]}))
+                .unwrap_err()
+                .category,
+            uc_core::ErrorCategory::Decoding
+        );
+        assert_eq!(super::MAX_PAGES, 4);
+    }
     use super::*;
     use crate::service::Roots;
     use crate::testing::{Scripted, context_at, header};

@@ -10,7 +10,7 @@ use uc_core::{Provider, ProviderRuntime, SharedHttpClient};
 
 use crate::providers;
 use crate::runtime::{CredentialSource, ServiceRuntime};
-use crate::service::{Roots, Service};
+use crate::service::{KeyFormat, Roots, Service};
 
 /// Every service compiled into this build, in a stable order.
 pub fn services() -> &'static [&'static dyn Service] {
@@ -49,6 +49,8 @@ pub struct ServiceInfo {
     pub takes_api_key: bool,
     /// What the key field asks for, in English ("API key", "Session cookie (…)").
     pub key_label: &'static str,
+    /// Whether the key is one token or a whole Cookie header.
+    pub key_format: KeyFormat,
     /// Where to create a key.
     pub key_url: Option<&'static str>,
     /// Environment variables read for a key.
@@ -70,6 +72,7 @@ pub fn service_infos() -> Vec<ServiceInfo> {
                 login_from: connection.login_from,
                 takes_api_key: connection.api_key.is_some(),
                 key_label: service.key_label(),
+                key_format: service.key_format(),
                 key_url: connection.api_key.map(|help| help.url),
                 key_env: connection
                     .api_key

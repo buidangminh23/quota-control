@@ -305,6 +305,7 @@ export function fixtureServices(): ServiceEntry[] {
     loginFrom: null,
     takesApiKey: true,
     keyLabel: "API key",
+    keyFormat: "token",
     keyUrl: `https://example.invalid/${id}/keys`,
     keyEnv: [`${id.toUpperCase()}_API_KEY`],
     keyFields: [],
@@ -325,6 +326,8 @@ export function fixtureServices(): ServiceEntry[] {
       keys: [{ id: `openrouter@${"2".repeat(64)}`, service: "openrouter", label: "OpenRouter", addedAt: "2026-09-20T08:00:00Z", hint: "9f3a" }],
     }),
     service("deepseek", "DeepSeek"),
+    service("perplexity", "Perplexity", { keyLabel: "Session cookie (__Secure-authjs.session-token)", keyFormat: "cookie", keyEnv: [] }),
+    service("longcat", "LongCat", { keyLabel: "Cookie header", keyFormat: "cookieHeader", keyEnv: [] }),
     service("xai", "xAI", { keyFields: [["teamId", "Team ID"]] }),
     service("ollama", "Ollama", { loginFrom: "Ollama", takesApiKey: false, keyUrl: null, keyEnv: [], startsHidden: true }),
   ];

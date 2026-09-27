@@ -60,10 +60,8 @@ const IDE_ORIGIN: &str = "Qoder IDE";
 const IDE_SECRET: &str = "secret://aicoding.auth.userInfo";
 /// Electron's safeStorage marker in front of a sealed value.
 const SEALED: &[u8] = b"v10";
-#[cfg(any(windows, test))]
+#[cfg(test)]
 const NONCE_LEN: usize = 12;
-#[cfg(any(windows, test))]
-const TAG_LEN: usize = 16;
 const CREDITS: &str = "Credits";
 const UNIT: &str = "credits";
 /// Buckets shown beside the plan credits when they hold any.
@@ -571,7 +569,7 @@ fn read_small(path: &Path) -> Option<Vec<u8>> {
 /// stored bytes, or safeStorage bytes sealed with the key in `local_state`.
 fn open(stored: &[u8], local_state: &Path) -> Option<Value> {
     if stored.starts_with(SEALED) {
-        return document(&unseal(local_state, stored)?);
+        return document(&apps::unseal(local_state, stored)?);
     }
     let parsed = parse(stored)?;
     let buffer = (parsed["type"] == "Buffer")
@@ -585,7 +583,7 @@ fn open(stored: &[u8], local_state: &Path) -> Option<Value> {
         .map(|byte| byte.as_u64().and_then(|byte| u8::try_from(byte).ok()))
         .collect::<Option<_>>()?;
     if bytes.starts_with(SEALED) {
-        document(&unseal(local_state, &bytes)?)
+        document(&apps::unseal(local_state, &bytes)?)
     } else {
         document(&bytes)
     }
@@ -608,87 +606,6 @@ fn as_document(value: Value) -> Option<Value> {
             .filter(Value::is_object),
         _ => None,
     }
-}
-
-#[cfg(windows)]
-fn unseal(local_state: &Path, sealed: &[u8]) -> Option<Vec<u8>> {
-    open_sealed(&master_key(local_state)?, sealed)
-}
-
-#[cfg(not(windows))]
-fn unseal(_local_state: &Path, _sealed: &[u8]) -> Option<Vec<u8>> {
-    None
-}
-
-/// The safeStorage key in `Local State`: `os_crypt.encrypted_key`, base64 of `DPAPI` and a blob
-/// DPAPI unwraps for this user.
-#[cfg(windows)]
-fn master_key(local_state: &Path) -> Option<Vec<u8>> {
-    use base64::Engine;
-    let state = value::read_json(local_state, 4 * 1024 * 1024)?;
-    let encoded = value::text(&state, "/os_crypt/encrypted_key")?;
-    let wrapped = base64::engine::general_purpose::STANDARD
-        .decode(encoded)
-        .ok()?;
-    dpapi_unprotect(wrapped.strip_prefix(b"DPAPI")?)
-}
-
-#[cfg(windows)]
-fn dpapi_unprotect(bytes: &[u8]) -> Option<Vec<u8>> {
-    use windows_sys::Win32::Foundation::LocalFree;
-    use windows_sys::Win32::Security::Cryptography::{
-        CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptUnprotectData,
-    };
-    let input = CRYPT_INTEGER_BLOB {
-        cbData: u32::try_from(bytes.len()).ok()?,
-        pbData: bytes.as_ptr().cast_mut(),
-    };
-    let mut output = CRYPT_INTEGER_BLOB {
-        cbData: 0,
-        pbData: std::ptr::null_mut(),
-    };
-    let success = unsafe {
-        CryptUnprotectData(
-            &input,
-            std::ptr::null_mut(),
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            CRYPTPROTECT_UI_FORBIDDEN,
-            &mut output,
-        )
-    };
-    if success == 0 || output.pbData.is_null() {
-        return None;
-    }
-    let key = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
-    unsafe {
-        std::ptr::write_bytes(output.pbData, 0, output.cbData as usize);
-        LocalFree(output.pbData.cast());
-    }
-    Some(key)
-}
-
-/// Electron's safeStorage on Windows: `v10`, a 12-byte nonce, then the AES-256-GCM ciphertext and
-/// tag.
-#[cfg(any(windows, test))]
-fn open_sealed(master: &[u8], sealed: &[u8]) -> Option<Vec<u8>> {
-    use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
-    let body = sealed.strip_prefix(SEALED)?;
-    if body.len() < NONCE_LEN + TAG_LEN {
-        return None;
-    }
-    let (nonce, ciphertext) = body.split_at(NONCE_LEN);
-    let key = LessSafeKey::new(UnboundKey::new(&AES_256_GCM, master).ok()?);
-    let mut buffer = ciphertext.to_vec();
-    let plain = key
-        .open_in_place(
-            Nonce::try_assume_unique_for_key(nonce).ok()?,
-            Aad::empty(),
-            &mut buffer,
-        )
-        .ok()?;
-    Some(plain.to_vec())
 }
 
 #[cfg(test)]
@@ -1181,11 +1098,11 @@ mod tests {
         let master = [5u8; 32];
         let blob = seal(&master, b"{\"token\":\"t\"}");
         assert_eq!(
-            open_sealed(&master, &blob).as_deref(),
+            apps::open_sealed(&master, &blob).as_deref(),
             Some(&b"{\"token\":\"t\"}"[..])
         );
-        assert_eq!(open_sealed(&[6u8; 32], &blob), None);
-        assert_eq!(open_sealed(&master, b"v10short"), None);
+        assert_eq!(apps::open_sealed(&[6u8; 32], &blob), None);
+        assert_eq!(apps::open_sealed(&master, b"v10short"), None);
     }
 
     #[test]

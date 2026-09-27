@@ -362,6 +362,8 @@ export interface ServiceEntry {
   takesApiKey: boolean;
   /** What the key field asks for, in English: "API key", or a session cookie's name for a web login. */
   keyLabel: string;
+  /** Whether the key is one token, one session cookie's value, or a browser's whole Cookie header. */
+  keyFormat: "token" | "cookie" | "cookieHeader";
   /** Where to create a key. */
   keyUrl: string | null;
   /** Environment variables read for a key. */
