@@ -28,6 +28,11 @@ describe("viTerm", () => {
       "Địa chỉ máy chủ LiteLLM phải bắt đầu bằng https://.",
     );
     expect(viTerm("Kilo did not start a sign-in. Try again later.")).toBe("Kilo chưa mở được phiên đăng nhập. Hãy thử lại sau.");
+    expect(viTerm("Google did not say which account signed in.")).toBe("Google không cho biết tài khoản nào vừa đăng nhập.");
+    expect(viTerm("Cursor returned no usable sign-in.")).toBe("Cursor không trả về phiên đăng nhập dùng được.");
+    expect(viTerm("Kiro did not grant a lasting sign-in. Start a new sign-in.")).toBe(
+      "Kiro không cấp phiên đăng nhập lâu dài. Hãy đăng nhập lại từ đầu.",
+    );
     expect(viTerm("This sign-in expired. Sign in again in Accounts.")).toBe(
       "Phiên đăng nhập này đã hết hạn. Hãy đăng nhập lại trong Tài khoản.",
     );

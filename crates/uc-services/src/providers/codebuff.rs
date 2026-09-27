@@ -18,12 +18,19 @@ use uc_core::{HttpRequest, MetricKind, Provider, SimpleProviderError, WidgetDesc
 use crate::service::{
     ApiKeyHelp, Connection, FetchContext, Login, Reading, Roots, Secret, Service,
 };
+use crate::signin::{
+    self, Converted, Look, Method, Pending, Poll, Polling, SignIn, SignedIn, StartContext,
+};
 use crate::support::{http, lines, value};
 
 pub(crate) struct Codebuff;
 
 const NAME: &str = "Codebuff";
 const URL: &str = "https://www.codebuff.com/api/v1/usage";
+/// The browser sign-in of the Codebuff CLI: a login page for this device, and where the app asks
+/// whether it was used.
+const LOGIN_CODE: &str = "https://www.codebuff.com/api/auth/cli/code";
+const LOGIN_STATUS: &str = "https://www.codebuff.com/api/auth/cli/status";
 
 #[async_trait]
 impl Service for Codebuff {
@@ -41,6 +48,10 @@ impl Service for Codebuff {
             url: "https://www.codebuff.com",
             fields: &[],
         })
+    }
+
+    fn sign_in(&self) -> Option<&'static dyn SignIn> {
+        Some(&Codebuff)
     }
 
     fn discover(&self, roots: &Roots) -> Vec<Login> {
@@ -171,12 +182,193 @@ fn parse(body: &Value) -> Result<Reading, SimpleProviderError> {
     Ok(Reading::new(None, rows))
 }
 
+#[async_trait]
+impl SignIn for Codebuff {
+    /// Codebuff signs in with GitHub only.
+    fn methods(&self) -> &'static [Method] {
+        &[Method::GitHub]
+    }
+
+    async fn start(
+        &self,
+        _method: Method,
+        context: &StartContext,
+    ) -> Result<Pending, SimpleProviderError> {
+        let fingerprint = format!("quota-control-{}", signin::random_token(6)?);
+        let response = context
+            .http
+            .send(
+                HttpRequest::post(LOGIN_CODE)
+                    .json_body(&json!({ "fingerprintId": fingerprint }))
+                    .header("Accept", "application/json")
+                    .timeout(signin::REQUEST_TIMEOUT),
+            )
+            .await
+            .map_err(|_| signin::network(NAME))?;
+        let body: Value = response.json().unwrap_or(Value::Null);
+        let page =
+            value::text(&body, "/loginUrl").and_then(|raw| signin::page_on(raw, &["codebuff.com"]));
+        let hash = value::text(&body, "/fingerprintHash").map(str::to_string);
+        let expires = body.get("expiresAt").and_then(|expires| match expires {
+            Value::String(text) => Some(text.clone()),
+            Value::Number(number) => Some(number.to_string()),
+            _ => None,
+        });
+        let (Some(page), Some(hash), Some(expires), true) =
+            (page, hash, expires, response.is_success())
+        else {
+            return Err(SimpleProviderError::new(
+                uc_core::ErrorCategory::http(response.status),
+                format!("{NAME} did not start a sign-in. Try again later."),
+            ));
+        };
+        let mut status = url::Url::parse(LOGIN_STATUS).map_err(|_| http::decoding(NAME))?;
+        status
+            .query_pairs_mut()
+            .append_pair("fingerprintId", &fingerprint)
+            .append_pair("fingerprintHash", &hash)
+            .append_pair("expiresAt", &expires);
+        let status = status.to_string();
+        let requests = context.http.clone();
+        let look = move || -> Look {
+            let http = requests.clone();
+            let status = status.clone();
+            Box::pin(async move { look_login(&http, &status).await })
+        };
+        Ok(signin::polled(
+            page,
+            None,
+            Polling {
+                interval: std::time::Duration::from_secs(5),
+                slow_down: std::time::Duration::from_secs(5),
+                lifetime: signin::FLOW_LIFETIME,
+            },
+            context.http.clone(),
+            look,
+            signed_in,
+        ))
+    }
+}
+
+/// One look at a browser sign-in: Codebuff answers 401 until the user has signed in on the page,
+/// and the CLI keeps asking through any other failure, as this does.
+async fn look_login(http: &uc_core::SharedHttpClient, status: &str) -> Poll {
+    let Ok(response) = http
+        .send(
+            HttpRequest::get(status)
+                .header("Accept", "application/json")
+                .timeout(signin::REQUEST_TIMEOUT),
+        )
+        .await
+    else {
+        return Poll::Waiting;
+    };
+    if response.status == 429 {
+        return Poll::SlowDown;
+    }
+    if !response.is_success() {
+        return Poll::Waiting;
+    }
+    let body: Value = response.json().unwrap_or(Value::Null);
+    if body.get("user").is_some_and(Value::is_object) {
+        Poll::Approved(body)
+    } else {
+        Poll::Waiting
+    }
+}
+
+/// A signed-in CLI session's token, saved as the Codebuff CLI saves it and named by its user.
+fn signed_in(_: uc_core::SharedHttpClient, answer: Value) -> Converted {
+    Box::pin(async move {
+        let user = &answer["user"];
+        let token = value::text(user, "/authToken")
+            .ok_or_else(|| signin::invalid("Codebuff returned no usable sign-in."))?;
+        let identity = value::text(user, "/id")
+            .or_else(|| value::text(user, "/email"))
+            .ok_or_else(|| signin::invalid("Codebuff did not say which account signed in."))?
+            .to_string();
+        let label = value::text(user, "/email")
+            .or_else(|| value::text(user, "/name"))
+            .map(str::to_string);
+        Ok(SignedIn {
+            identity,
+            label,
+            document: json!({ "apiKey": token }),
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::testing::{Scripted, context_at, header};
     use chrono::{TimeZone, Utc};
     use uc_core::ErrorCategory;
+
+    #[tokio::test(start_paused = true)]
+    async fn a_browser_sign_in_saves_the_cli_session_codebuff_creates() {
+        let http = Scripted::new()
+            .on(
+                "POST",
+                LOGIN_CODE,
+                200,
+                r#"{"fingerprintId":"x","fingerprintHash":"hash-1",
+                    "loginUrl":"https://www.codebuff.com/login?auth_code=abc",
+                    "expiresAt":"2026-09-27T11:00:00.000Z"}"#,
+            )
+            .on("GET", LOGIN_STATUS, 401, r#"{"error":"not yet"}"#)
+            .on(
+                "GET",
+                LOGIN_STATUS,
+                200,
+                r#"{"user":{"id":"u-1","name":"Minh","email":"me@example.com","authToken":"cb-token"}}"#,
+            );
+        let context = StartContext {
+            http: http.shared(),
+            language: uc_core::loopback::LoginLanguage::English,
+            product: NAME,
+        };
+        let pending = Codebuff.start(Method::GitHub, &context).await.unwrap();
+        assert_eq!(pending.url, "https://www.codebuff.com/login?auth_code=abc");
+        let account = pending.finish.await.result.unwrap();
+        assert_eq!(account.identity, "u-1");
+        assert_eq!(account.label.as_deref(), Some("me@example.com"));
+        assert_eq!(account.document, json!({"apiKey": "cb-token"}));
+        let requests = http.requests();
+        let fingerprint: Value =
+            serde_json::from_slice(requests[0].body.as_deref().unwrap()).unwrap();
+        let fingerprint = fingerprint["fingerprintId"].as_str().unwrap().to_string();
+        assert!(fingerprint.starts_with("quota-control-"));
+        let status = url::Url::parse(&requests[1].url).unwrap();
+        let query: std::collections::HashMap<_, _> = status.query_pairs().into_owned().collect();
+        assert_eq!(query["fingerprintId"], fingerprint);
+        assert_eq!(query["fingerprintHash"], "hash-1");
+        assert_eq!(query["expiresAt"], "2026-09-27T11:00:00.000Z");
+    }
+
+    #[tokio::test]
+    async fn a_login_page_off_codebuff_is_not_opened() {
+        let http = Scripted::new().on(
+            "POST",
+            LOGIN_CODE,
+            200,
+            r#"{"fingerprintHash":"h","loginUrl":"https://example.com/login","expiresAt":"x"}"#,
+        );
+        let context = StartContext {
+            http: http.shared(),
+            language: uc_core::loopback::LoginLanguage::English,
+            product: NAME,
+        };
+        let error = Codebuff
+            .start(Method::GitHub, &context)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(
+            error.message,
+            "Codebuff did not start a sign-in. Try again later."
+        );
+    }
 
     #[test]
     fn the_token_in_the_manicode_credentials_becomes_one_login_under_its_hash() {

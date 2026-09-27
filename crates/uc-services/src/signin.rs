@@ -165,6 +165,22 @@ pub fn random_bytes(bytes: usize) -> Result<Vec<u8>, SimpleProviderError> {
     Ok(buffer)
 }
 
+/// A random version 4 UUID.
+pub fn random_uuid() -> Result<String, SimpleProviderError> {
+    let mut bytes = random_bytes(16)?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    Ok(format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    ))
+}
+
 /// `raw` when it is an `https` page on one of `hosts` or their subdomains: the only pages a sign-in
 /// opens from a service's answer.
 pub fn page_on(raw: &str, hosts: &[&str]) -> Option<String> {

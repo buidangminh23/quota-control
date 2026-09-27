@@ -329,6 +329,21 @@ pub struct FetchContext<'a> {
     pub memo: &'a Memo,
 }
 
+/// Where a fetch leaves an owned sign-in's renewed token document for its card to save.
+pub(crate) const RENEWED: &str = "signin.renewed";
+
+impl FetchContext<'_> {
+    /// Hand an owned sign-in's renewed token document to its card, which saves it in place of the
+    /// old one as soon as this fetch ends, even when the fetch then fails: a rotated refresh token
+    /// is already the only one that works. Another app's login is never written, so for it this
+    /// does nothing.
+    pub async fn keep_renewed(&self, document: Value) {
+        if self.secret.is_owned() {
+            self.memo.put(RENEWED, document, None).await;
+        }
+    }
+}
+
 /// One refresh's answer: the plan's name and the metric lines the service's widgets read.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Reading {
@@ -337,9 +352,6 @@ pub struct Reading {
     pub plan_term: Option<PlanTerm>,
     /// A soft notice shown on a card that did refresh.
     pub warning: Option<String>,
-    /// The account's token document after a renewal that rotated its refresh token; saved in place
-    /// of the old one, for an owned secret only.
-    pub renewed: Option<Value>,
 }
 
 impl Reading {
@@ -351,7 +363,6 @@ impl Reading {
             lines,
             plan_term: None,
             warning: None,
-            renewed: None,
         }
     }
 
@@ -362,11 +373,6 @@ impl Reading {
 
     pub fn with_warning(mut self, warning: Option<String>) -> Self {
         self.warning = warning;
-        self
-    }
-
-    pub fn with_renewed(mut self, document: Option<Value>) -> Self {
-        self.renewed = document;
         self
     }
 }

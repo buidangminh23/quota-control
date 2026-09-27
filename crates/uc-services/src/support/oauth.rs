@@ -29,6 +29,8 @@ const LEEWAY_SECONDS: i64 = 60;
 pub const SIGN_IN_EXPIRED: &str = "This sign-in expired. Sign in again in Accounts.";
 pub const SIGN_IN_REVOKED: &str =
     "This sign-in can no longer be renewed. Sign in again in Accounts.";
+pub const SIGN_IN_REFUSED: &str =
+    "The service no longer accepts this sign-in. Sign in again in Accounts.";
 
 /// What the app's saved login holds.
 #[derive(Clone, Copy, Debug)]

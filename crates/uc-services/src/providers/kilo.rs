@@ -12,20 +12,31 @@
 //! dollar), the Kilo Pass row this period's usage of its base and bonus credits until the next
 //! billing date, and every credit block with a description or name gets a balance row of its own.
 //! The pass's `tier_19`, `tier_49` and `tier_199` read as the Starter, Pro and Expert plans.
+//!
+//! Signing in from Quota Control uses the device sign-in of the Kilo CLI: app.kilo.ai's page opens
+//! with the code in it, the user signs in there (Google, GitHub and the others Kilo offers) and
+//! approves, and the long-lived token Kilo hands over is saved in Quota Control as the CLI saves it.
 
 use async_trait::async_trait;
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use uc_core::{HttpRequest, Provider, SimpleProviderError, WidgetDescriptor};
 
 use crate::service::{
     ApiKeyHelp, Connection, FetchContext, Login, Reading, Roots, Secret, Service,
 };
-use crate::support::{http, jwt, lines, value};
+use crate::signin::{
+    self, Converted, Look, Method, Pending, Poll, Polling, SignIn, SignedIn, StartContext,
+};
+use crate::support::{http, jwt, lines, oauth, value};
 
 pub(crate) struct Kilo;
 
 const URL: &str = "https://app.kilo.ai/api/trpc/user.getCreditBlocks,kiloPass.getState";
+const EXPIRED: &str = "The Kilo login expired. Open Kilo once to renew it.";
+/// The device sign-in of the Kilo CLI: a code, and where the app asks whether it was approved.
+const DEVICE_CODES: &str = "https://api.kilo.ai/api/device-auth/codes";
+const DEVICE_TOKEN: &str = "https://api.kilo.ai/api/device-auth/token";
 
 #[async_trait]
 impl Service for Kilo {
@@ -43,6 +54,10 @@ impl Service for Kilo {
             url: "https://app.kilo.ai",
             fields: &[],
         })
+    }
+
+    fn sign_in(&self) -> Option<&'static dyn SignIn> {
+        Some(&Kilo)
     }
 
     fn discover(&self, roots: &Roots) -> Vec<Login> {
@@ -92,10 +107,15 @@ impl Service for Kilo {
             .secret
             .key()
             .ok_or_else(|| http::invalid("The Kilo key or token is missing."))?;
+        let expired = || {
+            http::expired(if context.secret.is_owned() {
+                oauth::SIGN_IN_EXPIRED
+            } else {
+                EXPIRED
+            })
+        };
         if jwt::expires_at(key).is_some_and(|expiry| expiry <= context.now) {
-            return Err(http::expired(
-                "The Kilo login expired. Open Kilo once to renew it.",
-            ));
+            return Err(expired());
         }
         let mut url = url::Url::parse(URL).map_err(|_| http::decoding("Kilo"))?;
         url.query_pairs_mut()
@@ -114,7 +134,7 @@ impl Service for Kilo {
             if entry.get("error").is_some() {
                 let code = value::text(entry, "/error/json/data/code");
                 return Err(if matches!(code, Some("UNAUTHORIZED" | "FORBIDDEN")) {
-                    http::expired("The Kilo login expired. Open Kilo once to renew it.")
+                    expired()
                 } else {
                     http::decoding("Kilo")
                 });
@@ -186,13 +206,193 @@ impl Service for Kilo {
     }
 }
 
+#[async_trait]
+impl SignIn for Kilo {
+    /// Kilo's page offers both, and the choice is made there.
+    fn methods(&self) -> &'static [Method] {
+        &[Method::Google, Method::GitHub]
+    }
+
+    async fn start(
+        &self,
+        _method: Method,
+        context: &StartContext,
+    ) -> Result<Pending, SimpleProviderError> {
+        let response = context
+            .http
+            .send(
+                HttpRequest::post(DEVICE_CODES)
+                    .header("Accept", "application/json")
+                    .timeout(signin::REQUEST_TIMEOUT),
+            )
+            .await
+            .map_err(|_| signin::network("Kilo"))?;
+        let body: Value = response.json().unwrap_or(Value::Null);
+        let device_code = value::text(&body, "/device_code").map(str::to_string);
+        let page = value::text(&body, "/verificationUrl")
+            .and_then(|raw| signin::page_on(raw, &["kilo.ai"]));
+        let (Some(device_code), Some(page), true) = (device_code, page, response.is_success())
+        else {
+            return Err(SimpleProviderError::new(
+                uc_core::ErrorCategory::http(response.status),
+                "Kilo did not start a sign-in. Try again later.",
+            ));
+        };
+        let lifetime = value::number(&body, "/expiresIn").unwrap_or(600.0).max(0.0) as u64;
+        let requests = context.http.clone();
+        let look = move || -> Look {
+            let http = requests.clone();
+            let device_code = device_code.clone();
+            Box::pin(async move { look_device(&http, &device_code).await })
+        };
+        Ok(signin::polled(
+            page,
+            None,
+            Polling {
+                interval: std::time::Duration::from_secs(3),
+                slow_down: std::time::Duration::from_secs(3),
+                lifetime: std::time::Duration::from_secs(lifetime),
+            },
+            context.http.clone(),
+            look,
+            signed_in,
+        ))
+    }
+}
+
+/// One look at a device sign-in: 202 while it waits for the user, 403 when refused, 410 once the
+/// code expired or was used.
+async fn look_device(http: &uc_core::SharedHttpClient, device_code: &str) -> Poll {
+    let Ok(response) = http
+        .send(
+            HttpRequest::post(DEVICE_TOKEN)
+                .json_body(&json!({ "deviceCode": device_code, "supportsRefresh": false }))
+                .header("Accept", "application/json")
+                .timeout(signin::REQUEST_TIMEOUT),
+        )
+        .await
+    else {
+        return Poll::Waiting;
+    };
+    match response.status {
+        200 => Poll::Approved(response.json().unwrap_or(Value::Null)),
+        202 => Poll::Waiting,
+        403 => Poll::Failed(signin::denied()),
+        410 => Poll::Failed(uc_core::loopback::expired()),
+        429 => Poll::SlowDown,
+        status if status >= 500 => Poll::Waiting,
+        status => Poll::Failed(signin::unfinished(status)),
+    }
+}
+
+/// An approved device sign-in's token, saved as the Kilo CLI saves it and named by its user.
+fn signed_in(_: uc_core::SharedHttpClient, answer: Value) -> Converted {
+    Box::pin(async move {
+        let token = value::text(&answer, "/token")
+            .ok_or_else(|| signin::invalid("Kilo returned no usable sign-in."))?;
+        let email = value::text(&answer, "/userEmail").map(str::to_string);
+        let identity = value::text(&answer, "/userId")
+            .map(str::to_string)
+            .or_else(|| email.clone())
+            .ok_or_else(|| signin::invalid("Kilo did not say which account signed in."))?;
+        Ok(SignedIn {
+            identity,
+            label: email,
+            document: json!({ "apiKey": token }),
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{Scripted, context_at, header};
+    use crate::testing::{Scripted, context_at, header, owned_context_at};
     use chrono::Utc;
-    use serde_json::json;
     use uc_core::ErrorCategory;
+
+    fn start_context(http: &Scripted) -> StartContext {
+        StartContext {
+            http: http.shared(),
+            language: uc_core::loopback::LoginLanguage::English,
+            product: "Kilo",
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_device_sign_in_saves_the_token_the_page_approved() {
+        let http = Scripted::new()
+            .on(
+                "POST",
+                DEVICE_CODES,
+                200,
+                r#"{"code":"ABCD-EFGH","user_code":"ABCD-EFGH","device_code":"dc-1",
+                    "verificationUrl":"https://app.kilo.ai/device-auth?code=ABCD-EFGH","expiresIn":600}"#,
+            )
+            .on("POST", DEVICE_TOKEN, 202, r#"{"status":"pending"}"#)
+            .on(
+                "POST",
+                DEVICE_TOKEN,
+                200,
+                r#"{"status":"approved","token":"kilo-jwt","userId":"user-9","userEmail":"me@example.com"}"#,
+            );
+        let pending = Kilo
+            .start(Method::Google, &start_context(&http))
+            .await
+            .unwrap();
+        assert_eq!(
+            pending.url,
+            "https://app.kilo.ai/device-auth?code=ABCD-EFGH"
+        );
+        assert!(pending.user_code.is_none());
+        let account = pending.finish.await.result.unwrap();
+        assert_eq!(account.identity, "user-9");
+        assert_eq!(account.label.as_deref(), Some("me@example.com"));
+        assert_eq!(account.document, json!({"apiKey": "kilo-jwt"}));
+        let requests = http.requests();
+        let body: Value = serde_json::from_slice(requests[1].body.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            body,
+            json!({"deviceCode": "dc-1", "supportsRefresh": false})
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_refused_or_expired_device_code_ends_the_sign_in() {
+        for (status, message) in [
+            (403, "The browser login was not authorized."),
+            (410, "This login has expired. Start again."),
+        ] {
+            let http = Scripted::new()
+                .on(
+                    "POST",
+                    DEVICE_CODES,
+                    200,
+                    r#"{"device_code":"dc-1","verificationUrl":"https://app.kilo.ai/device-auth?code=X"}"#,
+                )
+                .on("POST", DEVICE_TOKEN, status, "{}");
+            let pending = Kilo
+                .start(Method::GitHub, &start_context(&http))
+                .await
+                .unwrap();
+            let error = pending.finish.await.result.unwrap_err();
+            assert_eq!(error.message, message);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_expired_sign_in_asks_to_sign_in_again_in_accounts() {
+        let http = Scripted::new();
+        let expired = format!(
+            "e30.{}.sig",
+            base64::Engine::encode(
+                &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                json!({"exp": 1_000_000_000}).to_string()
+            )
+        );
+        let scope = owned_context_at(&http, json!({"apiKey": expired}), Utc::now());
+        let error = Kilo.fetch(&scope.context()).await.unwrap_err();
+        assert_eq!(error.message, oauth::SIGN_IN_EXPIRED);
+    }
 
     const CREDITS_AND_PASS: &str = r#"[{"result":{"data":{"json":{"creditBlocks":[{"amount_mUsd":10000000,"balance_mUsd":7500000,"description":"Purchased"}],"totalBalance_mUsd":7500000}}}},{"result":{"data":{"json":{"subscription":{"tier":"tier_49","currentPeriodUsageUsd":5,"currentPeriodBaseCreditsUsd":20,"currentPeriodBonusCreditsUsd":2,"nextBillingAt":"2026-10-01T00:00:00Z"}}}}}]"#;
 

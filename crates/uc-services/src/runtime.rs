@@ -9,7 +9,7 @@ use uc_core::{
 };
 
 use crate::catalog::identity_hash;
-use crate::service::{FetchContext, Memo, Roots, Secret, Service};
+use crate::service::{FetchContext, Memo, RENEWED, Roots, Secret, Service};
 
 /// How long a card waits after the service answered "too many requests".
 const RATE_LIMIT_PAUSE_MINUTES: i64 = 5;
@@ -141,10 +141,12 @@ impl ServiceRuntime {
             now,
             memo: &self.memo,
         };
-        let reading = self.service.fetch(&context).await?;
-        if let Some(document) = reading.renewed.clone() {
+        let reading = self.service.fetch(&context).await;
+        if let Some(document) = self.memo.get(RENEWED, now).await {
+            self.memo.remove(RENEWED).await;
             self.keep_renewed(document).await;
         }
+        let reading = reading?;
         Ok(
             ProviderSnapshot::make(&self.provider, reading.plan, reading.lines, now)
                 .with_plan_term(reading.plan_term)
@@ -313,11 +315,99 @@ fn model_descriptors(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::service::{Connection, Reading};
     use crate::support::lines;
     use chrono::TimeZone;
+    use serde_json::{Value, json};
 
     fn provider() -> Provider {
         Provider::new("antigravity@abc", "Antigravity")
+    }
+
+    /// A service whose token renews at every fetch and whose usage request then fails.
+    struct Rotating;
+
+    #[async_trait]
+    impl Service for Rotating {
+        fn id(&self) -> &'static str {
+            "rotating"
+        }
+
+        fn name(&self) -> &'static str {
+            "Rotating"
+        }
+
+        fn connection(&self) -> Connection {
+            Connection::default()
+        }
+
+        fn descriptors(&self, _: &Provider) -> Vec<WidgetDescriptor> {
+            Vec::new()
+        }
+
+        async fn fetch(&self, context: &FetchContext<'_>) -> Result<Reading, SimpleProviderError> {
+            let generation = context.secret.value()["generation"].as_u64().unwrap_or(0);
+            context
+                .keep_renewed(json!({"refresh": "rotated", "generation": generation + 1}))
+                .await;
+            Err(SimpleProviderError::new(ErrorCategory::Network, "down"))
+        }
+    }
+
+    static ROTATING: Rotating = Rotating;
+
+    fn runtime(store: &KeyStore, id: &str, signed_in: bool) -> ServiceRuntime {
+        ServiceRuntime::new(
+            &ROTATING,
+            Provider::new(id, "Rotating"),
+            CredentialSource::Saved {
+                store: store.clone(),
+                id: id.to_string(),
+                signed_in,
+            },
+            uc_core::ReqwestHttpClient::shared(),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_renewed_sign_in_is_saved_even_when_the_fetch_then_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = KeyStore::new(dir.path().join("api-keys"));
+        let id = format!("rotating@{}", "a".repeat(64));
+        store
+            .add_login(
+                &id,
+                "rotating",
+                "me",
+                "google",
+                &json!({"refresh": "first"}),
+            )
+            .unwrap();
+        let card = runtime(&store, &id, true);
+        for generation in 1..=2 {
+            let snapshot = card.refresh(RefreshContext::manual()).await;
+            assert_eq!(snapshot.error_category, Some(ErrorCategory::Network));
+            let saved: Value = store.secret(&id).unwrap();
+            assert_eq!(
+                saved,
+                json!({"refresh": "rotated", "generation": generation})
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_saved_api_key_is_never_rewritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = KeyStore::new(dir.path().join("api-keys"));
+        let record = store
+            .add("rotating", "key", "sk-test-1234", &Value::Null)
+            .unwrap();
+        let card = runtime(&store, &record.id, false);
+        card.refresh(RefreshContext::manual()).await;
+        assert_eq!(
+            store.secret(&record.id).unwrap(),
+            json!({"apiKey": "sk-test-1234"})
+        );
     }
 
     #[test]

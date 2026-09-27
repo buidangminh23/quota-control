@@ -12,6 +12,16 @@
 //! Enterprise and team fallback) with the `WorkosCursorSessionToken` cookie the web dashboard builds
 //! from the same token. A refresh sends at most four requests; the plan and the credit balance are
 //! remembered between refreshes.
+//!
+//! Signing in from Quota Control uses the browser sign-in of the Cursor SDK and CLI: cursor.com's
+//! page links a random id and a PKCE challenge to the account the user signs in with (Google,
+//! GitHub or email, chosen on that page), and the app asks `api2.cursor.sh/auth/poll` for the tokens
+//! until Cursor hands them over. Those are the same session tokens the app keeps, so the card reads
+//! them the same way, and a sign-in of the account the app is signed in to shares its card. Being
+//! the card's own, they are renewed the way the app renews its session, a week into its 60 days.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
@@ -23,7 +33,10 @@ use uc_core::{
 };
 
 use crate::service::{Connection, FetchContext, Login, Reading, Roots, Secret, Service};
-use crate::support::{apps, http, jwt, lines, value};
+use crate::signin::{
+    self, Converted, Look, Method, Pending, Poll, Polling, SignIn, SignedIn, StartContext,
+};
+use crate::support::{apps, http, jwt, lines, oauth, value};
 
 pub(crate) struct Cursor;
 
@@ -56,6 +69,16 @@ const TEAM_UNAVAILABLE: &str = "Team request-based usage data unavailable. Try a
 const REQUESTS_UNAVAILABLE: &str = "Cursor request-based usage data unavailable. Try again later.";
 
 const PLAN_MEMO: &str = "cursor.plan";
+
+/// The page that signs a browser in for the SDK and CLI, and where the app asks for the tokens.
+const LOGIN_PAGE: &str = "https://cursor.com/loginDeepControl";
+const POLL: &str = "https://api2.cursor.sh/auth/poll";
+/// The endpoint and client the Cursor app renews its session with.
+const TOKEN: &str = "https://api2.cursor.sh/oauth/token";
+const CLIENT_ID: &str = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB";
+/// A session is renewed, as the app renews it, once fewer than 1272 hours (53 days) of it are left.
+const RENEW_BEFORE_HOURS: i64 = 1272;
+const POLICY: &str = "Your organization's settings do not allow this sign-in.";
 const CREDITS_MEMO: &str = "cursor.credits";
 const GROK_MEMO: &str = "cursor.grokBot";
 
@@ -78,6 +101,10 @@ impl Service for Cursor {
 
     fn connection(&self) -> Connection {
         Connection::login(APP)
+    }
+
+    fn sign_in(&self) -> Option<&'static dyn SignIn> {
+        Some(&Cursor)
     }
 
     /// The signed-in account, known by its JWT subject, else its cached email. A hash of a token is
@@ -164,21 +191,32 @@ impl Service for Cursor {
     }
 
     async fn fetch(&self, context: &FetchContext<'_>) -> Result<Reading, SimpleProviderError> {
-        let token = context
-            .secret
-            .str("/accessToken")
-            .ok_or_else(|| http::expired(EXPIRED))?;
+        let renewed = renew_if_due(context).await;
+        let fresh;
+        let secret = match renewed {
+            Some(document) => {
+                context.keep_renewed(document.clone()).await;
+                fresh = Secret::owned(document);
+                &fresh
+            }
+            None => context.secret,
+        };
+        let expired = || {
+            http::expired(if secret.is_owned() {
+                oauth::SIGN_IN_EXPIRED
+            } else {
+                EXPIRED
+            })
+        };
+        let token = secret.str("/accessToken").ok_or_else(expired)?;
         if jwt::expires_at(token).is_some_and(|expiry| expiry <= context.now) {
-            return Err(http::expired(EXPIRED));
+            return Err(expired());
         }
         // The usage call below is the first request.
         let mut budget = Budget(MAX_REQUESTS - 1);
         let usage = current_usage(context, token).await?;
         let plan = plan_name(context, token, &mut budget).await;
-        let membership = context
-            .secret
-            .str("/membershipType")
-            .and_then(membership_label);
+        let membership = secret.str("/membershipType").and_then(membership_label);
         let facts = Facts::of(&usage);
         let session = web_session(token);
 
@@ -226,6 +264,186 @@ impl Service for Cursor {
         found.extend(credits_line(context, token, session.as_ref(), &mut budget).await);
         Ok(Reading::new(label, found))
     }
+}
+
+#[async_trait]
+impl SignIn for Cursor {
+    /// Cursor's page offers both, and the choice is made there.
+    fn methods(&self) -> &'static [Method] {
+        &[Method::Google, Method::GitHub]
+    }
+
+    async fn start(
+        &self,
+        _method: Method,
+        context: &StartContext,
+    ) -> Result<Pending, SimpleProviderError> {
+        let verifier = signin::random_token(32)?;
+        let uuid = signin::random_uuid()?;
+        let mut page = url::Url::parse(LOGIN_PAGE).map_err(|_| http::decoding(APP))?;
+        page.query_pairs_mut()
+            .append_pair("challenge", &signin::challenge(&verifier))
+            .append_pair("uuid", &uuid)
+            .append_pair("mode", "login")
+            .append_pair("redirectTarget", "sdk");
+        let requests = context.http.clone();
+        let by_get = Arc::new(AtomicBool::new(false));
+        let look = move || -> Look {
+            let http = requests.clone();
+            let (uuid, verifier, by_get) = (uuid.clone(), verifier.clone(), by_get.clone());
+            Box::pin(async move { look_login(&http, &uuid, &verifier, &by_get).await })
+        };
+        Ok(signin::polled(
+            page.to_string(),
+            None,
+            Polling {
+                interval: std::time::Duration::from_secs(1),
+                slow_down: std::time::Duration::from_secs(2),
+                lifetime: signin::FLOW_LIFETIME,
+            },
+            context.http.clone(),
+            look,
+            signed_in,
+        ))
+    }
+}
+
+/// One look at a browser sign-in: Cursor answers 404 until the user has signed in. The look is a
+/// POST, so the verifier, which can mint a key, stays out of URLs; a server without that route is
+/// asked by GET from then on, as the SDK falls back.
+async fn look_login(
+    http: &uc_core::SharedHttpClient,
+    uuid: &str,
+    verifier: &str,
+    by_get: &AtomicBool,
+) -> Poll {
+    let request = if by_get.load(Ordering::Relaxed) {
+        HttpRequest::get(format!("{POLL}?uuid={uuid}&verifier={verifier}"))
+    } else {
+        HttpRequest::post(POLL).json_body(&json!({ "uuid": uuid, "verifier": verifier }))
+    };
+    let Ok(response) = http
+        .send(
+            request
+                .header("Accept", "application/json")
+                .timeout(signin::REQUEST_TIMEOUT),
+        )
+        .await
+    else {
+        return Poll::Waiting;
+    };
+    let text = String::from_utf8_lossy(&response.body).to_ascii_lowercase();
+    match response.status {
+        200 => {
+            let body: Value = response.json().unwrap_or(Value::Null);
+            if value::text(&body, "/accessToken").is_some()
+                && value::text(&body, "/refreshToken").is_some()
+            {
+                Poll::Approved(body)
+            } else {
+                Poll::Failed(signin::invalid("Cursor returned no usable sign-in."))
+            }
+        }
+        404 => {
+            if text.contains("route not found") {
+                by_get.store(true, Ordering::Relaxed);
+            }
+            Poll::Waiting
+        }
+        403 if text.contains("sign_in_policy_violation") => Poll::Failed(signin::invalid(POLICY)),
+        403 => Poll::Failed(signin::denied()),
+        429 => Poll::SlowDown,
+        status if status >= 500 => Poll::Waiting,
+        status => Poll::Failed(signin::unfinished(status)),
+    }
+}
+
+/// A browser sign-in's tokens in the shape the card reads the app's login, named by the session's
+/// subject as the app's login is.
+fn signed_in(http: uc_core::SharedHttpClient, answer: Value) -> Converted {
+    Box::pin(async move {
+        let access = value::text(&answer, "/accessToken")
+            .ok_or_else(|| signin::invalid("Cursor returned no usable sign-in."))?
+            .to_string();
+        let refresh = value::text(&answer, "/refreshToken")
+            .ok_or_else(|| signin::invalid("Cursor returned no usable sign-in."))?
+            .to_string();
+        let identity = token_subject(&access)
+            .ok_or_else(|| signin::invalid("Cursor did not say which account signed in."))?;
+        let label = match jwt::claim(&access, &["email"]) {
+            Some(email) => Some(email),
+            None => account_email(&http, &access).await,
+        };
+        Ok(SignedIn {
+            identity,
+            label,
+            document: json!({
+                "accessToken": access,
+                "refreshToken": refresh,
+                "membershipType": null
+            }),
+        })
+    })
+}
+
+/// The account's email as the web dashboard's `auth/me` reports it; none when that fails.
+async fn account_email(http: &uc_core::SharedHttpClient, token: &str) -> Option<String> {
+    let session = web_session(token)?;
+    let response = http
+        .send(
+            web("auth/me", &session)
+                .header("Accept", "application/json")
+                .timeout(signin::REQUEST_TIMEOUT),
+        )
+        .await
+        .ok()?;
+    if !response.is_success() {
+        return None;
+    }
+    let body: Value = response.json().ok()?;
+    value::text(&body, "/email").map(str::to_string)
+}
+
+/// A sign-in made in Quota Control renewed the way the Cursor app renews its own session: once
+/// fewer than 53 of its 60 days are left, its refresh token is traded for a new session token, which
+/// then serves as both. Until a renewal succeeds the current token is used as it is.
+async fn renew_if_due(context: &FetchContext<'_>) -> Option<Value> {
+    let secret = context.secret;
+    if !secret.is_owned() {
+        return None;
+    }
+    let token = secret.str("/accessToken")?;
+    if jwt::expires_at(token)
+        .is_some_and(|expiry| expiry > context.now + Duration::hours(RENEW_BEFORE_HOURS))
+    {
+        return None;
+    }
+    let refresh = secret.str("/refreshToken").unwrap_or(token);
+    let response = http::send(
+        context.http,
+        HttpRequest::post(TOKEN)
+            .json_body(&json!({
+                "grant_type": "refresh_token",
+                "client_id": CLIENT_ID,
+                "refresh_token": refresh
+            }))
+            .header("Accept", "application/json"),
+        APP,
+    )
+    .await
+    .ok()?;
+    if !response.is_success() {
+        return None;
+    }
+    let body = http::parse(&response, APP).ok()?;
+    if body.get("shouldLogout").and_then(Value::as_bool) == Some(true) {
+        return None;
+    }
+    let renewed = value::text(&body, "/access_token")?;
+    let mut document = secret.value().clone();
+    document["accessToken"] = json!(renewed);
+    document["refreshToken"] = json!(renewed);
+    Some(document)
 }
 
 /// The requests this refresh may still send.
@@ -927,7 +1145,7 @@ fn sha256_hex(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{Scripted, context_at, header};
+    use crate::testing::{Scripted, context_at, header, owned_context_at};
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use chrono::TimeZone;
@@ -995,6 +1213,147 @@ mod tests {
             .on("POST", &rpc("GetSandUsageStatus"), 200, GROK)
             .on("POST", &rpc("GetCreditGrantsBalance"), 200, GRANTS)
             .on("GET", &format!("{WEB}/auth/stripe"), 200, STRIPE)
+    }
+
+    fn start_context(http: &Scripted) -> StartContext {
+        StartContext {
+            http: http.shared(),
+            language: uc_core::loopback::LoginLanguage::English,
+            product: APP,
+        }
+    }
+
+    fn query(url: &str) -> std::collections::HashMap<String, String> {
+        url::Url::parse(url)
+            .unwrap()
+            .query_pairs()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_browser_sign_in_polls_until_cursor_hands_over_the_session() {
+        let session = live_token();
+        let http = Scripted::new()
+            .on("POST", POLL, 404, "Not found")
+            .on(
+                "POST",
+                POLL,
+                200,
+                &json!({"accessToken": session, "refreshToken": "refresh-1", "authId": SUBJECT})
+                    .to_string(),
+            )
+            .on(
+                "GET",
+                &format!("{WEB}/auth/me"),
+                200,
+                r#"{"email":"me@example.com","sub":"google-oauth2|user_01TESTUSER"}"#,
+            );
+        let pending = Cursor
+            .start(Method::GitHub, &start_context(&http))
+            .await
+            .unwrap();
+        let page = query(&pending.url);
+        assert!(pending.url.starts_with(LOGIN_PAGE));
+        assert_eq!(page["mode"], "login");
+        assert_eq!(page["redirectTarget"], "sdk");
+        let account = pending.finish.await.result.unwrap();
+        assert_eq!(account.identity, SUBJECT);
+        assert_eq!(account.label.as_deref(), Some("me@example.com"));
+        assert_eq!(
+            account.document,
+            json!({"accessToken": session, "refreshToken": "refresh-1", "membershipType": null})
+        );
+        let requests = http.requests();
+        let poll: Value = serde_json::from_slice(requests[0].body.as_deref().unwrap()).unwrap();
+        assert_eq!(poll["uuid"], page["uuid"].as_str());
+        let verifier = poll["verifier"].as_str().unwrap();
+        assert_eq!(signin::challenge(verifier), page["challenge"]);
+        assert!(!requests[0].url.contains(verifier));
+        assert!(
+            header(&requests[2], "Cookie").is_some_and(
+                |cookie| cookie.starts_with("WorkosCursorSessionToken=user_01TESTUSER")
+            )
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_server_without_the_post_route_is_asked_by_get() {
+        let http = Scripted::new()
+            .on("POST", POLL, 404, r#"{"error":"Route not found"}"#)
+            .on("GET", POLL, 403, r#"{"error":"sign_in_policy_violation"}"#);
+        let pending = Cursor
+            .start(Method::Google, &start_context(&http))
+            .await
+            .unwrap();
+        let error = pending.finish.await.result.unwrap_err();
+        assert_eq!(error.message, POLICY);
+        let requests = http.requests();
+        assert_eq!(requests[1].method, "GET");
+        assert!(requests[1].url.contains("verifier="));
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_made_here_is_renewed_a_week_into_its_session() {
+        let old = token(SUBJECT, now() + Duration::days(50));
+        let new = token(SUBJECT, now() + Duration::days(60));
+        let http = pro_account().on(
+            "POST",
+            TOKEN,
+            200,
+            &json!({"access_token": new, "id_token": "id", "shouldLogout": false}).to_string(),
+        );
+        let scope = owned_context_at(
+            &http,
+            json!({"accessToken": old, "refreshToken": "refresh-1", "membershipType": "pro"}),
+            now(),
+        );
+        Cursor.fetch(&scope.context()).await.unwrap();
+        let requests = http.requests();
+        let renewal: Value = serde_json::from_slice(requests[0].body.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            renewal,
+            json!({"grant_type": "refresh_token", "client_id": CLIENT_ID, "refresh_token": "refresh-1"})
+        );
+        let bearer = format!("Bearer {new}");
+        assert_eq!(header(&requests[1], "Authorization"), Some(bearer.as_str()));
+        assert_eq!(
+            scope.renewed().await.unwrap(),
+            json!({"accessToken": new, "refreshToken": new, "membershipType": "pro"})
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_renewal_keeps_the_current_session_until_it_expires() {
+        let old = token(SUBJECT, now() + Duration::days(50));
+        let http = pro_account().on("POST", TOKEN, 200, r#"{"shouldLogout":true}"#);
+        let scope = owned_context_at(&http, secret(&old), now());
+        Cursor.fetch(&scope.context()).await.unwrap();
+        let bearer = format!("Bearer {old}");
+        assert_eq!(
+            header(&http.requests()[1], "Authorization"),
+            Some(bearer.as_str())
+        );
+        assert!(scope.renewed().await.is_none());
+        let expired = owned_context_at(
+            &Scripted::new(),
+            secret(&token(SUBJECT, now() - Duration::minutes(1))),
+            now(),
+        );
+        let error = Cursor.fetch(&expired.context()).await.unwrap_err();
+        assert_eq!(error.message, oauth::SIGN_IN_EXPIRED);
+    }
+
+    #[tokio::test]
+    async fn the_apps_own_login_is_never_renewed() {
+        let http = pro_account();
+        let scope = context_at(
+            &http,
+            secret(&token(SUBJECT, now() + Duration::days(50))),
+            now(),
+        );
+        Cursor.fetch(&scope.context()).await.unwrap();
+        assert!(http.requests().iter().all(|request| request.url != TOKEN));
     }
 
     fn urls(requests: &[HttpRequest]) -> Vec<String> {

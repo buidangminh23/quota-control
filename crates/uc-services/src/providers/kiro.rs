@@ -11,6 +11,11 @@
 //! `https://q.eu-central-1.amazonaws.com/`. The route that answered is tried first for 12 hours.
 //! Kiro rotates its refresh token at every renewal, so the saved access token is used as it is and
 //! never renewed here: renewing it would sign the IDE out.
+//!
+//! Signing in from Quota Control uses the device sign-in the Kiro CLI uses on a remote machine:
+//! Kiro's page opens with Google or GitHub already chosen, and once the user approves, the tokens are
+//! saved in Quota Control. That refresh token is the card's own, so the card renews it shortly
+//! before the hour-long access token runs out and saves the one Kiro rotates in.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
@@ -20,8 +25,11 @@ use uc_core::{
     HttpRequest, MetricLine, Provider, ProviderLink, SimpleProviderError, WidgetDescriptor,
 };
 
-use crate::service::{Connection, FetchContext, Login, Reading, Roots, Secret, Service};
-use crate::support::{http, jwt, lines, value};
+use crate::service::{Connection, FetchContext, Login, Memo, Reading, Roots, Secret, Service};
+use crate::signin::{
+    self, Converted, Look, Method, Pending, Poll, Polling, SignIn, SignedIn, StartContext,
+};
+use crate::support::{http, jwt, lines, oauth, value};
 
 pub(crate) struct Kiro;
 
@@ -36,6 +44,15 @@ const ORIGIN: &str = "AI_EDITOR";
 const RESOURCE: &str = "AGENTIC_REQUEST";
 const IDE_AGENT: &str = "aws-sdk-js/1.0.0 KiroIDE";
 const ROUTE_MEMO: &str = "kiro.route";
+
+/// Kiro's sign-in service for Google and GitHub accounts.
+const AUTH: &str = "https://prod.us-east-1.auth.desktop.kiro.dev";
+/// The only client identity the sign-in service reads, sent as the Kiro CLI sends it.
+const CLIENT_ID: &str = "Kiro-CLI";
+/// The hosts of the page a device sign-in opens.
+const PAGE_HOSTS: &[&str] = &["kiro.dev", "amazoncognito.com"];
+/// How long before its expiry a sign-in made here is renewed.
+const RENEW_BEFORE_MINUTES: i64 = 5;
 
 /// The shared profiles Kiro falls back to for a login that names none: Google and GitHub sign-ins,
 /// and AWS Builder ID.
@@ -130,6 +147,10 @@ impl Service for Kiro {
         Connection::login(NAME)
     }
 
+    fn sign_in(&self) -> Option<&'static dyn SignIn> {
+        Some(&Kiro)
+    }
+
     fn discover(&self, roots: &Roots) -> Vec<Login> {
         let path = roots
             .home
@@ -180,27 +201,267 @@ impl Service for Kiro {
     }
 
     async fn fetch(&self, context: &FetchContext<'_>) -> Result<Reading, SimpleProviderError> {
-        let secret = context.secret;
-        let token = secret
-            .str("/accessToken")
-            .ok_or_else(|| http::expired(EXPIRED))?;
-        // Kiro's own tokens are opaque; a Microsoft Entra ID token may carry its expiry itself.
-        let expires = value::time(secret.value(), "/expiresAt").or_else(|| jwt::expires_at(token));
-        if expires.is_some_and(|expires| expires <= context.now) {
-            return Err(http::expired(EXPIRED));
-        }
-        let saved = secret.str("/profileArn");
-        let session = Session {
-            token,
-            profile: saved
-                .and_then(normalize_arn)
-                .unwrap_or_else(|| default_profile(secret).to_string()),
-            frankfurt: saved.filter(|arn| profile_region(arn) == Some(FRANKFURT_REGION)),
-            external_idp: secret.str("/authMethod").is_some_and(is_external_idp),
+        let renewed = renew_if_due(context).await?;
+        let fresh;
+        let secret = match renewed {
+            Some(document) => {
+                context.keep_renewed(document.clone()).await;
+                fresh = Secret::owned(document);
+                &fresh
+            }
+            None => context.secret,
         };
+        let session = session_of(secret, context.now)?;
         let body = usage_limits(context, &session).await?;
         Ok(Reading::new(plan(&body), meters(&body, context.now)))
     }
+}
+
+#[async_trait]
+impl SignIn for Kiro {
+    fn methods(&self) -> &'static [Method] {
+        &[Method::Google, Method::GitHub]
+    }
+
+    async fn start(
+        &self,
+        method: Method,
+        context: &StartContext,
+    ) -> Result<Pending, SimpleProviderError> {
+        // The service spells GitHub this way.
+        let provider = if method == Method::GitHub {
+            "Github"
+        } else {
+            "Google"
+        };
+        let response = context
+            .http
+            .send(auth_request(
+                "/oauth/device/authorization",
+                &json!({ "clientId": CLIENT_ID, "loginProvider": provider }),
+            ))
+            .await
+            .map_err(|_| signin::network(NAME))?;
+        let body: Value = response.json().unwrap_or(Value::Null);
+        let device_code = value::text(&body, "/deviceCode").map(str::to_string);
+        let page = value::text(&body, "/verificationUriComplete")
+            .and_then(|raw| signin::page_on(raw, PAGE_HOSTS));
+        let (Some(device_code), Some(page), true) = (device_code, page, response.is_success())
+        else {
+            return Err(SimpleProviderError::new(
+                uc_core::ErrorCategory::http(response.status),
+                format!("{NAME} did not start a sign-in. Try again later."),
+            ));
+        };
+        let interval = value::number(&body, "/intervalInMilliseconds")
+            .unwrap_or(5_000.0)
+            .clamp(1_000.0, 60_000.0) as u64;
+        let lifetime = value::number(&body, "/expiresInMilliseconds")
+            .unwrap_or(600_000.0)
+            .max(0.0) as u64;
+        let requests = context.http.clone();
+        let look = move || -> Look {
+            let http = requests.clone();
+            let device_code = device_code.clone();
+            Box::pin(async move { look_device(&http, &device_code, provider).await })
+        };
+        Ok(signin::polled(
+            page,
+            None,
+            Polling {
+                interval: std::time::Duration::from_millis(interval),
+                slow_down: std::time::Duration::from_secs(5),
+                lifetime: std::time::Duration::from_millis(lifetime),
+            },
+            context.http.clone(),
+            look,
+            signed_in,
+        ))
+    }
+}
+
+/// A request to Kiro's sign-in service, as the Kiro CLI sends it.
+fn auth_request(path: &str, body: &Value) -> HttpRequest {
+    HttpRequest::post(format!("{AUTH}{path}"))
+        .json_body(body)
+        .header("Accept", "application/json")
+        .header("User-Agent", CLIENT_ID)
+        .timeout(signin::REQUEST_TIMEOUT)
+}
+
+/// One look at a device sign-in. The service answers every look with HTTP 200 and a status; any
+/// other answer is treated as passing, as the Kiro CLI treats it, until the code expires.
+async fn look_device(
+    http: &uc_core::SharedHttpClient,
+    device_code: &str,
+    provider: &'static str,
+) -> Poll {
+    let Ok(response) = http
+        .send(auth_request(
+            "/oauth/device/poll",
+            &json!({ "deviceCode": device_code, "clientId": CLIENT_ID }),
+        ))
+        .await
+    else {
+        return Poll::Waiting;
+    };
+    if !response.is_success() {
+        return Poll::Waiting;
+    }
+    let body: Value = response.json().unwrap_or(Value::Null);
+    match value::text(&body, "/status") {
+        Some("authorized") => Poll::Approved(json!({ "tokens": body, "provider": provider })),
+        Some("expired_token") => Poll::Failed(uc_core::loopback::expired()),
+        Some("invalid_token") => Poll::Failed(signin::unfinished(400)),
+        _ => Poll::Waiting,
+    }
+}
+
+/// A device sign-in's tokens in the shape the Kiro IDE saves a social login, named by the account
+/// Kiro's usage answer reports.
+fn signed_in(http: uc_core::SharedHttpClient, answer: Value) -> Converted {
+    Box::pin(async move {
+        let tokens = &answer["tokens"];
+        let access = value::text(tokens, "/accessToken")
+            .ok_or_else(|| signin::invalid("Kiro returned no access token."))?;
+        let refresh = value::text(tokens, "/refreshToken").ok_or_else(|| {
+            signin::invalid("Kiro did not grant a lasting sign-in. Start a new sign-in.")
+        })?;
+        let provider = value::text(tokens, "/identityProvider")
+            .and_then(social_provider)
+            .or_else(|| answer["provider"].as_str())
+            .unwrap_or("Google");
+        let lifetime = value::number(tokens, "/expiresIn")
+            .unwrap_or(3600.0)
+            .clamp(60.0, 86_400.0) as i64;
+        let document = json!({
+            "accessToken": access,
+            "refreshToken": refresh,
+            "expiresAt": (Utc::now() + Duration::seconds(lifetime)).to_rfc3339(),
+            "profileArn": value::text(tokens, "/profileArn").filter(|arn| profile_region(arn).is_some()),
+            "authMethod": "social",
+            "provider": provider,
+        });
+        let (identity, label) = account_of(&http, &document).await;
+        Ok(SignedIn {
+            identity,
+            label,
+            document,
+        })
+    })
+}
+
+/// The service's name for a sign-in's identity provider.
+fn social_provider(wire: &str) -> Option<&'static str> {
+    match wire.trim().to_ascii_lowercase().as_str() {
+        "google" => Some("Google"),
+        "github" => Some("Github"),
+        _ => None,
+    }
+}
+
+/// The account a new sign-in belongs to, as Kiro's usage answer names it (its user id and email);
+/// a hash of its refresh token when that answer cannot be had, which still keeps the card apart.
+async fn account_of(
+    http: &uc_core::SharedHttpClient,
+    document: &Value,
+) -> (String, Option<String>) {
+    let secret = Secret::owned(document.clone());
+    let memo = Memo::default();
+    let context = FetchContext {
+        secret: &secret,
+        http,
+        now: Utc::now(),
+        memo: &memo,
+    };
+    let answer = match session_of(&secret, context.now) {
+        Ok(session) => usage_limits(&context, &session).await.ok(),
+        Err(_) => None,
+    };
+    let text = |pointer: &str| {
+        answer
+            .as_ref()
+            .and_then(|body| value::text(body, pointer))
+            .map(str::to_string)
+    };
+    let email = text("/userInfo/email");
+    let identity = text("/userInfo/userId")
+        .or_else(|| email.clone())
+        .unwrap_or_else(|| digest(value::text(document, "/refreshToken").unwrap_or_default()));
+    (identity, email)
+}
+
+/// A sign-in made in Quota Control, renewed shortly before it expires: its refresh token is the
+/// card's own, so renewing it signs nothing else out. Another app's login is never renewed.
+async fn renew_if_due(context: &FetchContext<'_>) -> Result<Option<Value>, SimpleProviderError> {
+    let secret = context.secret;
+    if !secret.is_owned() {
+        return Ok(None);
+    }
+    let expires = value::time(secret.value(), "/expiresAt");
+    if expires
+        .is_some_and(|expires| expires > context.now + Duration::minutes(RENEW_BEFORE_MINUTES))
+    {
+        return Ok(None);
+    }
+    let refresh = secret
+        .str("/refreshToken")
+        .ok_or_else(|| http::expired(oauth::SIGN_IN_EXPIRED))?;
+    let response = http::send(
+        context.http,
+        auth_request("/refreshToken", &json!({ "refreshToken": refresh })),
+        NAME,
+    )
+    .await?;
+    if matches!(response.status, 400 | 401 | 403) {
+        return Err(http::expired(oauth::SIGN_IN_REVOKED));
+    }
+    if !response.is_success() {
+        return Err(http::status_error(&response, NAME));
+    }
+    let body = http::parse(&response, NAME)?;
+    let access = value::text(&body, "/accessToken").ok_or_else(|| http::decoding(NAME))?;
+    let lifetime = value::number(&body, "/expiresIn")
+        .unwrap_or(3600.0)
+        .clamp(60.0, 86_400.0) as i64;
+    let mut document = secret.value().clone();
+    document["accessToken"] = json!(access);
+    document["expiresAt"] = json!((context.now + Duration::seconds(lifetime)).to_rfc3339());
+    if let Some(rotated) = value::text(&body, "/refreshToken") {
+        document["refreshToken"] = json!(rotated);
+    }
+    if let Some(profile) =
+        value::text(&body, "/profileArn").filter(|arn| profile_region(arn).is_some())
+    {
+        document["profileArn"] = json!(profile);
+    }
+    Ok(Some(document))
+}
+
+/// What one fetch sends for `secret`, unless its token has expired.
+fn session_of(secret: &Secret, now: DateTime<Utc>) -> Result<Session<'_>, SimpleProviderError> {
+    let expired = || {
+        http::expired(if secret.is_owned() {
+            oauth::SIGN_IN_EXPIRED
+        } else {
+            EXPIRED
+        })
+    };
+    let token = secret.str("/accessToken").ok_or_else(expired)?;
+    // Kiro's own tokens are opaque; a Microsoft Entra ID token may carry its expiry itself.
+    let expires = value::time(secret.value(), "/expiresAt").or_else(|| jwt::expires_at(token));
+    if expires.is_some_and(|expires| expires <= now) {
+        return Err(expired());
+    }
+    let saved = secret.str("/profileArn");
+    Ok(Session {
+        token,
+        profile: saved
+            .and_then(normalize_arn)
+            .unwrap_or_else(|| default_profile(secret).to_string()),
+        frankfurt: saved.filter(|arn| profile_region(arn) == Some(FRANKFURT_REGION)),
+        external_idp: secret.str("/authMethod").is_some_and(is_external_idp),
+    })
 }
 
 /// What one fetch sends.
@@ -588,6 +849,189 @@ fn digest(text: &str) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+#[cfg(test)]
+mod sign_in_tests {
+    use super::*;
+    use crate::testing::{Scripted, context_at, header, owned_context_at};
+    use chrono::TimeZone;
+
+    const USAGE: &str = "https://codewhisperer.us-east-1.amazonaws.com/getUsageLimits";
+    const ANSWER: &str = r#"{"subscriptionInfo":{"subscriptionTitle":"KIRO FREE"},
+        "usageBreakdownList":[{"resourceType":"CREDIT","displayName":"Credit","currentUsage":12,
+            "usageLimit":50}],
+        "userInfo":{"email":"person@example.com","userId":"user-1"}}"#;
+
+    fn body(request: &HttpRequest) -> Value {
+        serde_json::from_slice(request.body.as_deref().unwrap_or_default()).unwrap()
+    }
+
+    fn now() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 9, 27, 10, 0, 0).unwrap()
+    }
+
+    fn start_context(http: &Scripted) -> StartContext {
+        StartContext {
+            http: http.shared(),
+            language: uc_core::loopback::LoginLanguage::English,
+            product: NAME,
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_github_device_sign_in_saves_a_social_login_named_by_its_user() {
+        let http = Scripted::new()
+            .on(
+                "POST",
+                &format!("{AUTH}/oauth/device/authorization"),
+                200,
+                r#"{"deviceCode":"dc-1","userCode":"ABCD-EFGH",
+                    "verificationUri":"https://app.kiro.dev/device",
+                    "verificationUriComplete":"https://app.kiro.dev/device?code=ABCD-EFGH",
+                    "expiresInMilliseconds":600000,"intervalInMilliseconds":5000}"#,
+            )
+            .on(
+                "POST",
+                &format!("{AUTH}/oauth/device/poll"),
+                200,
+                r#"{"status":"authorization_pending"}"#,
+            )
+            .on(
+                "POST",
+                &format!("{AUTH}/oauth/device/poll"),
+                200,
+                r#"{"status":"authorized","accessToken":"aoa-1","refreshToken":"aor-1",
+                    "expiresIn":3600,"identityProvider":"github"}"#,
+            )
+            .on("GET", USAGE, 200, ANSWER);
+        let pending = Kiro
+            .start(Method::GitHub, &start_context(&http))
+            .await
+            .unwrap();
+        assert_eq!(pending.url, "https://app.kiro.dev/device?code=ABCD-EFGH");
+        assert!(pending.user_code.is_none());
+        let account = pending.finish.await.result.unwrap();
+        assert_eq!(account.identity, "user-1");
+        assert_eq!(account.label.as_deref(), Some("person@example.com"));
+        assert_eq!(account.document["provider"], "Github");
+        assert_eq!(account.document["authMethod"], "social");
+        assert_eq!(account.document["refreshToken"], "aor-1");
+        let requests = http.requests();
+        assert_eq!(
+            body(&requests[0]),
+            json!({"clientId": "Kiro-CLI", "loginProvider": "Github"})
+        );
+        assert_eq!(header(&requests[0], "User-Agent"), Some("Kiro-CLI"));
+        assert_eq!(
+            body(&requests[1]),
+            json!({"deviceCode": "dc-1", "clientId": "Kiro-CLI"})
+        );
+        assert_eq!(header(&requests[3], "Authorization"), Some("Bearer aoa-1"));
+    }
+
+    #[tokio::test]
+    async fn a_device_page_off_kiro_is_not_opened() {
+        let http = Scripted::new().on(
+            "POST",
+            &format!("{AUTH}/oauth/device/authorization"),
+            200,
+            r#"{"deviceCode":"dc-1","verificationUriComplete":"https://example.com/device"}"#,
+        );
+        let error = Kiro
+            .start(Method::Google, &start_context(&http))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(
+            error.message,
+            "Kiro did not start a sign-in. Try again later."
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_made_here_is_renewed_before_it_expires_and_the_rotated_token_kept() {
+        let http = Scripted::new()
+            .on(
+                "POST",
+                &format!("{AUTH}/refreshToken"),
+                200,
+                r#"{"accessToken":"aoa-2","refreshToken":"aor-2","expiresIn":3600}"#,
+            )
+            .on("GET", USAGE, 200, ANSWER);
+        let scope = owned_context_at(
+            &http,
+            json!({
+                "accessToken": "aoa-1",
+                "refreshToken": "aor-1",
+                "expiresAt": (now() + Duration::minutes(2)).to_rfc3339(),
+                "authMethod": "social",
+                "provider": "Google"
+            }),
+            now(),
+        );
+        let reading = Kiro.fetch(&scope.context()).await.unwrap();
+        assert!(!reading.lines.is_empty());
+        let requests = http.requests();
+        assert_eq!(body(&requests[0]), json!({"refreshToken": "aor-1"}));
+        assert_eq!(header(&requests[1], "Authorization"), Some("Bearer aoa-2"));
+        let renewed = scope.renewed().await.unwrap();
+        assert_eq!(renewed["accessToken"], "aoa-2");
+        assert_eq!(renewed["refreshToken"], "aor-2");
+        assert_eq!(
+            value::time(&renewed, "/expiresAt"),
+            Some(now() + Duration::hours(1))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_fresh_sign_in_is_used_as_saved() {
+        let http = Scripted::new().on("GET", USAGE, 200, ANSWER);
+        let scope = owned_context_at(
+            &http,
+            json!({
+                "accessToken": "aoa-1",
+                "refreshToken": "aor-1",
+                "expiresAt": (now() + Duration::minutes(30)).to_rfc3339(),
+                "authMethod": "social"
+            }),
+            now(),
+        );
+        Kiro.fetch(&scope.context()).await.unwrap();
+        assert_eq!(http.requests().len(), 1);
+        assert!(scope.renewed().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_refused_renewal_asks_to_sign_in_again_in_accounts() {
+        let http = Scripted::new().on(
+            "POST",
+            &format!("{AUTH}/refreshToken"),
+            400,
+            r#"{"error":"invalid_grant"}"#,
+        );
+        let scope = owned_context_at(
+            &http,
+            json!({"accessToken": "a", "refreshToken": "r", "expiresAt": now().to_rfc3339()}),
+            now(),
+        );
+        let error = Kiro.fetch(&scope.context()).await.unwrap_err();
+        assert_eq!(error.message, oauth::SIGN_IN_REVOKED);
+        assert!(scope.renewed().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn the_apps_own_expired_login_is_never_renewed() {
+        let http = Scripted::new();
+        let scope = context_at(
+            &http,
+            json!({"accessToken": "a", "refreshToken": "r", "expiresAt": now().to_rfc3339()}),
+            now(),
+        );
+        let error = Kiro.fetch(&scope.context()).await.unwrap_err();
+        assert_eq!(error.message, EXPIRED);
+        assert!(http.requests().is_empty());
+    }
 }
 
 #[cfg(test)]

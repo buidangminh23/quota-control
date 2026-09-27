@@ -144,6 +144,23 @@ pub fn context_at(http: &Scripted, secret: Value, now: DateTime<Utc>) -> Scope {
     }
 }
 
+/// A test scope for an account signed in to from Quota Control, whose token document the card owns.
+pub fn owned_context_at(http: &Scripted, secret: Value, now: DateTime<Utc>) -> Scope {
+    Scope {
+        secret: Secret::owned(secret),
+        http: http.shared(),
+        memo: Memo::default(),
+        now,
+    }
+}
+
+impl Scope {
+    /// The renewed token document a fetch handed its card to save.
+    pub async fn renewed(&self) -> Option<Value> {
+        self.memo.get(crate::service::RENEWED, self.now).await
+    }
+}
+
 /// The header `name` of `request`, case-insensitively.
 pub fn header<'a>(request: &'a HttpRequest, name: &str) -> Option<&'a str> {
     request

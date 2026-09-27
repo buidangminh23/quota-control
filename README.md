@@ -119,6 +119,17 @@ by earlier versions stay read-only. Connected accounts remain in the catalog whe
 offline or signed out; a revoked session still requires reconnecting, and the
 account card is retained until explicitly removed.
 
+Other AI services sign in the same way when their own apps have a browser sign-in:
+**Sign In with Google** or **Sign In with GitHub** opens the service's page, and the
+app saves the account encrypted beside API keys once the page is done. Google
+services (Gemini, Antigravity) come back to a loopback listener; Kiro, Kilo and
+Copilot use a device sign-in, and Copilot's one-time code is copied to the
+clipboard to paste on GitHub's page; Cursor, Codebuff and Ollama finish on their own
+site while the app waits. Each row of the Add Account list has a plus button that
+opens the first sign-in at once; picking the row shows every way to connect,
+including an API key or cookie. These sign-ins are the card's own, so the app renews
+them when they rotate (Kiro, Cursor) and never touches the service's app login.
+
 Cards the app has never seen start enabled. `knownProviders` in `settings.json`
 records the cards seen so far, so a card hidden in Customize stays hidden when its
 login returns, and a CLI login that appears while the app is closed still shows up.
@@ -142,18 +153,20 @@ Besides Claude and Codex, the `uc-services` crate reads these services. A login 
 from the files the service's own CLI, IDE or desktop app saved, never written and never
 renewed when its refresh token rotates; keys and pasted session cookies are saved
 encrypted for the current user (DPAPI on Windows) and never leave the computer except to
-the service itself. Every service is its own cargo feature; `all` is the default.
+the service itself. A browser sign-in made on the Accounts screen is saved the same way;
+its tokens are the card's own, so the card renews them. Every service is its own cargo
+feature; `all` is the default.
 
 | Service | Connects with |
 | --- | --- |
-| Gemini | the Gemini CLI login on this computer |
-| Antigravity | the Antigravity login on this computer |
-| Copilot | the GitHub Copilot login on this computer |
-| Cursor | the Cursor login on this computer |
-| Kiro | the Kiro login on this computer |
+| Gemini | the Gemini CLI login on this computer; or a Google sign-in |
+| Antigravity | the Antigravity login on this computer; or a Google sign-in |
+| Copilot | the GitHub Copilot login on this computer; or a GitHub sign-in |
+| Cursor | the Cursor login on this computer; or a sign-in on cursor.com (Google, GitHub or email) |
+| Kiro | the Kiro login on this computer; or a Google or GitHub sign-in |
 | Grok | the Grok CLI login on this computer |
 | OpenCode | the OpenCode login on this computer; or an API key (or `OPENCODE_API_KEY`) |
-| Ollama | the Ollama login on this computer; or an API key (or `OLLAMA_API_KEY`) (card starts hidden) |
+| Ollama | the Ollama login on this computer; or a sign-in on ollama.com (Google, GitHub or email) that links a key of its own; or an API key (or `OLLAMA_API_KEY`) (card starts hidden) |
 | Devin | the Devin login on this computer |
 | Zed | the Zed login on this computer |
 | Qoder | the Qoder login on this computer; or an API key (or `QODER_PERSONAL_ACCESS_TOKEN`) |
@@ -211,11 +224,11 @@ the service itself. Every service is its own cargo feature; `all` is the default
 | Amp | an API key (or `AMP_API_KEY`) |
 | Augment | a pasted session cookie (session) |
 | AWS Bedrock | the AWS CLI login on this computer; or a pasted secret access key with Access key ID, AWS region, Session token (optional) |
-| Codebuff | the Codebuff login on this computer; or an API key (or `CODEBUFF_API_KEY`) |
+| Codebuff | the Codebuff login on this computer; or a GitHub sign-in; or an API key (or `CODEBUFF_API_KEY`) |
 | Doubao | a pasted secret access key with Access key ID, Region (default: cn-beijing) |
 | Droid | the Droid login on this computer; or an API key (or `FACTORY_API_KEY`) |
 | JetBrains AI | the JetBrains IDE login on this computer |
-| Kilo | the Kilo login on this computer; or an API key (or `KILO_API_KEY`) |
+| Kilo | the Kilo login on this computer; or a sign-in on app.kilo.ai (Google, GitHub and others); or an API key (or `KILO_API_KEY`) |
 | LongCat | a pasted cookie header |
 | Xiaomi MiMo | a pasted session cookie (api-platform_serviceToken) with User ID cookie (userId) |
 | Mistral | a pasted cookie header (ory_session_*) with CSRF cookie (csrftoken) |

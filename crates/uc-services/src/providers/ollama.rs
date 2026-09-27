@@ -13,6 +13,11 @@
 //! settings page) and `POST https://ollama.com/api/me` for the plan and signup date, looked up twice
 //! a day; a failed lookup keeps the meters and adds a warning.
 //!
+//! Signing in from Quota Control links a key of the card's own the way `ollama signin` links the
+//! computer's: ollama.com's connect page asks the user to sign in (Google, GitHub or email, chosen
+//! there) and to connect the key, named "Quota Control" in the account's key list, and the card asks
+//! `/api/me`, signed with that key, until ollama.com knows it. Only the key's seed is saved.
+//!
 //! Ollama reports how much of each window is used, never when it resets, so the meters carry no
 //! countdown. The one exception is a Free plan's monthly window, which ollama.com/pricing says
 //! resets each month on the day the account signed up.
@@ -20,10 +25,11 @@
 use std::collections::BTreeMap;
 use std::io::{ErrorKind, Read};
 use std::path::Path;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chrono::{DateTime, Datelike, Duration, Months, Utc};
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::{Value, json};
@@ -36,7 +42,10 @@ use uc_core::{
 use crate::service::{
     ApiKeyHelp, Connection, FetchContext, Login, Reading, Roots, Secret, Service,
 };
-use crate::support::{http, lines, value};
+use crate::signin::{
+    self, Converted, Look, Method, Pending, Poll, Polling, SignIn, SignedIn, StartContext,
+};
+use crate::support::{http, lines, oauth, value};
 
 pub(crate) struct Ollama;
 
@@ -70,6 +79,11 @@ const UNUSABLE_KEY: &str = "~/.ollama/id_ed25519 isn't a usable Ollama signing k
 const UNREADABLE_KEY: &str = "Couldn't read ~/.ollama/id_ed25519. Check the file's permissions.";
 const PLAN_WARNING: &str = "Couldn't read your Ollama plan. Usage below is still up to date.";
 
+/// The page that links a key to the account the user signs in with.
+const CONNECT: &str = "https://ollama.com/connect";
+/// What the account's key list calls a key linked from Quota Control.
+const DEVICE_NAME: &str = "Quota Control";
+
 #[async_trait]
 impl Service for Ollama {
     fn id(&self) -> &'static str {
@@ -93,6 +107,10 @@ impl Service for Ollama {
             url: "https://ollama.com/settings/keys",
             fields: &[],
         })
+    }
+
+    fn sign_in(&self) -> Option<&'static dyn SignIn> {
+        Some(&Ollama)
     }
 
     /// Every Ollama install has the key, signed in to ollama.com or not, so the card waits to be
@@ -159,7 +177,11 @@ impl Service for Ollama {
         let request = credential.request("GET", USAGE_PATH, context.now);
         let response = http::send(context.http, request, NAME).await?;
         if matches!(response.status, 401 | 403) {
-            return Err(credential.refused());
+            return Err(if context.secret.is_owned() {
+                SimpleProviderError::new(ErrorCategory::AuthExpired, oauth::SIGN_IN_REFUSED)
+            } else {
+                credential.refused()
+            });
         }
         if !response.is_success() {
             return Err(http::status_error(&response, NAME));
@@ -174,6 +196,104 @@ impl Service for Ollama {
         let meters = meters(&usage, &account, context.now);
         Ok(Reading::new(account.plan, meters).with_warning(warning))
     }
+}
+
+#[async_trait]
+impl SignIn for Ollama {
+    /// ollama.com's page offers both, and the choice is made there.
+    fn methods(&self) -> &'static [Method] {
+        &[Method::Google, Method::GitHub]
+    }
+
+    async fn start(
+        &self,
+        _method: Method,
+        context: &StartContext,
+    ) -> Result<Pending, SimpleProviderError> {
+        let seed: [u8; 32] = signin::random_bytes(32)?
+            .try_into()
+            .map_err(|_| signin::invalid("Cannot start a sign-in on this computer."))?;
+        let key = SigningKey::from_seed(seed)
+            .ok_or_else(|| signin::invalid("Cannot start a sign-in on this computer."))?;
+        let line = format!(
+            "{KEY_TYPE} {}",
+            STANDARD.encode(wire_public_key(key.public()))
+        );
+        let mut page = url::Url::parse(CONNECT).map_err(|_| http::decoding(NAME))?;
+        page.query_pairs_mut()
+            .append_pair("name", DEVICE_NAME)
+            .append_pair("key", &URL_SAFE_NO_PAD.encode(line));
+        let key = Arc::new(key);
+        let requests = context.http.clone();
+        let look = move || -> Look {
+            let http = requests.clone();
+            let key = key.clone();
+            Box::pin(async move { look_account(&http, &key).await })
+        };
+        Ok(signin::polled(
+            page.to_string(),
+            None,
+            Polling {
+                interval: std::time::Duration::from_secs(2),
+                slow_down: std::time::Duration::from_secs(2),
+                lifetime: signin::FLOW_LIFETIME,
+            },
+            context.http.clone(),
+            look,
+            signed_in,
+        ))
+    }
+}
+
+/// One look at a connect page: ollama.com refuses the key's signed `/api/me` until the user has
+/// connected it, then names the account.
+async fn look_account(http: &uc_core::SharedHttpClient, key: &SigningKey) -> Poll {
+    let uri = format!("{ACCOUNT_PATH}?ts={}", Utc::now().timestamp());
+    let request = HttpRequest::new("POST", format!("{HOST}{uri}"))
+        .header("Authorization", key.authorization("POST", &uri))
+        .header("Accept", "application/json")
+        .header("Content-Length", "0")
+        .timeout(signin::REQUEST_TIMEOUT);
+    let Ok(response) = http.send(request).await else {
+        return Poll::Waiting;
+    };
+    match response.status {
+        200 => Poll::Approved(json!({
+            "seed": STANDARD.encode(key.seed),
+            "account": response.json::<Value>().unwrap_or(Value::Null),
+        })),
+        401 | 403 => Poll::Waiting,
+        429 => Poll::SlowDown,
+        status if status >= 500 => Poll::Waiting,
+        status => Poll::Failed(signin::unfinished(status)),
+    }
+}
+
+/// A connected key, saved as the card saves the computer's key (its seed) and named by the account
+/// ollama.com reports, whose answer uses Go's field names or lowercase ones.
+fn signed_in(_: uc_core::SharedHttpClient, answer: Value) -> Converted {
+    Box::pin(async move {
+        let seed = value::text(&answer, "/seed")
+            .ok_or_else(|| signin::invalid("Cannot start a sign-in on this computer."))?
+            .to_string();
+        let account = &answer["account"];
+        let text = |names: &[&str]| {
+            names
+                .iter()
+                .find_map(|name| value::text(account, &format!("/{name}")))
+                .map(str::to_string)
+        };
+        let email = text(&["email", "Email"]);
+        let identity = text(&["id", "ID", "Id"])
+            .or_else(|| email.clone())
+            .ok_or_else(|| signin::invalid("Ollama did not say which account signed in."))?;
+        let label = email.or_else(|| text(&["name", "Name"]));
+        Ok(SignedIn {
+            identity,
+            label,
+            document: json!({ "seed": seed }),
+        })
+    })
 }
 
 /// How a card signs its requests: with the key found on this computer, or with an API key.
@@ -513,6 +633,96 @@ impl SigningKey {
             STANDARD.encode(wire_public_key(self.public())),
             STANDARD.encode(signature.as_ref())
         )
+    }
+}
+
+#[cfg(test)]
+mod sign_in_tests {
+    use super::*;
+    use crate::testing::{Scripted, header, owned_context_at};
+    use ring::signature::{ED25519, UnparsedPublicKey};
+
+    fn start_context(http: &Scripted) -> StartContext {
+        StartContext {
+            http: http.shared(),
+            language: uc_core::loopback::LoginLanguage::English,
+            product: NAME,
+        }
+    }
+
+    /// The raw public key an `ssh-ed25519 <base64>` line carries.
+    fn public_key(line: &str) -> Vec<u8> {
+        let blob = STANDARD
+            .decode(line.strip_prefix("ssh-ed25519 ").unwrap())
+            .unwrap();
+        blob[blob.len() - 32..].to_vec()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_connected_key_is_saved_by_its_seed_and_named_by_the_account() {
+        let http = Scripted::new()
+            .on(
+                "POST",
+                &format!("{HOST}{ACCOUNT_PATH}"),
+                401,
+                "unauthorized",
+            )
+            .on(
+                "POST",
+                &format!("{HOST}{ACCOUNT_PATH}"),
+                200,
+                r#"{"id":"u-1","email":"me@example.com","name":"Minh","plan":"pro"}"#,
+            );
+        let pending = Ollama
+            .start(Method::Google, &start_context(&http))
+            .await
+            .unwrap();
+        let page = url::Url::parse(&pending.url).unwrap();
+        assert_eq!(page.host_str(), Some("ollama.com"));
+        assert_eq!(page.path(), "/connect");
+        let query: std::collections::HashMap<_, _> = page.query_pairs().into_owned().collect();
+        assert_eq!(query["name"], "Quota Control");
+        let line = String::from_utf8(URL_SAFE_NO_PAD.decode(&query["key"]).unwrap()).unwrap();
+        let public = public_key(&line);
+        let account = pending.finish.await.result.unwrap();
+        assert_eq!(account.identity, "u-1");
+        assert_eq!(account.label.as_deref(), Some("me@example.com"));
+        let seed: [u8; 32] = STANDARD
+            .decode(account.document["seed"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            SigningKey::from_seed(seed).unwrap().public(),
+            public.as_slice()
+        );
+        let requests = http.requests();
+        let request = &requests[1];
+        let (key, signature) = header(request, "Authorization")
+            .unwrap()
+            .split_once(':')
+            .unwrap();
+        assert_eq!(STANDARD.decode(key).unwrap(), wire_public_key(&public));
+        let uri = request.url.strip_prefix(HOST).unwrap();
+        assert!(uri.starts_with("/api/me?ts="));
+        UnparsedPublicKey::new(&ED25519, &public)
+            .verify(
+                format!("POST,{uri}").as_bytes(),
+                &STANDARD.decode(signature).unwrap(),
+            )
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_key_ollama_no_longer_knows_asks_to_sign_in_again_in_accounts() {
+        let http = Scripted::new().on("GET", &format!("{HOST}{USAGE_PATH}"), 401, "{}");
+        let scope = owned_context_at(
+            &http,
+            json!({"seed": STANDARD.encode([7u8; 32])}),
+            Utc::now(),
+        );
+        let error = Ollama.fetch(&scope.context()).await.unwrap_err();
+        assert_eq!(error.message, oauth::SIGN_IN_REFUSED);
     }
 }
 
