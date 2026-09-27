@@ -731,3 +731,50 @@ async fn claude_has_no_limit_resets_and_sends_nothing() {
     );
     assert!(http.requests.lock().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn codex_cards_carry_the_paid_through_date_their_login_states() {
+    let claims = json!({"https://api.openai.com/auth":{
+        "chatgpt_subscription_active_until":"2026-10-17T01:56:39+00:00",
+        "chatgpt_subscription_last_checked":"2026-09-25T13:56:24+00:00"
+    }});
+    let id_token = format!(
+        "header.{}.signature",
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap())
+    );
+    let http = fake(
+        200,
+        json!({"rate_limit":{"primary_window":{"used_percent":23}}}),
+    );
+    let (_directory, provider) = setup(
+        ProviderKind::Codex,
+        json!({"tokens":{"access_token":"fixture-token","account_id":"fixture-account","id_token":id_token}}),
+        http.clone(),
+    );
+    let snapshot = provider.refresh(RefreshContext::manual()).await;
+    assert!(!snapshot.is_error(), "{:?}", snapshot.error_category);
+    assert_eq!(
+        snapshot.plan_term,
+        Some(uc_core::PlanTerm::Stated {
+            ends_at: Utc.with_ymd_and_hms(2026, 10, 17, 1, 56, 39).unwrap(),
+            checked_at: Some(Utc.with_ymd_and_hms(2026, 9, 25, 13, 56, 24).unwrap()),
+        })
+    );
+    assert_eq!(http.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn claude_cards_from_a_credentials_file_never_ask_the_profile_for_a_term() {
+    let http = fake(200, json!({"five_hour":{"utilization":15}}));
+    let (_directory, provider) = setup(
+        ProviderKind::Claude,
+        json!({"claudeAiOauth":{"accessToken":"fixture-token"}}),
+        http.clone(),
+    );
+    let snapshot = provider.refresh(RefreshContext::manual()).await;
+    assert!(!snapshot.is_error(), "{:?}", snapshot.error_category);
+    assert_eq!(snapshot.plan_term, None);
+    let requests = http.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].url, "https://api.anthropic.com/api/oauth/usage");
+}

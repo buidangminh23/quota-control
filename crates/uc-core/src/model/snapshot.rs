@@ -8,6 +8,28 @@ use super::provider::Provider;
 use super::usage::ProviderUsageHistory;
 use crate::error::{ErrorCategory, ProviderError};
 
+/// What the provider says about the plan's current paid period.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "basis")]
+pub enum PlanTerm {
+    /// The provider states when the paid period ends (ChatGPT's login carries it).
+    #[serde(rename = "stated")]
+    Stated {
+        #[serde(rename = "endsAt")]
+        ends_at: DateTime<Utc>,
+        /// When the provider last confirmed that date.
+        #[serde(rename = "checkedAt", default, skip_serializing_if = "Option::is_none")]
+        checked_at: Option<DateTime<Utc>>,
+    },
+    /// Only the subscription's start is known (Anthropic's profile); a monthly plan renews on that
+    /// day of each month.
+    #[serde(rename = "monthlyFrom")]
+    MonthlyFrom {
+        #[serde(rename = "startedAt")]
+        started_at: DateTime<Utc>,
+    },
+}
+
 /// Latest normalized output for one provider refresh.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProviderSnapshot {
@@ -17,6 +39,9 @@ pub struct ProviderSnapshot {
     pub display_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
+    /// The plan's paid period, when the account states or implies one.
+    #[serde(rename = "planTerm", default, skip_serializing_if = "Option::is_none")]
+    pub plan_term: Option<PlanTerm>,
     pub lines: Vec<MetricLine>,
     #[serde(rename = "refreshedAt")]
     pub refreshed_at: DateTime<Utc>,
@@ -38,6 +63,7 @@ impl ProviderSnapshot {
             provider_id: provider.id.clone(),
             display_name: provider.display_name.clone(),
             plan,
+            plan_term: None,
             lines,
             refreshed_at,
             usage_history: None,
@@ -48,6 +74,11 @@ impl ProviderSnapshot {
 
     pub fn with_history(mut self, history: Option<ProviderUsageHistory>) -> Self {
         self.usage_history = history;
+        self
+    }
+
+    pub fn with_plan_term(mut self, term: Option<PlanTerm>) -> Self {
+        self.plan_term = term;
         self
     }
 
@@ -67,6 +98,7 @@ impl ProviderSnapshot {
             provider_id: provider.id.clone(),
             display_name: provider.display_name.clone(),
             plan: None,
+            plan_term: None,
             lines: vec![MetricLine::Badge(BadgeLine {
                 label: MetricLine::ERROR_BADGE_LABEL.to_string(),
                 text: message.into(),
@@ -114,5 +146,39 @@ mod tests {
         let json = serde_json::to_value(&snapshot).unwrap();
         assert_eq!(json["providerID"], "codex");
         assert_eq!(json["errorCategory"], "not_logged_in");
+        assert!(json.get("planTerm").is_none());
+    }
+
+    #[test]
+    fn plan_terms_serialize_with_their_basis_and_round_trip() {
+        use chrono::TimeZone;
+        let provider = Provider::new("codex", "Codex");
+        let ends_at = Utc.with_ymd_and_hms(2026, 10, 17, 1, 56, 39).unwrap();
+        let started_at = Utc.with_ymd_and_hms(2026, 7, 31, 3, 40, 9).unwrap();
+        for (term, expected) in [
+            (
+                PlanTerm::Stated {
+                    ends_at,
+                    checked_at: None,
+                },
+                serde_json::json!({"basis": "stated", "endsAt": "2026-10-17T01:56:39Z"}),
+            ),
+            (
+                PlanTerm::MonthlyFrom { started_at },
+                serde_json::json!({"basis": "monthlyFrom", "startedAt": "2026-07-31T03:40:09Z"}),
+            ),
+        ] {
+            let snapshot = ProviderSnapshot::make(&provider, None, Vec::new(), ends_at)
+                .with_plan_term(Some(term.clone()));
+            let json = serde_json::to_value(&snapshot).unwrap();
+            assert_eq!(json["planTerm"], expected);
+            let back: ProviderSnapshot = serde_json::from_value(json).unwrap();
+            assert_eq!(back.plan_term, Some(term));
+        }
+        let cached: ProviderSnapshot = serde_json::from_value(serde_json::json!({
+            "providerID": "codex", "displayName": "Codex", "lines": [], "refreshedAt": "2026-09-27T00:00:00Z"
+        }))
+        .unwrap();
+        assert_eq!(cached.plan_term, None);
     }
 }

@@ -15,7 +15,7 @@ pub use metric::{
     ProgressLine, TextLine, ValuesLine,
 };
 pub use provider::{Provider, ProviderLink};
-pub use snapshot::ProviderSnapshot;
+pub use snapshot::{PlanTerm, ProviderSnapshot};
 pub use usage::{
     DailyModelUsageEntry, DailyUsageEntry, DailyUsageSeries, LogUsageScan, ModelUsageBreakdown,
     ModelUsageEntry, ModelUsageSeries, ModelUsageVariant, ModelsByDay, ProviderUsageHistory,

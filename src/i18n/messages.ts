@@ -3,6 +3,7 @@
  * controls word order (English "95% left" vs Vietnamese "Còn 95%").
  */
 import type { ErrorCategory, LimitResetResult, UpdateFailureReason, UpdateFailureStage } from "@/lib/types";
+import type { PlanTermLeft } from "@/model/planTerm";
 import type { GlanceContent, IslandStyle, TaskbarDisplay } from "@/model/settings";
 import type { PriceMessages, UsageMessages } from "./usageMessages";
 
@@ -27,6 +28,8 @@ export type RestoreDay = { kind: "today" } | { kind: "tomorrow" } | { kind: "on"
 export interface FormatMessages {
   duration(days: number, hours: number, minutes: number): string;
   monthDay(date: Date): string;
+  /** A date with its year, e.g. `31/07/2026` / `Jul 31, 2026`. */
+  calendarDate(date: Date): string;
   when(when: When): string;
   deadline(verb: DeadlineVerb, when: When): string;
   /** The line under a reset countdown, e.g. `Hồi lại lúc 13:05 · T6 02/10`. */
@@ -96,6 +99,14 @@ export interface DashboardMessages {
   trendRange(days: number, first: string, last: string): string;
   expiryStatus(severity: "normal" | "warning" | "critical"): string;
   unknownPricingWarning: string;
+  /** The card header's right corner: time left in the plan's paid period, e.g. `còn 19 ngày`. */
+  planTermLeft(left: PlanTermLeft, estimated: boolean): string;
+  /** Under it, the day the period ends, e.g. `tới T7 17/10` / `tới ~T4 30/09`; `ended` names the past day alone. */
+  planTermDay(day: RestoreDay, estimated: boolean, ended: boolean): string;
+  /** Hover notes; `time` is a clock time with its day, `offset` the device zone's GMT offset. */
+  planTermStatedNote(time: string, offset: string, checked: string | null): string;
+  planTermEndedNote(time: string, offset: string): string;
+  planTermEstimateNote(time: string, offset: string, started: string): string;
 }
 
 export interface TotalSpendMessages {

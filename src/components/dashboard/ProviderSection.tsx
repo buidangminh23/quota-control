@@ -19,6 +19,7 @@ import {
   type ProviderMetrics,
 } from "@/model/layout";
 import { accountEmailOf, accountLabelOf, brandName, headerNotice, providerBrand, providerTitle, stalenessHint } from "@/model/providerText";
+import { planTermLines } from "@/model/planTermLines";
 import { knownBrandColor } from "@/model/totalSpend";
 import { condensedTextRowOffsets, widgetDataFor, type DisplayOptions, type WidgetData } from "@/model/widgetData";
 import { useBarKind } from "@/state/hooks";
@@ -29,6 +30,7 @@ import { ProviderMark } from "../ui/ProviderMark";
 import { tooltipProps, truncatedTooltipProps } from "../ui/tooltip";
 import { FreeResetRow } from "./FreeResetRow";
 import { MetricRow } from "./MetricRow";
+import { PlanTermCorner } from "./PlanTermCorner";
 import { RedeemResetButton, canRedeemReset } from "./RedeemResetButton";
 
 const CHAT_PRODUCTS: Record<AccountProvider, string> = { claude: "Claude", codex: "ChatGPT" };
@@ -90,6 +92,8 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
   const stale = stalenessHint(runtime, refreshIntervalMs, now, language);
   const refreshing = runtime?.refreshing ?? false;
   const plan = isLocalHistoryCard(providerId) ? undefined : runtime?.snapshot?.plan;
+  const planTerm = isLocalHistoryCard(providerId) ? undefined : runtime?.snapshot?.planTerm;
+  const termLines = planTerm ? planTermLines(planTerm, now, display.timeFormat, language) : null;
   const chat = chatTarget(group);
   const tokenSource = isLocalHistoryCard(providerId);
   const seriesColor = tokenSource ? knownBrandColor(providerBrand(group.provider), false) : null;
@@ -152,7 +156,7 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
   return (
     <section className="uc-section" aria-label={title} style={seriesColor ? ({ "--uc-series-color": seriesColor } as CSSProperties) : undefined}>
       <header
-        className="uc-section-head"
+        className={termLines ? "uc-section-head has-term" : "uc-section-head"}
         onContextMenu={(event) => {
           event.preventDefault();
           openMenu({ entries: headerEntries(), anchor: { x: event.clientX, y: event.clientY } });
@@ -188,6 +192,7 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
             {email}
           </div>
         ) : null}
+        {termLines ? <PlanTermCorner lines={termLines} /> : null}
       </header>
       <div className="uc-card uc-metric-card">
         {!tokenSource && providerBrand(group.provider) === "codex" ? <FreeResetRow now={now} /> : null}

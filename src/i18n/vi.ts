@@ -64,6 +64,10 @@ export const vi: Messages = {
       const parts = zonedParts(date);
       return `${parts.day}/${parts.month}`;
     },
+    calendarDate: (date) => {
+      const parts = zonedParts(date);
+      return `${twoDigits(parts.day)}/${twoDigits(parts.month)}/${parts.year}`;
+    },
     when,
     deadline(verb, value) {
       const phrases = VERBS[verb];
@@ -166,6 +170,26 @@ export const vi: Messages = {
         critical: "Có lượt đặt lại hết hạn trong 48 giờ",
       })[severity],
     unknownPricingWarning: "Khoảng này dùng mô hình chưa rõ giá",
+    planTermLeft(left, estimated) {
+      const about = estimated ? "~" : "";
+      switch (left.kind) {
+        case "days":
+          return `còn ${about}${left.count} ngày`;
+        case "hours":
+          return `còn ${about}${left.count} giờ`;
+        case "minutes":
+          return `còn ${about}${left.count} phút`;
+        case "due":
+          return "đã tới hạn";
+      }
+    },
+    planTermDay: (day, estimated, ended) => (ended ? restoreDay(day) : `tới ${estimated ? "~" : ""}${restoreDay(day)}`),
+    planTermStatedNote: (time, offset, checked) =>
+      `Gói hết kỳ lúc ${time} · ${offset}. Ngày do ChatGPT ghi trong phiên đăng nhập${checked ? `, kiểm tra lần cuối ${checked}` : ""}. Gói tự gia hạn thì đây là ngày gia hạn.`,
+    planTermEndedNote: (time, offset) =>
+      `Kỳ gói đã hết lúc ${time} · ${offset}. ChatGPT gửi ngày của kỳ mới khi phiên đăng nhập tự làm mới.`,
+    planTermEstimateNote: (time, offset, started) =>
+      `Khoảng ${time} · ${offset}, ước tính. Anthropic chỉ cho biết ngày đăng ký gói (${started}), không cho biết ngày gia hạn, nên ngày này tính theo chu kỳ tháng từ ngày đăng ký.`,
   },
   totalSpend: {
     metric: (key) => ({ cost: "Chi phí", costPerMtok: "Chi phí mỗi triệu token", tokens: "Token" })[key],

@@ -1343,3 +1343,103 @@ async fn claude_cli_invalid_session_does_not_attempt_profile_verification() {
         assert!(client.requests.lock().unwrap().is_empty());
     }
 }
+
+struct TermHttp {
+    profile: Value,
+    profile_calls: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl HttpClient for TermHttp {
+    async fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        assert_eq!(request.method, "GET");
+        let body = if request.url.ends_with("/api/oauth/profile") {
+            self.profile_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.profile.clone()
+        } else {
+            assert!(request.url.ends_with("/api/oauth/usage"), "{}", request.url);
+            json!({"five_hour":{"utilization":15}})
+        };
+        Ok(HttpResponse {
+            status: 200,
+            headers: HashMap::new(),
+            body: serde_json::to_vec(&body).unwrap(),
+        })
+    }
+}
+
+fn subscription_start() -> chrono::DateTime<Utc> {
+    use chrono::TimeZone;
+    Utc.with_ymd_and_hms(2026, 7, 31, 3, 40, 9).unwrap()
+}
+
+#[tokio::test]
+async fn browser_claude_cards_read_the_subscription_start_from_the_live_profile_once() {
+    let (_dir, store) = store();
+    let document = claude_doc(4_000_000_000_000);
+    let record = store
+        .import(
+            "claude",
+            "Managed",
+            "account-a|org-a",
+            &document,
+            CredentialMode::ManagedOauth,
+        )
+        .unwrap();
+    let client = Arc::new(TermHttp {
+        profile: json!({"account":{"uuid":"account-a"},"organization":{"uuid":"org-a","subscription_created_at":"2026-07-31T03:40:09Z"}}),
+        profile_calls: Default::default(),
+    });
+    let runtime = runtimes_with_client(store.clone(), client.clone())
+        .unwrap()
+        .remove(0);
+    for _ in 0..2 {
+        let snapshot = runtime.refresh(RefreshContext::manual()).await;
+        assert!(!snapshot.is_error(), "{:?}", snapshot.error_category);
+        assert_eq!(
+            snapshot.plan_term,
+            Some(uc_core::PlanTerm::MonthlyFrom {
+                started_at: subscription_start()
+            })
+        );
+    }
+    assert_eq!(
+        client
+            .profile_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+    assert_eq!(store.credentials(&record.id).unwrap(), document);
+}
+
+#[tokio::test]
+async fn claude_cli_cards_take_the_subscription_start_from_claude_code_without_asking() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = cli_profile_http(200, false);
+    let (runtime, _) = claude_cli_fixture(directory.path(), "fixture-old", client.clone());
+    let mut profile = claude_doc(1);
+    profile["oauthAccount"]["subscriptionCreatedAt"] = json!("2026-07-31T03:40:09Z");
+    std::fs::write(
+        directory.path().join(".claude.json"),
+        serde_json::to_vec(&profile).unwrap(),
+    )
+    .unwrap();
+    let snapshot = runtime.refresh(RefreshContext::scheduled()).await;
+    assert_eq!(snapshot.error_category, None);
+    assert_eq!(
+        snapshot.plan_term,
+        Some(uc_core::PlanTerm::MonthlyFrom {
+            started_at: subscription_start()
+        })
+    );
+    let requests = client.requests.lock().unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.url.ends_with("/profile"))
+            .count(),
+        1,
+        "only the identity check may read the profile"
+    );
+}

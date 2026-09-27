@@ -287,12 +287,13 @@ pub(crate) fn read_cli_account(
     profile: Option<PathBuf>,
 ) -> Result<(CliAccount, Credentials), SimpleProviderError> {
     let mut document = read_location(&location, kind)?;
-    let credentials = parse_credentials(kind, &document)?;
+    let mut credentials = parse_credentials(kind, &document)?;
     if kind == ProviderKind::Claude {
         let profile = profile.as_deref().ok_or_else(|| {
             auth_error("Claude account metadata is unavailable. Connect through the browser.")
         })?;
         document["oauthAccount"] = read_json_file(profile, kind)?["oauthAccount"].clone();
+        credentials.plan_term = crate::plan_term::from_document(kind, &document);
     }
     let key = identity(kind, &document)?;
     let email = match kind {

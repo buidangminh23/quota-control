@@ -134,7 +134,8 @@ function daysBetween(now: Date, date: Date): number {
   return calendarDaysBetween(now, date);
 }
 
-function restoreDayOf(date: Date, now: Date, relative = true): RestoreDay {
+/** The day of `date` next to a clock time: today, tomorrow or its weekday and date in the device's zone. */
+export function restoreDayOf(date: Date, now: Date, relative = true): RestoreDay {
   if (!relative) return { kind: "on", date };
   const dayDiff = daysBetween(now, date);
   return dayDiff <= 0 ? { kind: "today" } : dayDiff === 1 ? { kind: "tomorrow" } : { kind: "on", date };

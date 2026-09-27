@@ -37,6 +37,53 @@
   color: var(--uc-secondary);
 }
 
+/* The plan period takes the header's right column; its two lines share the title and email rows. */
+.uc-section-head.has-term {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.uc-section-head.has-term > .uc-section-header {
+  grid-area: 1 / 1;
+}
+
+.uc-section-head.has-term > .uc-section-account {
+  grid-area: 2 / 1;
+}
+
+.uc-plan-term {
+  display: grid;
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  grid-template-rows: subgrid;
+  justify-items: end;
+  padding-right: 12px;
+  font-size: var(--uc-plan-size);
+  white-space: nowrap;
+}
+
+/* The line box takes the name's font size (the line's strut) and the words sit in it at the plan
+   size, so their baseline meets the plan badge's instead of sitting centered a little higher. */
+.uc-plan-term-left {
+  align-self: center;
+  font-size: var(--uc-header-size);
+  color: var(--uc-secondary);
+}
+
+.uc-plan-term-left > span {
+  font-size: var(--uc-plan-size);
+  font-weight: 500;
+}
+
+.uc-plan-term-day {
+  padding-bottom: 2px;
+  color: var(--uc-tertiary);
+}
+
+.uc-plan-term.is-soon > span {
+  color: var(--uc-notice-text);
+}
+
 .uc-section-header.is-spend {
   padding-left: 4px;
   padding-right: 4px;

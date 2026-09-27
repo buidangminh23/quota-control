@@ -44,6 +44,7 @@ export const en: Messages = {
       return `${minutes}m`;
     },
     monthDay: (date) => date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: deviceTimeZone() }),
+    calendarDate: (date) => date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: deviceTimeZone() }),
     when,
     deadline(verb, value) {
       const prefix = VERBS[verb];
@@ -134,6 +135,25 @@ export const en: Messages = {
         critical: "A reset credit expires within 48 hours",
       })[severity],
     unknownPricingWarning: "This period used a model with unknown pricing",
+    planTermLeft(left, estimated) {
+      const about = estimated ? "~" : "";
+      switch (left.kind) {
+        case "days":
+          return `${about}${left.count} ${left.count === 1 ? "day" : "days"} left`;
+        case "hours":
+          return `${about}${left.count} ${left.count === 1 ? "hour" : "hours"} left`;
+        case "minutes":
+          return `${about}${left.count} min left`;
+        case "due":
+          return "Period ended";
+      }
+    },
+    planTermDay: (day, estimated, ended) => `${estimated && !ended ? "~" : ""}${restoreDay(day)}`,
+    planTermStatedNote: (time, offset, checked) =>
+      `The plan period ends at ${time} · ${offset}. ChatGPT states this date in the login${checked ? `, last checked ${checked}` : ""}. If the plan renews automatically, this is the renewal date.`,
+    planTermEndedNote: (time, offset) => `The plan period ended at ${time} · ${offset}. ChatGPT sends the next period's date when the login renews itself.`,
+    planTermEstimateNote: (time, offset, started) =>
+      `Around ${time} · ${offset}, estimated. Anthropic only states when the subscription started (${started}), not when it renews, so this counts monthly from that day.`,
   },
   totalSpend: {
     metric: (key) => ({ cost: "Cost", costPerMtok: "Cost/MTok", tokens: "Tokens" })[key],

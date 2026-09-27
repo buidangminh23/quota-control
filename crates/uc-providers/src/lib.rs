@@ -3,6 +3,7 @@ pub mod credentials;
 pub mod keychain;
 pub mod mapping;
 pub mod oauth;
+mod plan_term;
 
 pub use accounts::{
     CliAccount, VisibleAccount, account_runtimes, cli_accounts, cli_accounts_keeping,
@@ -66,6 +67,7 @@ pub struct LocalProvider {
     refresh_endpoint: String,
     cooldown: tokio::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>>,
     cli: Option<CliBinding>,
+    profile_term: plan_term::ProfileTerm,
 }
 
 /// The CLI login a card follows, checked on every refresh so that a CLI that switched accounts
@@ -94,6 +96,7 @@ impl LocalProvider {
             refresh_endpoint: accounts::refresh_url(kind).into(),
             cooldown: tokio::sync::Mutex::new(None),
             cli: None,
+            profile_term: Default::default(),
         }
     }
 
@@ -296,12 +299,22 @@ impl LocalProvider {
         {
             line.expiries_at = expiries;
         }
+        let plan_term = match credentials.plan_term.take() {
+            Some(term) => Some(term),
+            None if self.kind == ProviderKind::Claude && self.credentials.is_managed() => {
+                self.profile_term
+                    .get(&self.http, &credentials.access_token, now)
+                    .await
+            }
+            None => None,
+        };
         Ok(ProviderSnapshot::make(
             &self.provider,
             mapped.plan.or(credentials.plan),
             mapped.lines,
             now,
-        ))
+        )
+        .with_plan_term(plan_term))
     }
 
     /// Codex's banked resets live next to its usage endpoint; Claude banks none.

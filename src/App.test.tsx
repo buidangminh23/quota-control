@@ -285,6 +285,20 @@ describe("popup", () => {
     expect(screen.getByText("Claude · Cá nhân")).toHaveClass("uc-section-name");
   });
 
+  it("shows how long each plan's paid period has left in the card header's right corner", async () => {
+    await renderApp();
+    const codex = screen.getByRole("region", { name: "Codex" });
+    const stated = within(codex).getByRole("group", { name: /^còn 20 ngày\. tới .+\. Gói hết kỳ lúc .+ · GMT/ });
+    expect(stated).not.toHaveClass("is-soon");
+    expect(stated.closest("header")).toHaveClass("has-term");
+    const work = screen.getByRole("region", { name: "Claude · Công ty" });
+    const estimate = within(work).getByRole("group", { name: /^còn ~\d+ ngày\. tới ~.+\. Khoảng .+, ước tính\./ });
+    expect(within(estimate).getByText(/^tới ~/)).toHaveClass("uc-plan-term-day");
+    const personal = screen.getByRole("region", { name: "Claude · Cá nhân" });
+    expect(within(personal).queryByRole("group", { name: /^còn / })).not.toBeInTheDocument();
+    expect(personal.querySelector("header")).not.toHaveClass("has-term");
+  });
+
   it("lists connected accounts with a Google sign-in and in-app chat actions", async () => {
     await renderApp();
     act(() => useApp.setState({ screen: "accounts" }));

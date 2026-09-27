@@ -5,7 +5,7 @@ use std::sync::Arc;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use uc_accounts::{AccountRecord, AccountStore};
+use uc_accounts::{AccountRecord, AccountStore, CredentialMode};
 use uc_core::{ErrorCategory, SimpleProviderError, paths};
 
 use crate::ProviderKind;
@@ -17,6 +17,8 @@ pub struct Credentials {
     pub(crate) plan: Option<String>,
     pub(crate) expires_at: Option<DateTime<Utc>>,
     pub(crate) profile_scope: bool,
+    /// The plan's paid period as the login document states or implies it.
+    pub(crate) plan_term: Option<uc_core::PlanTerm>,
 }
 
 #[derive(Clone)]
@@ -94,6 +96,11 @@ impl CredentialStore {
 
     pub fn path(&self) -> Option<&Path> {
         self.location().and_then(CliLocation::path)
+    }
+
+    /// True for a browser-connected account, whose session this app owns and renews.
+    pub(crate) fn is_managed(&self) -> bool {
+        matches!(&self.source, CredentialSource::Account { record, .. } if record.credential_mode == CredentialMode::ManagedOauth)
     }
 
     pub fn for_account(
@@ -263,6 +270,7 @@ pub(crate) fn parse_credentials(
                 plan,
                 expires_at,
                 profile_scope,
+                plan_term: crate::plan_term::from_document(kind, body),
             })
         }
         ProviderKind::Codex => {
@@ -288,6 +296,7 @@ pub(crate) fn parse_credentials(
                 plan: None,
                 expires_at,
                 profile_scope: true,
+                plan_term: crate::plan_term::from_document(kind, body),
             })
         }
     }
