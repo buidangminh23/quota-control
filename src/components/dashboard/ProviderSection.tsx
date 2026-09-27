@@ -27,6 +27,7 @@ import { ChevronDown, ChevronUp, ExternalIcon, Spinner, WarningTriangle } from "
 import { openMenu, type MenuEntry } from "../ui/menu";
 import { ProviderMark } from "../ui/ProviderMark";
 import { tooltipProps, truncatedTooltipProps } from "../ui/tooltip";
+import { FreeResetRow } from "./FreeResetRow";
 import { MetricRow } from "./MetricRow";
 import { RedeemResetButton, canRedeemReset } from "./RedeemResetButton";
 
@@ -189,6 +190,7 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
         ) : null}
       </header>
       <div className="uc-card uc-metric-card">
+        {!tokenSource && providerBrand(group.provider) === "codex" ? <FreeResetRow now={now} /> : null}
         {always.map(renderRow)}
         {hasExpandable ? (
           <button

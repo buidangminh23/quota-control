@@ -9,6 +9,7 @@ import type { BenchmarkCategory } from "@/model/insights/epoch";
 import type { EffortLevel } from "@/model/insights/modelNames";
 import type { QualityPartKey, QualityRange } from "@/model/insights/quality";
 import type { ForecastHorizon, ResetKind } from "@/model/insights/resets";
+import type { NamedDay, ResetWindow } from "@/model/insights/upcomingReset";
 import type { BenchmarkView } from "@/state/insights";
 import { insightsEn } from "./insightsEn";
 import { insightsVi } from "./insightsVi";
@@ -159,6 +160,32 @@ export interface InsightsMessages {
   notifyResetTitle: string;
   notifyScheduledTitle: string;
   notifyWatchTitle(level: "elevated" | "strong"): string;
+
+  /** The row on a Codex card counting down to the next free reset. */
+  freeResetTitle(origin: "scheduled" | "watch", kind: ResetKind | null): string;
+  freeResetIn(duration: string, estimate: boolean): string;
+  freeResetWithin(duration: string): string;
+  freeResetNoTime: string;
+  freeResetAwaiting: string;
+  /** Captions; `time` is a clock time with its day, e.g. `08:00 · T2 28/09`. */
+  freeResetAt(time: string, offset: string): string;
+  freeResetAround(time: string, offset: string): string;
+  freeResetBy(time: string, offset: string, chance: string | null): string;
+  freeResetDue(time: string, offset: string): string;
+  freeResetWindow(window: ResetWindow): string;
+  freeResetUntimed: string;
+  namedDay(day: NamedDay): string;
+  /** The line under an estimated time naming the post's own day, e.g. `“Ngày mai” theo giờ Mỹ`. */
+  freeResetDayNote(day: string): string;
+  /** Hover lines: where the reset comes from, then how its time was worked out. */
+  freeResetPosted(time: string, post: string): string;
+  freeResetWatched(time: string, post: string): string;
+  freeResetHowExact(fromSite: boolean, zone: string): string;
+  freeResetHowDay(day: string, zone: string): string;
+  freeResetHowBy(chance: string | null): string;
+  freeResetHowWindow(window: ResetWindow): string;
+  freeResetHowUntimed: string;
+  freeResetOpenTab: string;
 }
 
 const CATALOGS: Record<Language, InsightsMessages> = { vi: insightsVi, en: insightsEn };

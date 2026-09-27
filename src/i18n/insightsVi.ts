@@ -1,5 +1,8 @@
 /** Vietnamese text for the Benchmark and Reset tabs. */
+import type { ResetWindow } from "@/model/insights/upcomingReset";
 import type { InsightsMessages } from "./insights";
+
+const VI_WINDOWS: Record<ResetWindow, string> = { thisWeek: "Trong tuần này", weekend: "Cuối tuần này", nextWeek: "Tuần sau" };
 
 export const insightsVi: InsightsMessages = {
   source: (source) => (source === "claude" ? "Claude Code" : "Codex"),
@@ -194,4 +197,41 @@ export const insightsVi: InsightsMessages = {
   notifyResetTitle: "Codex vừa reset",
   notifyScheduledTitle: "Codex hẹn reset",
   notifyWatchTitle: (level) => (level === "strong" ? "Codex Resets: dấu hiệu mạnh sắp reset" : "Codex Resets: có dấu hiệu sắp reset"),
+
+  freeResetTitle: (origin, kind) => (origin === "watch" ? "Có thể reset" : kind === "banked" ? "Tặng lượt để dành" : "Reset free"),
+  freeResetIn: (duration, estimate) => (estimate ? `sau ~${duration}` : `sau ${duration}`),
+  freeResetWithin: (duration) => `trong ${duration} tới`,
+  freeResetNoTime: "chưa rõ giờ",
+  freeResetAwaiting: "chờ xác nhận",
+  freeResetAt: (time, offset) => `Lúc ${time} · ${offset}`,
+  freeResetAround: (time, offset) => `Khoảng ${time} · ${offset}`,
+  freeResetBy: (time, offset, chance) => (chance ? `${chance} · trước ${time} · ${offset}` : `Trước ${time} · ${offset}`),
+  freeResetDue: (time, offset) => `Hẹn ${time} · ${offset}`,
+  freeResetWindow: (window) => `${VI_WINDOWS[window]} giờ Mỹ`,
+  freeResetUntimed: "Bài đăng chưa nói khi nào",
+  namedDay: (day) => {
+    switch (day.kind) {
+      case "today":
+        return "Hôm nay";
+      case "tonight":
+        return "Tối nay";
+      case "tomorrow":
+        return "Ngày mai";
+      case "weekday":
+        return ["Chủ nhật", "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy"][day.weekday] ?? "";
+    }
+  },
+  freeResetDayNote: (day) => `“${day}” theo giờ Mỹ`,
+  freeResetPosted: (time, post) => `@thsottiaux đăng lúc ${time}:\n“${post}”`,
+  freeResetWatched: (time, post) => `Codex Resets thấy dấu hiệu từ ${time}:\n“${post}”`,
+  freeResetHowExact: (fromSite, zone) =>
+    `${fromSite ? "Codex Resets ghi giờ hẹn cụ thể" : "Giờ lấy từ bài đăng"}; đã đổi sang múi giờ của máy (${zone}).`,
+  freeResetHowDay: (day, zone) =>
+    `“${day}” tính theo giờ San Francisco, nơi đăng bài. Bài không nói giờ nên app lấy giờ đăng của ngày đó (ngày mai là 24 giờ sau lúc đăng), rồi đổi sang múi giờ của máy (${zone}).`,
+  freeResetHowBy: (chance) =>
+    `Codex Resets theo dõi đến giờ trên${chance ? `, ước tính ${chance}` : ""}. Đây là dự đoán của họ, không phải OpenAI hứa.`,
+  freeResetHowWindow: (window) =>
+    `Bài đăng chỉ nói ${VI_WINDOWS[window].toLocaleLowerCase("vi-VN")} (giờ San Francisco), chưa có giờ để đếm ngược.`,
+  freeResetHowUntimed: "Bài đăng chưa nói khi nào; dòng này tự ẩn sau 7 ngày nếu chưa có giờ.",
+  freeResetOpenTab: "Bấm để mở tab Reset Codex.",
 };

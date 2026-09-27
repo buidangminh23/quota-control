@@ -239,3 +239,42 @@ describe("reset notifications", () => {
     expect(JSON.parse(window.localStorage.getItem("quota-control.codex-resets-notified") ?? "{}")).toMatchObject({ watch: `strong@${observed}` });
   });
 });
+
+describe("free reset on the Codex card", () => {
+  async function pushScheduled(api: MockBackend, scheduled: Record<string, unknown>) {
+    const status = await api.publicFeed("codexResetStatus");
+    const body = JSON.parse(status.body!) as { data: { scheduled_reset: Record<string, unknown> } };
+    body.data.scheduled_reset = { ...body.data.scheduled_reset, ...scheduled };
+    act(() => useInsights.setState({ feeds: { ...useInsights.getState().feeds, codexResetStatus: { ...status, body: JSON.stringify(body) } } }));
+  }
+
+  it("counts down to an announced reset on Codex cards only and opens the Reset tab", async () => {
+    const api = await renderApp();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    await pushScheduled(api, { id: "42", scheduled_for: new Date(Date.now() + 3 * 3_600_000 - 30_000).toISOString(), text: "Resetting everyone soon" });
+
+    const codex = screen.getByRole("region", { name: "Codex" });
+    const row = within(codex).getByRole("button", { name: /^Reset free: sau 3 giờ\. Lúc .+ · GMT([+-]\d+(:\d{2})?)?$/ });
+    expect(within(row).getByText("sau 3 giờ")).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Claude · Công ty" })).queryByText("Reset free")).not.toBeInTheDocument();
+
+    fireEvent.click(row);
+    expect(screen.getByRole("tab", { name: "Reset" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("counts 'tomorrow' down from 24 hours when the post gives no time", async () => {
+    const api = await renderApp();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    await pushScheduled(api, { id: "43", announced_at: new Date(Date.now() - 5 * 60_000).toISOString(), scheduled_for: null, text: "More resets coming tomorrow" });
+    const row = within(screen.getByRole("region", { name: "Codex" })).getByRole("button", {
+      name: /^Reset free: sau ~23 giờ 5\d phút\. Khoảng .+ · GMT([+-]\d+(:\d{2})?)?\. “Ngày mai” theo giờ Mỹ$/,
+    });
+    expect(within(row).getByText("“Ngày mai” theo giờ Mỹ")).toBeInTheDocument();
+  });
+
+  it("stays away while reset tracking is off", async () => {
+    await renderApp({ showResetsTab: false, notifyCodexResets: false });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    expect(screen.queryByText("Reset free")).not.toBeInTheDocument();
+  });
+});

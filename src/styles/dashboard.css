@@ -234,6 +234,52 @@ button.uc-row-warning:hover {
   text-underline-offset: 2px;
 }
 
+/* The free-reset countdown atop a Codex card: a text row's rhythm with the restore caption under it. */
+.uc-free-reset {
+  --uc-free-reset-tone: var(--uc-positive-text);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding-top: var(--uc-text-row-pad);
+  padding-bottom: var(--uc-text-row-pad);
+  text-align: left;
+}
+
+.uc-free-reset.is-watch {
+  --uc-free-reset-tone: var(--uc-notice-text);
+}
+
+.uc-free-reset.is-awaiting {
+  --uc-free-reset-tone: var(--uc-secondary);
+}
+
+.uc-free-reset-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  font-weight: 600;
+  color: var(--uc-label);
+}
+
+.uc-free-reset-title svg,
+.uc-free-reset-value {
+  color: var(--uc-free-reset-tone);
+}
+
+button.uc-free-reset:hover .uc-free-reset-value {
+  text-decoration: underline;
+  text-decoration-color: var(--uc-quaternary);
+  text-underline-offset: 2px;
+}
+
+button.uc-free-reset:focus-visible {
+  outline: 2px solid var(--uc-accent);
+  outline-offset: -2px;
+  border-radius: var(--uc-control-radius);
+}
+
 .uc-row.is-text {
   display: flex;
   align-items: center;

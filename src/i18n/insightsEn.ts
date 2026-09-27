@@ -1,5 +1,8 @@
 /** English text for the Benchmark and Reset tabs. */
+import type { ResetWindow } from "@/model/insights/upcomingReset";
 import type { InsightsMessages } from "./insights";
+
+const EN_WINDOWS: Record<ResetWindow, string> = { thisWeek: "This week", weekend: "This weekend", nextWeek: "Next week" };
 
 export const insightsEn: InsightsMessages = {
   source: (source) => (source === "claude" ? "Claude Code" : "Codex"),
@@ -193,4 +196,40 @@ export const insightsEn: InsightsMessages = {
   notifyResetTitle: "Codex just reset",
   notifyScheduledTitle: "Codex reset announced",
   notifyWatchTitle: (level) => (level === "strong" ? "Codex Resets: strong signs of a reset" : "Codex Resets: signs of a reset soon"),
+
+  freeResetTitle: (origin, kind) => (origin === "watch" ? "Possible reset" : kind === "banked" ? "Banked reset" : "Free reset"),
+  freeResetIn: (duration, estimate) => (estimate ? `in ~${duration}` : `in ${duration}`),
+  freeResetWithin: (duration) => `within ${duration}`,
+  freeResetNoTime: "time not given",
+  freeResetAwaiting: "awaiting confirmation",
+  freeResetAt: (time, offset) => `At ${time} · ${offset}`,
+  freeResetAround: (time, offset) => `Around ${time} · ${offset}`,
+  freeResetBy: (time, offset, chance) => (chance ? `${chance} · by ${time} · ${offset}` : `By ${time} · ${offset}`),
+  freeResetDue: (time, offset) => `Due ${time} · ${offset}`,
+  freeResetWindow: (window) => `${EN_WINDOWS[window]}, US Pacific`,
+  freeResetUntimed: "The post gives no time",
+  namedDay: (day) => {
+    switch (day.kind) {
+      case "today":
+        return "Today";
+      case "tonight":
+        return "Tonight";
+      case "tomorrow":
+        return "Tomorrow";
+      case "weekday":
+        return ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][day.weekday] ?? "";
+    }
+  },
+  freeResetDayNote: (day) => `“${day}” in US Pacific time`,
+  freeResetPosted: (time, post) => `@thsottiaux posted at ${time}:\n“${post}”`,
+  freeResetWatched: (time, post) => `Codex Resets has seen signs since ${time}:\n“${post}”`,
+  freeResetHowExact: (fromSite, zone) =>
+    `${fromSite ? "Codex Resets recorded the exact time" : "The time comes from the post"}, shown in this computer's time zone (${zone}).`,
+  freeResetHowDay: (day, zone) =>
+    `“${day}” is read in San Francisco time, where the post was made. The post gives no time, so the app uses the post's own time on that day (tomorrow is 24 hours after the post), shown in this computer's time zone (${zone}).`,
+  freeResetHowBy: (chance) =>
+    `Codex Resets is watching until then${chance ? `, estimating ${chance}` : ""}. This is their forecast, not a promise from OpenAI.`,
+  freeResetHowWindow: (window) => `The post only says ${EN_WINDOWS[window].toLowerCase()} (San Francisco time), with no time to count down to.`,
+  freeResetHowUntimed: "The post does not say when; this line hides after 7 days without a time.",
+  freeResetOpenTab: "Click to open the Codex Reset tab.",
 };
