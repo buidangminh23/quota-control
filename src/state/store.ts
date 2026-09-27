@@ -82,7 +82,7 @@ export interface AppState {
   notice: Notice | null;
   /** The core's self-update state; `null` where there is no updater. */
   update: UpdateStatus | null;
-  /** Key of the update card the user closed (`updateBannerKey`). */
+  /** Key of the update notice the user closed (`updateBannerKey`). */
   dismissedUpdate: string | null;
   /** The core's usage ledger status; `null` until first read. */
   ledgerInfo: UsageLedgerInfo | null;
@@ -358,7 +358,7 @@ function watchWindowResets(state: EngineState, now: Date): void {
   );
 }
 
-/** Look for a new release now; the result shows on the update card and in Settings. */
+/** Look for a new release now; the result shows in the update dialog and in Settings. */
 export function checkForUpdates(): void {
   const api = backend();
   if (!api.checkForUpdate) return;
@@ -377,10 +377,18 @@ export function installUpdate(): void {
   void api.installUpdate().catch(logFailure("Installing the update"));
 }
 
-/** Close the update card until something new happens (upstream's banner close button). */
+/** Close the update notice until something new happens (upstream's banner close button). */
 export function dismissUpdate(): void {
   const key = updateBannerKey(get().update);
   if (key) set({ dismissedUpdate: key });
+}
+
+/** The update dialog has shown which version this launch replaced. */
+export function acknowledgeUpdate(): void {
+  const update = get().update;
+  if (!update?.updatedFrom) return;
+  set({ update: { ...update, updatedFrom: undefined } });
+  void backend().acknowledgeUpdate?.().catch(logFailure("Acknowledging the update"));
 }
 
 export async function reloadAccounts(): Promise<void> {

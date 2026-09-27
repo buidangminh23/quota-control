@@ -442,4 +442,6 @@ export interface UpdateStatus {
   /** When the last check finished (ISO-8601). */
   checkedAt?: string;
   failure?: { stage: UpdateFailureStage; reason: UpdateFailureReason };
+  /** The version this launch replaced, until the popup has shown it (`acknowledgeUpdate`). */
+  updatedFrom?: string;
 }

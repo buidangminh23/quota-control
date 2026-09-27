@@ -1,14 +1,17 @@
 /**
- * What the dashboard's update card shows for an `UpdateStatus` (upstream `UpdateBannerCard`, which
- * only covered "Update Available"; here the card also carries the install's progress and the outcome
- * of a check the user started, since the popup has no separate updater window).
+ * What the update dialog shows for an `UpdateStatus` (upstream `UpdateBannerCard`, which only
+ * covered "Update Available" as a dashboard card): the version this launch replaced, a release a
+ * background check found, the install's progress, and the outcome of a check or install the user
+ * started.
  *
- * Background checks stay silent unless they find a release. Closing the card snoozes it: the key
- * includes the check time, so the next check that still finds the release shows it again.
+ * Background checks stay silent unless they find a release. Closing a notice snoozes it: its key
+ * includes the check time, so the next check that still finds the release shows it again, and a
+ * progress notice stays closed only for its own step.
  */
 import type { UpdateFailureReason, UpdateFailureStage, UpdateStatus } from "@/lib/types";
 
 export type UpdateBanner =
+  | { kind: "updated"; from: string; version: string }
   | { kind: "checking" }
   | { kind: "available"; version: string; notes?: string }
   | { kind: "downloading"; version: string; fraction: number | null }
@@ -16,6 +19,7 @@ export type UpdateBanner =
   | { kind: "upToDate"; version: string }
   | { kind: "failed"; stage: UpdateFailureStage; reason: UpdateFailureReason; version?: string };
 
+/** The step in progress or the outcome of the last one, apart from the version this launch replaced. */
 export function updateBannerOf(status: UpdateStatus | null): UpdateBanner | null {
   if (!status) return null;
   const version = status.available?.version;
@@ -44,17 +48,38 @@ export function updateBannerOf(status: UpdateStatus | null): UpdateBanner | null
   }
 }
 
-/** The card can be closed; progress cards stay until the step ends. */
-export function isDismissible(banner: UpdateBanner): boolean {
-  return banner.kind === "available" || banner.kind === "upToDate" || banner.kind === "failed";
-}
-
-/** Identity of the card for snoozing, or `null` when there is nothing to close. */
+/** Identity of the step's notice for snoozing, or `null` when there is none. */
 export function updateBannerKey(status: UpdateStatus | null): string | null {
   const banner = updateBannerOf(status);
-  if (!banner || !isDismissible(banner) || !status) return null;
-  const stage = banner.kind === "failed" ? banner.stage : "";
-  return [banner.kind, status.available?.version ?? "", status.checkedAt ?? "", stage].join("|");
+  if (!banner || !status) return null;
+  const version = status.available?.version ?? "";
+  switch (banner.kind) {
+    case "downloading":
+    case "installing":
+      return [banner.kind, version].join("|");
+    case "failed":
+      return [banner.kind, version, status.checkedAt ?? "", banner.stage].join("|");
+    default:
+      return [banner.kind, version, status.checkedAt ?? ""].join("|");
+  }
+}
+
+function inProgress(banner: UpdateBanner): boolean {
+  return banner.kind === "checking" || banner.kind === "downloading" || banner.kind === "installing";
+}
+
+/**
+ * The notice the dialog shows: a step in progress first, then the version this launch replaced,
+ * then the step's outcome, skipping the one the user closed (`dismissed`, an `updateBannerKey`).
+ */
+export function updateNoticeOf(status: UpdateStatus | null, dismissed: string | null): UpdateBanner | null {
+  if (!status) return null;
+  const banner = updateBannerOf(status);
+  const key = updateBannerKey(status);
+  const step = banner && key !== dismissed ? banner : null;
+  if (step && inProgress(step)) return step;
+  if (status.updatedFrom) return { kind: "updated", from: status.updatedFrom, version: status.currentVersion };
+  return step;
 }
 
 /** Results of a check the user started, which should not greet them again the next time the popup opens. */

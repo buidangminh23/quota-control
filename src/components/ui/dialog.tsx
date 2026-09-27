@@ -20,6 +20,7 @@ export interface DialogRequest {
 }
 
 let request: DialogRequest | null = null;
+let holds = 0;
 const listeners = new Set<() => void>();
 
 function emit(): void {
@@ -49,7 +50,23 @@ export function closeDialog(): void {
 }
 
 export function isDialogOpen(): boolean {
-  return request !== null;
+  return request !== null || holds > 0;
+}
+
+/** Another layer's dialog (the update dialog) is showing: `isDialogOpen` stays true until released. */
+export function holdDialog(): () => void {
+  holds += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    holds -= 1;
+  };
+}
+
+/** Whether a dialog opened with `openDialog` is showing. */
+export function useDialogRequest(): boolean {
+  return useSyncExternalStore(subscribe, () => request !== null, () => request !== null);
 }
 
 /** Ask to confirm a destructive action; resolves `true` only when the user confirms. */

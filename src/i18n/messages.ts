@@ -341,12 +341,17 @@ export interface GlanceMessages {
   units: { day: string; hour: string; minute: string };
 }
 
-/** The dashboard's update card and the Settings "App Updates" section. */
+/** The update dialog and the Settings "App Updates" section. */
 export interface UpdateMessages {
   availableTitle: string;
   availableMessage(name: string, version: string): string;
   install: string;
   whatsNew: string;
+  later: string;
+  hide: string;
+  close: string;
+  updatedTitle(version: string): string;
+  updatedMessage(name: string, from: string, to: string): string;
   checking: string;
   upToDateTitle: string;
   upToDateMessage(name: string, version: string): string;

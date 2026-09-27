@@ -4,8 +4,9 @@
 //! signatures. The updater plugin verifies each download against the public key in
 //! `tauri.conf.json`, and `requireSignedVersion` rejects a manifest that pairs a new version
 //! number with an older signed build. A background task checks shortly after launch and then every
-//! six hours while the `automaticUpdateChecks` setting is on; a found update shows as the
-//! dashboard banner and in the tray menu, never as a window of its own.
+//! six hours while the `automaticUpdateChecks` setting is on. A found update shows as a dialog in
+//! the popup and in the tray menu; while the popup is closed, a system notification says so once
+//! per version. The first launch after an update says which version it replaced the same way.
 //!
 //! Installing hands Windows over to the NSIS installer in passive `/UPDATE` mode, which keeps the
 //! shortcuts and launch at login and relaunches the app. On Linux the AppImage is replaced in place
@@ -41,6 +42,8 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(200);
 const MARKER_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 /// The settings document key behind "Check for updates automatically"; missing means on.
 const AUTOMATIC_CHECKS_KEY: &str = "automaticUpdateChecks";
+/// The version the previous launch ran, next to the pending-install marker.
+const LAST_RUN_FILE: &str = "last-version";
 const STATUS_EVENT: &str = "update-status";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -157,6 +160,9 @@ pub struct UpdateStatus {
     pub checked_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure: Option<UpdateFailure>,
+    /// The version this launch replaced, until the popup has shown it (`acknowledge_update`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_from: Option<String>,
 }
 
 impl UpdateStatus {
@@ -171,6 +177,7 @@ impl UpdateStatus {
             total: None,
             checked_at: None,
             failure: None,
+            updated_from: None,
         }
     }
 }
@@ -182,6 +189,8 @@ pub struct Updates {
     /// Checks and installs run one at a time.
     operation: tokio::sync::Mutex<()>,
     last_check: Mutex<Option<SystemTime>>,
+    /// The release a background check last found, so its system notification shows once.
+    announced: Mutex<Option<String>>,
 }
 
 impl Updates {
@@ -195,6 +204,7 @@ impl Updates {
             pending: Mutex::new(None),
             operation: tokio::sync::Mutex::new(()),
             last_check: Mutex::new(None),
+            announced: Mutex::new(None),
         }
     }
 
@@ -204,14 +214,38 @@ impl Updates {
 
     /// Report how the previous launch's install went, then start the background checks.
     pub fn start(&self, app: &AppHandle) {
-        let current = self.status.lock().current_version.clone();
-        match relaunch_outcome(PendingInstall::take(), &current, Utc::now()) {
-            Some(Relaunch::Updated { from, to }) => {
-                tracing::info!(target: "updates", "updated from {from} to {to}");
-                announce_update(app, &to);
-            }
+        let (current, supported) = {
+            let status = self.status.lock();
+            (status.current_version.clone(), status.supported)
+        };
+        let relaunch = relaunch_outcome(PendingInstall::take(), &current, Utc::now());
+        let last_run = if supported {
+            LastRun::replace(&current)
+        } else {
+            None
+        };
+        let replaced = match &relaunch {
+            Some(Relaunch::Updated { from, .. }) => Some(from.clone()),
+            _ => updated_from(last_run.as_deref(), &current),
+        };
+        if let Some(from) = replaced {
+            tracing::info!(target: "updates", "updated from {from} to {current}");
+            notify(
+                app,
+                format!("Đã cập nhật Quota Control lên phiên bản {current}."),
+                format!("Quota Control was updated to version {current}."),
+            );
+            self.publish(app, |status| status.updated_from = Some(from));
+        }
+        match relaunch {
+            Some(Relaunch::Updated { .. }) | None => {}
             Some(Relaunch::Unfinished { to }) => {
                 tracing::warn!(target: "updates", "the install of {to} did not finish; still on {current}");
+                notify(
+                    app,
+                    format!("Chưa cài được bản {to}. Mở Quota Control để thử lại."),
+                    format!("Version {to} didn't install. Open Quota Control to try again."),
+                );
                 self.publish(app, |status| {
                     status.phase = UpdatePhase::Failed;
                     status.manual = true;
@@ -226,7 +260,6 @@ impl Updates {
                     });
                 });
             }
-            None => {}
         }
         match installer(app) {
             Some(kind) if self.status.lock().supported => {
@@ -285,6 +318,7 @@ impl Updates {
             Ok(Some(update)) => {
                 tracing::info!(target: "updates", "{} is available", update.version);
                 let offer = AvailableUpdate::of(&update);
+                let version = offer.version.clone();
                 *self.pending.lock() = Some(update);
                 self.publish(app, |status| {
                     status.phase = UpdatePhase::Available;
@@ -292,6 +326,28 @@ impl Updates {
                     status.checked_at = checked_at;
                     status.failure = None;
                 });
+                let announce = {
+                    let mut announced = self.announced.lock();
+                    let announce = should_announce_offer(
+                        manual,
+                        crate::popup_visible(app),
+                        announced.as_deref(),
+                        &version,
+                    );
+                    if !manual {
+                        *announced = Some(version.clone());
+                    }
+                    announce
+                };
+                if announce {
+                    notify(
+                        app,
+                        format!("Có bản mới {version}. Mở Quota Control để cài."),
+                        format!(
+                            "Version {version} is available. Open Quota Control to install it."
+                        ),
+                    );
+                }
             }
             Ok(None) => {
                 *self.pending.lock() = None;
@@ -409,9 +465,24 @@ impl Updates {
         if stage == FailureStage::Install && cfg!(windows) {
             app.restart();
         }
-        self.pending.lock().take();
+        let version = self.pending.lock().take().map(|update| update.version);
         PendingInstall::remove();
         tracing::warn!(target: "updates", "update {stage:?} failed: {message}");
+        if let Some(version) = version.filter(|_| !crate::popup_visible(app)) {
+            let (vietnamese, english) = match stage {
+                FailureStage::Download => (
+                    format!("Không tải được bản {version}. Mở Quota Control để thử lại."),
+                    format!(
+                        "Couldn't download version {version}. Open Quota Control to try again."
+                    ),
+                ),
+                _ => (
+                    format!("Chưa cài được bản {version}. Mở Quota Control để thử lại."),
+                    format!("Version {version} didn't install. Open Quota Control to try again."),
+                ),
+            };
+            notify(app, vietnamese, english);
+        }
         self.publish(app, |status| {
             status.phase = UpdatePhase::Failed;
             status.failure = Some(UpdateFailure {
@@ -436,6 +507,13 @@ impl Updates {
         }
         if offer_changed && crate::update_tray_menu(app).is_err() {
             tracing::warn!(target: "updates", "could not update the tray menu");
+        }
+    }
+
+    /// The popup has shown which version this launch replaced.
+    pub fn acknowledge_update(&self, app: &AppHandle) {
+        if self.status.lock().updated_from.is_some() {
+            self.publish(app, |status| status.updated_from = None);
         }
     }
 
@@ -532,12 +610,13 @@ fn check_due(last: Option<SystemTime>, now: SystemTime) -> bool {
     })
 }
 
-fn announce_update(app: &AppHandle, version: &str) {
+/// A system notification in the app's language, for update news the closed popup cannot show.
+fn notify(app: &AppHandle, vietnamese: String, english: String) {
     use tauri_plugin_notification::NotificationExt;
     let body = if crate::english(app) {
-        format!("Quota Control was updated to version {version}.")
+        english
     } else {
-        format!("Đã cập nhật Quota Control lên phiên bản {version}.")
+        vietnamese
     };
     if let Err(error) = app
         .notification()
@@ -546,7 +625,54 @@ fn announce_update(app: &AppHandle, version: &str) {
         .body(body)
         .show()
     {
-        tracing::warn!(target: "updates", "could not announce the update: {}", safe_error(error));
+        tracing::warn!(target: "updates", "could not show an update notification: {}", safe_error(error));
+    }
+}
+
+/// A background check found a release: say so with a system notification only while the popup is
+/// closed (the open popup shows its dialog) and once per version.
+fn should_announce_offer(
+    manual: bool,
+    popup_open: bool,
+    announced: Option<&str>,
+    version: &str,
+) -> bool {
+    !manual && !popup_open && announced != Some(version)
+}
+
+/// `previous` when it is an older release than `current`: an update made outside the app (a
+/// downloaded installer, a package manager). A first launch, the same version or a downgrade is not.
+fn updated_from(previous: Option<&str>, current: &str) -> Option<String> {
+    let previous = previous?.trim();
+    let older = semver::Version::parse(previous.trim_start_matches('v')).ok()?;
+    let newer = semver::Version::parse(current.trim_start_matches('v')).ok()?;
+    (older < newer).then(|| previous.to_owned())
+}
+
+/// The version the previous launch of an installed build ran.
+struct LastRun;
+
+impl LastRun {
+    fn path() -> PathBuf {
+        uc_core::paths::cache_dir().join(LAST_RUN_FILE)
+    }
+
+    /// Read the recorded version and record `current` in its place.
+    fn replace(current: &str) -> Option<String> {
+        let path = Self::path();
+        let previous = std::fs::read_to_string(&path)
+            .ok()
+            .map(|text| text.trim().to_owned());
+        if previous.as_deref() != Some(current) {
+            let saved = path
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| uc_core::paths::write_atomic(&path, current.as_bytes()));
+            if let Err(error) = saved {
+                tracing::warn!(target: "updates", "could not record the running version: {error}");
+            }
+        }
+        previous
     }
 }
 
@@ -643,6 +769,11 @@ pub async fn check_for_update(
 #[tauri::command]
 pub async fn install_update(app: AppHandle, updates: State<'_, Updates>) -> Result<(), String> {
     updates.install(&app).await
+}
+
+#[tauri::command]
+pub fn acknowledge_update(app: AppHandle, updates: State<'_, Updates>) {
+    updates.acknowledge_update(&app);
 }
 
 #[cfg(test)]
@@ -801,6 +932,38 @@ mod tests {
         assert_eq!(
             value["failure"],
             serde_json::json!({"stage": "download", "reason": "signature"})
+        );
+    }
+
+    #[test]
+    fn a_newer_version_than_the_last_launch_is_an_update() {
+        assert_eq!(updated_from(Some("0.3.0"), "0.3.1"), Some("0.3.0".into()));
+        assert_eq!(
+            updated_from(Some("v0.2.2\n"), "0.3.1"),
+            Some("v0.2.2".into())
+        );
+        assert_eq!(updated_from(None, "0.3.1"), None);
+        assert_eq!(updated_from(Some("0.3.1"), "0.3.1"), None);
+        assert_eq!(updated_from(Some("0.4.0"), "0.3.1"), None);
+        assert_eq!(updated_from(Some("garbage"), "0.3.1"), None);
+    }
+
+    #[test]
+    fn only_background_offers_found_while_the_popup_is_closed_notify_once() {
+        assert!(should_announce_offer(false, false, None, "0.3.1"));
+        assert!(should_announce_offer(false, false, Some("0.3.0"), "0.3.1"));
+        assert!(!should_announce_offer(false, false, Some("0.3.1"), "0.3.1"));
+        assert!(!should_announce_offer(false, true, None, "0.3.1"));
+        assert!(!should_announce_offer(true, false, None, "0.3.1"));
+    }
+
+    #[test]
+    fn the_replaced_version_reaches_the_popup() {
+        let mut status = UpdateStatus::idle(true, "0.3.1".into());
+        status.updated_from = Some("0.3.0".into());
+        assert_eq!(
+            serde_json::to_value(&status).unwrap()["updatedFrom"],
+            "0.3.0"
         );
     }
 

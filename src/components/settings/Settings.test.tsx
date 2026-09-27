@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { setBackend } from "@/lib/backend";
 import { MockBackend } from "@/lib/mockBackend";
 import { useApp } from "@/state/store";
@@ -92,13 +92,15 @@ describe("app updates", () => {
     expect(await screen.findByText(/^Đang dùng bản mới nhất · kiểm tra lúc .+\.$/)).toBeInTheDocument();
   });
 
-  it("offers the release a check found", async () => {
+  it("offers the release a check found, in the section and in the update dialog", async () => {
     await openSettings();
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Kiểm tra ngay" }));
     });
     expect(await screen.findByText("Đã có bản 0.2.0.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Cài bản mới" })).toBeInTheDocument();
+    const dialog = screen.getByRole("alertdialog", { name: "Có phiên bản mới" });
+    expect(within(dialog).getByRole("button", { name: "Cài bản mới" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Cài bản mới" })).toHaveLength(2);
   });
 
   it("points a build that cannot update itself to the releases page", async () => {

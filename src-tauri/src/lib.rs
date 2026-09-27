@@ -128,6 +128,7 @@ pub fn run() -> anyhow::Result<()> {
             updates::update_status,
             updates::check_for_update,
             updates::install_update,
+            updates::acknowledge_update,
         ]))
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -385,7 +386,7 @@ pub(crate) fn update_tray_menu(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn popup_visible(app: &AppHandle) -> bool {
+pub(crate) fn popup_visible(app: &AppHandle) -> bool {
     app.get_webview_window("popup")
         .and_then(|window| window.is_visible().ok())
         .unwrap_or(false)

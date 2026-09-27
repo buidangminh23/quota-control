@@ -375,11 +375,15 @@ Installed copies update themselves from this repository's GitHub releases.
 
 - About 20 seconds after launch, and then every six hours while **Settings → App Updates → Check
   for Updates Automatically** is on, the app reads `latest.json` from the latest release. A newer
-  version shows a card at the top of the popup with **Install Update** and **What's New**, and the
-  tray menu offers **Install Update X…**. A failed background check stays silent; **Check Now** in
-  Settings and **Check for Updates…** in the tray menu always report their result.
+  version opens a dialog in the popup with **Install Update**, **What's New** and **Later**, the
+  tray menu offers **Install Update X…**, and while the popup is closed a system notification says
+  so once per version. **Later** waits for the next check that still finds it. A failed background
+  check stays silent; **Check Now** in Settings and **Check for Updates…** in the tray menu always
+  report their result in the same dialog, as do the download, the install and a failed step.
 - **Install Update** downloads the package that matches how the app was installed, verifies its
-  signature, installs it and reopens the app, which confirms the new version with a notification.
+  signature, installs it and reopens the app, which confirms the new version with a notification
+  and, the next time the popup opens, a dialog naming the version it replaced. A version installed
+  outside the app (a downloaded setup, a package manager) is confirmed the same way.
   Windows runs the NSIS setup in passive mode: a progress window, no questions, no administrator
   rights. A `.deb` asks for an administrator password (through `pkexec`, or a zenity or kdialog
   prompt). An AppImage replaces its own file. On macOS the `.app` bundle is replaced in place,

@@ -1,5 +1,5 @@
 import type { UpdateStatus } from "@/lib/types";
-import { isTransientBanner, updateBannerKey, updateBannerOf } from "./updateBanner";
+import { isTransientBanner, updateBannerKey, updateBannerOf, updateNoticeOf } from "./updateBanner";
 
 function status(patch: Partial<UpdateStatus>): UpdateStatus {
   return { supported: true, currentVersion: "0.1.0", phase: "idle", manual: false, downloaded: 0, ...patch };
@@ -52,14 +52,39 @@ describe("updateBannerKey", () => {
     expect(updateBannerKey(later)).not.toBe(updateBannerKey(first));
   });
 
-  it("cannot close a card while an install runs", () => {
-    expect(updateBannerKey(status({ phase: "downloading", available: OFFER }))).toBeNull();
-    expect(updateBannerKey(status({ phase: "installing", available: OFFER }))).toBeNull();
+  it("hides a progress notice only for its own step", () => {
+    const downloading = updateBannerKey(status({ phase: "downloading", available: OFFER, downloaded: 10, total: 100 }));
+    expect(downloading).toBe(updateBannerKey(status({ phase: "downloading", available: OFFER, downloaded: 90, total: 100 })));
+    expect(updateBannerKey(status({ phase: "installing", available: OFFER }))).not.toBe(downloading);
   });
 
   it("treats a manual result, not an offer, as transient", () => {
     expect(isTransientBanner(updateBannerOf(status({ phase: "upToDate", manual: true })))).toBe(true);
     expect(isTransientBanner(updateBannerOf(status({ phase: "failed", manual: true, failure: { stage: "check", reason: "network" } })))).toBe(true);
     expect(isTransientBanner(updateBannerOf(status({ phase: "available", available: OFFER })))).toBe(false);
+  });
+});
+
+describe("updateNoticeOf", () => {
+  const updated = status({ updatedFrom: "0.0.9" });
+
+  it("says which version this launch replaced until it is acknowledged", () => {
+    expect(updateNoticeOf(updated, null)).toEqual({ kind: "updated", from: "0.0.9", version: "0.1.0" });
+    expect(updateNoticeOf(status({}), null)).toBeNull();
+  });
+
+  it("lets a step in progress go first and the replaced version before an outcome", () => {
+    const downloading = { ...updated, phase: "downloading" as const, available: OFFER, downloaded: 1, total: 4 };
+    expect(updateNoticeOf(downloading, null)).toMatchObject({ kind: "downloading" });
+    const offer = { ...updated, phase: "available" as const, available: OFFER, checkedAt: "2026-09-26T04:00:00Z" };
+    expect(updateNoticeOf(offer, null)).toMatchObject({ kind: "updated" });
+    expect(updateNoticeOf({ ...offer, updatedFrom: undefined }, null)).toMatchObject({ kind: "available" });
+  });
+
+  it("skips the notice the user closed", () => {
+    const offer = status({ phase: "available", available: OFFER, checkedAt: "2026-09-26T04:00:00Z" });
+    expect(updateNoticeOf(offer, updateBannerKey(offer))).toBeNull();
+    const downloading = status({ phase: "downloading", available: OFFER, updatedFrom: "0.0.9" });
+    expect(updateNoticeOf(downloading, updateBannerKey(downloading))).toMatchObject({ kind: "updated" });
   });
 });

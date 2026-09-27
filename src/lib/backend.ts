@@ -93,6 +93,8 @@ export interface Backend {
   /** Download, verify and install the newest release, checking first when none is pending. The app
    * then exits (Windows, relaunched by the installer) or restarts (Linux); a rejection means it stayed. */
   installUpdate?(): Promise<void>;
+  /** The popup has shown which version this launch replaced (`UpdateStatus.updatedFrom`). */
+  acknowledgeUpdate?(): Promise<void>;
   /** Model quality counted from the local transcripts, per model and project, within the query's days. */
   modelQuality(query: QualityQuery): Promise<QualitySummary>;
   /** Rescan the transcripts now instead of at the next 10-minute pass. */

@@ -350,3 +350,31 @@
 .uc-dialog-actions.is-stacked {
   flex-direction: column;
 }
+
+.uc-update-dialog .uc-dialog-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.uc-update-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.uc-update-meter {
+  flex: 1 1 auto;
+}
+
+.uc-update-meter-fill {
+  background: var(--uc-accent);
+}
+
+.uc-update-percent {
+  flex: none;
+  font-size: var(--uc-support-size);
+  color: var(--uc-secondary);
+}

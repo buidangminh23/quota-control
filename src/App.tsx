@@ -23,6 +23,7 @@ import { Dashboard } from "./components/dashboard/Dashboard";
 import { Settings } from "./components/settings/Settings";
 import { Pill } from "./components/ui/controls";
 import { closeDialog, DialogLayer, isDialogOpen } from "./components/ui/dialog";
+import { UpdateDialog } from "./components/update/UpdateDialog";
 import { dismissHoverPopovers } from "./components/ui/hoverPopover";
 import { closeMenu, isMenuOpen, MenuLayer } from "./components/ui/menu";
 import { hideTooltip, TooltipLayer } from "./components/ui/tooltip";
@@ -227,6 +228,7 @@ export function App() {
       ) : null}
       <TooltipLayer />
       <MenuLayer />
+      <UpdateDialog />
       <DialogLayer />
     </div>
   );

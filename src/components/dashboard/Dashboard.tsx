@@ -19,7 +19,6 @@ import { CloseIcon } from "../ui/icons";
 import { PricesTab } from "../prices/PricesTab";
 import { TokensTab } from "../tokens/TokensTab";
 import { ProviderSections } from "./ProviderSections";
-import { UpdateBanner } from "./UpdateBanner";
 
 function HintCard({ title, message, action, onAction, onDismiss, dismissLabel }: { title: string; message: string; action: string; onAction: () => void; onDismiss: () => void; dismissLabel: string }) {
   return (
@@ -105,7 +104,6 @@ export function Dashboard() {
 
   return (
     <div className="uc-stack" {...panel}>
-      <UpdateBanner />
       <LoginProgress messages={messages} />
       {tab === "tokens" ? (
         <TokensTab />

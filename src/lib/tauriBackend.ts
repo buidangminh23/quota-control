@@ -223,6 +223,10 @@ export class TauriBackend implements Backend {
     return invoke("install_update");
   }
 
+  acknowledgeUpdate(): Promise<void> {
+    return invoke("acknowledge_update");
+  }
+
   modelQuality(query: QualityQuery): Promise<QualitySummary> {
     return invoke<QualitySummary>("model_quality", { query });
   }

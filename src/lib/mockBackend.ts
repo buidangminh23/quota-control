@@ -320,6 +320,7 @@ export class MockBackend implements Backend {
   async installUpdate(): Promise<void> {
     if (!this.updateState.available) await this.checkForUpdate();
     const release = this.updateState.available;
+    const from = this.updateState.currentVersion;
     if (!release) throw new Error("Quota Control is already up to date");
     this.setUpdate({ phase: "downloading", manual: true, downloaded: 0, total: UPDATE_SIZE_BYTES, failure: undefined });
     for (let step = 1; step <= 4; step += 1) {
@@ -330,7 +331,11 @@ export class MockBackend implements Backend {
     await wait(UPDATE_STEP_MS);
     this.version = release.version;
     this.nextRelease = null;
-    this.setUpdateStatus({ supported: true, currentVersion: release.version, phase: "idle", manual: false, downloaded: 0 });
+    this.setUpdateStatus({ supported: true, currentVersion: release.version, phase: "idle", manual: false, downloaded: 0, updatedFrom: from });
+  }
+
+  async acknowledgeUpdate(): Promise<void> {
+    if (this.updateState.updatedFrom) this.setUpdate({ updatedFrom: undefined });
   }
 
   /** Test hook: publish `status` the way the core pushes `update-status`. */
