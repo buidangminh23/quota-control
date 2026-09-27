@@ -5,7 +5,7 @@
  * Rust command names live in `src-tauri/src/commands.rs`; keep both sides in sync.
  */
 import type { Language } from "@/i18n/language";
-import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, SavedKey, ServiceEntry, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
+import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, SavedKey, ServiceEntry, SignInMethod, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
 
 import type { ContextWindowSession, ExchangeRate, UsageGroupRow, UsageLedgerInfo, UsageQuery } from "./types";
 import type { LimitResetResult } from "./types";
@@ -31,8 +31,9 @@ export interface Backend {
   /**
    * Open the provider's sign-in page, in Google Chrome when it is installed. The core finishes the
    * login itself, even while the popup is hidden, and reports how it ended through `onAccountLogin`.
+   * `provider` is `claude`, `codex` or a service's id; a service signs in with `method`.
    */
-  beginAccountLogin(provider: AccountProvider, language: Language): Promise<AccountLogin>;
+  beginAccountLogin(provider: string, language: Language, method?: SignInMethod): Promise<AccountLogin>;
   /** Show the sign-in page of a login that is still waiting. */
   reopenAccountLogin(flowId: string): Promise<LoginBrowser>;
   cancelAccountLogin(flowId: string): Promise<void>;

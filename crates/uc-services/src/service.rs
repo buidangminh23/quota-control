@@ -16,20 +16,37 @@ use uc_core::{
 /// Secret material for one account: a token document, an API key, a session cookie. Only the
 /// service that produced it reads it, it never crosses IPC, and `Debug` never prints it.
 #[derive(Clone, PartialEq)]
-pub struct Secret(Value);
+pub struct Secret {
+    value: Value,
+    owned: bool,
+}
 
 impl Secret {
     pub fn new(value: Value) -> Self {
-        Self(value)
+        Self {
+            value,
+            owned: false,
+        }
+    }
+
+    /// The token document of an account signed in to from Quota Control: the card owns it, so it
+    /// may renew a rotating refresh token and hand the new document back in its [`Reading`].
+    pub fn owned(value: Value) -> Self {
+        Self { value, owned: true }
     }
 
     /// A secret that is only an API key, as a saved key or an environment variable provides.
     pub fn api_key(key: &str) -> Self {
-        Self(serde_json::json!({ "apiKey": key.trim() }))
+        Self::new(serde_json::json!({ "apiKey": key.trim() }))
     }
 
     pub fn value(&self) -> &Value {
-        &self.0
+        &self.value
+    }
+
+    /// Whether the card owns the secret; another app's login is only borrowed.
+    pub fn is_owned(&self) -> bool {
+        self.owned
     }
 
     /// The API key of a key-based secret.
@@ -39,7 +56,7 @@ impl Secret {
 
     /// The non-empty string at a JSON pointer (`/tokens/access_token`).
     pub fn str(&self, pointer: &str) -> Option<&str> {
-        self.0
+        self.value
             .pointer(pointer)
             .and_then(Value::as_str)
             .map(str::trim)
@@ -320,6 +337,9 @@ pub struct Reading {
     pub plan_term: Option<PlanTerm>,
     /// A soft notice shown on a card that did refresh.
     pub warning: Option<String>,
+    /// The account's token document after a renewal that rotated its refresh token; saved in place
+    /// of the old one, for an owned secret only.
+    pub renewed: Option<Value>,
 }
 
 impl Reading {
@@ -331,6 +351,7 @@ impl Reading {
             lines,
             plan_term: None,
             warning: None,
+            renewed: None,
         }
     }
 
@@ -341,6 +362,11 @@ impl Reading {
 
     pub fn with_warning(mut self, warning: Option<String>) -> Self {
         self.warning = warning;
+        self
+    }
+
+    pub fn with_renewed(mut self, document: Option<Value>) -> Self {
+        self.renewed = document;
         self
     }
 }
@@ -378,6 +404,12 @@ pub trait Service: Send + Sync + 'static {
     /// site, the whole Cookie header.
     fn key_format(&self) -> KeyFormat {
         KeyFormat::Token
+    }
+
+    /// How an account is added by signing in through the browser, when the service's apps sign in
+    /// that way and the reader can use what the sign-in returns.
+    fn sign_in(&self) -> Option<&'static dyn crate::signin::SignIn> {
+        None
     }
 
     /// The logins the service's own apps saved under `roots`. Reads files only, never the network,

@@ -12,6 +12,7 @@ mod catalog;
 mod providers;
 mod runtime;
 mod service;
+pub mod signin;
 pub mod support;
 #[cfg(test)]
 pub(crate) mod testing;

@@ -7,6 +7,10 @@
 //! a 5-hour and a weekly window), falling back to `fetchAvailableModels` pooled per family on older
 //! accounts, and `loadCodeAssist` for the plan. An expired access token is renewed in memory with
 //! the app's public client; Google keeps the refresh token valid, so the app stays signed in.
+//!
+//! Signing in from Quota Control opens Google's sign-in page for the app's own client and comes back
+//! to this computer the way the app's sign-in does (`http://localhost:<any port>/oauth-callback`).
+//! The app's own login names no account, so a sign-in of the same account gets a card of its own.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
@@ -17,8 +21,12 @@ use uc_core::{
 };
 
 use crate::service::{Connection, FetchContext, Login, Reading, Roots, Secret, Service};
+use crate::signin::{
+    self, CodeClient, Converted, Method, Pending, Redirect, SignIn, SignedIn, StartContext,
+    TokenBody,
+};
 use crate::support::oauth::{self, Client, SavedToken};
-use crate::support::{http, keyring, lines, value};
+use crate::support::{google, http, keyring, lines, value};
 
 pub(crate) struct Antigravity;
 
@@ -37,6 +45,27 @@ const CLIENT: Client = Client {
     // Antigravity ships this installed-app secret in its bundle; it is split only so secret
     // scanners do not mistake it for a leaked credential.
     secret: concat!("GOCSPX", "-K58FWR486LdLJ1mLB8sXC4z6qDAf"),
+};
+
+/// Google's sign-in page for the app's own client, with the scopes the app asks for.
+const SIGN_IN: CodeClient = CodeClient {
+    authorize_url: google::AUTHORIZE_URL,
+    token_url: oauth::GOOGLE_TOKEN_URL,
+    client_id: CLIENT.id,
+    client_secret: CLIENT.secret,
+    scopes: &[
+        google::CLOUD_PLATFORM,
+        google::EMAIL,
+        google::PROFILE,
+        "https://www.googleapis.com/auth/cclog",
+        "https://www.googleapis.com/auth/experimentsandconfigs",
+    ],
+    redirect: Redirect::Localhost {
+        port: 0,
+        path: "/oauth-callback",
+    },
+    params: google::PARAMS,
+    body: TokenBody::Form,
 };
 
 /// The summary's pools, matched by exact bucket id: (bucket, descriptor suffix, title, period).
@@ -79,6 +108,10 @@ impl Service for Antigravity {
 
     fn connection(&self) -> Connection {
         Connection::login(APP)
+    }
+
+    fn sign_in(&self) -> Option<&'static dyn SignIn> {
+        Some(&Antigravity)
     }
 
     fn discover(&self, _roots: &Roots) -> Vec<Login> {
@@ -356,6 +389,38 @@ fn format_plan(raw: Option<&str>) -> Option<String> {
 /// The token document go-keyring holds: `{"token": {...}}` or the token object itself, with the
 /// access token, refresh token and expiry under any of the names the app has used. Returns the
 /// normalized `{access_token, refresh_token, expiry}` or `None` for anything unusable.
+#[async_trait]
+impl SignIn for Antigravity {
+    fn methods(&self) -> &'static [Method] {
+        &[Method::Google]
+    }
+
+    async fn start(
+        &self,
+        method: Method,
+        context: &StartContext,
+    ) -> Result<Pending, SimpleProviderError> {
+        signin::start_code(&SIGN_IN, method, &[], context, signed_in).await
+    }
+}
+
+/// A Google sign-in in the shape the app keeps its own login, named by the account's email.
+fn signed_in(http: uc_core::SharedHttpClient, answer: Value) -> Converted {
+    Box::pin(async move {
+        let account = google::account(&http, &answer, APP).await?;
+        Ok(SignedIn {
+            identity: account.email.clone(),
+            label: Some(account.email),
+            document: json!({
+                "access_token": account.access_token,
+                "refresh_token": account.refresh_token,
+                "expiry": account.expires_at.to_rfc3339(),
+                "token_type": "Bearer",
+            }),
+        })
+    })
+}
+
 fn parse_token(stored: &str) -> Option<Value> {
     let text = stored.trim().trim_start_matches('\u{feff}');
     if text.is_empty() {

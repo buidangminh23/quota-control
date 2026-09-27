@@ -310,6 +310,7 @@ export function fixtureServices(): ServiceEntry[] {
     keyEnv: [`${id.toUpperCase()}_API_KEY`],
     keyFields: [],
     startsHidden: false,
+    signIn: [],
     detected: [],
     keys: [],
     ...extra,
@@ -320,7 +321,16 @@ export function fixtureServices(): ServiceEntry[] {
       takesApiKey: false,
       keyUrl: null,
       keyEnv: [],
+      signIn: ["google"],
       detected: [{ id: `gemini@${"1".repeat(64)}`, service: "gemini", label: "minh@example.com", origin: "Gemini CLI" }],
+    }),
+    service("copilot", "Copilot", {
+      loginFrom: "GitHub Copilot",
+      takesApiKey: false,
+      keyUrl: null,
+      keyEnv: [],
+      signIn: ["github"],
+      keys: [{ id: `copilot@${"3".repeat(64)}`, service: "copilot", label: "octocat", addedAt: "2026-09-26T08:00:00Z", hint: "", signIn: "github" }],
     }),
     service("openrouter", "OpenRouter", {
       keys: [{ id: `openrouter@${"2".repeat(64)}`, service: "openrouter", label: "OpenRouter", addedAt: "2026-09-20T08:00:00Z", hint: "9f3a" }],
@@ -329,6 +339,7 @@ export function fixtureServices(): ServiceEntry[] {
     service("perplexity", "Perplexity", { keyLabel: "Session cookie (__Secure-authjs.session-token)", keyFormat: "cookie", keyEnv: [] }),
     service("longcat", "LongCat", { keyLabel: "Cookie header", keyFormat: "cookieHeader", keyEnv: [] }),
     service("xai", "xAI", { keyFields: [["teamId", "Team ID"]] }),
-    service("ollama", "Ollama", { loginFrom: "Ollama", takesApiKey: false, keyUrl: null, keyEnv: [], startsHidden: true }),
+    service("ollama", "Ollama", { loginFrom: "Ollama", keyEnv: ["OLLAMA_API_KEY"], signIn: ["google", "github"], startsHidden: true }),
+    service("windsurf", "Windsurf", { loginFrom: "Windsurf", takesApiKey: false, keyUrl: null, keyEnv: [] }),
   ];
 }

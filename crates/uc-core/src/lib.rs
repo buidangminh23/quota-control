@@ -8,6 +8,7 @@ pub mod error;
 pub mod fallback;
 pub mod format;
 pub mod http;
+pub mod loopback;
 pub mod model;
 pub mod paths;
 pub mod redact;

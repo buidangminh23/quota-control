@@ -11,6 +11,7 @@ use uc_core::{Provider, ProviderRuntime, SharedHttpClient};
 use crate::providers;
 use crate::runtime::{CredentialSource, ServiceRuntime};
 use crate::service::{KeyFormat, Roots, Service};
+use crate::signin::Method;
 
 /// Every service compiled into this build, in a stable order.
 pub fn services() -> &'static [&'static dyn Service] {
@@ -59,6 +60,8 @@ pub struct ServiceInfo {
     pub key_fields: Vec<(&'static str, &'static str)>,
     /// Whether its cards start hidden.
     pub starts_hidden: bool,
+    /// The browser sign-ins it offers, in order.
+    pub sign_in: Vec<Method>,
 }
 
 pub fn service_infos() -> Vec<ServiceInfo> {
@@ -83,6 +86,10 @@ pub fn service_infos() -> Vec<ServiceInfo> {
                     .map(|help| help.fields.to_vec())
                     .unwrap_or_default(),
                 starts_hidden: service.starts_hidden(),
+                sign_in: service
+                    .sign_in()
+                    .map(|sign_in| sign_in.methods().to_vec())
+                    .unwrap_or_default(),
             }
         })
         .collect()
@@ -109,7 +116,8 @@ pub enum DetectedSource {
 }
 
 /// Every login and environment key found under `roots`, one card per account: the first login an
-/// account has wins, and an environment key that is also saved is left to the saved card.
+/// account has wins, and a login or environment key of an account also saved here (signed in to
+/// from Quota Control, or the same key) is left to the saved card.
 pub fn detect(roots: &Roots, saved: &[KeyRecord]) -> Vec<Detected> {
     let saved_ids: HashSet<&str> = saved.iter().map(|record| record.id.as_str()).collect();
     let mut seen = HashSet::new();
@@ -118,7 +126,7 @@ pub fn detect(roots: &Roots, saved: &[KeyRecord]) -> Vec<Detected> {
         for login in service.discover(roots) {
             let hash = identity_hash(service.id(), &login.identity);
             let id = format!("{}@{hash}", service.id());
-            if !seen.insert(id.clone()) {
+            if saved_ids.contains(id.as_str()) || !seen.insert(id.clone()) {
                 continue;
             }
             found.push(Detected {
@@ -210,6 +218,7 @@ pub fn runtimes(
             CredentialSource::Saved {
                 store: store.clone(),
                 id: record.id.clone(),
+                signed_in: record.sign_in.is_some(),
             },
             http.clone(),
         )));

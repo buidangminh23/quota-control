@@ -5,7 +5,7 @@ import type { ContextWindowSession, ExchangeRate, SavedKey, ServiceEntry, UsageG
 import type { LimitResetResult } from "./types";
 import type { PublicFeedName, PublicFeedSnapshot, QualityInfo, QualityQuery, QualitySummary } from "./insightsTypes";
 import type { Language } from "@/i18n/language";
-import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
+import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, SignInMethod, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
 import type { GlanceDocument } from "@/model/glance";
 
 /** Subscribe to a Tauri event synchronously; the returned function tears the listener down. */
@@ -71,8 +71,8 @@ export class TauriBackend implements Backend {
     return invoke("list_accounts");
   }
 
-  beginAccountLogin(provider: AccountProvider, language: Language): Promise<AccountLogin> {
-    return invoke("begin_account_login", { provider, language });
+  beginAccountLogin(provider: string, language: Language, method?: SignInMethod): Promise<AccountLogin> {
+    return invoke("begin_account_login", { provider, language, method });
   }
 
   reopenAccountLogin(flowId: string): Promise<LoginBrowser> {

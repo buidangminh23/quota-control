@@ -1,5 +1,5 @@
 import { StrictMode } from "react";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { setBackend } from "@/lib/backend";
 import { localDay } from "@/lib/days";
 import type { EngineState } from "@/lib/types";
@@ -399,17 +399,27 @@ describe("popup", () => {
     act(() => useApp.setState({ screen: "accounts" }));
     expect(await screen.findByRole("heading", { name: "Tài khoản" })).toBeInTheDocument();
     expect(screen.getByText("Tự động từ Codex CLI trên máy này")).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /^Xóa (?!OpenRouter)/ })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: /^Xóa (?!OpenRouter|Copilot)/ })).toHaveLength(2);
     expect(screen.getByRole("button", { name: /^Xóa OpenRouter/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Xóa Copilot/ })).toBeInTheDocument();
+    expect(screen.getByText("Đăng nhập bằng GitHub")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Xóa Codex" })).not.toBeInTheDocument();
-    const add = screen.getByRole("listbox", { name: "Thêm tài khoản" });
-    const offered = within(add).getAllByRole("option").map((option) => option.getAttribute("aria-label"));
+    const add = screen.getByRole("list", { name: "Thêm tài khoản" });
+    const offered = within(add)
+      .getAllByRole("listitem")
+      .map((row) => within(row).getAllByRole("button")[0]?.getAttribute("aria-label"));
     expect(offered.slice(0, 2)).toEqual(["Claude", "Codex"]);
-    expect(offered).toEqual(expect.arrayContaining(["DeepSeek", "Gemini", "Ollama", "OpenRouter", "Perplexity"]));
-    expect(within(add).getByRole("option", { name: "Claude" })).toHaveTextContent("Google");
-    expect(within(add).getByRole("option", { name: "Ollama" })).toHaveTextContent("Ollama");
+    expect(offered).toEqual(expect.arrayContaining(["Copilot", "DeepSeek", "Gemini", "Ollama", "OpenRouter", "Perplexity", "Windsurf"]));
+    expect(within(add).getByRole("button", { name: "Claude" })).toHaveTextContent("Google");
+    expect(within(add).getByRole("button", { name: "Gemini" })).toHaveTextContent("Google");
+    expect(within(add).getByRole("button", { name: "Copilot" })).toHaveTextContent("GitHub");
+    expect(within(add).getByRole("button", { name: "Ollama" })).toHaveTextContent("Google · GitHub · API key");
+    expect(within(add).getByRole("button", { name: "Windsurf" })).toHaveTextContent("Windsurf");
+    expect(within(add).getByRole("button", { name: "Đăng nhập Claude bằng Google" })).toBeInTheDocument();
+    expect(within(add).getByRole("button", { name: "Đăng nhập Copilot bằng GitHub" })).toBeInTheDocument();
+    expect(within(add).getByRole("button", { name: "Thêm DeepSeek" })).toBeInTheDocument();
     expect(screen.queryByText("Thêm bằng API key")).not.toBeInTheDocument();
-    fireEvent.click(within(add).getByRole("option", { name: "Claude" }));
+    fireEvent.click(within(add).getByRole("button", { name: "Claude" }));
     expect(screen.getByRole("button", { name: "Đăng nhập bằng Google" })).toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Mở Claude trong ứng dụng" }).length).toBeGreaterThan(0);
@@ -423,7 +433,7 @@ describe("popup", () => {
     await screen.findByRole("heading", { name: "Tài khoản" });
     const pick = (name: string) => {
       fireEvent.change(screen.getByRole("searchbox", { name: "Tìm nhà cung cấp…" }), { target: { value: name } });
-      fireEvent.click(screen.getByRole("option", { name }));
+      fireEvent.click(within(screen.getByRole("list", { name: "Thêm tài khoản" })).getByRole("button", { name }));
     };
     pick("LongCat");
     expect(screen.getByLabelText("Dán Cookie header")).toBeInTheDocument();
@@ -441,8 +451,8 @@ describe("popup", () => {
     expect(screen.getByRole("button", { name: "Lấy API key" })).toBeInTheDocument();
     expect(screen.queryByText(/F12/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Đổi nhà cung cấp" }));
-    pick("Ollama");
-    expect(screen.getByText("Quota Control đọc Ollama từ đăng nhập Ollama trên máy này. Đăng nhập Ollama là tài khoản tự hiện ở mục Nhà cung cấp AI khác, không cần thêm.")).toBeInTheDocument();
+    pick("Windsurf");
+    expect(screen.getByText("Quota Control đọc Windsurf từ đăng nhập Windsurf trên máy này. Đăng nhập Windsurf là tài khoản tự hiện ở mục Nhà cung cấp AI khác, không cần thêm.")).toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
 
@@ -450,7 +460,7 @@ describe("popup", () => {
     const api = await renderApp();
     api.loginDelayMs = null;
     act(() => useApp.setState({ screen: "accounts" }));
-    fireEvent.click(await screen.findByRole("option", { name: "Claude" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Claude" }));
     fireEvent.click(screen.getByRole("button", { name: "Đăng nhập bằng Google" }));
     expect(await screen.findByText("Đang chờ bạn đăng nhập Claude trong Google Chrome…")).toBeInTheDocument();
     await act(() => api.hidePopup());
@@ -467,11 +477,57 @@ describe("popup", () => {
     expect(useApp.getState().accounts.filter((account) => account.credentialMode === "managed_oauth")).toHaveLength(2);
   });
 
+  it("starts a sign-in from a row's plus button and copies the code GitHub asks for", async () => {
+    const api = await renderApp();
+    api.loginDelayMs = null;
+    const copy = vi.spyOn(api, "copyText");
+    act(() => useApp.setState({ screen: "accounts" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Đăng nhập Copilot bằng GitHub" }));
+    expect(await screen.findByText("Đang chờ bạn đăng nhập Copilot trong Google Chrome…")).toBeInTheDocument();
+    expect(screen.getByText("WDJB-MJHT")).toBeInTheDocument();
+    expect(screen.getByText("Nhập mã này trên trang vừa mở rồi cho phép truy cập.")).toBeInTheDocument();
+    await waitFor(() => expect(copy).toHaveBeenCalledWith("WDJB-MJHT"));
+    expect(await screen.findByRole("button", { name: "Đã sao chép" })).toBeInTheDocument();
+    const login = useApp.getState().accountLogin;
+    if (login?.phase !== "waiting") throw new Error("the sign-in should be waiting");
+    expect(login.method).toBe("github");
+    await act(async () => {
+      api.finishLogin(login.flowId);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+    expect(screen.getByText("Đã kết nối Copilot")).toBeInTheDocument();
+    expect(useApp.getState().services.find((service) => service.id === "copilot")?.keys).toHaveLength(2);
+  });
+
+  it("offers every way a service connects, and a plus button that signs in with the first", async () => {
+    const api = await renderApp();
+    api.loginDelayMs = null;
+    act(() => useApp.setState({ screen: "accounts" }));
+    const list = await screen.findByRole("list", { name: "Thêm tài khoản" });
+    fireEvent.click(within(list).getByRole("button", { name: "Ollama" }));
+    const ways = screen.getByRole("radiogroup", { name: "Cách kết nối" });
+    expect(within(ways).getAllByRole("radio").map((way) => way.textContent)).toEqual(["Google", "GitHub", "API key"]);
+    expect(screen.getByRole("button", { name: "Đăng nhập bằng Google" })).toBeInTheDocument();
+    fireEvent.click(within(ways).getByRole("radio", { name: "GitHub" }));
+    expect(screen.getByRole("button", { name: "Đăng nhập bằng GitHub" })).toBeInTheDocument();
+    fireEvent.click(within(ways).getByRole("radio", { name: "API key" }));
+    expect(screen.getByLabelText("Dán API key")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Đổi nhà cung cấp" }));
+    fireEvent.click(within(screen.getByRole("list", { name: "Thêm tài khoản" })).getByRole("button", { name: "Đăng nhập Ollama bằng Google" }));
+    expect(await screen.findByText("Đang chờ bạn đăng nhập Ollama trong Google Chrome…")).toBeInTheDocument();
+    expect(screen.queryByText("WDJB-MJHT")).not.toBeInTheDocument();
+    const login = useApp.getState().accountLogin;
+    if (login?.phase !== "waiting") throw new Error("the sign-in should be waiting");
+    act(() => api.finishLogin(login.flowId, "The browser login was not authorized."));
+    expect(await screen.findByText("Chưa kết nối được Ollama: Đăng nhập trong trình duyệt chưa được cho phép.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Đăng nhập bằng Google" })).toBeInTheDocument();
+  });
+
   it("explains a failed sign-in and lets a waiting one be cancelled", async () => {
     const api = await renderApp();
     api.loginDelayMs = null;
     act(() => useApp.setState({ screen: "accounts" }));
-    fireEvent.click(await screen.findByRole("option", { name: "Codex" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Codex" }));
     fireEvent.click(screen.getByRole("button", { name: "Đăng nhập bằng Google" }));
     await screen.findByText("Đang chờ bạn đăng nhập Codex trong Google Chrome…");
     const login = useApp.getState().accountLogin;

@@ -1,5 +1,10 @@
 //! Gemini CLI: the Google login `gemini` saves in `~/.gemini/oauth_creds.json`, read against the
 //! Gemini Code Assist quota the CLI's `/stats` shows (daily request buckets per model).
+//!
+//! Signing in from Quota Control opens Google's sign-in page for the CLI's own client and comes back
+//! to this computer the way the CLI's browser sign-in does, so the saved tokens are read exactly as
+//! the CLI's login is. Google answers only for accounts it still serves Gemini Code Assist to; since
+//! June 2026 that leaves out most personal accounts, whose card then shows Google's reason.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
@@ -8,8 +13,12 @@ use sha2::{Digest, Sha256};
 use uc_core::{HttpRequest, Provider, ProviderLink, SimpleProviderError, WidgetDescriptor};
 
 use crate::service::{Connection, FetchContext, Login, Reading, Roots, Secret, Service};
+use crate::signin::{
+    self, CodeClient, Converted, Method, Pending, Redirect, SignIn, SignedIn, StartContext,
+    TokenBody,
+};
 use crate::support::oauth::{self, Client, SavedToken};
-use crate::support::{http, jwt, lines, value};
+use crate::support::{google, http, jwt, lines, value};
 
 pub(crate) struct Gemini;
 
@@ -24,6 +33,22 @@ const CLIENT: Client = Client {
     // The CLI ships this installed-app secret in its public source; it is split only so secret
     // scanners do not mistake it for a leaked credential.
     secret: concat!("GOCSPX", "-4uHgMPm-1o7Sk-geV6Cu5clXFsxl"),
+};
+
+/// Google's sign-in page for the CLI's own client, coming back to this computer the way the CLI's
+/// browser sign-in does (`http://127.0.0.1:<any port>/oauth2callback`).
+const SIGN_IN: CodeClient = CodeClient {
+    authorize_url: google::AUTHORIZE_URL,
+    token_url: oauth::GOOGLE_TOKEN_URL,
+    client_id: CLIENT.id,
+    client_secret: CLIENT.secret,
+    scopes: &[google::CLOUD_PLATFORM, google::EMAIL, google::PROFILE],
+    redirect: Redirect::Ipv4 {
+        ports: &[0],
+        path: "/oauth2callback",
+    },
+    params: google::PARAMS,
+    body: TokenBody::Form,
 };
 
 /// Model families shown as meters, matched against a bucket's `modelId` in this order.
@@ -52,6 +77,10 @@ impl Service for Gemini {
 
     fn connection(&self) -> Connection {
         Connection::login(APP)
+    }
+
+    fn sign_in(&self) -> Option<&'static dyn SignIn> {
+        Some(&Gemini)
     }
 
     fn discover(&self, roots: &Roots) -> Vec<Login> {
@@ -134,6 +163,40 @@ impl Service for Gemini {
         let body = http::parse(&response, APP)?;
         Ok(Reading::new(plan, meters(&body)))
     }
+}
+
+#[async_trait]
+impl SignIn for Gemini {
+    fn methods(&self) -> &'static [Method] {
+        &[Method::Google]
+    }
+
+    async fn start(
+        &self,
+        method: Method,
+        context: &StartContext,
+    ) -> Result<Pending, SimpleProviderError> {
+        signin::start_code(&SIGN_IN, method, &[], context, signed_in).await
+    }
+}
+
+/// A Google sign-in as the CLI saves one, named by its email as the CLI's login of the same account
+/// is, so the two share a card.
+fn signed_in(http: uc_core::SharedHttpClient, answer: Value) -> Converted {
+    Box::pin(async move {
+        let account = google::account(&http, &answer, NAME).await?;
+        Ok(SignedIn {
+            identity: account.email.clone(),
+            label: Some(account.email),
+            document: json!({
+                "access_token": account.access_token,
+                "refresh_token": account.refresh_token,
+                "expiry_date": account.expires_at.timestamp_millis(),
+                "id_token": account.id_token,
+                "token_type": "Bearer",
+            }),
+        })
+    })
 }
 
 impl Gemini {

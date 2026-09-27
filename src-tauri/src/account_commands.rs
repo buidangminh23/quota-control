@@ -8,6 +8,7 @@ use uc_accounts::{AccountStore, CredentialMode, KeyRecord, KeyStore};
 use uc_core::ProviderRuntime;
 use uc_providers::oauth::{LoginLanguage, OAuthManager, is_cancelled, is_expired};
 use uc_providers::{CliAccount, ProviderKind, VisibleAccount};
+use uc_services::signin::{Method, SignInManager};
 use uc_services::{Detected, KeyFormat, Roots, ServiceInfo};
 
 use crate::browser::{LoginBrowser, open_login_page};
@@ -16,6 +17,8 @@ use crate::service::{BackendService, safe_error};
 pub struct Accounts {
     pub store: Arc<AccountStore>,
     oauth: OAuthManager,
+    /// Browser sign-ins of the other services, saved beside their API keys.
+    sign_ins: SignInManager,
     label_backfill: uc_providers::accounts::AccountLabelBackfill,
     changes: tokio::sync::Mutex<()>,
     /// The CLI logins the current cards were built from.
@@ -29,6 +32,7 @@ impl Accounts {
     pub fn new(store: Arc<AccountStore>, keys: KeyStore) -> Self {
         Self {
             oauth: OAuthManager::new(store.clone()),
+            sign_ins: SignInManager::new(keys.clone()),
             label_backfill: uc_providers::accounts::AccountLabelBackfill::new(store.clone()),
             store,
             changes: tokio::sync::Mutex::new(()),
@@ -131,6 +135,9 @@ pub struct LoginOpened {
     authorization_url: String,
     expires_in_seconds: u64,
     browser: LoginBrowser,
+    /// The code to type on the page, for a device sign-in (GitHub) that cannot fill it in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user_code: Option<String>,
 }
 
 /// How a browser sign-in ended, sent to the popup as `account-login`. A connected or failed login
@@ -147,8 +154,19 @@ struct LoginOutcome {
     error: Option<String>,
 }
 
-fn kind(provider: &str) -> Result<ProviderKind, String> {
-    ProviderKind::parse(provider).ok_or_else(|| "Unsupported account provider".into())
+/// Whom a sign-in is for: a Claude or Codex account, or another service's.
+enum LoginTarget {
+    Account(ProviderKind),
+    Service(&'static dyn uc_services::Service),
+}
+
+fn login_target(provider: &str) -> Result<LoginTarget, String> {
+    if let Some(kind) = ProviderKind::parse(provider) {
+        return Ok(LoginTarget::Account(kind));
+    }
+    uc_services::service(provider)
+        .map(LoginTarget::Service)
+        .ok_or_else(|| "Unsupported account provider".into())
 }
 
 #[tauri::command]
@@ -317,16 +335,24 @@ async fn rescan_services(accounts: &Accounts) -> bool {
 }
 
 /// Open the provider's sign-in page and finish the login in the background: it keeps going while
-/// the popup is hidden behind the browser, and ends by showing the popup again.
+/// the popup is hidden behind the browser, and ends by showing the popup again. Claude and Codex
+/// accounts are signed in to with their own OAuth clients; any other service with `method`
+/// (`google`, `github`), as its own apps sign in.
 #[tauri::command]
 pub async fn begin_account_login(
     app: AppHandle,
     accounts: State<'_, Accounts>,
     provider: String,
     language: Option<String>,
+    method: Option<String>,
 ) -> Result<LoginOpened, String> {
-    let kind = kind(&provider)?;
     let language = LoginLanguage::parse(language.as_deref().unwrap_or_default());
+    let kind = match login_target(&provider)? {
+        LoginTarget::Account(kind) => kind,
+        LoginTarget::Service(known) => {
+            return begin_service_login(app, &accounts, known, method.as_deref(), language).await;
+        }
+    };
     let start = accounts
         .oauth
         .begin_login_in(kind, kind.cli().into(), language)
@@ -345,7 +371,78 @@ pub async fn begin_account_login(
         authorization_url: start.authorization_url,
         expires_in_seconds: start.expires_in_seconds,
         browser,
+        user_code: None,
     })
+}
+
+/// Start a service's browser sign-in: its page opens, and the account is saved beside the API keys
+/// once the browser finished.
+async fn begin_service_login(
+    app: AppHandle,
+    accounts: &Accounts,
+    known: &'static dyn uc_services::Service,
+    method: Option<&str>,
+    language: LoginLanguage,
+) -> Result<LoginOpened, String> {
+    let method = Method::parse(method.unwrap_or("google")).ok_or("Unsupported sign-in")?;
+    let started = accounts
+        .sign_ins
+        .begin(known.id(), method, language)
+        .await
+        .map_err(safe_error)?;
+    let browser = match open_login_page(&app, &started.authorization_url) {
+        Ok(browser) => browser,
+        Err(error) => {
+            accounts.sign_ins.cancel(&started.flow_id).await;
+            return Err(error);
+        }
+    };
+    tauri::async_runtime::spawn(finish_service_login(
+        app.clone(),
+        started.flow_id.clone(),
+        known.id(),
+    ));
+    Ok(LoginOpened {
+        flow_id: started.flow_id,
+        authorization_url: started.authorization_url,
+        expires_in_seconds: started.expires_in_seconds,
+        browser,
+        user_code: started.user_code,
+    })
+}
+
+/// How a sign-in that did not connect is reported.
+fn unfinished(
+    flow_id: String,
+    provider: &'static str,
+    error: uc_core::SimpleProviderError,
+) -> LoginOutcome {
+    let (status, error) = if is_cancelled(&error) {
+        ("cancelled", None)
+    } else if is_expired(&error) {
+        ("expired", Some(error.message))
+    } else {
+        ("failed", Some(safe_error(error.message)))
+    };
+    LoginOutcome {
+        flow_id,
+        provider,
+        status,
+        account_id: None,
+        error,
+    }
+}
+
+/// Bring the popup back for a connected or failed sign-in, and tell it how the sign-in ended.
+fn report(app: &AppHandle, outcome: LoginOutcome) {
+    if matches!(outcome.status, "connected" | "failed")
+        && let Err(error) = crate::show_popup(app)
+    {
+        tracing::warn!("{error}");
+    }
+    if app.emit_to("popup", "account-login", outcome).is_err() {
+        tracing::warn!("Could not report how the sign-in ended");
+    }
 }
 
 async fn finish_login(app: AppHandle, flow_id: String, kind: ProviderKind) {
@@ -368,36 +465,52 @@ async fn finish_login(app: AppHandle, flow_id: String, kind: ProviderKind) {
                 error: None,
             }
         }
-        Err(error) if is_cancelled(&error) => LoginOutcome {
-            flow_id,
-            provider: kind.cli(),
-            status: "cancelled",
-            account_id: None,
-            error: None,
-        },
-        Err(error) if is_expired(&error) => LoginOutcome {
-            flow_id,
-            provider: kind.cli(),
-            status: "expired",
-            account_id: None,
-            error: Some(error.message),
-        },
-        Err(error) => LoginOutcome {
-            flow_id,
-            provider: kind.cli(),
-            status: "failed",
-            account_id: None,
-            error: Some(safe_error(error.message)),
-        },
+        Err(error) => unfinished(flow_id, kind.cli(), error),
     };
-    if matches!(outcome.status, "connected" | "failed")
-        && let Err(error) = crate::show_popup(&app)
-    {
-        tracing::warn!("{error}");
+    report(&app, outcome);
+}
+
+async fn finish_service_login(app: AppHandle, flow_id: String, provider: &'static str) {
+    let accounts = app.state::<Accounts>();
+    let outcome = match accounts.sign_ins.complete(&flow_id).await {
+        Ok(record) => {
+            let _changes = accounts.changes.lock().await;
+            rescan_services(&accounts).await;
+            let service = app.state::<BackendService>();
+            let rebuilt = accounts
+                .runtimes()
+                .and_then(|runtimes| service.replace_runtimes(runtimes, &app))
+                .and_then(|()| show_card(&service, &record.id));
+            if let Err(error) = rebuilt {
+                tracing::warn!("Account connected, but the cards were not rebuilt: {error}");
+            }
+            LoginOutcome {
+                flow_id,
+                provider,
+                status: "connected",
+                account_id: Some(record.id),
+                error: None,
+            }
+        }
+        Err(error) => unfinished(flow_id, provider, error),
+    };
+    report(&app, outcome);
+}
+
+/// A card the user just signed in to is shown, even for a service whose cards otherwise start
+/// hidden (Ollama).
+fn show_card(service: &BackendService, id: &str) -> Result<(), String> {
+    let engine = service.engine();
+    if engine.is_enabled(id) || engine.runtime(id).is_none() {
+        return Ok(());
     }
-    if app.emit_to("popup", "account-login", outcome).is_err() {
-        tracing::warn!("Could not report how the sign-in ended");
-    }
+    let mut enabled: Vec<String> = engine
+        .provider_ids()
+        .into_iter()
+        .filter(|candidate| engine.is_enabled(candidate))
+        .collect();
+    enabled.push(id.to_string());
+    service.set_enabled(&enabled)
 }
 
 /// Show the sign-in page of a login that is still waiting, in the same browser as before.
@@ -407,11 +520,11 @@ pub async fn reopen_account_login(
     accounts: State<'_, Accounts>,
     flow_id: String,
 ) -> Result<LoginBrowser, String> {
-    let url = accounts
-        .oauth
-        .authorization_url(&flow_id)
-        .await
-        .ok_or("This login is no longer active. Start again.")?;
+    let url = match accounts.oauth.authorization_url(&flow_id).await {
+        Some(url) => Some(url),
+        None => accounts.sign_ins.authorization_url(&flow_id).await,
+    }
+    .ok_or("This login is no longer active. Start again.")?;
     open_login_page(&app, &url)
 }
 
@@ -420,6 +533,10 @@ pub async fn cancel_account_login(
     accounts: State<'_, Accounts>,
     flow_id: String,
 ) -> Result<(), String> {
+    if accounts.sign_ins.knows(&flow_id).await {
+        accounts.sign_ins.cancel(&flow_id).await;
+        return Ok(());
+    }
     accounts
         .oauth
         .cancel_login(&flow_id)
@@ -490,9 +607,20 @@ mod tests {
 
     #[test]
     fn account_commands_only_accept_supported_providers() {
-        assert!(kind("codex").is_ok());
-        assert!(kind("claude").is_ok());
-        assert!(kind("../accounts").is_err());
+        assert!(matches!(
+            login_target("codex"),
+            Ok(LoginTarget::Account(ProviderKind::Codex))
+        ));
+        assert!(matches!(
+            login_target("claude"),
+            Ok(LoginTarget::Account(ProviderKind::Claude))
+        ));
+        assert!(matches!(
+            login_target("gemini"),
+            Ok(LoginTarget::Service(known)) if known.id() == "gemini"
+        ));
+        assert!(login_target("../accounts").is_err());
+        assert!(login_target("").is_err());
     }
 
     #[test]

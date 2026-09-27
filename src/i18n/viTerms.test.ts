@@ -27,6 +27,10 @@ describe("viTerm", () => {
     expect(viTerm("The LiteLLM server address must start with https://.")).toBe(
       "Địa chỉ máy chủ LiteLLM phải bắt đầu bằng https://.",
     );
+    expect(viTerm("Kilo did not start a sign-in. Try again later.")).toBe("Kilo chưa mở được phiên đăng nhập. Hãy thử lại sau.");
+    expect(viTerm("This sign-in expired. Sign in again in Accounts.")).toBe(
+      "Phiên đăng nhập này đã hết hạn. Hãy đăng nhập lại trong Tài khoản.",
+    );
   });
 
   it("translates the readers' links, units, key fields and composed row labels", () => {

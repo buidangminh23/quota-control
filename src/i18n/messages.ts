@@ -268,7 +268,20 @@ export interface AccountsMessages {
   status(kind: "ok" | "refreshing" | "error" | "unknown"): string;
   add: string;
   signInWithGoogle: string;
+  signInWithGitHub: string;
   signInNote(brand: string): string;
+  /** Under a service's sign-in button: where the page opens and what to choose there. */
+  serviceSignInNote(service: string, method: "google" | "github"): string;
+  /** The Add Account panel's picker between a service's ways to connect. */
+  methodsLabel: string;
+  /** The plus button of an Add Account row that opens the provider's sign-in page at once. */
+  quickSignIn(service: string, method: string): string;
+  /** The plus button of an Add Account row whose provider connects with a key or its own app. */
+  quickAdd(service: string): string;
+  /** A device sign-in's code, which the user types on the page that opened. */
+  userCodeLabel: string;
+  copyCode: string;
+  userCodeNote: string;
   cliNote: string;
   starting: string;
   waiting(brand: string, browser: "chrome" | "default"): string;
@@ -284,14 +297,15 @@ export interface AccountsMessages {
   removeConfirm: string;
   failed(detail: string): string;
   chatOpenFailed: string;
-  /** Where a service card reads its credentials: an app's login, an environment variable, a saved key. */
-  serviceSource(kind: "login" | "env" | "key", detail: string): string;
+  /** Where a service card reads its credentials: an app's login, an environment variable, a saved key, or a sign-in made here. */
+  serviceSource(kind: "login" | "env" | "key" | "google" | "github", detail: string): string;
   otherServices: string;
   otherServicesNone: string;
   /** `apps`: the apps whose logins on this computer are picked up automatically. */
   detectedNote(apps: string): string;
-  /** How the Add Account list says a provider is added: a Google sign-in, an API key or a cookie. */
+  /** How the Add Account list says a provider is added: a Google or GitHub sign-in, an API key or a cookie. */
   kindGoogle: string;
+  kindGitHub: string;
   kindApiKey: string;
   kindCookie: string;
   /** A service that only reads `app`'s login on this computer. */

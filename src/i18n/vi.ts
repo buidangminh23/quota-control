@@ -378,6 +378,17 @@ export const vi: Messages = {
     status: (kind) => ({ ok: "Đang hoạt động", refreshing: "Đang làm mới…", error: "Có lỗi", unknown: "Chưa có dữ liệu" })[kind],
     add: "Thêm tài khoản",
     signInWithGoogle: "Đăng nhập bằng Google",
+    signInWithGitHub: "Đăng nhập bằng GitHub",
+    serviceSignInNote: (service, method) =>
+      method === "google"
+        ? `Trang đăng nhập mở trong Google Chrome. Chọn tài khoản Google rồi cho phép truy cập. ${service} tự kết nối, không cần copy mã.`
+        : `Trang đăng nhập mở trong Google Chrome. Đăng nhập bằng tài khoản GitHub rồi cho phép truy cập. ${service} tự kết nối.`,
+    methodsLabel: "Cách kết nối",
+    quickSignIn: (service, method) => `Đăng nhập ${service} bằng ${method}`,
+    quickAdd: (service) => `Thêm ${service}`,
+    userCodeLabel: "Mã xác nhận",
+    copyCode: "Sao chép mã",
+    userCodeNote: "Nhập mã này trên trang vừa mở rồi cho phép truy cập.",
     signInNote: (brand) =>
       `Trang đăng nhập ${brand} mở trong Google Chrome. Chọn Continue with Google rồi cho phép truy cập. Tài khoản tự kết nối, không cần copy mã.`,
     cliNote: "Claude Code và Codex CLI đã đăng nhập trên máy này tự hiện ở đây, không cần thêm.",
@@ -397,11 +408,18 @@ export const vi: Messages = {
     failed: (detail) => `Không thực hiện được: ${detail}`,
     chatOpenFailed: "Không mở được phiên chat. Phiên đã lưu vẫn được giữ nguyên.",
     serviceSource: (kind, detail) =>
-      ({ login: `Tự động từ ${detail} trên máy này`, env: `Key trong biến môi trường ${detail}`, key: `API key ••••${detail}` })[kind],
+      ({
+        login: `Tự động từ ${detail} trên máy này`,
+        env: `Key trong biến môi trường ${detail}`,
+        key: `API key ••••${detail}`,
+        google: "Đăng nhập bằng Google",
+        github: "Đăng nhập bằng GitHub",
+      })[kind],
     otherServices: "Nhà cung cấp AI khác",
     otherServicesNone: "Chưa có nhà cung cấp nào khác. Đăng nhập ứng dụng của họ trên máy này, hoặc thêm ở mục Thêm tài khoản.",
     detectedNote: (apps) => `Đăng nhập của ${apps} trên máy này tự hiện ở đây, không cần thêm.`,
     kindGoogle: "Google",
+    kindGitHub: "GitHub",
     kindApiKey: "API key",
     kindCookie: "Cookie",
     appLoginNote: (service, app) =>

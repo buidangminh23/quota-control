@@ -3,6 +3,7 @@
 
 pub mod apps;
 pub mod endpoint;
+pub mod google;
 pub mod http;
 pub mod jwt;
 pub mod keyring;

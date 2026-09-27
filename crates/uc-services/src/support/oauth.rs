@@ -25,6 +25,11 @@ pub const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 /// How long before its stated expiry a token is treated as expired.
 const LEEWAY_SECONDS: i64 = 60;
 
+/// What to do when a sign-in made in Quota Control lapses: the card names the service already.
+pub const SIGN_IN_EXPIRED: &str = "This sign-in expired. Sign in again in Accounts.";
+pub const SIGN_IN_REVOKED: &str =
+    "This sign-in can no longer be renewed. Sign in again in Accounts.";
+
 /// What the app's saved login holds.
 #[derive(Clone, Copy, Debug)]
 pub struct SavedToken<'a> {
@@ -53,10 +58,15 @@ pub async fn access_token(
     {
         return Ok(token.to_string());
     }
+    let owned = context.secret.is_owned();
     let Some(refresh_token) = saved.refresh_token else {
         return Err(SimpleProviderError::new(
             ErrorCategory::AuthExpired,
-            format!("The {service} login expired. Open {service} once to renew it."),
+            if owned {
+                SIGN_IN_EXPIRED.to_string()
+            } else {
+                format!("The {service} login expired. Open {service} once to renew it.")
+            },
         ));
     };
     let fingerprint: String = Sha256::digest(refresh_token.as_bytes())
@@ -90,7 +100,11 @@ pub async fn access_token(
     if matches!(response.status, 400 | 401 | 403) {
         return Err(SimpleProviderError::new(
             ErrorCategory::AuthExpired,
-            format!("The {service} login can no longer be renewed. Sign in to {service} again."),
+            if owned {
+                SIGN_IN_REVOKED.to_string()
+            } else {
+                format!("The {service} login can no longer be renewed. Sign in to {service} again.")
+            },
         ));
     }
     if !response.is_success() {

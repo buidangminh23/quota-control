@@ -1,6 +1,7 @@
 //! API keys the user saved for services that keep no login on this computer (OpenRouter, Z.ai,
-//! MiniMax, ...). A key is protected like an account's credentials (DPAPI on Windows, owner-only
-//! files elsewhere) and is read back only for that service's own requests.
+//! MiniMax, ...), and the accounts of such services signed in to through the browser (the token
+//! document the sign-in returned). Both are protected like an account's credentials (DPAPI on
+//! Windows, owner-only files elsewhere) and are read back only for that service's own requests.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -22,8 +23,12 @@ pub struct KeyRecord {
     pub service: String,
     pub label: String,
     pub added_at: DateTime<Utc>,
-    /// The key's last four characters, so two keys of one service can be told apart.
+    /// The key's last four characters, so two keys of one service can be told apart; empty for a
+    /// signed-in account.
     pub hint: String,
+    /// How a signed-in account was added (`google`, `github`, `browser`); absent for a pasted key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_in: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -51,6 +56,8 @@ impl Default for KeyRegistry {
 }
 
 const MAX_KEY_LENGTH: usize = 8192;
+/// The largest token document a sign-in may save; the stored file is read back up to 64 KiB.
+const MAX_DOCUMENT_BYTES: usize = 32 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct KeyStore {
@@ -106,7 +113,6 @@ impl KeyStore {
         secret.insert("apiKey".into(), Value::String(key.into()));
         let bytes = serde_json::to_vec(&Value::Object(secret))
             .map_err(|_| AccountError::InvalidCredentials)?;
-        let id = Self::key_id(service, key);
         let hint: String = key
             .chars()
             .rev()
@@ -115,41 +121,110 @@ impl KeyStore {
             .into_iter()
             .rev()
             .collect();
+        self.save(
+            &Self::key_id(service, key),
+            service,
+            label,
+            hint,
+            None,
+            &bytes,
+        )
+    }
+
+    /// Save the token document a browser sign-in returned for one account of `service`, as card
+    /// `id` (`<service>@<64 hex digits>`, derived by the caller from the account's identity).
+    /// Signing in to the same account again replaces the document and keeps its card and date.
+    pub fn add_login(
+        &self,
+        id: &str,
+        service: &str,
+        label: &str,
+        method: &str,
+        document: &Value,
+    ) -> Result<KeyRecord> {
+        validate(service, label)?;
+        if !valid_id(id, service) || !valid_method(method) {
+            return Err(AccountError::InvalidAccount);
+        }
+        let bytes = document_bytes(document)?;
+        self.save(
+            id,
+            service,
+            label,
+            String::new(),
+            Some(method.into()),
+            &bytes,
+        )
+    }
+
+    /// Replace a signed-in account's token document, when a renewal rotated its refresh token.
+    pub fn replace_login(&self, id: &str, document: &Value) -> Result<()> {
+        let bytes = document_bytes(document)?;
+        let _lock = storage::lock(&self.root)?;
+        let mut registry = self.registry()?;
+        let entry = registry.keys.get_mut(id).ok_or(AccountError::NotFound)?;
+        if entry.record.sign_in.is_none() {
+            return Err(AccountError::InvalidAccount);
+        }
+        let previous = entry.revision;
+        let revision = Uuid::new_v4();
+        let encrypted = protection::protect(&bytes, id.as_bytes())?;
+        storage::write_atomic(&self.secret_path(id, revision), &encrypted)?;
+        entry.revision = revision;
+        if let Err(error) = self.save_registry(&registry) {
+            let _ = storage::remove(&self.secret_path(id, revision));
+            return Err(error);
+        }
+        let _ = storage::remove(&self.secret_path(id, previous));
+        Ok(())
+    }
+
+    fn save(
+        &self,
+        id: &str,
+        service: &str,
+        label: &str,
+        hint: String,
+        sign_in: Option<String>,
+        bytes: &[u8],
+    ) -> Result<KeyRecord> {
         let _lock = storage::lock(&self.root)?;
         let mut registry = self.registry()?;
         let now = Utc::now();
         let record = KeyRecord {
-            id: id.clone(),
+            id: id.into(),
             service: service.into(),
             label: label.trim().into(),
             added_at: registry
                 .keys
-                .get(&id)
+                .get(id)
                 .map(|entry| entry.record.added_at)
                 .unwrap_or(now),
             hint,
+            sign_in,
         };
         let revision = Uuid::new_v4();
-        let encrypted = protection::protect(&bytes, id.as_bytes())?;
-        storage::write_atomic(&self.secret_path(&id, revision), &encrypted)?;
+        let encrypted = protection::protect(bytes, id.as_bytes())?;
+        storage::write_atomic(&self.secret_path(id, revision), &encrypted)?;
         let previous = registry.keys.insert(
-            id.clone(),
+            id.into(),
             StoredKey {
                 record: record.clone(),
                 revision,
             },
         );
         if let Err(error) = self.save_registry(&registry) {
-            let _ = storage::remove(&self.secret_path(&id, revision));
+            let _ = storage::remove(&self.secret_path(id, revision));
             return Err(error);
         }
         if let Some(previous) = previous {
-            let _ = storage::remove(&self.secret_path(&id, previous.revision));
+            let _ = storage::remove(&self.secret_path(id, previous.revision));
         }
         Ok(record)
     }
 
-    /// The saved key and its extra fields, as `{"apiKey": ..., ...}`.
+    /// A saved key and its extra fields, as `{"apiKey": ..., ...}`, or a signed-in account's token
+    /// document as its sign-in returned it.
     pub fn secret(&self, id: &str) -> Result<Value> {
         let _lock = storage::lock(&self.root)?;
         let registry = self.registry()?;
@@ -160,7 +235,11 @@ impl KeyStore {
         let bytes = protection::unprotect(&encrypted, id.as_bytes())?;
         let secret: Value =
             serde_json::from_slice(&bytes).map_err(|_| AccountError::CredentialsUnavailable)?;
-        if !secret.get("apiKey").is_some_and(Value::is_string) {
+        let usable = match entry.record.sign_in {
+            Some(_) => secret.is_object(),
+            None => secret.get("apiKey").is_some_and(Value::is_string),
+        };
+        if !usable {
             return Err(AccountError::CredentialsUnavailable);
         }
         Ok(secret)
@@ -197,6 +276,11 @@ impl KeyStore {
                         .bytes()
                         .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
                     || validate(&entry.record.service, &entry.record.label).is_err()
+                    || entry
+                        .record
+                        .sign_in
+                        .as_deref()
+                        .is_some_and(|method| !valid_method(method))
             })
         {
             return Err(AccountError::InvalidRegistry);
@@ -208,6 +292,35 @@ impl KeyStore {
         let bytes = serde_json::to_vec_pretty(registry).map_err(|_| AccountError::Storage)?;
         storage::write_atomic(&self.root.join("keys.json"), &bytes)
     }
+}
+
+/// `<service>@<64 lowercase hex digits>`.
+fn valid_id(id: &str, service: &str) -> bool {
+    id.strip_prefix(service)
+        .and_then(|rest| rest.strip_prefix('@'))
+        .is_some_and(|hash| {
+            hash.len() == 64
+                && hash
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+}
+
+/// A sign-in method is one short lowercase word.
+fn valid_method(method: &str) -> bool {
+    (1..=16).contains(&method.len()) && method.bytes().all(|byte| byte.is_ascii_lowercase())
+}
+
+/// A token document as saved: a JSON object of bounded size.
+fn document_bytes(document: &Value) -> Result<Vec<u8>> {
+    if !document.is_object() {
+        return Err(AccountError::InvalidCredentials);
+    }
+    let bytes = serde_json::to_vec(document).map_err(|_| AccountError::InvalidCredentials)?;
+    if bytes.len() > MAX_DOCUMENT_BYTES {
+        return Err(AccountError::InvalidCredentials);
+    }
+    Ok(bytes)
 }
 
 fn validate(service: &str, label: &str) -> Result<()> {
@@ -319,6 +432,90 @@ mod tests {
             store.secret(&header.id).unwrap()["apiKey"],
             "session=a1; theme=dark"
         );
+    }
+
+    fn login_id(service: &str, digit: char) -> String {
+        format!("{service}@{}", digit.to_string().repeat(64))
+    }
+
+    #[test]
+    fn a_signed_in_account_keeps_its_whole_token_document() {
+        let (store, _dir) = store();
+        let id = login_id("gemini", 'a');
+        let document = json!({"access_token": "at", "refresh_token": "rt", "expiry_date": 1});
+        let record = store
+            .add_login(&id, "gemini", "me@example.com", "google", &document)
+            .unwrap();
+        assert_eq!(record.id, id);
+        assert_eq!(record.sign_in.as_deref(), Some("google"));
+        assert_eq!(record.hint, "");
+        assert_eq!(store.secret(&id).unwrap(), document);
+        let registry = std::fs::read_to_string(store.root.join("keys.json")).unwrap();
+        assert!(registry.contains("\"signIn\": \"google\""));
+        assert!(!registry.contains("refresh_token") && !registry.contains("\"rt\""));
+        let again = store
+            .add_login(
+                &id,
+                "gemini",
+                "me@example.com",
+                "google",
+                &json!({"access_token": "new"}),
+            )
+            .unwrap();
+        assert_eq!(again.added_at, record.added_at);
+        assert_eq!(store.list().unwrap(), vec![again]);
+        assert_eq!(store.secret(&id).unwrap()["access_token"], "new");
+    }
+
+    #[test]
+    fn a_rotated_login_replaces_its_document_and_leaves_one_file() {
+        let (store, _dir) = store();
+        let id = login_id("kiro", 'b');
+        store
+            .add_login(
+                &id,
+                "kiro",
+                "Kiro",
+                "github",
+                &json!({"refreshToken": "r1"}),
+            )
+            .unwrap();
+        store
+            .replace_login(&id, &json!({"refreshToken": "r2"}))
+            .unwrap();
+        assert_eq!(store.secret(&id).unwrap()["refreshToken"], "r2");
+        let files = std::fs::read_dir(store.root.join("credentials"))
+            .unwrap()
+            .count();
+        assert_eq!(files, 1);
+        let key = store.add("zai", "Z.ai", "key-1", &Value::Null).unwrap();
+        assert!(matches!(
+            store.replace_login(&key.id, &json!({})),
+            Err(AccountError::InvalidAccount)
+        ));
+        assert!(matches!(
+            store.replace_login(&login_id("kiro", 'c'), &json!({})),
+            Err(AccountError::NotFound)
+        ));
+    }
+
+    #[test]
+    fn sign_ins_are_validated() {
+        let (store, _dir) = store();
+        let document = json!({"token": "t"});
+        let id = login_id("copilot", 'd');
+        let add = |id: &str, service: &str, method: &str, document: &Value| {
+            store.add_login(id, service, "x", method, document)
+        };
+        assert!(add("copilot@abc", "copilot", "github", &document).is_err());
+        assert!(add(&login_id("gemini", 'd'), "copilot", "github", &document).is_err());
+        assert!(add(&login_id("copilot", 'D'), "copilot", "github", &document).is_err());
+        assert!(add(&id, "copilot", "Git Hub", &document).is_err());
+        assert!(add(&id, "copilot", "", &document).is_err());
+        assert!(add(&id, "copilot", "github", &json!("token")).is_err());
+        let huge = json!({"token": "t".repeat(MAX_DOCUMENT_BYTES)});
+        assert!(add(&id, "copilot", "github", &huge).is_err());
+        assert!(store.list().unwrap().is_empty());
     }
 
     #[test]

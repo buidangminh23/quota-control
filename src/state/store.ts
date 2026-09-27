@@ -18,6 +18,7 @@ import type {
   PopoverScreen,
   ProviderEntry,
   ServiceEntry,
+  SignInMethod,
   UpdateStatus,
   UsageLedgerInfo,
 } from "@/lib/types";
@@ -37,13 +38,17 @@ export type NoticeTone = "positive" | "notice";
 /** Which way the screen content slides in: from the right (`forward`) or from the left (`back`). */
 export type Motion = "forward" | "back";
 
-/** A browser sign-in in progress. It outlives the popup, which hides while the browser is in front. */
+/**
+ * A browser sign-in in progress: of a Claude or Codex account (`provider` `claude` / `codex`), or of
+ * another service's account by its id. It outlives the popup, which hides while the browser is in
+ * front. `userCode` is what a device sign-in (GitHub) asks the user to type on its page.
+ */
 export type AccountLogin =
-  | { phase: "starting"; provider: AccountProvider }
-  | { phase: "waiting"; provider: AccountProvider; flowId: string; browser: LoginBrowser };
+  | { phase: "starting"; provider: string; method: SignInMethod }
+  | { phase: "waiting"; provider: string; method: SignInMethod; flowId: string; browser: LoginBrowser; userCode?: string };
 
 export interface AccountLoginError {
-  provider: AccountProvider;
+  provider: string;
   text: string;
 }
 
@@ -414,22 +419,35 @@ function errorText(error: unknown): string {
 
 let loginAttempt = 0;
 
+/** The name a sign-in is announced with: Claude, Codex, or the service's own name among `services`. */
+export function loginBrandIn(provider: string, services: readonly ServiceEntry[]): string {
+  if (provider === "claude" || provider === "codex") return brandName(provider);
+  return services.find((service) => service.id === provider)?.name ?? brandName(provider);
+}
+
+function loginBrand(provider: string): string {
+  return loginBrandIn(provider, get().services);
+}
+
 /**
- * Open the provider's sign-in page. The core waits for the browser, saves the account and reports
- * the outcome through `account-login`, so nothing here waits for the sign-in itself.
+ * Open the provider's sign-in page: a Claude or Codex account's, or another service's with
+ * `method`. The core waits for the browser, saves the account and reports the outcome through
+ * `account-login`, so nothing here waits for the sign-in itself.
  */
-export async function startAccountLogin(provider: AccountProvider): Promise<void> {
+export async function startAccountLogin(provider: string, method: SignInMethod = "google"): Promise<void> {
   const attempt = ++loginAttempt;
   const previous = get().accountLogin;
   if (previous?.phase === "waiting") void backend().cancelAccountLogin(previous.flowId).catch(logFailure("Cancelling the sign-in"));
-  set({ accountLogin: { phase: "starting", provider }, accountLoginError: null });
+  set({ accountLogin: { phase: "starting", provider, method }, accountLoginError: null });
   try {
-    const login = await backend().beginAccountLogin(provider, get().settings.language);
+    const isAccount = provider === "claude" || provider === "codex";
+    const login = await backend().beginAccountLogin(provider, get().settings.language, isAccount ? undefined : method);
     if (attempt !== loginAttempt) {
       void backend().cancelAccountLogin(login.flowId).catch(logFailure("Cancelling the sign-in"));
       return;
     }
-    set({ accountLogin: { phase: "waiting", provider, flowId: login.flowId, browser: login.browser } });
+    const userCode = login.userCode ? { userCode: login.userCode } : {};
+    set({ accountLogin: { phase: "waiting", provider, method, flowId: login.flowId, browser: login.browser, ...userCode } });
   } catch (error) {
     if (attempt === loginAttempt) set({ accountLogin: null, accountLoginError: { provider, text: errorText(error) } });
   }
@@ -457,9 +475,11 @@ export function cancelAccountLogin(): void {
 /** A connected account is announced even when its login is no longer the one shown as waiting. */
 function applyLoginResult(result: AccountLoginResult): void {
   const messages = messagesFor(get().settings.language).accounts;
-  const brand = brandName(result.provider);
+  const brand = loginBrand(result.provider);
   if (result.status === "connected") {
     void reloadAccounts();
+    void reloadServices();
+    void reloadEnabledProviders();
     showNotice(messages.connectedNotice(brand), "positive");
   }
   const current = get().accountLogin;

@@ -343,14 +343,19 @@ export interface DetectedCard {
   origin: string;
 }
 
-/** An API key saved in Quota Control; the key itself never reaches the popup. */
+/** A browser sign-in a service offers: with a Google account, or with a GitHub account. */
+export type SignInMethod = "google" | "github";
+
+/** An API key saved in Quota Control, or an account signed in to from it; neither the key nor the token reaches the popup. */
 export interface SavedKey {
   id: string;
   service: string;
   label: string;
   addedAt: string;
-  /** The key's last four characters. */
+  /** The key's last four characters; empty for a signed-in account. */
   hint: string;
+  /** How a signed-in account was added; absent for a pasted key. */
+  signIn?: SignInMethod;
 }
 
 /** A service beyond Claude and Codex, with the cards it has (`list_services`). */
@@ -372,6 +377,8 @@ export interface ServiceEntry {
   keyFields: [string, string][];
   /** Its cards start hidden until turned on in Customize. */
   startsHidden: boolean;
+  /** The browser sign-ins it offers, in order. */
+  signIn: SignInMethod[];
   detected: DetectedCard[];
   keys: SavedKey[];
 }
@@ -384,12 +391,15 @@ export interface AccountLogin {
   authorizationUrl: string;
   expiresInSeconds: number;
   browser: LoginBrowser;
+  /** The code to type on the sign-in page, for a device sign-in (GitHub) that cannot fill it in. */
+  userCode?: string;
 }
 
 /** How a browser sign-in ended. The core finishes it on its own and reports it through `account-login`. */
 export interface AccountLoginResult {
   flowId: string;
-  provider: AccountProvider;
+  /** `claude`, `codex`, or the id of the service signed in to. */
+  provider: string;
   /** `expired`: nobody finished the sign-in in the browser in time. */
   status: "connected" | "cancelled" | "expired" | "failed";
   accountId?: string;

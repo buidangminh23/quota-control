@@ -17,6 +17,13 @@
 //! - Windows only: the GitHub sign-in of VS Code-style apps (VS Code, VS Code Insiders, VSCodium,
 //!   Cursor, Windsurf), the sessions their GitHub Authentication extension keeps in secret storage.
 //!
+//! Signing in from Quota Control uses Copilot's own GitHub app (`Iv1.b507a08c87ecfe98`, the one
+//! the Copilot editor plugins sign in with) through GitHub's device flow: the page
+//! github.com/login/device opens, the one-time code is copied to the clipboard to paste there, and
+//! the resulting `ghu_` token is saved in Quota Control. GitHub has no way to fill the code in by
+//! itself. The Google button is the same flow with `provider=google`, which takes a GitHub account
+//! that signs in with Google straight to Google, as VS Code does.
+//!
 //! Endpoint: `GET https://api.github.com/copilot_internal/user`, GitHub's internal account
 //! endpoint, with `Authorization: token <t>` and the Copilot Chat editor headers. Paid plans
 //! report `quota_snapshots`: the AI-credit pool as Credits (plus Extra Usage once extra spend is
@@ -37,6 +44,9 @@ use uc_core::{
 };
 
 use crate::service::{Connection, FetchContext, Login, Reading, Roots, Secret, Service};
+use crate::signin::{
+    self, Converted, DeviceClient, Method, Pending, SignIn, SignedIn, StartContext,
+};
 use crate::support::{apps, http, keyring, lines, value};
 
 pub(crate) struct Copilot;
@@ -45,6 +55,18 @@ const NAME: &str = "Copilot";
 /// The app the Accounts screen names, and the origin of logins the Copilot editor plugins saved.
 const APP: &str = "GitHub Copilot";
 const GH_CLI: &str = "GitHub CLI";
+/// The origin of a token signed in to from Quota Control's Accounts screen.
+const SIGNED_IN: &str = "Quota Control";
+const USER_URL: &str = "https://api.github.com/user";
+
+/// Copilot's own GitHub app and GitHub's device flow, as the Copilot editor plugins sign in.
+const DEVICE: DeviceClient = DeviceClient {
+    device_url: "https://github.com/login/device/code",
+    token_url: "https://github.com/login/oauth/access_token",
+    client_id: "Iv1.b507a08c87ecfe98",
+    scope: "read:user",
+    headers: &[("User-Agent", "QuotaControl")],
+};
 /// The server named in connection, status and rate-limit errors.
 const GITHUB: &str = "GitHub";
 const USAGE_URL: &str = "https://api.github.com/copilot_internal/user";
@@ -88,6 +110,10 @@ impl Service for Copilot {
 
     fn connection(&self) -> Connection {
         Connection::login(APP)
+    }
+
+    fn sign_in(&self) -> Option<&'static dyn SignIn> {
+        Some(&Copilot)
     }
 
     fn discover(&self, roots: &Roots) -> Vec<Login> {
@@ -231,11 +257,62 @@ fn rate_limit_error(response: &HttpResponse) -> Option<SimpleProviderError> {
     })
 }
 
+#[async_trait]
+impl SignIn for Copilot {
+    fn methods(&self) -> &'static [Method] {
+        &[Method::GitHub, Method::Google]
+    }
+
+    async fn start(
+        &self,
+        method: Method,
+        context: &StartContext,
+    ) -> Result<Pending, SimpleProviderError> {
+        let mut pending = signin::start_device(&DEVICE, context, signed_in).await?;
+        if method == Method::Google
+            && let Ok(mut page) = url::Url::parse(&pending.url)
+        {
+            page.query_pairs_mut().append_pair("provider", "google");
+            pending.url = page.to_string();
+        }
+        Ok(pending)
+    }
+}
+
+/// The GitHub account a device sign-in's token belongs to, as a card the editor plugins' login of
+/// the same user would share.
+fn signed_in(http: uc_core::SharedHttpClient, tokens: Value) -> Converted {
+    Box::pin(async move {
+        let token = tokens
+            .get("access_token")
+            .and_then(Value::as_str)
+            .and_then(usable)
+            .ok_or_else(|| http::invalid("GitHub returned no usable token."))?;
+        let user = http::json(
+            &http,
+            HttpRequest::get(USER_URL)
+                .header("Authorization", format!("token {token}"))
+                .header("Accept", "application/vnd.github+json")
+                .header("User-Agent", "QuotaControl"),
+            GITHUB,
+        )
+        .await?;
+        let login = value::text(&user, "/login")
+            .ok_or_else(|| http::invalid("GitHub did not say which account signed in."))?;
+        Ok(SignedIn {
+            identity: login.to_lowercase(),
+            label: Some(login.to_string()),
+            document: json!({ "tokens": [{ "token": token, "origin": SIGNED_IN }] }),
+        })
+    })
+}
+
 /// What to do when GitHub refused every token: sign in again where the first one came from.
 fn expired(origin: &str) -> SimpleProviderError {
     http::expired(match origin {
         APP => "The GitHub Copilot login expired. Sign in to Copilot in your editor again.".into(),
         GH_CLI => "The GitHub CLI login expired. Run gh auth login to renew it.".into(),
+        SIGNED_IN => "The GitHub sign-in expired. Sign in to Copilot again in Accounts.".into(),
         app => format!("The {app} login expired. Open {app} and sign in to GitHub again."),
     })
 }
@@ -814,6 +891,73 @@ fn app_name(folder: &str) -> &str {
         "Code" => "VS Code",
         "Code - Insiders" => "VS Code Insiders",
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod sign_in_tests {
+    use super::*;
+    use crate::testing::{Scripted, header};
+
+    #[tokio::test]
+    async fn a_device_token_becomes_the_github_users_card() {
+        let http = Scripted::new().on("GET", USER_URL, 200, r#"{"login":"OctoCat","id":583231}"#);
+        let account = signed_in(
+            http.shared(),
+            json!({"access_token": "ghu_abc123", "token_type": "bearer"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(account.identity, "octocat");
+        assert_eq!(account.label.as_deref(), Some("OctoCat"));
+        assert_eq!(
+            account.document,
+            json!({"tokens": [{"token": "ghu_abc123", "origin": SIGNED_IN}]})
+        );
+        let request = &http.requests()[0];
+        assert_eq!(header(request, "Authorization"), Some("token ghu_abc123"));
+        let secret = Secret::owned(account.document);
+        assert_eq!(saved_tokens(&secret), vec![("ghu_abc123", SIGNED_IN)]);
+        assert!(
+            expired(SIGNED_IN)
+                .message
+                .contains("Sign in to Copilot again in Accounts")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_google_button_asks_github_to_go_straight_to_google() {
+        let http = Scripted::new().on(
+            "POST",
+            DEVICE.device_url,
+            200,
+            r#"{"device_code":"dc","user_code":"WDJB-MJHT","verification_uri":"https://github.com/login/device","interval":5,"expires_in":900}"#,
+        );
+        let context = StartContext {
+            http: http.shared(),
+            language: uc_core::loopback::LoginLanguage::English,
+            product: NAME,
+        };
+        let google = Copilot.start(Method::Google, &context).await.unwrap();
+        assert_eq!(
+            google.url,
+            "https://github.com/login/device?provider=google"
+        );
+        assert_eq!(google.user_code.as_deref(), Some("WDJB-MJHT"));
+        let github = Copilot.start(Method::GitHub, &context).await.unwrap();
+        assert_eq!(github.url, "https://github.com/login/device");
+        let body = String::from_utf8(http.requests()[0].body.clone().unwrap()).unwrap();
+        assert!(body.contains("client_id=Iv1.b507a08c87ecfe98"));
+        assert!(body.contains("scope=read%3Auser"));
+    }
+
+    #[tokio::test]
+    async fn a_token_github_does_not_recognize_is_not_saved() {
+        let http = Scripted::new().on("GET", USER_URL, 401, "{}");
+        let refused = signed_in(http.shared(), json!({"access_token": "ghu_x"})).await;
+        assert!(refused.is_err());
+        let empty = signed_in(http.shared(), json!({"access_token": "has space"})).await;
+        assert!(empty.is_err());
     }
 }
 

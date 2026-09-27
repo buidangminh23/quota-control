@@ -1,10 +1,11 @@
 /**
  * The Accounts screen: every connected Claude and Codex account (always all of them, each with its
  * own live status and a button that opens its product's official site in the app), adding an
- * account of any provider from one list (Claude and Codex through a Google sign-in in the browser,
- * the other services with an API key or a session cookie, or by signing in to the app whose login
- * they read), and the other AI providers already connected. Claude Code and the Codex CLI signed in
- * on this computer are listed automatically.
+ * account of any provider from one list (Claude and Codex through a Google sign-in in the browser;
+ * the other services every way they connect: a Google or GitHub sign-in in the browser, an API key
+ * or a session cookie, or signing in to the app whose login they read), and the other AI providers
+ * already connected. Claude Code and the Codex CLI signed in on this computer are listed
+ * automatically.
  */
 import { useEffect, useMemo, useState } from "react";
 import { messagesFor, type Language, type Messages } from "@/i18n";
@@ -12,13 +13,13 @@ import { backend } from "@/lib/backend";
 import type { AccountProvider, ConnectedAccount, ProviderRuntimeState } from "@/lib/types";
 import { brandName, headerNotice } from "@/model/providerText";
 import { useLanguage } from "@/state/hooks";
-import { cancelAccountLogin, openChatFor, reloadAccounts, reloadServices, reopenAccountLogin, showNotice, startAccountLogin, useApp } from "@/state/store";
+import { cancelAccountLogin, loginBrandIn, openChatFor, reloadAccounts, reloadServices, reopenAccountLogin, showNotice, startAccountLogin, useApp } from "@/state/store";
 import { Button } from "../ui/controls";
 import { confirmAction } from "../ui/dialog";
-import { ChatIcon, CloseIcon, Spinner } from "../ui/icons";
+import { ChatIcon, CloseIcon, PlusIcon, Spinner } from "../ui/icons";
 import { ProviderMark } from "../ui/ProviderMark";
 import { tooltipProps, truncatedTooltipProps } from "../ui/tooltip";
-import { addKind, detectedApps, isAddable, matchesProvider, ServiceAppNote, ServiceCards, ServiceKeyForm } from "./Services";
+import { addKind, connectsHere, detectedApps, isAddable, matchesProvider, ServiceAppNote, ServiceCards, ServicePanel } from "./Services";
 import { errorText, statusOf } from "./status";
 
 const PROVIDERS: readonly AccountProvider[] = ["claude", "codex"];
@@ -85,8 +86,10 @@ function AccountRow({ account, runtime, messages, language }: { account: Connect
  */
 export function LoginProgress({ messages }: { messages: Messages }) {
   const login = useApp((state) => state.accountLogin);
+  const services = useApp((state) => state.services);
   if (!login) return null;
-  const brand = brandName(login.provider);
+  const brand = loginBrandIn(login.provider, services);
+  const userCode = login.phase === "waiting" ? login.userCode : undefined;
   return (
     <div className="uc-card uc-add-account">
       <div className="uc-login-flow" role="status">
@@ -98,6 +101,7 @@ export function LoginProgress({ messages }: { messages: Messages }) {
           <Spinner size={11} />
           <span>{login.phase === "waiting" ? messages.accounts.waiting(brand, login.browser) : messages.accounts.starting}</span>
         </p>
+        {userCode ? <UserCode code={userCode} messages={messages} /> : null}
         <p className="uc-settings-note is-flush">{messages.accounts.waitingNote}</p>
         <div className="uc-settings-actions is-split">
           <Button onClick={cancelAccountLogin} className="is-small">
@@ -108,6 +112,34 @@ export function LoginProgress({ messages }: { messages: Messages }) {
           </Button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The code a device sign-in (GitHub) asks the user to type on its page. It is copied to the
+ * clipboard as soon as it appears, so pasting it is enough.
+ */
+function UserCode({ code, messages }: { code: string; messages: Messages }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () =>
+    backend()
+      .copyText(code)
+      .then(() => setCopied(true))
+      .catch(() => setCopied(false));
+  useEffect(() => {
+    void copy();
+  }, [code]);
+  return (
+    <div className="uc-user-code">
+      <span className="uc-user-code-label">{messages.accounts.userCodeLabel}</span>
+      <div className="uc-user-code-row">
+        <span className="uc-user-code-value">{code}</span>
+        <Button onClick={() => void copy()} className="is-small">
+          {copied ? messages.settings.copied : messages.accounts.copyCode}
+        </Button>
+      </div>
+      <p className="uc-settings-note is-flush">{messages.accounts.userCodeNote}</p>
     </div>
   );
 }
@@ -136,6 +168,15 @@ function GoogleSignIn({ provider, messages, onBack }: { provider: AccountProvide
  * Add an account of any provider from one list: Claude and Codex first (a Google sign-in), then
  * every other service that takes a key or reads an app's login on this computer.
  */
+/** A provider the Add Account list offers: picking it opens its panel, its plus button connects it at once. */
+interface AddOption {
+  id: string;
+  name: string;
+  kind: string;
+  quickLabel: string;
+  quick: () => void;
+}
+
 function AddAccount({ messages, language }: { messages: Messages; language: Language }) {
   const services = useApp((state) => state.services);
   const login = useApp((state) => state.accountLogin);
@@ -152,15 +193,39 @@ function AddAccount({ messages, language }: { messages: Messages; language: Lang
       back();
       setQuery("");
     };
-    return service.takesApiKey ? (
-      <ServiceKeyForm key={service.id} service={service} messages={messages} language={language} onBack={back} onSaved={saved} />
+    return connectsHere(service) ? (
+      <ServicePanel key={service.id} service={service} messages={messages} language={language} onBack={back} onSaved={saved} />
     ) : (
       <ServiceAppNote service={service} messages={messages} onBack={back} />
     );
   }
-  const options = [
-    ...PROVIDERS.filter((provider) => matchesProvider(brandName(provider), provider, query)).map((provider) => ({ id: provider, name: brandName(provider), kind: messages.accounts.kindGoogle })),
-    ...addable.filter((candidate) => matchesProvider(candidate.name, candidate.id, query)).map((candidate) => ({ id: candidate.id, name: candidate.name, kind: addKind(candidate, messages) })),
+  const options: AddOption[] = [
+    ...PROVIDERS.filter((provider) => matchesProvider(brandName(provider), provider, query)).map((provider) => ({
+      id: provider,
+      name: brandName(provider),
+      kind: messages.accounts.kindGoogle,
+      quickLabel: messages.accounts.quickSignIn(brandName(provider), messages.accounts.kindGoogle),
+      quick: () => {
+        setChoice(provider);
+        void startAccountLogin(provider);
+      },
+    })),
+    ...addable
+      .filter((candidate) => matchesProvider(candidate.name, candidate.id, query))
+      .map((candidate) => {
+        const method = candidate.signIn[0];
+        const methodName = method === "github" ? messages.accounts.kindGitHub : messages.accounts.kindGoogle;
+        return {
+          id: candidate.id,
+          name: candidate.name,
+          kind: addKind(candidate, messages),
+          quickLabel: method ? messages.accounts.quickSignIn(candidate.name, methodName) : messages.accounts.quickAdd(candidate.name),
+          quick: () => {
+            setChoice(candidate.id);
+            if (method) void startAccountLogin(candidate.id, method);
+          },
+        };
+      }),
   ];
   return (
     <div className="uc-card uc-add-account">
@@ -175,16 +240,24 @@ function AddAccount({ messages, language }: { messages: Messages; language: Lang
           if (event.key === "Enter" && options[0]) setChoice(options[0].id);
         }}
       />
-      <div className="uc-service-results" role="listbox" aria-label={messages.accounts.add}>
-        {options.length === 0 ? <p className="uc-insight-note">{messages.accounts.noServiceMatch}</p> : null}
-        {options.map((option) => (
-          <button key={option.id} type="button" role="option" aria-selected={false} aria-label={option.name} className="uc-service-result" onClick={() => setChoice(option.id)}>
-            <ProviderMark brand={option.id} size={14} />
-            <span className="uc-truncate">{option.name}</span>
-            <span className="uc-service-kind">{option.kind}</span>
-          </button>
-        ))}
-      </div>
+      {options.length === 0 ? (
+        <p className="uc-insight-note">{messages.accounts.noServiceMatch}</p>
+      ) : (
+        <ul className="uc-service-results" aria-label={messages.accounts.add}>
+          {options.map((option) => (
+            <li key={option.id} className="uc-service-result">
+              <button type="button" aria-label={option.name} className="uc-service-pick" onClick={() => setChoice(option.id)}>
+                <ProviderMark brand={option.id} size={14} />
+                <span className="uc-truncate">{option.name}</span>
+                <span className="uc-service-kind">{option.kind}</span>
+              </button>
+              <button type="button" className="uc-icon-button" aria-label={option.quickLabel} onClick={option.quick} {...tooltipProps(option.quickLabel)}>
+                <PlusIcon size={14} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

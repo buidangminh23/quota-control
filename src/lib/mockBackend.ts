@@ -20,6 +20,7 @@ import type {
   ProviderEntry,
   SavedKey,
   ServiceEntry,
+  SignInMethod,
   UpdateStatus,
 } from "./types";
 import { accountDescriptors, accountProvider, fixtureAccounts, fixtureCatalog, fixtureEngineState, fixtureServices } from "./fixtures";
@@ -66,7 +67,7 @@ export class MockBackend implements Backend {
   private readonly navigateListeners = new Set<(screen: PopoverScreen) => void>();
   private readonly documents = new Map<DocumentName, unknown>();
   private readonly accounts: ConnectedAccount[] = fixtureAccounts();
-  private readonly pendingLogins = new Map<string, { provider: AccountProvider; timer?: ReturnType<typeof setTimeout> }>();
+  private readonly pendingLogins = new Map<string, { provider: string; method: SignInMethod; timer?: ReturnType<typeof setTimeout> }>();
   private readonly loginListeners = new Set<(result: AccountLoginResult) => void>();
   private readonly chatSessions: ChatSession[] = [];
   private readonly services: ServiceEntry[] = fixtureServices();
@@ -107,15 +108,20 @@ export class MockBackend implements Backend {
     return structuredClone(this.accounts);
   }
 
-  async beginAccountLogin(provider: AccountProvider): Promise<AccountLogin> {
+  async beginAccountLogin(provider: string, _language?: unknown, method: SignInMethod = "google"): Promise<AccountLogin> {
+    const isAccount = provider === "claude" || provider === "codex";
+    if (!isAccount && !this.services.some((service) => service.id === provider && service.signIn.includes(method))) {
+      throw new Error("This service does not offer that sign-in.");
+    }
     const flowId = mockId();
     const timer = this.loginDelayMs === null ? undefined : setTimeout(() => this.finishLogin(flowId), this.loginDelayMs);
-    this.pendingLogins.set(flowId, { provider, timer });
+    this.pendingLogins.set(flowId, { provider, method, timer });
     return {
       flowId,
       authorizationUrl: `https://example.invalid/oauth/${provider}?flow=${flowId}`,
       expiresInSeconds: LOGIN_EXPIRY_SECONDS,
       browser: "chrome",
+      ...(method === "github" ? { userCode: "WDJB-MJHT" } : {}),
     };
   }
 
@@ -142,8 +148,28 @@ export class MockBackend implements Backend {
       this.emitLogin({ flowId, provider: pending.provider, status: "failed", error });
       return;
     }
-    const account = this.addAccount(pending.provider, pending.provider, "managed_oauth");
-    this.emitLogin({ flowId, provider: pending.provider, status: "connected", accountId: account.id });
+    if (pending.provider === "claude" || pending.provider === "codex") {
+      const account = this.addAccount(pending.provider, pending.provider, "managed_oauth");
+      this.emitLogin({ flowId, provider: pending.provider, status: "connected", accountId: account.id });
+      return;
+    }
+    const saved = this.addSignIn(pending.provider, pending.method);
+    this.emitLogin({ flowId, provider: pending.provider, status: "connected", accountId: saved.id });
+  }
+
+  /** A service account signed in to from the Accounts screen, saved beside the keys as the core saves it. */
+  private addSignIn(serviceId: string, method: SignInMethod): SavedKey {
+    const service = this.services.find((candidate) => candidate.id === serviceId);
+    const saved: SavedKey = {
+      id: `${serviceId}@${mockId().replace(/[^a-f0-9]/g, "").padEnd(64, "0").slice(0, 64)}`,
+      service: serviceId,
+      label: method === "github" ? "octocat" : "me@example.com",
+      addedAt: new Date().toISOString(),
+      hint: "",
+      signIn: method,
+    };
+    service?.keys.push(saved);
+    return saved;
   }
 
   async listServices(): Promise<ServiceEntry[]> {
@@ -419,7 +445,7 @@ export class MockBackend implements Backend {
     return structuredClone(account);
   }
 
-  private takeLogin(flowId: string): { provider: AccountProvider } | undefined {
+  private takeLogin(flowId: string): { provider: string; method: SignInMethod } | undefined {
     const pending = this.pendingLogins.get(flowId);
     if (!pending) return undefined;
     this.pendingLogins.delete(flowId);

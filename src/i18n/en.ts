@@ -340,6 +340,17 @@ export const en: Messages = {
     status: (kind) => ({ ok: "Active", refreshing: "Refreshing…", error: "Error", unknown: "No data yet" })[kind],
     add: "Add Account",
     signInWithGoogle: "Sign In with Google",
+    signInWithGitHub: "Sign In with GitHub",
+    serviceSignInNote: (service, method) =>
+      method === "google"
+        ? `Opens the sign-in page in Google Chrome. Choose your Google account, then allow access. ${service} connects by itself, with no code to copy.`
+        : `Opens the sign-in page in Google Chrome. Sign in with your GitHub account, then allow access. ${service} connects by itself.`,
+    methodsLabel: "How to connect",
+    quickSignIn: (service, method) => `Sign in to ${service} with ${method}`,
+    quickAdd: (service) => `Add ${service}`,
+    userCodeLabel: "Verification code",
+    copyCode: "Copy Code",
+    userCodeNote: "Enter this code on the page that opened, then allow access.",
     signInNote: (brand) =>
       `Opens the ${brand} sign-in page in Google Chrome. Choose Continue with Google, then allow access. The account connects by itself, with no code to copy.`,
     cliNote: "Claude Code and the Codex CLI signed in on this computer appear here automatically.",
@@ -359,11 +370,18 @@ export const en: Messages = {
     failed: (detail) => `That didn't work: ${detail}`,
     chatOpenFailed: "Couldn't open the chat session. The saved session is kept.",
     serviceSource: (kind, detail) =>
-      ({ login: `Automatic from ${detail} on this computer`, env: `Key in the ${detail} environment variable`, key: `API key ••••${detail}` })[kind],
+      ({
+        login: `Automatic from ${detail} on this computer`,
+        env: `Key in the ${detail} environment variable`,
+        key: `API key ••••${detail}`,
+        google: "Signed in with Google",
+        github: "Signed in with GitHub",
+      })[kind],
     otherServices: "Other AI providers",
     otherServicesNone: "No other providers yet. Sign in to their apps on this computer, or add one under Add Account.",
     detectedNote: (apps) => `Logins of ${apps} on this computer appear here automatically.`,
     kindGoogle: "Google",
+    kindGitHub: "GitHub",
     kindApiKey: "API key",
     kindCookie: "Cookie",
     appLoginNote: (service, app) =>

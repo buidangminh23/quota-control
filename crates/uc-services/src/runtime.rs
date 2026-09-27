@@ -20,8 +20,13 @@ const RATE_LIMIT_PAUSE_MINUTES: i64 = 5;
 pub enum CredentialSource {
     /// A login found on this computer, picked out of a fresh discovery by its identity's hash.
     Login { identity_hash: String, roots: Roots },
-    /// A key saved in Quota Control.
-    Saved { store: KeyStore, id: String },
+    /// A key saved in Quota Control, or an account signed in to from it (`signed_in`), whose token
+    /// document the card owns.
+    Saved {
+        store: KeyStore,
+        id: String,
+        signed_in: bool,
+    },
     /// A key in an environment variable.
     Env {
         variable: &'static str,
@@ -89,14 +94,24 @@ impl ServiceRuntime {
                     )
                 })
             }
-            CredentialSource::Saved { store, id } => {
+            CredentialSource::Saved {
+                store,
+                id,
+                signed_in,
+            } => {
                 let secret = uc_core::load_blocking(move || store.secret(&id)).await;
-                secret.map(Secret::new).map_err(|_| {
-                    SimpleProviderError::new(
+                match (secret, signed_in) {
+                    (Ok(value), true) => Ok(Secret::owned(value)),
+                    (Ok(value), false) => Ok(Secret::new(value)),
+                    (Err(_), true) => Err(SimpleProviderError::new(
+                        ErrorCategory::CredentialAccess,
+                        "The saved sign-in could not be read. Sign in again in Accounts.",
+                    )),
+                    (Err(_), false) => Err(SimpleProviderError::new(
                         ErrorCategory::CredentialAccess,
                         "The saved API key could not be read. Add it again in Accounts.",
-                    )
-                })
+                    )),
+                }
             }
             CredentialSource::Env { variable, roots } => roots
                 .var(variable)
@@ -127,11 +142,36 @@ impl ServiceRuntime {
             memo: &self.memo,
         };
         let reading = self.service.fetch(&context).await?;
+        if let Some(document) = reading.renewed.clone() {
+            self.keep_renewed(document).await;
+        }
         Ok(
             ProviderSnapshot::make(&self.provider, reading.plan, reading.lines, now)
                 .with_plan_term(reading.plan_term)
                 .with_warning(reading.warning),
         )
+    }
+}
+
+impl ServiceRuntime {
+    /// Save a signed-in account's renewed token document, so the rotated refresh token is the one
+    /// the next refresh uses. Another app's login is never written.
+    async fn keep_renewed(&self, document: serde_json::Value) {
+        let CredentialSource::Saved {
+            store,
+            id,
+            signed_in: true,
+        } = self.source.clone()
+        else {
+            return;
+        };
+        let saved = uc_core::load_blocking(move || store.replace_login(&id, &document)).await;
+        if saved.is_err() {
+            tracing::warn!(
+                "A renewed sign-in of {} could not be saved",
+                self.service.name()
+            );
+        }
     }
 }
 
