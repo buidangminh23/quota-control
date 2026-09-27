@@ -11,6 +11,8 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -597,6 +599,43 @@ struct Flow {
     expires: Instant,
     task: Option<tokio::task::JoinHandle<Result<KeyRecord, SimpleProviderError>>>,
     abort: tokio::task::AbortHandle,
+    stage: Arc<Stage>,
+}
+
+/// Whether a sign-in can still be cancelled: only until its account starts being saved. The key
+/// store write cannot be stopped halfway, so a sign-in is either saved or cancelled, never cancelled
+/// after its account was written.
+#[derive(Default)]
+struct Stage(AtomicU8);
+
+impl Stage {
+    const OPEN: u8 = 0;
+    const SAVING: u8 = 1;
+    const CANCELLED: u8 = 2;
+
+    /// Take the sign-in for saving its account; false once it was cancelled.
+    fn claim(&self) -> bool {
+        self.0
+            .compare_exchange(
+                Self::OPEN,
+                Self::SAVING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    /// Cancel the sign-in; false once its account is being saved.
+    fn cancel(&self) -> bool {
+        self.0
+            .compare_exchange(
+                Self::OPEN,
+                Self::CANCELLED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
 }
 
 /// The open browser sign-ins of services, each saved in the key store once the browser finished.
@@ -672,13 +711,15 @@ impl SignInManager {
         } = sign_in.start(method, &context).await?;
         let flow_id = random_token(16)?;
         let keys = self.keys.clone();
+        let stage = Arc::new(Stage::default());
+        let saving = stage.clone();
         let task = tokio::spawn(async move {
             let Ok(Finished { result, page }) = tokio::time::timeout(FLOW_LIFETIME, finish).await
             else {
                 return Err(loopback::expired());
             };
             let outcome = match result {
-                Ok(signed_in) => save(keys, known, method, signed_in).await,
+                Ok(signed_in) => save(keys, known, method, signed_in, saving).await,
                 Err(error) => Err(error),
             };
             if let Some(page) = page {
@@ -698,6 +739,7 @@ impl SignInManager {
                 expires: Instant::now() + FLOW_LIFETIME,
                 abort: task.abort_handle(),
                 task: Some(task),
+                stage,
             },
         );
         Ok(Started {
@@ -761,9 +803,17 @@ impl SignInManager {
         }
     }
 
-    /// Stop a sign-in; the browser tab it opened then shows that it was cancelled.
+    /// Stop a sign-in; the browser tab it opened then shows that it was cancelled. One whose account
+    /// is already being saved is left to finish, and reports that it connected.
     pub async fn cancel(&self, flow_id: &str) {
-        let Some(flow) = self.flows.lock().await.remove(flow_id) else {
+        let flow = {
+            let mut flows = self.flows.lock().await;
+            match flows.get(flow_id) {
+                Some(flow) if flow.stage.cancel() => flows.remove(flow_id),
+                _ => None,
+            }
+        };
+        let Some(flow) = flow else {
             return;
         };
         flow.abort.abort();
@@ -802,6 +852,7 @@ async fn save(
     known: &'static dyn Service,
     method: Method,
     signed_in: SignedIn,
+    stage: Arc<Stage>,
 ) -> Result<KeyRecord, SimpleProviderError> {
     let identity = signed_in.identity.trim().to_string();
     if identity.is_empty() {
@@ -811,16 +862,19 @@ async fn save(
     let label = card_label(signed_in.label.as_deref(), known.name());
     let service_id = known.id();
     let saving = tokio::task::spawn_blocking(move || {
-        keys.add_login(
-            &id,
-            service_id,
-            &label,
-            method.as_str(),
-            &signed_in.document,
-        )
+        stage.claim().then(|| {
+            keys.add_login(
+                &id,
+                service_id,
+                &label,
+                method.as_str(),
+                &signed_in.document,
+            )
+        })
     });
     match saving.await {
-        Ok(Ok(record)) => Ok(record),
+        Ok(Some(Ok(record))) => Ok(record),
+        Ok(None) => Err(loopback::cancelled()),
         _ => Err(SimpleProviderError::new(
             ErrorCategory::CredentialAccess,
             "The account could not be saved. Try signing in again.",
@@ -1078,6 +1132,64 @@ mod tests {
         ));
         assert_eq!(manager.service_of(&second.flow_id).await, Some("fixture"));
         manager.cancel(&second.flow_id).await;
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_whose_account_is_being_saved_finishes_when_cancelled() {
+        let http = Scripted::new();
+        let (manager, _dir) = manager(&http);
+        let record = manager
+            .keys
+            .add_login(
+                &login_card_id("fixture", "me"),
+                "fixture",
+                "Fixture",
+                "google",
+                &serde_json::json!({ "access_token": "at-1" }),
+            )
+            .unwrap();
+        let stage = Arc::new(Stage::default());
+        assert!(stage.claim());
+        let (release, released) = oneshot::channel::<()>();
+        let saved = record.clone();
+        let task = tokio::spawn(async move {
+            let _ = released.await;
+            Ok(saved)
+        });
+        manager.flows.lock().await.insert(
+            "flow-1".to_string(),
+            Flow {
+                service: "fixture",
+                url: "https://auth.example.com/authorize".to_string(),
+                expires: Instant::now() + FLOW_LIFETIME,
+                abort: task.abort_handle(),
+                task: Some(task),
+                stage,
+            },
+        );
+        manager.cancel("flow-1").await;
+        assert_eq!(manager.service_of("flow-1").await, Some("fixture"));
+        release.send(()).unwrap();
+        assert_eq!(manager.complete("flow-1").await.unwrap(), record);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_sign_in_saves_nothing_even_when_its_browser_already_finished() {
+        let dir = tempfile::tempdir().unwrap();
+        let keys = KeyStore::new(dir.path().join("api-keys"));
+        let stage = Arc::new(Stage::default());
+        assert!(stage.cancel());
+        assert!(!stage.claim());
+        let signed_in = SignedIn {
+            identity: "me".to_string(),
+            label: None,
+            document: serde_json::json!({ "access_token": "at-1" }),
+        };
+        let error = save(keys.clone(), &FIXTURE, Method::Google, signed_in, stage)
+            .await
+            .unwrap_err();
+        assert!(loopback::is_cancelled(&error));
+        assert!(keys.list().unwrap().is_empty());
     }
 
     #[tokio::test(start_paused = true)]
