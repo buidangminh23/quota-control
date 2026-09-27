@@ -31,6 +31,8 @@ export interface FormatMessages {
   deadline(verb: DeadlineVerb, when: When): string;
   /** The line under a reset countdown, e.g. `Hồi lại lúc 13:05 · T6 02/10`. */
   restoresAt(time: string, day: RestoreDay): string;
+  /** A clock time and its day, e.g. `13:05 · T6 02/10` / `1:05 PM · tomorrow`. */
+  timeOnDay(time: string, day: RestoreDay): string;
   expiryListHeader(mode: ResetModeKey): string;
   list(items: string[]): string;
 }
@@ -194,6 +196,10 @@ export interface SettingsMessages {
   reduceAnimations: string;
   timeFormat: string;
   timeFormatOption(format: "auto" | "12h" | "24h"): string;
+  timeZone: string;
+  /** The detected zone, e.g. `Giờ Đông Dương · GMT+7`. */
+  timeZoneValue(name: string, offset: string): string;
+  timeZoneNote(zone: string): string;
   showUsageAs: string;
   resetTimes: string;
   resetTimesOption(mode: "relative" | "absolute"): string;

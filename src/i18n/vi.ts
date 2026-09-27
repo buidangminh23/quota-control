@@ -1,4 +1,5 @@
 /** Vietnamese catalog — the default language. Numbers follow vi-VN (see `numbers.ts`). */
+import { zonedParts } from "@/model/timeZone";
 import type { Messages, RestoreDay, When } from "./messages";
 import { pricesVi, usageVi } from "./usageVi";
 import { viTerm } from "./viTerms";
@@ -30,8 +31,10 @@ function restoreDay(day: RestoreDay): string {
       return "hôm nay";
     case "tomorrow":
       return "ngày mai";
-    case "on":
-      return `${WEEKDAYS[day.date.getDay()]} ${twoDigits(day.date.getDate())}/${twoDigits(day.date.getMonth() + 1)}`;
+    case "on": {
+      const parts = zonedParts(day.date);
+      return `${WEEKDAYS[parts.weekday]} ${twoDigits(parts.day)}/${twoDigits(parts.month)}`;
+    }
   }
 }
 
@@ -57,7 +60,10 @@ export const vi: Messages = {
       if (hours > 0) return minutes > 0 ? `${hours} giờ ${minutes} phút` : `${hours} giờ`;
       return `${minutes} phút`;
     },
-    monthDay: (date) => `${date.getDate()}/${date.getMonth() + 1}`,
+    monthDay: (date) => {
+      const parts = zonedParts(date);
+      return `${parts.day}/${parts.month}`;
+    },
     when,
     deadline(verb, value) {
       const phrases = VERBS[verb];
@@ -66,6 +72,7 @@ export const vi: Messages = {
       return `${phrases.lead} lúc ${when(value)}`;
     },
     restoresAt: (time, day) => `Hồi lại lúc ${time} · ${restoreDay(day)}`,
+    timeOnDay: (time, day) => `${time} · ${restoreDay(day)}`,
     expiryListHeader: (mode) => (mode === "relative" ? "Các lượt đặt lại hết hạn sau:" : "Các lượt đặt lại hết hạn lúc:"),
     list: (items) => new Intl.ListFormat("vi", { type: "conjunction" }).format(items),
   },
@@ -259,6 +266,9 @@ export const vi: Messages = {
     densityOption: (density) => (density === "regular" ? "Mặc định" : "Gọn"),
     reduceAnimations: "Giảm hiệu ứng chuyển động",
     timeFormat: "Định dạng giờ",
+    timeZone: "Múi giờ",
+    timeZoneValue: (name, offset) => `${name} · ${offset}`,
+    timeZoneNote: (zone) => `Tự nhận theo máy (${zone}). Đổi múi giờ trên máy là mọi giờ trong app đổi theo, không cần mở lại.`,
     timeFormatOption: (format) => ({ auto: "Tự động", "12h": "12 giờ", "24h": "24 giờ" })[format],
     showUsageAs: "Hiển thị theo",
     resetTimes: "Thời điểm đặt lại",

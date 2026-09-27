@@ -9,6 +9,7 @@ import { messagesFor, translate, type Language, type Messages } from "@/i18n";
 import { backend } from "@/lib/backend";
 import type { AccountProvider, ChatSession, ConnectedAccount, ProviderRuntimeState } from "@/lib/types";
 import { brandName, headerNotice } from "@/model/providerText";
+import { deviceTimeZone } from "@/model/timeZone";
 import { useLanguage } from "@/state/hooks";
 import { cancelAccountLogin, openChatFor, reloadAccounts, reloadChats, reopenAccountLogin, showNotice, startAccountLogin, useApp } from "@/state/store";
 import { Button } from "../ui/controls";
@@ -43,7 +44,7 @@ function statusOf(runtime: ProviderRuntimeState | undefined): Status {
 
 function formatDate(iso: string, language: Language): string {
   const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString(language === "vi" ? "vi-VN" : "en-US");
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString(language === "vi" ? "vi-VN" : "en-US", { timeZone: deviceTimeZone() });
 }
 
 function AccountRow({ account, runtime, messages, language }: { account: ConnectedAccount; runtime: ProviderRuntimeState | undefined; messages: Messages; language: Language }) {

@@ -10,6 +10,8 @@
  * an announced reset (`scheduled`) or the site's own watch is shown beside it, never folded into it.
  */
 
+import { dayNumber, deviceTimeZone, instantOnDay, zonedParts } from "@/model/timeZone";
+
 export type ResetKind = "regular" | "banked";
 
 export interface ResetSource {
@@ -148,6 +150,14 @@ export function parseResets(body: string | null | undefined, extra: readonly (Co
   return [...byId.values()].sort((a, b) => b.announcedAt.getTime() - a.announcedAt.getTime());
 }
 
+const EXCERPT_LENGTH = 160;
+
+/** The post's words without its links, on one line and cut to a notification's length. */
+export function excerpt(text: string, length = EXCERPT_LENGTH): string {
+  const plain = text.replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim();
+  return plain.length > length ? `${plain.slice(0, length - 1).trimEnd()}…` : plain;
+}
+
 /** A watch counts until it expires. */
 export function activeWatch(status: ResetStatus | null, now: Date): ResetWatch | null {
   const current = status?.watch ?? null;
@@ -274,13 +284,14 @@ export interface AnnouncementPattern {
   total: number;
 }
 
-/** When announcements land, in this machine's time zone. */
-export function announcementPattern(resets: readonly CodexReset[]): AnnouncementPattern {
+/** When announcements land, in the device's time zone. */
+export function announcementPattern(resets: readonly CodexReset[], zone: string = deviceTimeZone()): AnnouncementPattern {
   const weekdays = Array.from({ length: 7 }, () => 0);
   const hours = Array.from({ length: HOUR_BLOCKS }, () => 0);
   for (const reset of resets) {
-    const weekday = (reset.announcedAt.getDay() + 6) % 7;
-    const block = Math.floor(reset.announcedAt.getHours() / (24 / HOUR_BLOCKS));
+    const parts = zonedParts(reset.announcedAt, zone);
+    const weekday = (parts.weekday + 6) % 7;
+    const block = Math.floor(parts.hour / (24 / HOUR_BLOCKS));
     weekdays[weekday] = (weekdays[weekday] ?? 0) + 1;
     hours[block] = (hours[block] ?? 0) + 1;
   }
@@ -288,8 +299,9 @@ export function announcementPattern(resets: readonly CodexReset[]): Announcement
 }
 
 export interface CalendarDay {
+  /** Noon of the day in the calendar's zone, so the date reads the same there. */
   date: Date;
-  /** Resets announced that local day, in announcement order. */
+  /** Resets announced that day, in announcement order. */
   kinds: ResetKind[];
   isToday: boolean;
   future: boolean;
@@ -297,27 +309,19 @@ export interface CalendarDay {
 
 export const CALENDAR_WEEKS = 20;
 
-function localDayKey(date: Date): string {
-  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
-}
-
-/** The last `weeks` local weeks ending with the current one, each Monday to Sunday. */
-export function resetCalendar(resets: readonly CodexReset[], now: Date, weeks = CALENDAR_WEEKS): CalendarDay[][] {
-  const byDay = new Map<string, ResetKind[]>();
+/** The last `weeks` weeks in the device's zone ending with the current one, each Monday to Sunday. */
+export function resetCalendar(resets: readonly CodexReset[], now: Date, weeks = CALENDAR_WEEKS, zone: string = deviceTimeZone()): CalendarDay[][] {
+  const byDay = new Map<number, ResetKind[]>();
   for (const reset of [...resets].sort((a, b) => a.announcedAt.getTime() - b.announcedAt.getTime())) {
-    const key = localDayKey(reset.announcedAt);
+    const key = dayNumber(reset.announcedAt, zone);
     byDay.set(key, [...(byDay.get(key) ?? []), reset.kind]);
   }
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const monday = new Date(today);
-  monday.setDate(today.getDate() - ((today.getDay() + 6) % 7) - (weeks - 1) * 7);
-  const todayKey = localDayKey(today);
+  const today = dayNumber(now, zone);
+  const monday = today - ((zonedParts(now, zone).weekday + 6) % 7) - (weeks - 1) * 7;
   return Array.from({ length: weeks }, (_, week) =>
     Array.from({ length: 7 }, (_, weekday) => {
-      const date = new Date(monday);
-      date.setDate(monday.getDate() + week * 7 + weekday);
-      const key = localDayKey(date);
-      return { date, kinds: byDay.get(key) ?? [], isToday: key === todayKey, future: date.getTime() > today.getTime() };
+      const key = monday + week * 7 + weekday;
+      return { date: instantOnDay(key, 12, 0, zone), kinds: byDay.get(key) ?? [], isToday: key === today, future: key > today };
     }),
   );
 }

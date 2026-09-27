@@ -103,6 +103,7 @@ pub fn run() -> anyhow::Result<()> {
             commands::hide_popup,
             commands::open_url,
             commands::copy_text,
+            commands::system_time_zone,
             commands::set_tray_icon,
             commands::quit_app,
             account_commands::list_accounts,

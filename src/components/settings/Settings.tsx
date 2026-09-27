@@ -11,8 +11,10 @@ import type { NotificationKey, SettingsSectionKey } from "@/i18n/messages";
 import { barKind, platformKey } from "@/model/platform";
 import { anyNotificationEnabled, taskbarDisplayOf, taskbarDisplayPatch, type NotificationSettings, type TaskbarDisplay } from "@/model/settings";
 import { autostartEnabled, canRevealFiles, notificationAccess, requestNotificationAccess, revealFile, setAutostart, type NotificationAccess } from "@/platform/system";
+import { localeOf } from "@/i18n/numbers";
 import { backend } from "@/lib/backend";
-import { useSettings } from "@/state/hooks";
+import { offsetLabel, zoneName } from "@/model/timeZone";
+import { useNow, useSettings } from "@/state/hooks";
 import { navigate, resetAllSettings, showNotice, updateSettings, useApp } from "@/state/store";
 import { useTaskbarInfo } from "@/strip/support";
 import { CrossLink } from "../customize/Customize";
@@ -23,6 +25,7 @@ import { UpdateRows } from "./UpdateRows";
 import { Button, Picker, Switch } from "../ui/controls";
 import { confirmAction } from "../ui/dialog";
 import { SlidersIcon } from "../ui/icons";
+import { truncatedTooltipProps } from "../ui/tooltip";
 
 function useAutostart(): [boolean | null, (enabled: boolean) => void, string | null] {
   const [enabled, setEnabled] = useState<boolean | null>(null);
@@ -96,6 +99,9 @@ export function Settings() {
   const updatesSupported = typeof backend().updateStatus === "function";
   const taskbarDisplay = taskbarDisplayOf(settings, stripSupported);
   const section = (key: SettingsSectionKey) => text.section(key);
+  const timeZone = useApp((state) => state.timeZone);
+  const now = useNow();
+  const zoneValue = text.timeZoneValue(zoneName(now, timeZone, localeOf(language)), offsetLabel(now, timeZone));
 
   const setNotification = (key: NotificationKey, on: boolean) => {
     const notifications: NotificationSettings = { ...settings.notifications, [key]: on };
@@ -173,6 +179,11 @@ export function Settings() {
         </Row>
         <Row label={text.timeFormat}>
           <Picker value={settings.timeFormat} options={["auto", "12h", "24h"] as const} label={text.timeFormatOption} onChange={(value) => updateSettings({ timeFormat: value })} ariaLabel={text.timeFormat} />
+        </Row>
+        <Row label={text.timeZone} note={text.timeZoneNote(timeZone)}>
+          <span className="uc-settings-value uc-num" {...truncatedTooltipProps(zoneValue)}>
+            {zoneValue}
+          </span>
         </Row>
         <Row label={text.reduceAnimations}>
           <Switch checked={settings.reduceAnimations} label={text.reduceAnimations} onChange={(on) => updateSettings({ reduceAnimations: on })} />

@@ -22,6 +22,7 @@ import type {
 } from "@/lib/types";
 import { hasDashboardCard, reconcileLayout, parseLayout, resetAllLayout, sameLayout, type LayoutDocument } from "@/model/layout";
 import { setDongRate } from "@/model/format";
+import { deviceTimeZone, setSystemTimeZone } from "@/model/timeZone";
 import { brandName } from "@/model/providerText";
 import { DASHBOARD_TABS, DEFAULT_SETTINGS, enabledProvidersOf, mergeSettingsDocument, parseSettings, type AppSettings, type DashboardTab } from "@/model/settings";
 import { isTransientBanner, updateBannerKey, updateBannerOf } from "@/model/updateBanner";
@@ -84,6 +85,8 @@ export interface AppState {
   ledgerVersion: number;
   /** The Vietcombank USD selling rate the core keeps; `null` until one was fetched. */
   exchangeRate: ExchangeRate | null;
+  /** The IANA zone wall-clock times show in: the system's, re-checked while the app runs. */
+  timeZone: string;
 }
 
 /** Undo depth, matching upstream `LayoutUndoHistory`. */
@@ -114,6 +117,7 @@ export const useApp = create<AppState>(() => ({
   ledgerInfo: null,
   ledgerVersion: 0,
   exchangeRate: null,
+  timeZone: deviceTimeZone(),
 }));
 
 const get = () => useApp.getState();
@@ -480,6 +484,21 @@ export async function reloadExchangeRate(): Promise<void> {
   } catch (error) {
     logFailure("Reading the exchange rate")(error);
   }
+}
+
+/** Re-read the system's time zone (the webview's where the core cannot say); a change redraws every time on screen. */
+export async function checkTimeZone(): Promise<void> {
+  const api = backend();
+  if (typeof api.systemTimeZone === "function") {
+    try {
+      setSystemTimeZone(await api.systemTimeZone());
+    } catch (error) {
+      setSystemTimeZone(null);
+      logFailure("Reading the system time zone")(error);
+    }
+  }
+  const zone = deviceTimeZone();
+  if (zone !== get().timeZone) set({ timeZone: zone });
 }
 
 function resetTransientState(): void {

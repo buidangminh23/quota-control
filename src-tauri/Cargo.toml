@@ -27,6 +27,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
+iana-time-zone = "0.1"
 parking_lot.workspace = true
 quick-xml = "0.41"
 semver = "1"

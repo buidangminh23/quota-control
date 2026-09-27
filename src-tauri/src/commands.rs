@@ -104,6 +104,31 @@ pub async fn copy_text(app: AppHandle, text: String) -> Result<(), String> {
     app.clipboard().write_text(text).map_err(safe_error)
 }
 
+/// The operating system's current IANA time zone (e.g. `Asia/Saigon`), read afresh on every call
+/// so the popup follows a zone change made while the app runs; the webview can keep the zone its
+/// process started with. `None` when the system does not name one.
+#[tauri::command]
+pub fn system_time_zone() -> Option<String> {
+    iana_time_zone::get_timezone()
+        .ok()
+        .filter(|zone| !zone.is_empty())
+}
+
+#[cfg(test)]
+mod time_zone_tests {
+    #[test]
+    fn names_the_system_time_zone_on_desktop_systems() {
+        let zone = super::system_time_zone();
+        if cfg!(any(windows, target_os = "macos")) {
+            let zone = zone.expect("Windows and macOS always name a time zone");
+            assert!(
+                zone.contains('/') || zone == "UTC",
+                "unexpected time zone {zone}"
+            );
+        }
+    }
+}
+
 /// The tray icon the popup last asked for (`None`: the app icon), and whether the taskbar strip
 /// covers the icon's notification-area button. While it does, the button shows a clear icon so
 /// nothing of the icon peeks out from under the strip, and the requested one comes back after.

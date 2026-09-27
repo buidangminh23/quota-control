@@ -1,4 +1,5 @@
 /** English catalog: the upstream OpenUsage copy, adapted for Windows and Linux. */
+import { deviceTimeZone } from "@/model/timeZone";
 import type { Messages, RestoreDay, When } from "./messages";
 import { pricesEn, usageEn } from "./usageEn";
 
@@ -24,7 +25,7 @@ function restoreDay(day: RestoreDay): string {
     case "tomorrow":
       return "tomorrow";
     case "on":
-      return day.date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+      return day.date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: deviceTimeZone() });
   }
 }
 
@@ -42,13 +43,14 @@ export const en: Messages = {
       if (hours > 0) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
       return `${minutes}m`;
     },
-    monthDay: (date) => date.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+    monthDay: (date) => date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: deviceTimeZone() }),
     when,
     deadline(verb, value) {
       const prefix = VERBS[verb];
       return value.kind === "in" ? `${prefix} in ${value.duration}` : `${prefix} ${when(value)}`;
     },
     restoresAt: (time, day) => `Back at ${time} · ${restoreDay(day)}`,
+    timeOnDay: (time, day) => `${time} · ${restoreDay(day)}`,
     expiryListHeader: (mode) => (mode === "relative" ? "Resets expire in:" : "Resets expire:"),
     list(items) {
       if (items.length <= 1) return items[0] ?? "";
@@ -231,6 +233,9 @@ export const en: Messages = {
     densityOption: (density) => (density === "regular" ? "Default" : "Compact"),
     reduceAnimations: "Reduce Animations",
     timeFormat: "Time Format",
+    timeZone: "Time Zone",
+    timeZoneValue: (name, offset) => `${name} · ${offset}`,
+    timeZoneNote: (zone) => `Detected from this computer (${zone}). Change the zone on the computer and every time in the app follows, no restart needed.`,
     timeFormatOption: (format) => ({ auto: "Auto", "12h": "12-hour", "24h": "24-hour" })[format],
     showUsageAs: "Show Usage As",
     resetTimes: "Reset Times",

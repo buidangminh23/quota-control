@@ -9,7 +9,7 @@ import type { IsEnabled } from "@/model/layout";
 import { barKind, platformKey } from "@/model/platform";
 import type { AppSettings, DashboardTab } from "@/model/settings";
 import type { DisplayOptions } from "@/model/widgetData";
-import { dashboardTabs, displayOptionsOf, isProviderEnabled, useApp, visibleDashboardTab } from "./store";
+import { checkTimeZone, dashboardTabs, displayOptionsOf, isProviderEnabled, useApp, visibleDashboardTab } from "./store";
 
 /** The platform key the interface words itself by (Finder vs File Explorer, ⌘ vs Win). */
 export function usePlatformKey(): PlatformKey {
@@ -34,13 +34,34 @@ export function useMessages(): Messages {
 }
 
 /**
- * Row display options. The exchange rate is a dependency on purpose: money on the Vietnamese UI
- * follows it (`setDongRate`), so a new rate hands the rows a new object and they draw again.
+ * Row display options. The exchange rate and the time zone are dependencies on purpose: money on the
+ * Vietnamese UI follows the rate (`setDongRate`) and every clock time the zone (`deviceTimeZone`), so
+ * a change hands the rows a new object and they draw again.
  */
 export function useDisplay(): DisplayOptions {
   const settings = useSettings();
   const rate = useApp((state) => state.exchangeRate?.usdToVnd ?? null);
-  return useMemo(() => (rate === null ? displayOptionsOf(settings) : { ...displayOptionsOf(settings) }), [settings, rate]);
+  const zone = useApp((state) => state.timeZone);
+  return useMemo(() => ({ ...displayOptionsOf(settings) }), [settings, rate, zone]);
+}
+
+const TIME_ZONE_CHECK_MS = 60_000;
+
+/** Keep the time zone current: at start, when the popup opens, when the window regains focus and every minute. */
+export function useTimeZoneWatch(): void {
+  const visible = useApp((state) => state.popupVisible);
+  useEffect(() => {
+    void checkTimeZone();
+  }, [visible]);
+  useEffect(() => {
+    const check = () => void checkTimeZone();
+    const timer = setInterval(check, TIME_ZONE_CHECK_MS);
+    window.addEventListener("focus", check);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", check);
+    };
+  }, []);
 }
 
 export function useIsEnabled(): IsEnabled {

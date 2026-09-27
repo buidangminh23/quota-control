@@ -8,6 +8,7 @@ import type { DeadlineVerb, RestoreDay, When } from "@/i18n/messages";
 import { compact, compactDollars, compactDong, decimal, dollars, dong, localeOf } from "@/i18n/numbers";
 import type { MetricKind, MetricValue } from "@/lib/types";
 import { roundHalfAwayFromZero } from "./decimal";
+import { calendarDaysBetween, deviceTimeZone } from "./timeZone";
 
 /** `tray` (taskbar strip): shortest. `row` (popup row): abbreviated, money keeps cents. `full`: every digit. */
 export type FormatStyle = "tray" | "row" | "full";
@@ -121,20 +122,22 @@ export function setSystemClockPreference(uses24Hour: boolean | null): void {
   systemUses24Hour = uses24Hour;
 }
 
-/** Short wall-clock time honoring the Time Format setting (`5:30 PM` / `17:30`). */
-export function shortTime(date: Date, format: TimeFormat, language: Language): string {
+/** Short wall-clock time in the device's zone, honoring the Time Format setting (`5:30 PM` / `17:30`). */
+export function shortTime(date: Date, format: TimeFormat, language: Language, timeZone: string = deviceTimeZone()): string {
   const uses24Hour = format === "12h" ? false : format === "24h" ? true : systemUses24Hour;
-  const options: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
+  const options: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit", timeZone };
   if (uses24Hour !== null) options.hourCycle = uses24Hour ? "h23" : "h12";
   return date.toLocaleTimeString(localeOf(language), options);
 }
 
-function startOfDay(date: Date): number {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+function daysBetween(now: Date, date: Date): number {
+  return calendarDaysBetween(now, date);
 }
 
-function daysBetween(now: Date, date: Date): number {
-  return Math.round((startOfDay(date) - startOfDay(now)) / 86_400_000);
+function restoreDayOf(date: Date, now: Date, relative = true): RestoreDay {
+  if (!relative) return { kind: "on", date };
+  const dayDiff = daysBetween(now, date);
+  return dayDiff <= 0 ? { kind: "today" } : dayDiff === 1 ? { kind: "tomorrow" } : { kind: "on", date };
 }
 
 /** The structured "when" of a deadline, or `null` when the duration is not finite. */
@@ -183,7 +186,13 @@ export function resetAbsoluteLabel(resetsAt: Date, now: Date, timeFormat: TimeFo
 /** The exact wall-clock moment a limit comes back, e.g. `Hồi lại lúc 13:05 · T6 02/10`; `null` once it has passed. */
 export function restoreLabel(resetsAt: Date, now: Date, timeFormat: TimeFormat, language: Language): string | null {
   if (!(resetsAt.getTime() > now.getTime())) return null;
-  const dayDiff = daysBetween(now, resetsAt);
-  const day: RestoreDay = dayDiff <= 0 ? { kind: "today" } : dayDiff === 1 ? { kind: "tomorrow" } : { kind: "on", date: resetsAt };
-  return messagesFor(language).format.restoresAt(shortTime(resetsAt, timeFormat, language), day);
+  return messagesFor(language).format.restoresAt(shortTime(resetsAt, timeFormat, language), restoreDayOf(resetsAt, now));
+}
+
+/**
+ * A clock time with its day in the device's zone, e.g. `13:05 · ngày mai` / `1:05 PM · Fri, Oct 2`;
+ * `relative: false` always names the weekday and date.
+ */
+export function timeOnDayLabel(date: Date, now: Date, timeFormat: TimeFormat, language: Language, relative = true): string {
+  return messagesFor(language).format.timeOnDay(shortTime(date, timeFormat, language), restoreDayOf(date, now, relative));
 }

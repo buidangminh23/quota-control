@@ -10,7 +10,7 @@ import { backend } from "@/lib/backend";
 import { useUsageNotifications } from "@/notify/useUsageNotifications";
 import { useTaskbarStrip } from "@/strip/useTaskbarStrip";
 import { useGlance } from "@/glance/useGlance";
-import { useDashboardTabs, useIsDark } from "@/state/hooks";
+import { useDashboardTabs, useIsDark, useTimeZoneWatch } from "@/state/hooks";
 import { cycleDashboardTab, dashboardTabs, navigate, refresh, startApp, undoLayout, useApp, type Screen } from "@/state/store";
 import { startInsights } from "@/state/insights";
 import { useResetNotifications } from "@/notify/useResetNotifications";
@@ -197,6 +197,7 @@ export function App() {
   useGlance();
   useUsageNotifications();
   useResetNotifications();
+  useTimeZoneWatch();
 
   const direction = tabMotion ?? (screen === "dashboard" && previous !== "dashboard" ? "back" : "forward");
   return (

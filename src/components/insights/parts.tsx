@@ -10,6 +10,7 @@ import { decimal } from "@/i18n/numbers";
 import { backend } from "@/lib/backend";
 import type { PublicFeedName, PublicFeedSnapshot } from "@/lib/insightsTypes";
 import { compactDuration } from "@/model/format";
+import { deviceTimeZone } from "@/model/timeZone";
 import { useNow } from "@/state/hooks";
 import { refreshFeeds, useInsights } from "@/state/insights";
 import { Button } from "../ui/controls";
@@ -151,14 +152,14 @@ export function agoText(iso: string | Date | null | undefined, now: Date, langua
   return compactDuration(Math.max(60, (now.getTime() - time) / 1000), language);
 }
 
-/** A local calendar date: `26/09/2026` or `9/26/2026`. */
-export function dateText(date: Date, language: Language): string {
-  return date.toLocaleDateString(language === "vi" ? "vi-VN" : "en-US", { day: "2-digit", month: "2-digit", year: "numeric" });
+/** A calendar date in the device's zone (or `timeZone`): `26/09/2026` or `9/26/2026`. */
+export function dateText(date: Date, language: Language, timeZone: string = deviceTimeZone()): string {
+  return date.toLocaleDateString(language === "vi" ? "vi-VN" : "en-US", { day: "2-digit", month: "2-digit", year: "numeric", timeZone });
 }
 
-/** A `YYYY-MM-DD` day as a local calendar date. */
+/** A `YYYY-MM-DD` day as written, whatever the zone. */
 export function dayText(day: string, language: Language): string {
   const [year, month, date] = day.split("-").map(Number);
   if (!year || !month || !date) return day;
-  return dateText(new Date(year, month - 1, date), language);
+  return dateText(new Date(Date.UTC(year, month - 1, date, 12)), language, "UTC");
 }

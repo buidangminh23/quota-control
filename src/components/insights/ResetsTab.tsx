@@ -12,6 +12,7 @@ import {
   activeWatch,
   announcementPattern,
   currentWait,
+  excerpt,
   FORECAST_HORIZONS,
   forecastResets,
   HOUR_BLOCKS,
@@ -23,7 +24,7 @@ import {
   type ResetSource,
   type ResetStatus,
 } from "@/model/insights/resets";
-import { excerpt } from "@/notify/useResetNotifications";
+import { zonedParts } from "@/model/timeZone";
 import { useNow, useSettings } from "@/state/hooks";
 import { useInsights } from "@/state/insights";
 import { tooltipProps } from "../ui/tooltip";
@@ -49,11 +50,12 @@ function PostLink({ source, text, compact = false }: { source: ResetSource; text
   );
 }
 
-/** `12/09`, with the year only when it is not the current one. */
+/** `12/09` in the device's zone, with the year only when it is not the current one. */
 function shortDate(date: Date, now: Date, language: Language): string {
-  if (date.getFullYear() !== now.getFullYear()) return dateText(date, language);
-  const day = String(date.getDate()).padStart(2, "0");
-  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const parts = zonedParts(date);
+  if (parts.year !== zonedParts(now).year) return dateText(date, language);
+  const day = String(parts.day).padStart(2, "0");
+  const month = String(parts.month).padStart(2, "0");
   return language === "vi" ? `${day}/${month}` : `${month}/${day}`;
 }
 
@@ -163,8 +165,8 @@ function Calendar({ resets, language, text }: { resets: CodexReset[]; language: 
         <div className="uc-reset-cal-grid" role="img" aria-label={title} style={{ gridTemplateColumns: `auto repeat(${weeks.length}, minmax(0, 1fr))` }}>
           <span />
           {weeks.map((week, index) => {
-            const month = week[0]!.date.getMonth();
-            const starts = index === 0 || month !== weeks[index - 1]![0]!.date.getMonth();
+            const month = zonedParts(week[0]!.date).month - 1;
+            const starts = index === 0 || month !== zonedParts(weeks[index - 1]![0]!.date).month - 1;
             return (
               <span key={week[0]!.date.getTime()} className="uc-reset-cal-month">
                 {starts ? text.monthShort(month) : ""}

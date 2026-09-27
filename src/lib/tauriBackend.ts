@@ -159,6 +159,10 @@ export class TauriBackend implements Backend {
     return invoke("copy_text", { text });
   }
 
+  systemTimeZone(): Promise<string | null> {
+    return invoke<string | null>("system_time_zone");
+  }
+
   taskbarInfo(): Promise<TaskbarInfo> {
     return invoke<TaskbarInfo>("taskbar_info");
   }

@@ -63,6 +63,8 @@ export interface Backend {
   onNavigate(listener: (screen: PopoverScreen) => void): Unsubscribe;
   openUrl(url: string): Promise<void>;
   copyText(text: string): Promise<void>;
+  /** The operating system's current IANA time zone, read afresh each call; `null` when it names none. */
+  systemTimeZone?(): Promise<string | null>;
   /** Replace the tray icon (PNG bytes) and tooltip; `null` restores the app icon. */
   setTrayIcon(png: Uint8Array | null, tooltip: string): Promise<void>;
   /** The taskbar band the live strip is rendered for; absent where the core has no strip. */

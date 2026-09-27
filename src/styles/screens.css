@@ -224,6 +224,16 @@
   min-width: 0;
 }
 
+.uc-settings-value {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--uc-support-size);
+  color: var(--uc-secondary);
+}
+
 .uc-settings-note {
   margin: -4px 12px 8px;
   font-size: 10.5px;

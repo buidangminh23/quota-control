@@ -3445,6 +3445,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "iana-time-zone",
  "ksni",
  "parking_lot",
  "quick-xml 0.41.0",

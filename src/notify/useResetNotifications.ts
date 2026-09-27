@@ -7,7 +7,7 @@
 import { announceOnIsland } from "@/glance/alerts";
 import { useEffect } from "react";
 import { insightsFor } from "@/i18n/insights";
-import { activeWatch, parseResetStatus, type ResetWatch } from "@/model/insights/resets";
+import { activeWatch, excerpt, parseResetStatus, type ResetWatch } from "@/model/insights/resets";
 import { notify } from "@/platform/system";
 import { ensureFeed, useInsights } from "@/state/insights";
 import { useApp } from "@/state/store";
@@ -15,7 +15,6 @@ import { useApp } from "@/state/store";
 const STORAGE_KEY = "quota-control.codex-resets-notified";
 /** A reset older than this when first seen is history, not news. */
 const FRESH_MS = 48 * 3_600_000;
-const EXCERPT_LENGTH = 160;
 
 interface Seen {
   latest: string | null;
@@ -47,12 +46,6 @@ function writeSeen(seen: Seen): void {
   } catch {
     return;
   }
-}
-
-/** The post's words without its links, on one line and cut to a notification's length. */
-export function excerpt(text: string, length = EXCERPT_LENGTH): string {
-  const plain = text.replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim();
-  return plain.length > length ? `${plain.slice(0, length - 1).trimEnd()}…` : plain;
 }
 
 export function useResetNotifications(): void {
