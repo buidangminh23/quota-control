@@ -5,6 +5,7 @@ use tauri_plugin_opener::OpenerExt;
 use uc_engine::{EngineState, ProviderEntry};
 
 use crate::service::{AppInfo, BackendService, safe_error, validate_url};
+use crate::taskbar_strip::{SLOT_ICON_HEIGHT, TraySlot};
 
 #[tauri::command]
 pub fn app_info(service: State<'_, BackendService>) -> AppInfo {
@@ -129,19 +130,19 @@ mod time_zone_tests {
     }
 }
 
-/// The tray icon the popup last asked for (`None`: the app icon), and whether the taskbar strip
-/// covers the icon's notification-area button. While it does, the button shows a clear icon so
-/// nothing of the icon peeks out from under the strip, and the requested one comes back after.
+/// The tray icon the popup last asked for (`None`: the app icon), and what the taskbar strip wants
+/// the icon's notification-area button to show. While the strip sits in the button, or asks it to
+/// grow, the button shows a clear icon as wide as the strip needs, so nothing of the icon peeks out
+/// from under the strip; the requested one comes back after.
 #[derive(Default)]
 pub struct TrayImage {
     requested: parking_lot::Mutex<Option<tauri::image::Image<'static>>>,
-    covered: std::sync::atomic::AtomicBool,
+    slot: parking_lot::Mutex<TraySlot>,
 }
 
 impl TrayImage {
-    pub fn set_covered(&self, app: &AppHandle, covered: bool) {
-        self.covered
-            .store(covered, std::sync::atomic::Ordering::Release);
+    pub fn set_slot(&self, app: &AppHandle, slot: TraySlot) {
+        *self.slot.lock() = slot;
         if let Err(error) = self.apply(app) {
             tracing::warn!("could not update the tray icon: {error}");
         }
@@ -157,16 +158,23 @@ impl TrayImage {
         self.apply(app)
     }
 
-    /// An icon nobody can see. Its pixels keep an alpha of 1, because Windows draws an icon whose
-    /// alpha is zero throughout as if it had no alpha at all: a black square.
-    fn clear_icon() -> tauri::image::Image<'static> {
-        tauri::image::Image::new_owned([0, 0, 0, 1].repeat(16 * 16), 16, 16)
+    /// An icon nobody can see, `width` by [`SLOT_ICON_HEIGHT`]: only its aspect ratio matters, to
+    /// a styler rule that sizes the button by it. Its pixels keep an alpha of 1, because Windows
+    /// draws an icon whose alpha is zero throughout as if it had no alpha at all: a black square.
+    fn clear_icon(width: u32) -> tauri::image::Image<'static> {
+        let width = width.max(1);
+        tauri::image::Image::new_owned(
+            [0, 0, 0, 1].repeat((width * SLOT_ICON_HEIGHT) as usize),
+            width,
+            SLOT_ICON_HEIGHT,
+        )
     }
 
     fn apply(&self, app: &AppHandle) -> Result<(), String> {
         let tray = app.tray_by_id("main").ok_or("Tray is unavailable")?;
-        let image = if self.covered.load(std::sync::atomic::Ordering::Acquire) {
-            Self::clear_icon()
+        let slot = *self.slot.lock();
+        let image = if let TraySlot::Clear { width } = slot {
+            Self::clear_icon(width)
         } else if let Some(image) = self.requested.lock().clone() {
             image
         } else {

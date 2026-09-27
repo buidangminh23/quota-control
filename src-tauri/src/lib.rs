@@ -249,10 +249,10 @@ pub fn run() -> anyhow::Result<()> {
                         tracing::warn!("{error}");
                     }
                 },
-                move |covered| {
+                move |slot| {
                     cover_app
                         .state::<commands::TrayImage>()
-                        .set_covered(&cover_app, covered);
+                        .set_slot(&cover_app, slot);
                 },
             ));
             #[cfg(target_os = "macos")]

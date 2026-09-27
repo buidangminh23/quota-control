@@ -6,9 +6,12 @@
 //! the taskbar's edge (Windhawk's centered taskbar), the strip becomes a matching island right after
 //! it instead. When a styler rule widens the app's own notification-area button to fit the strip
 //! (Windhawk's Taskbar Styler, by the button's name [`SLOT_NAME`]), the strip covers that button and
-//! sits inside the notification area itself, on its real background, shrinking a little when it
-//! grows wider than the button; it only leaves the button for the island placement, never for a
-//! spot over the notification area's own buttons. It is owned by one dedicated
+//! sits inside the notification area itself, on its real background. The button then shows a clear
+//! icon as wide as the strip needs, so a rule that sizes the button by its image makes the
+//! notification area grow and shrink with the strip; under a rule that fixes the button's width the
+//! strip shrinks a little when it grows wider than the button. It only leaves the button for the
+//! island placement, never for a spot over the notification area's own buttons. It is owned by one
+//! dedicated
 //! thread with its own message loop, re-anchors on a one-second timer, rebuilds itself after Explorer
 //! restarts (`TaskbarCreated`) and reports taskbar size, scale and theme changes to the popup as
 //! `taskbar-info`.
@@ -22,10 +25,38 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, PhysicalRect, Runtime, State};
 
 /// The tray icon's tooltip while the strip shows, which Windows also gives its notification-area
-/// button as a name. A taskbar styler rule widens the button by this name to make room for the
-/// strip: `SystemTray.NotifyIconView#NotifyItemIcon[AutomationProperties.Name=Quota Control]`.
+/// button as a name. Two taskbar styler rules find the button by this name and let it grow with the
+/// strip: `SystemTray.NotifyIconView#NotifyItemIcon[AutomationProperties.Name=Quota Control]` with
+/// `Width=Auto` and `MinWidth=88`, and the same target followed by ` > * > Image` with `Width=Auto`,
+/// `Height=16` and `Stretch=Uniform`, so the button is as wide as the clear icon the app gives it
+/// (see [`TraySlot::Clear`]). A fixed `Width=` on the button also works, without the growing.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub const SLOT_NAME: &str = "Quota Control";
+
+/// What the app's notification-area button shows while the strip may sit inside it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TraySlot {
+    /// The app icon, or the Bars glyph: the strip is elsewhere or gone.
+    #[default]
+    Icon,
+    /// A clear icon `width` points wide and [`SLOT_ICON_HEIGHT`] tall. Under the styler rules in
+    /// [`SLOT_NAME`] the button's image keeps that aspect ratio at 16 points tall, so the button
+    /// becomes as wide as the strip needs; a rule that fixes the button's width ignores it.
+    Clear { width: u32 },
+}
+
+/// Height, in points, of the clear icon that sizes the app's button.
+pub const SLOT_ICON_HEIGHT: u32 = 16;
+
+/// Points the button's width moves by, so a reading gaining a digit rarely resizes the
+/// notification area.
+#[cfg_attr(not(windows), allow(dead_code))]
+const SLOT_STEP: u32 = 8;
+
+/// A narrower strip gives points back only once it frees this many, so the button doesn't flap
+/// between two widths while a reading moves across a digit.
+#[cfg_attr(not(windows), allow(dead_code))]
+const SLOT_SHRINK_SLACK: u32 = 16;
 
 /// Largest frame the popup may send, in device pixels.
 const MAX_FRAME_WIDTH: u32 = 4096;
@@ -433,14 +464,42 @@ pub fn slot_scale(content: &Bitmap, width: u32, height: u32) -> f64 {
         .min(1.0)
 }
 
-/// Whether the app's notification-area button, `width` x `height`, holds the strip: a taskbar
-/// styler must have widened it on purpose (icon buttons are about square, so at least twice as wide
-/// as tall), and the strip must keep at least [`MIN_SLOT_SCALE`] of its size inside it.
+/// Whether a taskbar styler widened the app's notification-area button, `width` x `height`, on
+/// purpose: icon buttons are about square, so it must be at least twice as wide as tall.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn slot_capable(width: i32, height: i32) -> bool {
+    height > 0 && width >= height * 2
+}
+
+/// Whether the app's notification-area button, `width` x `height`, holds the strip: it must be
+/// widened for it ([`slot_capable`]), and the strip must keep at least [`MIN_SLOT_SCALE`] of its size
+/// inside it.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn slot_holds(content: &Bitmap, width: i32, height: i32) -> bool {
-    height > 0
-        && width >= height * 2
+    slot_capable(width, height)
         && slot_scale(content, width as u32, height as u32) >= MIN_SLOT_SCALE
+}
+
+/// Points the app's button must be wide to hold `content` at full size, with the margin [`slotted`]
+/// keeps at each end of a `height`-pixel button, rounded up to [`SLOT_STEP`]; `scale` is device
+/// pixels per point.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn slot_width_for(content: &Bitmap, height: u32, scale: f64) -> u32 {
+    let (left, _, right, _) = ink(content).unwrap_or((0, 0, content.width, content.height));
+    let pixels = (right - left) + slot_margin(height) * 2;
+    let scale = if scale > 0.0 { scale } else { 1.0 };
+    let points = (f64::from(pixels) / scale).ceil() as u32;
+    points.div_ceil(SLOT_STEP) * SLOT_STEP
+}
+
+/// The width to ask of the button when the strip wants `wanted` points and `current` was asked for
+/// last: grow at once, shrink only past [`SLOT_SHRINK_SLACK`].
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn next_slot_width(current: Option<u32>, wanted: u32) -> u32 {
+    match current {
+        Some(current) if wanted <= current && current - wanted < SLOT_SHRINK_SLACK => current,
+        _ => wanted,
+    }
 }
 
 /// `region` of `content` (`left`, `top`, `right`, `bottom`, the last two exclusive) resampled to
@@ -542,13 +601,14 @@ pub struct TaskbarStrip {
 }
 
 impl TaskbarStrip {
-    /// Start the strip. `on_click` runs on the main thread, and so does `on_cover`, which hears
-    /// whether the strip now covers the app's notification-area button (the button then shows a
-    /// clear icon, so nothing of the icon peeks out from under the strip).
+    /// Start the strip. `on_click` runs on the main thread, and so does `on_cover`, which hears what
+    /// the app's notification-area button should show: a clear icon sized for the strip while the
+    /// strip sits inside it or asks it to grow, so nothing of the icon peeks out from under the
+    /// strip, or the app icon.
     pub fn install<R: Runtime>(
         app: &AppHandle<R>,
         on_click: impl Fn(StripClick) + Send + Sync + 'static,
-        on_cover: impl Fn(bool) + Send + Sync + 'static,
+        on_cover: impl Fn(TraySlot) + Send + Sync + 'static,
     ) -> Self {
         Self {
             inner: platform::Strip::start(
@@ -645,8 +705,9 @@ mod platform {
 
     use super::{
         Bitmap, Fill, Island, SLOT_NAME, StripButton, StripClick, TASKBAR_INFO_EVENT, TaskbarEdge,
-        TaskbarInfo, TaskbarTheme, framed, island_reach, island_strip_origin, slot_holds, slotted,
-        strip_origin, tray_moved,
+        TaskbarInfo, TaskbarTheme, TraySlot, framed, island_reach, island_strip_origin,
+        next_slot_width, slot_capable, slot_holds, slot_width_for, slotted, strip_origin,
+        tray_moved,
     };
 
     const WM_APP_FRAME: u32 = WM_APP + 1;
@@ -674,13 +735,17 @@ mod platform {
     /// Passes in a row without the widened button before the strip leaves it, so a button being laid
     /// out again never makes the strip jump out and back.
     const SLOT_EXIT_PASSES: u8 = 2;
+    /// Passes in a row that the strip, asking a widened button to grow, still doesn't fit it before
+    /// the button gets the app icon back: a styler rule that fixes the button's width never lets it
+    /// grow.
+    const SLOT_STRETCH_PASSES: u8 = 3;
     const COLOR_REFRESH: Duration = Duration::from_secs(30);
     const TOOLTIP_MAX_WIDTH_POINTS: f64 = 360.0;
     /// The dark common-controls theme Explorer itself uses for tooltips over a dark taskbar.
     const DARK_TOOLTIP_THEME: &str = "DarkMode_Explorer";
 
     type ClickHandler = Arc<dyn Fn(StripClick) + Send + Sync>;
-    type CoverHandler = Arc<dyn Fn(bool) + Send + Sync>;
+    type CoverHandler = Arc<dyn Fn(TraySlot) + Send + Sync>;
     /// Hands a click job to the main thread (window procedures must never block on Tauri).
     type Dispatch = Box<dyn Fn(Box<dyn FnOnce() + Send>) + Send>;
 
@@ -1223,8 +1288,13 @@ mod platform {
         slot: Option<RECT>,
         /// Passes in a row that found that button gone or too narrow for the frame.
         slot_misses: u8,
-        /// Whether the app last heard that the strip covers its button.
-        covering: bool,
+        /// What the app last heard its button should show.
+        tray: TraySlot,
+        /// Points last asked of the button, and the width the strip wanted then.
+        slot_request: Option<u32>,
+        slot_wanted: Option<u32>,
+        /// Passes since the strip wanted that width in which it did not fit the button.
+        slot_unheld: u8,
     }
 
     thread_local! {
@@ -1267,6 +1337,7 @@ mod platform {
         fn taskbar_changed(&mut self, restarted: bool) {
             if restarted {
                 self.islands.forget();
+                self.slot_wanted = None;
             } else {
                 self.islands.distrust_fill();
             }
@@ -1330,9 +1401,13 @@ mod platform {
             let padding = (FRAME_PADDING_POINTS * scale).round() as u32;
             let popup_open = self.shared.popup.load(Ordering::Acquire);
             let layout = self.islands.layout(taskbar);
-            let fitting = layout
+            let button = layout
                 .and_then(|layout| layout.slot)
                 .map(|slot| to_client(taskbar.hwnd, slot))
+                .filter(|slot| slot_capable(slot.right - slot.left, slot.bottom - slot.top));
+            let wanted =
+                button.map(|slot| slot_width_for(content, (slot.bottom - slot.top) as u32, scale));
+            let fitting = button
                 .filter(|slot| slot_holds(content, slot.right - slot.left, slot.bottom - slot.top));
             match fitting {
                 Some(slot) => {
@@ -1430,22 +1505,47 @@ mod platform {
                 self.painted = paint(window.strip, bitmap);
                 update_tooltip(window, &bitmap.tooltip);
             }
-            let covering = self.slot.is_some() && self.painted;
-            self.cover(covering);
+            let tray = self.tray_for(wanted);
+            self.cover(tray);
         }
 
-        /// Tell the app, when it changes, whether the strip covers its notification-area button.
-        fn cover(&mut self, covering: bool) {
-            if self.covering == covering {
+        /// What the app's button should show while it is widened for the strip, which wants
+        /// `wanted` points of it: a clear icon that wide (see [`TraySlot::Clear`]), until the strip
+        /// has not fitted the button for [`SLOT_STRETCH_PASSES`] passes, which means a styler rule
+        /// keeps the button's width fixed and the strip sits elsewhere.
+        fn tray_for(&mut self, wanted: Option<u32>) -> TraySlot {
+            let Some(wanted) = wanted.filter(|_| self.painted) else {
+                self.slot_request = None;
+                self.slot_wanted = None;
+                self.slot_unheld = 0;
+                return TraySlot::Icon;
+            };
+            if self.slot_wanted != Some(wanted) {
+                self.slot_wanted = Some(wanted);
+                self.slot_unheld = 0;
+            }
+            let request = next_slot_width(self.slot_request, wanted);
+            self.slot_request = Some(request);
+            self.slot_unheld = if self.slot.is_some() {
+                0
+            } else {
+                self.slot_unheld.saturating_add(1)
+            };
+            if self.slot_unheld > SLOT_STRETCH_PASSES {
+                TraySlot::Icon
+            } else {
+                TraySlot::Clear { width: request }
+            }
+        }
+
+        /// Tell the app, when it changes, what its notification-area button should show.
+        fn cover(&mut self, tray: TraySlot) {
+            if self.tray == tray {
                 return;
             }
-            self.covering = covering;
+            self.tray = tray;
             let on_cover = self.on_cover.clone();
-            if self
-                .app
-                .run_on_main_thread(move || on_cover(covering))
-                .is_err()
-            {
+            if self.app.run_on_main_thread(move || on_cover(tray)).is_err() {
                 tracing::warn!("could not report where the taskbar strip sits");
             }
         }
@@ -1467,7 +1567,10 @@ mod platform {
             self.discard_window();
             self.slot = None;
             self.slot_misses = 0;
-            self.cover(false);
+            self.slot_request = None;
+            self.slot_wanted = None;
+            self.slot_unheld = 0;
+            self.cover(TraySlot::Icon);
         }
     }
 
@@ -1846,7 +1949,10 @@ mod platform {
                 placed: None,
                 slot: None,
                 slot_misses: 0,
-                covering: false,
+                tray: TraySlot::Icon,
+                slot_request: None,
+                slot_wanted: None,
+                slot_unheld: 0,
             }));
         });
         unsafe { SetTimer(host, SYNC_TIMER, SYNC_INTERVAL_MS, None) };
@@ -1883,7 +1989,7 @@ mod platform {
         pub fn start<R: Runtime>(
             app: AppHandle<R>,
             _on_click: Arc<dyn Fn(StripClick) + Send + Sync>,
-            _on_cover: Arc<dyn Fn(bool) + Send + Sync>,
+            _on_cover: Arc<dyn Fn(super::TraySlot) + Send + Sync>,
         ) -> Self {
             Self {
                 set_title: Box::new(move |title| {
@@ -1953,7 +2059,7 @@ mod platform {
         pub fn start<R: Runtime>(
             app: AppHandle<R>,
             _on_click: Arc<dyn Fn(StripClick) + Send + Sync>,
-            _on_cover: Arc<dyn Fn(bool) + Send + Sync>,
+            _on_cover: Arc<dyn Fn(super::TraySlot) + Send + Sync>,
         ) -> Self {
             let scale = app
                 .primary_monitor()
@@ -2038,7 +2144,7 @@ mod platform {
         pub fn start<R: Runtime>(
             _app: AppHandle<R>,
             _on_click: Arc<dyn Fn(StripClick) + Send + Sync>,
-            _on_cover: Arc<dyn Fn(bool) + Send + Sync>,
+            _on_cover: Arc<dyn Fn(super::TraySlot) + Send + Sync>,
         ) -> Self {
             Self
         }
@@ -2188,6 +2294,24 @@ mod tests {
             }
         }
         frame
+    }
+
+    #[test]
+    fn asks_the_button_for_the_strip_width_plus_its_margins_in_points() {
+        let content = frame_with_ink(300, 42, 10..30, [255, 255, 255, 255]);
+        assert_eq!(slot_width_for(&content, 42, 1.0), 312);
+        let hidpi = frame_with_ink(450, 63, 15..45, [255, 255, 255, 255]);
+        assert_eq!(slot_width_for(&hidpi, 63, 1.5), 312);
+        assert!(slot_capable(88, 42));
+        assert!(!slot_capable(40, 42));
+    }
+
+    #[test]
+    fn grows_the_button_at_once_and_shrinks_it_only_past_the_slack() {
+        assert_eq!(next_slot_width(None, 256), 256);
+        assert_eq!(next_slot_width(Some(256), 264), 264);
+        assert_eq!(next_slot_width(Some(256), 248), 256);
+        assert_eq!(next_slot_width(Some(256), 240), 240);
     }
 
     #[test]
