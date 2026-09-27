@@ -1,7 +1,8 @@
 /**
  * One provider on the dashboard (upstream `WidgetGroupedListView.section`): the header with mark,
  * name, plan and refresh state, then a card of metric rows. On Demand metrics sit behind the caret
- * together with the provider's links. Right-click on the header or a row opens its context menu.
+ * together with the provider's links. Rows for limits the account's plan does not have drop out once
+ * a successful read shows it (`offeredRows`). Right-click on the header or a row opens its context menu.
  */
 import { useMemo, type CSSProperties } from "react";
 import { messagesFor, translate, type Messages } from "@/i18n";
@@ -18,10 +19,10 @@ import {
   setProviderOpen,
   type ProviderMetrics,
 } from "@/model/layout";
-import { accountEmailOf, accountLabelOf, brandName, headerNotice, providerBrand, providerTitle, stalenessHint } from "@/model/providerText";
+import { accountEmailOf, accountLabelOf, brandName, hasPlanReading, headerNotice, providerBrand, providerTitle, stalenessHint } from "@/model/providerText";
 import { planTermLines } from "@/model/planTermLines";
 import { knownBrandColor } from "@/model/totalSpend";
-import { condensedTextRowOffsets, widgetDataFor, type DisplayOptions, type WidgetData } from "@/model/widgetData";
+import { condensedTextRowOffsets, offeredRows, widgetDataFor, type DisplayOptions, type WidgetData } from "@/model/widgetData";
 import { useBarKind } from "@/state/hooks";
 import { navigate, openChatFor, refresh, setProviderEnabled, showNotice, updateLayout, useApp } from "@/state/store";
 import { ChevronDown, ChevronUp, ExternalIcon, Spinner, WarningTriangle } from "../ui/icons";
@@ -83,8 +84,11 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
   const layout = useApp((state) => state.layout);
   const catalog = useApp((state) => state.catalog);
   const open = layout.openProviders.includes(providerId);
-  const always = useMemo(() => resolve(group.always, runtime, display), [group.always, runtime, display]);
-  const onDemand = useMemo(() => resolve(group.onDemand, runtime, display), [group.onDemand, runtime, display]);
+  const tokenSource = isLocalHistoryCard(providerId);
+  const { always, onDemand } = useMemo(
+    () => offeredRows(resolve(group.always, runtime, display), resolve(group.onDemand, runtime, display), !tokenSource && hasPlanReading(runtime)),
+    [group.always, group.onDemand, runtime, display, tokenSource],
+  );
   const condensed = useMemo(() => new Set([...condensedIds(always), ...(open ? condensedIds(onDemand) : [])]), [always, onDemand, open]);
   const links = group.provider.links ?? [];
   const hasExpandable = onDemand.length > 0 || links.length > 0;
@@ -95,7 +99,6 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
   const planTerm = isLocalHistoryCard(providerId) ? undefined : runtime?.snapshot?.planTerm;
   const termLines = planTerm ? planTermLines(planTerm, now, display.timeFormat, language) : null;
   const chat = chatTarget(group);
-  const tokenSource = isLocalHistoryCard(providerId);
   const seriesColor = tokenSource ? knownBrandColor(providerBrand(group.provider), false) : null;
   const refreshEntry: MenuEntry = { kind: "item", label: messages.dashboard.refreshProvider(title), onSelect: () => refresh(providerId) };
   const customizeEntry: MenuEntry = { kind: "item", label: messages.dashboard.customizeEllipsis, onSelect: () => navigate("customize", providerId) };

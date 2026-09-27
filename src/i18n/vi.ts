@@ -92,6 +92,7 @@ export const vi: Messages = {
     notStarted: "Chưa bắt đầu",
     freshSessionTooltip: "Phiên chỉ bắt đầu sau khi bạn gửi tin nhắn đầu tiên.",
     noData: "Không có dữ liệu",
+    sessionTitle: (window) => `Phiên ${window}`,
     dollarLimit(amount, noun) {
       if (noun === undefined || noun === "limit") return `Hạn mức ${amount}`;
       return `${capitalize(viTerm(noun) ?? noun)} ${amount}`;

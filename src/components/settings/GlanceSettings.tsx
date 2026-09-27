@@ -5,7 +5,7 @@
  * notch.
  */
 import { useMemo } from "react";
-import { messagesFor, translate, type Language } from "@/i18n";
+import { messagesFor, type Language } from "@/i18n";
 import type { SettingsMessages } from "@/i18n/messages";
 import type { WidgetDescriptor } from "@/lib/types";
 import { displayGroups, glanceCandidates, type ProviderMetrics } from "@/model/layout";
@@ -19,6 +19,7 @@ import {
   type StripSettings,
   type TaskbarDisplay,
 } from "@/model/settings";
+import { descriptorTitle } from "@/model/widgetData";
 import { useIsEnabled, useSettings } from "@/state/hooks";
 import { updateSettings, useApp } from "@/state/store";
 import { Picker, Switch } from "../ui/controls";
@@ -114,6 +115,7 @@ function AccountChecklist({
   language: Language;
 }) {
   const identity = cardIdentity(group.provider, undefined, language);
+  const snapshot = useApp((state) => state.engine?.providers[group.provider.id]?.snapshot);
   return (
     <>
       <div className="uc-list-row is-glance-account">
@@ -126,7 +128,7 @@ function AccountChecklist({
         </span>
       </div>
       {group.always.map((descriptor) => {
-        const title = translate(descriptor.template.title, language);
+        const title = descriptorTitle(descriptor, snapshot, language);
         return (
           <Row key={descriptor.id} label={title} nested>
             <Switch checked={picked.has(descriptor.id)} label={title} onChange={(on) => onToggle(descriptor.id, on)} />
@@ -187,6 +189,7 @@ export function IslandSection() {
   const text = messagesFor(language).settings;
   const island = settings.island;
   const candidates = useCandidates();
+  const engine = useApp((state) => state.engine);
   const metricsById = useMemo(() => {
     const byId = new Map<string, { group: ProviderMetrics; descriptor: WidgetDescriptor }>();
     for (const group of candidates) for (const descriptor of group.always) byId.set(descriptor.id, { group, descriptor });
@@ -196,7 +199,8 @@ export function IslandSection() {
   const wingLabel = (id: string) => {
     const entry = metricsById.get(id);
     if (!entry) return text.islandWingAuto;
-    return `${cardIdentity(entry.group.provider, undefined, language).name} · ${translate(entry.descriptor.template.title, language)}`;
+    const snapshot = engine?.providers[entry.group.provider.id]?.snapshot;
+    return `${cardIdentity(entry.group.provider, undefined, language).name} · ${descriptorTitle(entry.descriptor, snapshot, language)}`;
   };
   const wingValue = (id: string) => (metricsById.has(id) ? id : AUTO_WING);
   const setWing = (index: 0 | 1, id: string) => {

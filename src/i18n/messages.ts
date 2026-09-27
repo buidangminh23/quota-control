@@ -52,6 +52,8 @@ export interface MeterMessages {
   notStarted: string;
   freshSessionTooltip: string;
   noData: string;
+  /** A session row's title with its window (`5h`), so it reads apart from the weekly limit. */
+  sessionTitle(window: string): string;
   dollarLimit(amount: string, noun: string | undefined): string;
   valueWithWord(value: string, word: string): string;
   noUsageInPeriod: string;

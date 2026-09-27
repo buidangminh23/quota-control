@@ -18,7 +18,7 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { messagesFor, translate, type Language } from "@/i18n";
+import { messagesFor, type Language } from "@/i18n";
 import type { WidgetDescriptor } from "@/lib/types";
 import {
   applyMetricSections,
@@ -34,6 +34,7 @@ import {
   type ProviderRow,
 } from "@/model/layout";
 import { providerBrand, providerTitle } from "@/model/providerText";
+import { descriptorTitle } from "@/model/widgetData";
 import { useBarKind, useIsEnabled, useLanguage } from "@/state/hooks";
 import { navigate, openCustomizeDetail, setProviderEnabled, showNotice, updateLayout, useApp } from "@/state/store";
 import { Switch } from "../ui/controls";
@@ -308,7 +309,8 @@ function MetricRowView({ descriptor, language, handle, lifted }: { descriptor: W
   const bar = useBarKind();
   const layout = useApp((state) => state.layout);
   const catalog = useApp((state) => state.catalog);
-  const title = translate(descriptor.template.title, language);
+  const snapshot = useApp((state) => state.engine?.providers[descriptor.providerId]?.snapshot);
+  const title = descriptorTitle(descriptor, snapshot, language);
   const enabled = isMetricEnabled(layout, descriptor.id);
   const pinned = isPinned(layout, descriptor.id);
   const toggleStar = () => {

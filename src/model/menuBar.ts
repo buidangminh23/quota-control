@@ -8,6 +8,7 @@
  * contributes nothing (no orphan mark). Nothing left means the app icon.
  */
 import type { Provider, WidgetDescriptor } from "@/lib/types";
+import { hourWindowLabel } from "./format";
 import type { ProviderMetrics } from "./layout";
 import { brandOf } from "./layout";
 import { fraction, isBounded, menuBarValue, type WidgetData } from "./widgetData";
@@ -67,7 +68,7 @@ const DAY_MS = 24 * HOUR_MS;
  */
 export function periodLabel(periodMs: number | undefined): string | null {
   if (periodMs === undefined || !(periodMs > 0)) return null;
-  if (periodMs < DAY_MS) return periodMs % HOUR_MS === 0 ? `${periodMs / HOUR_MS}h` : null;
+  if (periodMs < DAY_MS) return hourWindowLabel(periodMs);
   if (periodMs === DAY_MS) return "day";
   if (periodMs === 7 * DAY_MS) return "week";
   return periodMs >= 28 * DAY_MS && periodMs <= 31 * DAY_MS ? "month" : null;

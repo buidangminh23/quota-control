@@ -194,6 +194,14 @@ export function isErrorSnapshot(runtime: ProviderRuntimeState | undefined): bool
   return runtime?.snapshot?.errorCategory !== undefined;
 }
 
+/**
+ * Whether the snapshot on screen came from a successful read (the latest, or the last good one while
+ * a refresh fails), so a metric it lacks is a limit the account's plan does not have.
+ */
+export function hasPlanReading(runtime: ProviderRuntimeState | undefined): boolean {
+  return runtime?.snapshot !== undefined && !isErrorSnapshot(runtime);
+}
+
 export interface StalenessHint {
   label: string;
   tooltip: string;

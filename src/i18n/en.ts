@@ -71,6 +71,7 @@ export const en: Messages = {
     notStarted: "Not started",
     freshSessionTooltip: "Sessions start after you send your first message.",
     noData: "No data",
+    sessionTitle: (window) => `${window} Session`,
     dollarLimit: (amount, noun) => `${amount} ${noun ?? "limit"}`,
     valueWithWord: (value, word) => `${value} ${word}`,
     noUsageInPeriod: "No usage in this period",

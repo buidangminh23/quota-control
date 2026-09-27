@@ -105,6 +105,14 @@ export function totalSpendRingCenter(value: number, metric: TotalSpendMetric, la
   }
 }
 
+const HOUR_MS = 3_600_000;
+
+/** A limit window of whole hours under a day as `5h`, the same in every language; `null` otherwise. */
+export function hourWindowLabel(periodMs: number | undefined): string | null {
+  if (periodMs === undefined || !(periodMs > 0) || periodMs >= 24 * HOUR_MS || periodMs % HOUR_MS !== 0) return null;
+  return `${periodMs / HOUR_MS}h`;
+}
+
 /** Compact duration (`1d 6h` / `1 ngày 6 giờ`); `null` for non-finite or non-positive spans. */
 export function compactDuration(seconds: number, language: Language): string | null {
   if (!Number.isFinite(seconds) || seconds <= 0) return null;

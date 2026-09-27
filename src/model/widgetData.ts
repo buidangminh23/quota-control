@@ -25,6 +25,7 @@ import {
   deadlineLabel,
   formatNumber,
   formatValue,
+  hourWindowLabel,
   type ResetDisplayMode,
   type TimeFormat,
   whenLabel,
@@ -86,11 +87,30 @@ export const DEFAULT_DISPLAY: DisplayOptions = {
   language: "vi",
 };
 
+/** The source title every provider gives its rolling short window. */
+const SESSION_TITLE = "Session";
+
+/**
+ * A row's title in `language`. A session names its window ("Phiên 5h"), so it reads apart from the
+ * weekly limit; any other title, or a session whose window is unknown, translates as it is.
+ */
+export function metricTitle(source: string, periodMs: number | undefined, language: Language): string {
+  const window = source === SESSION_TITLE ? hourWindowLabel(periodMs) : null;
+  return window ? messagesFor(language).meter.sessionTitle(window) : translate(source, language);
+}
+
+/** The title `descriptor`'s row shows, with the window the provider's last reading reported. */
+export function descriptorTitle(descriptor: WidgetDescriptor, snapshot: ProviderSnapshot | undefined, language: Language): string {
+  const line = snapshot?.lines.find((candidate) => candidate.label === descriptor.metricLabel);
+  const periodMs = line?.type === "progress" ? line.periodDurationMs : descriptor.template.periodDurationMs;
+  return metricTitle(descriptor.template.title, periodMs, language);
+}
+
 /** The descriptor's template as a tile (upstream `descriptor.sample`); its numbers are placeholders. */
 export function sampleFromTemplate(template: WidgetTemplate, display: DisplayOptions): WidgetData {
   return {
     ...display,
-    title: translate(template.title, display.language),
+    title: metricTitle(template.title, template.periodDurationMs, display.language),
     kind: template.kind,
     used: 0,
     limit: template.limit ?? null,
@@ -130,7 +150,7 @@ export function resolveLine(line: MetricLine, descriptor: WidgetDescriptor, disp
     case "progress": {
       const kind = line.format.kind;
       return {
-        ...sampleFromTemplate({ title: template.title, kind }, display),
+        ...sampleFromTemplate({ title: template.title, kind, periodDurationMs: line.periodDurationMs }, display),
         used: kind === "percent" ? clampPercent(line.used) : line.used,
         limit: line.limit,
         countSuffix: line.format.kind === "count" ? line.format.suffix : undefined,
@@ -171,6 +191,23 @@ export function widgetDataFor(descriptor: WidgetDescriptor, snapshot: ProviderSn
   const resolved = line ? resolveLine(line, descriptor, display) : null;
   if (resolved) return resolved;
   return { ...sampleFromTemplate(descriptor.template, display), hasData: false };
+}
+
+/**
+ * The rows a card shows, split as the layout splits them. While no successful read is on screen (the
+ * first load, or a first refresh that failed) every row stays and reads "No data". Once one is, a row
+ * it does not carry is a limit the account's plan does not have (Codex Pro 5x has no five-hour window,
+ * Claude Pro no Fable allowance), so the row drops out; a read with no data for any row keeps them all
+ * rather than leave the card empty.
+ */
+export function offeredRows<Row extends { data: WidgetData }>(
+  always: Row[],
+  onDemand: Row[],
+  successfulRead: boolean,
+): { always: Row[]; onDemand: Row[] } {
+  const hasData = (row: Row) => row.data.hasData;
+  if (!successfulRead || !(always.some(hasData) || onDemand.some(hasData))) return { always, onDemand };
+  return { always: always.filter(hasData), onDemand: onDemand.filter(hasData) };
 }
 
 export function isBounded(data: WidgetData): boolean {

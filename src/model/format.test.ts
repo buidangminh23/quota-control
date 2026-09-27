@@ -5,6 +5,7 @@ import {
   formatCostPerMtok,
   formatNumber,
   formatValue,
+  hourWindowLabel,
   resetAbsoluteLabel,
   restoreLabel,
   setDongRate,
@@ -136,6 +137,15 @@ describe("Formatters", () => {
     expect(compactDuration(52 * 60, "en")).toBe("52m");
     expect(compactDuration(0, "en")).toBeNull();
     expect(compactDuration(Number.POSITIVE_INFINITY, "en")).toBeNull();
+  });
+
+  it("names a limit window of whole hours under a day", () => {
+    expect(hourWindowLabel(5 * 3_600_000)).toBe("5h");
+    expect(hourWindowLabel(3_600_000)).toBe("1h");
+    expect(hourWindowLabel(90 * 60_000)).toBeNull();
+    expect(hourWindowLabel(24 * 3_600_000)).toBeNull();
+    expect(hourWindowLabel(0)).toBeNull();
+    expect(hourWindowLabel(undefined)).toBeNull();
   });
 
   it("spells durations out in Vietnamese", () => {

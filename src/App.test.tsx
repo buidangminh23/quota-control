@@ -34,6 +34,13 @@ function spendWorkSession(state: EngineState, resetInMs: number): void {
   session.resetsAt = new Date(Date.now() + resetInMs).toISOString();
 }
 
+/** Drop `label`'s reading from `providerId`'s snapshot, the way a plan without that limit reports it. */
+function dropLine(state: EngineState, providerId: string, label: string): void {
+  const snapshot = state.providers[providerId]?.snapshot;
+  if (!snapshot) throw new Error(`the fixture has no ${providerId} snapshot`);
+  snapshot.lines = snapshot.lines.filter((line) => line.label !== label);
+}
+
 afterEach(async () => {
   closeMenu();
   closeDialog();
@@ -111,8 +118,56 @@ describe("popup", () => {
     await renderApp();
     const codex = screen.getByRole("region", { name: "Codex" });
     expect(within(codex).getByRole("button", { name: "Xem thêm" })).toHaveAttribute("aria-expanded", "false");
-    const titles = within(codex).getAllByText(/^(Phiên|Tuần|Spark|Tín dụng|Lượt đặt lại hạn mức)$/).map((element) => element.textContent);
-    expect(titles).toEqual(["Phiên", "Tuần", "Lượt đặt lại hạn mức"]);
+    const titles = within(codex).getAllByText(/^(Phiên 5h|Phiên|Tuần|Spark|Tín dụng|Lượt đặt lại hạn mức)$/).map((element) => element.textContent);
+    expect(titles).toEqual(["Phiên 5h", "Tuần", "Lượt đặt lại hạn mức"]);
+  });
+
+  it("hides a limit the account's plan lacks once a read succeeds, and keeps it while the card loads or fails", async () => {
+    const api = await renderApp();
+    const codex = screen.getByRole("region", { name: "Codex" });
+    expect(within(codex).getByText("Phiên 5h")).toBeInTheDocument();
+
+    act(() => api.editEngineState((state) => dropLine(state, "codex@52d0", "Session")));
+    expect(within(codex).queryByText(/^Phiên/)).not.toBeInTheDocument();
+    expect(within(codex).queryByText("Không có dữ liệu")).not.toBeInTheDocument();
+    expect(within(codex).getByText("Tuần")).toBeInTheDocument();
+
+    act(() =>
+      api.editEngineState((state) => {
+        state.providers["codex@52d0"] = { refreshing: true };
+      }),
+    );
+    expect(within(codex).getByText("Phiên")).toBeInTheDocument();
+
+    act(() =>
+      api.editEngineState((state) => {
+        state.providers["codex@52d0"] = {
+          refreshing: false,
+          snapshot: {
+            providerID: "codex@52d0",
+            displayName: "Codex · codex",
+            refreshedAt: new Date().toISOString(),
+            errorCategory: "network",
+            lines: [{ type: "badge", label: "Error", text: "Network error" }],
+          },
+        };
+      }),
+    );
+    expect(within(codex).getByText("Phiên")).toBeInTheDocument();
+  });
+
+  it("leaves out the allowances a plan does not include, before and behind the caret", async () => {
+    const api = await renderApp();
+    const personal = screen.getByRole("region", { name: "Claude · Cá nhân" });
+    expect(within(personal).queryByText("Fable")).not.toBeInTheDocument();
+    expect(within(personal).queryByText("Không có dữ liệu")).not.toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Claude · Công ty" })).getByText("Fable")).toBeInTheDocument();
+
+    act(() => api.editEngineState((state) => dropLine(state, "codex@52d0", "Spark")));
+    const codex = screen.getByRole("region", { name: "Codex" });
+    fireEvent.click(within(codex).getByRole("button", { name: "Xem thêm" }));
+    expect(within(codex).queryByText("Spark")).not.toBeInTheDocument();
+    expect(within(codex).getByText("Spark (tuần)")).toBeInTheDocument();
   });
 
   it("uses a Codex limit reset only after the user confirms, one per press", async () => {

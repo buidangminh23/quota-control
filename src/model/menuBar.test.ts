@@ -23,7 +23,7 @@ describe("taskbar strip content", () => {
     const strip = content();
     expect(strip.groups.map((group) => group.displayName)).toEqual(["Claude · Công ty", "Claude · Cá nhân", "Codex"]);
     expect(strip.groups[0]!.metrics.map((metric) => metric.value)).toEqual(["88%", "42%"]);
-    expect(stripSummary(strip)).toContain("Claude · Công ty: Phiên 88%, Tuần 42%");
+    expect(stripSummary(strip)).toContain("Claude · Công ty: Phiên 5h 88%, Tuần 42%");
     expect(stripText(strip)).toContain("Codex 18% 36%");
   });
 
