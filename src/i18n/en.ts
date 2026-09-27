@@ -360,9 +360,14 @@ export const en: Messages = {
     serviceSource: (kind, detail) =>
       ({ login: `Automatic from ${detail} on this computer`, env: `Key in the ${detail} environment variable`, key: `API key ••••${detail}` })[kind],
     otherServices: "Other AI providers",
-    otherServicesNone: "No other providers yet. Sign in to their apps on this computer, or add an API key below.",
+    otherServicesNone: "No other providers yet. Sign in to their apps on this computer, or add one under Add Account.",
     detectedNote: (apps) => `Logins of ${apps} on this computer appear here automatically.`,
-    addKey: "Add with an API key",
+    kindGoogle: "Google",
+    kindApiKey: "API key",
+    kindCookie: "Cookie",
+    appLoginNote: (service, app) =>
+      `Quota Control reads ${service} from ${app}'s sign-in on this computer. Sign in to ${app} and the account appears under Other AI providers by itself.`,
+    alsoAppLogin: (app) => `Or sign in to ${app} on this computer; that account appears here too.`,
     searchService: "Search providers…",
     noServiceMatch: "No provider matches.",
     keyLabel: "Label (optional)",

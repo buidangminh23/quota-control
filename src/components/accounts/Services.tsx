@@ -1,8 +1,9 @@
 /**
  * The Accounts screen's other AI providers: the cards of services beyond Claude and Codex (logins
- * other apps keep on this computer, keys in environment variables, keys saved here) and adding a
- * service with an API key. The core reads every login and key; the popup only sees a saved key's
- * last four characters.
+ * other apps keep on this computer, keys in environment variables, keys saved here), and the panels
+ * the Add Account picker opens for them: a key or cookie form, or a note for a service that reads
+ * another app's login. The core reads every login and key; the popup only sees a saved key's last
+ * four characters.
  */
 import { useMemo, useState } from "react";
 import { translate, type Language, type Messages } from "@/i18n";
@@ -109,40 +110,73 @@ export function detectedApps(services: readonly ServiceEntry[]): string[] {
   return [...new Set(services.flatMap((service) => (service.loginFrom ? [service.loginFrom] : [])))].sort((a, b) => a.localeCompare(b));
 }
 
-function matches(service: ServiceEntry, query: string): boolean {
+/** Whether `query` finds a provider by its name or id. */
+export function matchesProvider(name: string, id: string, query: string): boolean {
   const needle = query.trim().toLowerCase();
-  return needle === "" || service.name.toLowerCase().includes(needle) || service.id.includes(needle);
+  return needle === "" || name.toLowerCase().includes(needle) || id.includes(needle);
 }
 
-/** Pick a service that takes an API key, then paste the key (and what the service asks beside it). */
-export function AddServiceKey({ messages, language }: { messages: Messages; language: Language }) {
-  const services = useApp((state) => state.services);
-  const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+/** A service that can be added from this screen: one that takes a key, or reads an app's login here. */
+export function isAddable(service: ServiceEntry): boolean {
+  return service.takesApiKey || service.loginFrom !== null;
+}
+
+/** How a service is added, as the picker lists it: API key, cookie, or the app whose login it reads. */
+export function addKind(service: ServiceEntry, messages: Messages): string {
+  if (!service.takesApiKey) return service.loginFrom ?? "";
+  return service.keyFormat === "token" ? messages.accounts.kindApiKey : messages.accounts.kindCookie;
+}
+
+function PanelHead({ brand, name, messages, onBack }: { brand: string; name: string; messages: Messages; onBack: () => void }) {
+  return (
+    <div className="uc-login-head">
+      <ProviderMark brand={brand} size={16} />
+      <span className="uc-list-title uc-truncate">{name}</span>
+      <Button variant="plain" onClick={onBack} className="is-small uc-key-change">
+        {messages.accounts.changeService}
+      </Button>
+    </div>
+  );
+}
+
+/** A service that only reads another app's login on this computer: signing in to that app adds it. */
+export function ServiceAppNote({ service, messages, onBack }: { service: ServiceEntry; messages: Messages; onBack: () => void }) {
+  return (
+    <div className="uc-card uc-add-account">
+      <PanelHead brand={service.id} name={service.name} messages={messages} onBack={onBack} />
+      <p className="uc-settings-note is-flush">{messages.accounts.appLoginNote(service.name, service.loginFrom ?? service.name)}</p>
+    </div>
+  );
+}
+
+/** Paste a service's API key or session cookie (and what it asks beside it), then save it. */
+export function ServiceKeyForm({
+  service,
+  messages,
+  language,
+  onBack,
+  onSaved,
+}: {
+  service: ServiceEntry;
+  messages: Messages;
+  language: Language;
+  onBack: () => void;
+  onSaved: () => void;
+}) {
   const [key, setKey] = useState("");
   const [label, setLabel] = useState("");
   const [fields, setFields] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
-  const keyed = useMemo(() => services.filter((service) => service.takesApiKey).sort((a, b) => a.name.localeCompare(b.name)), [services]);
-  const selected = keyed.find((service) => service.id === selectedId) ?? null;
-
-  const choose = (id: string | null) => {
-    setSelectedId(id);
-    setKey("");
-    setLabel("");
-    setFields({});
-  };
 
   const save = async () => {
-    if (!selected || key.trim() === "" || saving) return;
+    if (key.trim() === "" || saving) return;
     setSaving(true);
     try {
       const filled = Object.fromEntries(Object.entries(fields).filter(([, value]) => value.trim() !== ""));
-      await backend().addApiKey(selected.id, key.trim(), label.trim() || undefined, filled);
+      await backend().addApiKey(service.id, key.trim(), label.trim() || undefined, filled);
       await reloadServices();
-      showNotice(messages.accounts.keySaved(selected.name), "positive");
-      choose(null);
-      setQuery("");
+      showNotice(messages.accounts.keySaved(service.name), "positive");
+      onSaved();
     } catch (error) {
       showNotice(messages.accounts.failed(errorText(error, language)), "notice");
     } finally {
@@ -150,44 +184,10 @@ export function AddServiceKey({ messages, language }: { messages: Messages; lang
     }
   };
 
-  if (!selected) {
-    const found = keyed.filter((service) => matches(service, query));
-    return (
-      <div className="uc-card uc-add-account">
-        <input
-          className="uc-text-field"
-          type="search"
-          value={query}
-          placeholder={messages.accounts.searchService}
-          aria-label={messages.accounts.searchService}
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && found[0]) choose(found[0].id);
-          }}
-        />
-        <div className="uc-service-results" role="listbox" aria-label={messages.accounts.addKey}>
-          {found.length === 0 ? <p className="uc-insight-note">{messages.accounts.noServiceMatch}</p> : null}
-          {found.map((service) => (
-            <button key={service.id} type="button" role="option" aria-selected={false} className="uc-service-result" onClick={() => choose(service.id)}>
-              <ProviderMark brand={service.id} size={14} />
-              <span className="uc-truncate">{service.name}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  const keyPlaceholder = selected.keyLabel === "API key" ? messages.accounts.keyPlaceholder : messages.accounts.pasteValue(translate(selected.keyLabel, language));
+  const keyPlaceholder = service.keyLabel === "API key" ? messages.accounts.keyPlaceholder : messages.accounts.pasteValue(translate(service.keyLabel, language));
   return (
     <div className="uc-card uc-add-account">
-      <div className="uc-login-head">
-        <ProviderMark brand={selected.id} size={16} />
-        <span className="uc-list-title uc-truncate">{selected.name}</span>
-        <Button variant="plain" onClick={() => choose(null)} className="is-small uc-key-change">
-          {messages.accounts.changeService}
-        </Button>
-      </div>
+      <PanelHead brand={service.id} name={service.name} messages={messages} onBack={onBack} />
       <input
         className="uc-text-field"
         type="password"
@@ -202,7 +202,7 @@ export function AddServiceKey({ messages, language }: { messages: Messages; lang
           if (event.key === "Enter") void save();
         }}
       />
-      {selected.keyFields.map(([field, fieldLabel]) => (
+      {service.keyFields.map(([field, fieldLabel]) => (
         <input
           key={field}
           className="uc-text-field"
@@ -225,9 +225,9 @@ export function AddServiceKey({ messages, language }: { messages: Messages; lang
         onChange={(event) => setLabel(event.target.value)}
       />
       <div className="uc-settings-actions is-split">
-        {selected.keyUrl ? (
-          <Button onClick={() => void backend().openUrl(selected.keyUrl!)} className="is-small">
-            {selected.keyLabel === "API key" ? messages.accounts.getKey : messages.accounts.openServicePage(selected.name)}
+        {service.keyUrl ? (
+          <Button onClick={() => void backend().openUrl(service.keyUrl!)} className="is-small">
+            {service.keyLabel === "API key" ? messages.accounts.getKey : messages.accounts.openServicePage(service.name)}
           </Button>
         ) : (
           <span />
@@ -237,10 +237,11 @@ export function AddServiceKey({ messages, language }: { messages: Messages; lang
           <span>{messages.accounts.saveKey}</span>
         </Button>
       </div>
-      {selected.keyFormat === "cookie" ? <p className="uc-settings-note is-flush">{messages.accounts.cookieNote}</p> : null}
-      {selected.keyFormat === "cookieHeader" ? <p className="uc-settings-note is-flush">{messages.accounts.cookieHeaderNote}</p> : null}
+      {service.keyFormat === "cookie" ? <p className="uc-settings-note is-flush">{messages.accounts.cookieNote}</p> : null}
+      {service.keyFormat === "cookieHeader" ? <p className="uc-settings-note is-flush">{messages.accounts.cookieHeaderNote}</p> : null}
       <p className="uc-settings-note is-flush">{messages.accounts.keyStoredNote}</p>
-      {selected.keyEnv.length > 0 ? <p className="uc-settings-note is-flush">{messages.accounts.keyEnvNote(selected.keyEnv.join(", "))}</p> : null}
+      {service.keyEnv.length > 0 ? <p className="uc-settings-note is-flush">{messages.accounts.keyEnvNote(service.keyEnv.join(", "))}</p> : null}
+      {service.loginFrom ? <p className="uc-settings-note is-flush">{messages.accounts.alsoAppLogin(service.loginFrom)}</p> : null}
     </div>
   );
 }

@@ -347,6 +347,14 @@ describe("popup", () => {
     expect(screen.getAllByRole("button", { name: /^Xóa (?!OpenRouter)/ })).toHaveLength(2);
     expect(screen.getByRole("button", { name: /^Xóa OpenRouter/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Xóa Codex" })).not.toBeInTheDocument();
+    const add = screen.getByRole("listbox", { name: "Thêm tài khoản" });
+    const offered = within(add).getAllByRole("option").map((option) => option.getAttribute("aria-label"));
+    expect(offered.slice(0, 2)).toEqual(["Claude", "Codex"]);
+    expect(offered).toEqual(expect.arrayContaining(["DeepSeek", "Gemini", "Ollama", "OpenRouter", "Perplexity"]));
+    expect(within(add).getByRole("option", { name: "Claude" })).toHaveTextContent("Google");
+    expect(within(add).getByRole("option", { name: "Ollama" })).toHaveTextContent("Ollama");
+    expect(screen.queryByText("Thêm bằng API key")).not.toBeInTheDocument();
+    fireEvent.click(within(add).getByRole("option", { name: "Claude" }));
     expect(screen.getByRole("button", { name: "Đăng nhập bằng Google" })).toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Mở Claude trong ứng dụng" }).length).toBeGreaterThan(0);
@@ -377,13 +385,18 @@ describe("popup", () => {
     expect(screen.getByLabelText("Dán API key")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Lấy API key" })).toBeInTheDocument();
     expect(screen.queryByText(/F12/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Đổi nhà cung cấp" }));
+    pick("Ollama");
+    expect(screen.getByText("Quota Control đọc Ollama từ đăng nhập Ollama trên máy này. Đăng nhập Ollama là tài khoản tự hiện ở mục Nhà cung cấp AI khác, không cần thêm.")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
 
   it("keeps waiting for a browser sign-in while the popup hides and announces the new account", async () => {
     const api = await renderApp();
     api.loginDelayMs = null;
     act(() => useApp.setState({ screen: "accounts" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Đăng nhập bằng Google" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Claude" }));
+    fireEvent.click(screen.getByRole("button", { name: "Đăng nhập bằng Google" }));
     expect(await screen.findByText("Đang chờ bạn đăng nhập Claude trong Google Chrome…")).toBeInTheDocument();
     await act(() => api.hidePopup());
     expect(useApp.getState().screen).toBe("dashboard");
@@ -403,7 +416,7 @@ describe("popup", () => {
     const api = await renderApp();
     api.loginDelayMs = null;
     act(() => useApp.setState({ screen: "accounts" }));
-    fireEvent.click(await screen.findByRole("radio", { name: "Codex" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Codex" }));
     fireEvent.click(screen.getByRole("button", { name: "Đăng nhập bằng Google" }));
     await screen.findByText("Đang chờ bạn đăng nhập Codex trong Google Chrome…");
     const login = useApp.getState().accountLogin;

@@ -398,9 +398,14 @@ export const vi: Messages = {
     serviceSource: (kind, detail) =>
       ({ login: `Tự động từ ${detail} trên máy này`, env: `Key trong biến môi trường ${detail}`, key: `API key ••••${detail}` })[kind],
     otherServices: "Nhà cung cấp AI khác",
-    otherServicesNone: "Chưa có nhà cung cấp nào khác. Đăng nhập ứng dụng của họ trên máy này, hoặc thêm API key bên dưới.",
+    otherServicesNone: "Chưa có nhà cung cấp nào khác. Đăng nhập ứng dụng của họ trên máy này, hoặc thêm ở mục Thêm tài khoản.",
     detectedNote: (apps) => `Đăng nhập của ${apps} trên máy này tự hiện ở đây, không cần thêm.`,
-    addKey: "Thêm bằng API key",
+    kindGoogle: "Google",
+    kindApiKey: "API key",
+    kindCookie: "Cookie",
+    appLoginNote: (service, app) =>
+      `Quota Control đọc ${service} từ đăng nhập ${app} trên máy này. Đăng nhập ${app} là tài khoản tự hiện ở mục Nhà cung cấp AI khác, không cần thêm.`,
+    alsoAppLogin: (app) => `Hoặc đăng nhập ${app} trên máy này, tài khoản cũng tự hiện.`,
     searchService: "Tìm nhà cung cấp…",
     noServiceMatch: "Không có nhà cung cấp nào khớp.",
     keyLabel: "Tên gợi nhớ (không bắt buộc)",

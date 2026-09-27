@@ -1,10 +1,12 @@
 /**
  * The Accounts screen: every connected Claude and Codex account (always all of them, each with its
- * own live status and a button that opens its product's official site in the app), signing in to
- * another one through the browser, and the other AI providers (their apps' logins on this computer
- * and API keys). Claude Code and the Codex CLI signed in on this computer are listed automatically.
+ * own live status and a button that opens its product's official site in the app), adding an
+ * account of any provider from one list (Claude and Codex through a Google sign-in in the browser,
+ * the other services with an API key or a session cookie, or by signing in to the app whose login
+ * they read), and the other AI providers already connected. Claude Code and the Codex CLI signed in
+ * on this computer are listed automatically.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { messagesFor, type Language, type Messages } from "@/i18n";
 import { backend } from "@/lib/backend";
 import type { AccountProvider, ConnectedAccount, ProviderRuntimeState } from "@/lib/types";
@@ -16,7 +18,7 @@ import { confirmAction } from "../ui/dialog";
 import { ChatIcon, CloseIcon, Spinner } from "../ui/icons";
 import { ProviderMark } from "../ui/ProviderMark";
 import { tooltipProps, truncatedTooltipProps } from "../ui/tooltip";
-import { AddServiceKey, detectedApps, ServiceCards } from "./Services";
+import { addKind, detectedApps, isAddable, matchesProvider, ServiceAppNote, ServiceCards, ServiceKeyForm } from "./Services";
 import { errorText, statusOf } from "./status";
 
 const PROVIDERS: readonly AccountProvider[] = ["claude", "codex"];
@@ -110,32 +112,79 @@ export function LoginProgress({ messages }: { messages: Messages }) {
   );
 }
 
-function AddAccount({ messages }: { messages: Messages }) {
-  const [provider, setProvider] = useState<AccountProvider>("claude");
-  const login = useApp((state) => state.accountLogin);
+function GoogleSignIn({ provider, messages, onBack }: { provider: AccountProvider; messages: Messages; onBack: () => void }) {
   const error = useApp((state) => state.accountLoginError);
-  if (login) return <LoginProgress messages={messages} />;
   return (
     <div className="uc-card uc-add-account">
-      <div className="uc-capsule-picker" role="radiogroup" aria-label={messages.accounts.add}>
-        {PROVIDERS.map((candidate) => (
-          <button
-            key={candidate}
-            type="button"
-            role="radio"
-            aria-checked={candidate === provider}
-            className={`uc-capsule-segment${candidate === provider ? " is-selected" : ""}`}
-            onClick={() => setProvider(candidate)}
-          >
-            {brandName(candidate)}
-          </button>
-        ))}
+      <div className="uc-login-head">
+        <ProviderMark brand={provider} size={16} />
+        <span className="uc-list-title uc-truncate">{brandName(provider)}</span>
+        <Button variant="plain" onClick={onBack} className="is-small uc-key-change">
+          {messages.accounts.changeService}
+        </Button>
       </div>
       <Button variant="prominent" onClick={() => void startAccountLogin(provider)} className="is-small is-wide">
         {messages.accounts.signInWithGoogle}
       </Button>
       <p className="uc-settings-note is-flush">{messages.accounts.signInNote(brandName(provider))}</p>
       {error ? <p className="uc-settings-notice is-flush">{messages.accounts.loginFailed(brandName(error.provider), error.text)}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * Add an account of any provider from one list: Claude and Codex first (a Google sign-in), then
+ * every other service that takes a key or reads an app's login on this computer.
+ */
+function AddAccount({ messages, language }: { messages: Messages; language: Language }) {
+  const services = useApp((state) => state.services);
+  const login = useApp((state) => state.accountLogin);
+  const [query, setQuery] = useState("");
+  const [choice, setChoice] = useState<string | null>(null);
+  const addable = useMemo(() => services.filter(isAddable).sort((a, b) => a.name.localeCompare(b.name)), [services]);
+  if (login) return <LoginProgress messages={messages} />;
+  const back = () => setChoice(null);
+  const google = PROVIDERS.find((provider) => provider === choice);
+  if (google) return <GoogleSignIn provider={google} messages={messages} onBack={back} />;
+  const service = addable.find((candidate) => candidate.id === choice);
+  if (service) {
+    const saved = () => {
+      back();
+      setQuery("");
+    };
+    return service.takesApiKey ? (
+      <ServiceKeyForm key={service.id} service={service} messages={messages} language={language} onBack={back} onSaved={saved} />
+    ) : (
+      <ServiceAppNote service={service} messages={messages} onBack={back} />
+    );
+  }
+  const options = [
+    ...PROVIDERS.filter((provider) => matchesProvider(brandName(provider), provider, query)).map((provider) => ({ id: provider, name: brandName(provider), kind: messages.accounts.kindGoogle })),
+    ...addable.filter((candidate) => matchesProvider(candidate.name, candidate.id, query)).map((candidate) => ({ id: candidate.id, name: candidate.name, kind: addKind(candidate, messages) })),
+  ];
+  return (
+    <div className="uc-card uc-add-account">
+      <input
+        className="uc-text-field"
+        type="search"
+        value={query}
+        placeholder={messages.accounts.searchService}
+        aria-label={messages.accounts.searchService}
+        onChange={(event) => setQuery(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && options[0]) setChoice(options[0].id);
+        }}
+      />
+      <div className="uc-service-results" role="listbox" aria-label={messages.accounts.add}>
+        {options.length === 0 ? <p className="uc-insight-note">{messages.accounts.noServiceMatch}</p> : null}
+        {options.map((option) => (
+          <button key={option.id} type="button" role="option" aria-selected={false} aria-label={option.name} className="uc-service-result" onClick={() => setChoice(option.id)}>
+            <ProviderMark brand={option.id} size={14} />
+            <span className="uc-truncate">{option.name}</span>
+            <span className="uc-service-kind">{option.kind}</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -167,7 +216,7 @@ export function Accounts() {
 
       <section className="uc-group">
         <h2 className="uc-group-title">{messages.accounts.add}</h2>
-        <AddAccount messages={messages} />
+        <AddAccount messages={messages} language={language} />
         <p className="uc-group-note">{messages.accounts.cliNote}</p>
       </section>
 
@@ -175,11 +224,6 @@ export function Accounts() {
         <h2 className="uc-group-title">{messages.accounts.otherServices}</h2>
         <ServiceCards messages={messages} language={language} />
         {apps.length > 0 ? <p className="uc-group-note">{messages.accounts.detectedNote(apps.join(", "))}</p> : null}
-      </section>
-
-      <section className="uc-group">
-        <h2 className="uc-group-title">{messages.accounts.addKey}</h2>
-        <AddServiceKey messages={messages} language={language} />
       </section>
     </div>
   );

@@ -360,6 +360,13 @@
   margin-left: auto;
 }
 
+.uc-service-kind {
+  flex: none;
+  margin-left: auto;
+  font-size: var(--uc-caption-size);
+  color: var(--uc-secondary);
+}
+
 .uc-account-status {
   display: inline-flex;
   align-items: center;

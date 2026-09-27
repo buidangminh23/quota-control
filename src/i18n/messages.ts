@@ -288,7 +288,14 @@ export interface AccountsMessages {
   otherServicesNone: string;
   /** `apps`: the apps whose logins on this computer are picked up automatically. */
   detectedNote(apps: string): string;
-  addKey: string;
+  /** How the Add Account list says a provider is added: a Google sign-in, an API key or a cookie. */
+  kindGoogle: string;
+  kindApiKey: string;
+  kindCookie: string;
+  /** A service that only reads `app`'s login on this computer. */
+  appLoginNote(service: string, app: string): string;
+  /** A service that takes a key and also reads `app`'s login. */
+  alsoAppLogin(app: string): string;
   searchService: string;
   noServiceMatch: string;
   keyLabel: string;
