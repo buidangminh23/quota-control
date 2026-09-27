@@ -1,44 +1,26 @@
-import { act, cleanup, render } from "@testing-library/react";
-import { useApp } from "@/state/store";
-import { PROVIDER_MARKS } from "@/assets/providerMarks";
+import { render } from "@testing-library/react";
+import { colorArtUrl, PROVIDER_COLOR_ART } from "@/assets/providerColorArt";
 import { ProviderMark } from "./ProviderMark";
 
-function setTheme(theme: "light" | "dark" | "system"): void {
-  act(() => useApp.setState({ settings: { ...useApp.getState().settings, theme } }));
-}
-
-function fill(brand: string): string | null {
-  const { container } = render(<ProviderMark brand={brand} size={16} />);
-  const value = container.querySelector("svg")?.getAttribute("fill") ?? null;
-  cleanup();
-  return value;
-}
-
-afterEach(() => {
-  cleanup();
-  setTheme("system");
-});
-
-describe("ProviderMark", () => {
-  it("draws Claude and Codex in their own colors in both appearances", () => {
-    setTheme("light");
-    expect(fill("claude")).toBe("#DE7356");
-    expect(fill("codex")).toBe("#10A37F");
-    setTheme("dark");
-    expect(fill("claude")).toBe("#DE7356");
-    expect(fill("codex")).toBe("#10A37F");
+describe("provider marks", () => {
+  it("shows the official color logo for a brand whose logo is several colors", () => {
+    const { container } = render(<ProviderMark brand="antigravity" size={18} />);
+    const image = container.querySelector("img.uc-mark");
+    expect(image).not.toBeNull();
+    expect(image!.getAttribute("src")).toBe(colorArtUrl(PROVIDER_COLOR_ART.antigravity!, 0.04));
+    expect(decodeURIComponent(image!.getAttribute("src")!)).toContain("#FC413D");
+    expect(container.querySelector("svg")).toBeNull();
   });
 
-  it("switches a black-and-white brand with the appearance", () => {
-    setTheme("light");
-    expect(fill("cursor")).toBe("#13120A");
-    setTheme("dark");
-    expect(fill("cursor")).toBe("#F5F5F7");
+  it("draws a single-color brand's mark in its tint", () => {
+    const { container } = render(<ProviderMark brand="claude" size={18} />);
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("svg.uc-mark")?.getAttribute("fill")).toBe("#DE7356");
   });
 
-  it("draws every brand that has a mark in its own color", () => {
-    setTheme("light");
-    const uncolored = Object.keys(PROVIDER_MARKS).filter((brand) => fill(brand) === "currentColor");
-    expect(uncolored).toEqual([]);
+  it("centers color art in a square with the same inset as the marks", () => {
+    const url = decodeURIComponent(colorArtUrl({ box: [0, 7, 24, 11], body: "<path/>" }, 0.04));
+    expect(url).toContain('viewBox="-0.96 -0.46 25.92 25.92"');
+    expect(url.endsWith("<path/></svg>")).toBe(true);
   });
 });

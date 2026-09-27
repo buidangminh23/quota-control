@@ -5,6 +5,7 @@
  * scaled to the Windows taskbar the way the system clock stacks time over date; the menu bar style
  * keeps upstream's own macOS metrics, drawn black so macOS tints the template for the menu bar.
  */
+import { colorArtUrl, PROVIDER_COLOR_ART } from "@/assets/providerColorArt";
 import { PROVIDER_MARKS } from "@/assets/providerMarks";
 import { barFill, type StripContent, type StripMetric } from "@/model/menuBar";
 import { knownBrandColor } from "@/model/totalSpend";
@@ -112,7 +113,27 @@ export async function renderBarsGlyph(bars: readonly StripMetric[], scale: numbe
   return toPng(element);
 }
 
-function drawMark(context: CanvasRenderingContext2D, brand: string, x: number, y: number, side: number, color: string): void {
+const colorArtImages = new Map<string, Promise<HTMLImageElement | null>>();
+
+/** `brand`'s official color logo, decoded once, or `null` for a brand drawn in a single color. */
+function colorArtImage(brand: string): Promise<HTMLImageElement | null> {
+  const art = PROVIDER_COLOR_ART[brand];
+  if (!art) return Promise.resolve(null);
+  let pending = colorArtImages.get(brand);
+  if (!pending) {
+    const image = new Image();
+    image.src = colorArtUrl(art, MARK_INSET);
+    pending = typeof image.decode === "function" ? image.decode().then(() => image, () => null) : Promise.resolve(null);
+    colorArtImages.set(brand, pending);
+  }
+  return pending;
+}
+
+function drawMark(context: CanvasRenderingContext2D, brand: string, x: number, y: number, side: number, color: string, art: HTMLImageElement | null): void {
+  if (art) {
+    context.drawImage(art, x, y, side, side);
+    return;
+  }
   const mark = PROVIDER_MARKS[brand];
   context.fillStyle = color;
   if (!mark) {
@@ -146,7 +167,8 @@ interface MeasuredGroup {
 /**
  * The color of `brand`'s mark on the strip: on the Windows taskbar the brand's own tint for the
  * taskbar's light or dark theme, the one the popup gives the mark, or `color` for a brand without
- * one; the macOS menu bar keeps every mark in `color`, a template the system tints.
+ * one; the macOS menu bar keeps every mark in `color`, a template the system tints. A brand with an
+ * official color logo (`providerColorArt.ts`) shows that logo on the taskbar instead.
  */
 export function stripMarkColor(brand: string, color: "#000000" | "#ffffff", style: StripStyle): string {
   if (style === "menuBar") return color;
@@ -181,6 +203,7 @@ export async function renderTextStrip(
   const width = Math.ceil(
     metrics.sidePadding * 2 * scale + groups.reduce((sum, group) => sum + group.width, 0) + metrics.groupGap * scale * (groups.length - 1),
   );
+  const art = new Map(await Promise.all(groups.map(async (group) => [group.brand, style === "taskbar" ? await colorArtImage(group.brand) : null] as const)));
   const [element, context] = canvas(width, height);
   context.textBaseline = "middle";
   context.textAlign = "right";
@@ -188,7 +211,7 @@ export async function renderTextStrip(
   const middle = height / 2;
   const offset = (metrics.stackedLineHeight * scale) / 2;
   for (const group of groups) {
-    drawMark(context, group.brand, x, middle - (metrics.markSide * scale) / 2, metrics.markSide * scale, stripMarkColor(group.brand, color, style));
+    drawMark(context, group.brand, x, middle - (metrics.markSide * scale) / 2, metrics.markSide * scale, stripMarkColor(group.brand, color, style), art.get(group.brand) ?? null);
     const left = x + (metrics.markSide + metrics.markGap) * scale;
     const right = x + group.width;
     const lines = group.rows.length > 1 ? [middle - offset + scale, middle + offset] : [middle + scale];

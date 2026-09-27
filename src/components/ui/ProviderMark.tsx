@@ -2,8 +2,10 @@
  * A provider's mark (upstream `ProviderIcon`): the artwork is centered in a square box with a small
  * inset so every brand fills its glyph box the same way. It is drawn in the brand's own color, the one
  * the Token ring gives it, so Claude's mark is orange and Codex's green; a brand without one takes
- * `currentColor`.
+ * `currentColor`. A brand whose logo is several colors (Antigravity, Gemini, Mistral...) shows its
+ * official color logo instead.
  */
+import { colorArtUrl, PROVIDER_COLOR_ART } from "@/assets/providerColorArt";
 import { PROVIDER_MARKS } from "@/assets/providerMarks";
 import { knownBrandColor } from "@/model/totalSpend";
 import { useIsDark } from "@/state/hooks";
@@ -12,6 +14,8 @@ const DEFAULT_INSET = 0.04;
 
 export function ProviderMark({ brand, size, inset = DEFAULT_INSET }: { brand: string; size: number; inset?: number }) {
   const dark = useIsDark();
+  const art = PROVIDER_COLOR_ART[brand];
+  if (art) return <img className="uc-mark" src={colorArtUrl(art, inset)} width={size} height={size} alt="" aria-hidden="true" draggable={false} />;
   const mark = PROVIDER_MARKS[brand];
   if (!mark) {
     return (
