@@ -41,7 +41,9 @@ pub enum TraySlot {
     Icon,
     /// A clear icon `width` points wide and [`SLOT_ICON_HEIGHT`] tall. Under the styler rules in
     /// [`SLOT_NAME`] the button's image keeps that aspect ratio at 16 points tall, so the button
-    /// becomes as wide as the strip needs; a rule that fixes the button's width ignores it.
+    /// becomes as wide as the strip needs; a rule that fixes the button's width ignores it. Only the
+    /// Windows strip asks for it.
+    #[cfg_attr(not(windows), allow(dead_code))]
     Clear { width: u32 },
 }
 
