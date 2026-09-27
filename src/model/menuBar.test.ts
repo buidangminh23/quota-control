@@ -2,7 +2,7 @@ import { fixtureCatalog, fixtureSnapshots } from "@/lib/fixtures";
 import type { ProviderSnapshot } from "@/lib/types";
 import { stripText } from "@/strip/render";
 import { glanceGroups, pinnedGroups, reconcileLayout } from "./layout";
-import { barFill, buildStripContent, isStripEmpty, MAX_BARS, stripSummary, visualFraction } from "./menuBar";
+import { barFill, buildStripContent, isStripEmpty, MAX_BARS, periodLabel, stripSummary, visualFraction } from "./menuBar";
 import { providerTitle } from "./providerText";
 import { DEFAULT_DISPLAY, widgetDataFor } from "./widgetData";
 
@@ -46,10 +46,38 @@ describe("taskbar strip content", () => {
     expect(picked.groups.map((group) => group.metrics.map((metric) => metric.id))).toEqual([["codex@52d0.weekly"]]);
   });
 
+  it("names each reading's limit window, so the five-hour and weekly limits stay apart", () => {
+    const strip = content();
+    expect(strip.groups[0]!.metrics.map((metric) => [metric.period, metric.value])).toEqual([
+      ["5h", "88%"],
+      ["week", "42%"],
+    ]);
+  });
+
   it("drops a provider whose stars have no data", () => {
     const strip = content(DEFAULT_DISPLAY, { ...snapshots, "codex@52d0": undefined });
     expect(strip.groups.map((group) => group.providerId)).not.toContain("codex@52d0");
     expect(isStripEmpty(content(DEFAULT_DISPLAY, {}))).toBe(true);
+  });
+});
+
+describe("limit window names", () => {
+  const HOUR = 3_600_000;
+  const DAY = 24 * HOUR;
+
+  it("names the five-hour and weekly windows the way the strip shows them", () => {
+    expect(periodLabel(5 * HOUR)).toBe("5h");
+    expect(periodLabel(7 * DAY)).toBe("week");
+  });
+
+  it("names other whole windows and leaves the rest unnamed", () => {
+    expect(periodLabel(HOUR)).toBe("1h");
+    expect(periodLabel(DAY)).toBe("day");
+    expect(periodLabel(30 * DAY)).toBe("month");
+    expect(periodLabel(90 * 60_000)).toBeNull();
+    expect(periodLabel(3 * DAY)).toBeNull();
+    expect(periodLabel(undefined)).toBeNull();
+    expect(periodLabel(0)).toBeNull();
   });
 });
 

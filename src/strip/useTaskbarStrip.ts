@@ -23,7 +23,9 @@ type Output =
 
 function outputKey(output: Output): string {
   if (output.kind === "off") return `off|${output.tooltip}`;
-  const values = output.content.groups.map((group) => `${group.brand}:${group.metrics.map((metric) => `${metric.value}/${metric.fraction.toFixed(3)}`).join(",")}`).join(";");
+  const values = output.content.groups
+    .map((group) => `${group.brand}:${group.metrics.map((metric) => `${metric.period ?? ""} ${metric.value}/${metric.fraction.toFixed(3)}`).join(",")}`)
+    .join(";");
   if (output.kind === "bars") return `bars|${output.color}|${output.style}|${values}|${output.tooltip}`;
   return `text|${output.color}|${output.style}|${output.height}|${output.scale}|${values}|${output.tooltip}`;
 }

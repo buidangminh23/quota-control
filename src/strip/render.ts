@@ -24,6 +24,9 @@ interface StripMetrics {
   markGap: number;
   groupGap: number;
   sidePadding: number;
+  /** Size of the window names (`5h`, `week`) before the readings; `null` leaves them out. */
+  labelSize: number | null;
+  labelGap: number;
 }
 
 const STRIP_METRICS: Readonly<Record<StripStyle, StripMetrics>> = {
@@ -36,6 +39,8 @@ const STRIP_METRICS: Readonly<Record<StripStyle, StripMetrics>> = {
     markGap: 5,
     groupGap: 14,
     sidePadding: 6,
+    labelSize: 10,
+    labelGap: 3,
   },
   menuBar: {
     font: '-apple-system, "SF Pro Text", system-ui, sans-serif',
@@ -46,6 +51,8 @@ const STRIP_METRICS: Readonly<Record<StripStyle, StripMetrics>> = {
     markGap: 4,
     groupGap: 11,
     sidePadding: 2,
+    labelSize: null,
+    labelGap: 0,
   },
 };
 
@@ -124,9 +131,14 @@ function drawMark(context: CanvasRenderingContext2D, brand: string, x: number, y
   context.restore();
 }
 
+interface MeasuredRow {
+  label: string | null;
+  value: string;
+}
+
 interface MeasuredGroup {
   brand: string;
-  values: string[];
+  rows: MeasuredRow[];
   width: number;
 }
 
@@ -142,11 +154,18 @@ export async function renderTextStrip(
   const metrics = STRIP_METRICS[style];
   const [, measure] = canvas(1, 1);
   const font = (size: number, weight: number) => `${weight} ${size * scale}px ${metrics.font}`;
+  const labelFont = metrics.labelSize === null ? null : font(metrics.labelSize, 500);
+  const valueFont = (rows: number) => (rows > 1 ? font(metrics.stackedSize, 600) : font(metrics.singleSize, 700));
   const groups: MeasuredGroup[] = content.groups.map((group) => {
-    const values = group.metrics.slice(0, 2).map((metric) => metric.value);
-    measure.font = values.length > 1 ? font(metrics.stackedSize, 600) : font(metrics.singleSize, 700);
-    const textWidth = Math.max(...values.map((value) => measure.measureText(value).width));
-    return { brand: group.brand, values, width: (metrics.markSide + metrics.markGap) * scale + Math.ceil(textWidth) };
+    const rows = group.metrics.slice(0, 2).map((metric) => ({ label: labelFont ? metric.period : null, value: metric.value }));
+    const rowWidths = rows.map((row) => {
+      measure.font = valueFont(rows.length);
+      const value = measure.measureText(row.value).width;
+      if (!row.label || !labelFont) return value;
+      measure.font = labelFont;
+      return measure.measureText(row.label).width + metrics.labelGap * scale + value;
+    });
+    return { brand: group.brand, rows, width: (metrics.markSide + metrics.markGap) * scale + Math.ceil(Math.max(...rowWidths)) };
   });
   const width = Math.ceil(
     metrics.sidePadding * 2 * scale + groups.reduce((sum, group) => sum + group.width, 0) + metrics.groupGap * scale * (groups.length - 1),
@@ -156,22 +175,36 @@ export async function renderTextStrip(
   context.textAlign = "right";
   let x = metrics.sidePadding * scale;
   const middle = height / 2;
+  const offset = (metrics.stackedLineHeight * scale) / 2;
   for (const group of groups) {
     drawMark(context, group.brand, x, middle - (metrics.markSide * scale) / 2, metrics.markSide * scale, color);
+    const left = x + (metrics.markSide + metrics.markGap) * scale;
     const right = x + group.width;
-    context.fillStyle = color;
-    if (group.values.length > 1) {
-      context.font = font(metrics.stackedSize, 600);
-      const offset = (metrics.stackedLineHeight * scale) / 2;
-      context.fillText(group.values[0]!, right, middle - offset + scale);
-      context.fillText(group.values[1]!, right, middle + offset);
-    } else {
-      context.font = font(metrics.singleSize, 700);
-      context.fillText(group.values[0] ?? "", right, middle + scale);
-    }
+    const lines = group.rows.length > 1 ? [middle - offset + scale, middle + offset] : [middle + scale];
+    group.rows.forEach((row, index) => {
+      const y = lines[index]!;
+      context.font = valueFont(group.rows.length);
+      context.textAlign = "right";
+      context.fillStyle = color;
+      context.fillText(row.value, right, y);
+      if (!row.label || !labelFont) return;
+      const baseline = y + alphabeticDrop(context);
+      context.font = labelFont;
+      context.textAlign = "left";
+      context.textBaseline = "alphabetic";
+      context.fillStyle = withAlpha(color, 0.8);
+      context.fillText(row.label, left, baseline);
+      context.textBaseline = "middle";
+    });
     x = right + metrics.groupGap * scale;
   }
   return { png: await toPng(element), width, height };
+}
+
+/** How far the current font's alphabetic baseline sits below a `middle` baseline, so smaller text can share it. */
+function alphabeticDrop(context: CanvasRenderingContext2D): number {
+  const metrics = context.measureText("0");
+  return -metrics.alphabeticBaseline;
 }
 
 /** Plain-text strip for tray titles (Linux): `Claude 12% 58%  Codex 100% 36%`. */

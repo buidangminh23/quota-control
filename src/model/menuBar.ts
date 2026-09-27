@@ -18,6 +18,8 @@ export interface StripMetric {
   id: string;
   /** Full metric title in the display language (tooltips and accessibility). */
   label: string;
+  /** The limit window's short name drawn before the reading (`5h`, `week`), when it has one. */
+  period: string | null;
   /** The strip reading: `42%` for bounded metrics, the compact value otherwise. */
   value: string;
   /** Meter fill 0...1 (bounded metrics only). */
@@ -47,13 +49,28 @@ export function buildStripContent(
     const metrics = [...group.always, ...group.onDemand].flatMap((descriptor): StripMetric[] => {
       const data = dataFor(descriptor);
       if (!data.hasData) return [];
-      return [{ id: descriptor.id, label: data.title, value: menuBarValue(data), fraction: fraction(data), bounded: isBounded(data) }];
+      return [{ id: descriptor.id, label: data.title, period: periodLabel(data.periodDurationMs), value: menuBarValue(data), fraction: fraction(data), bounded: isBounded(data) }];
     }).slice(0, Math.max(1, perGroup));
     if (metrics.length === 0) return [];
     return [{ providerId: group.provider.id, displayName: displayName(group.provider), brand: brandOf(group.provider.icon || group.provider.id), metrics }];
   });
   const bars = resolved.flatMap((group) => group.metrics).filter((metric) => metric.bounded).slice(0, MAX_BARS);
   return { groups: resolved, bars };
+}
+
+const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
+
+/**
+ * The strip's name for a limit window, so the five-hour and weekly readings stay apart: `5h` for
+ * whole hours under a day, then `day`, `week` and `month`. Other lengths get none.
+ */
+export function periodLabel(periodMs: number | undefined): string | null {
+  if (periodMs === undefined || !(periodMs > 0)) return null;
+  if (periodMs < DAY_MS) return periodMs % HOUR_MS === 0 ? `${periodMs / HOUR_MS}h` : null;
+  if (periodMs === DAY_MS) return "day";
+  if (periodMs === 7 * DAY_MS) return "week";
+  return periodMs >= 28 * DAY_MS && periodMs <= 31 * DAY_MS ? "month" : null;
 }
 
 export function isStripEmpty(content: StripContent): boolean {
