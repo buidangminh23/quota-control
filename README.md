@@ -122,13 +122,13 @@ account card is retained until explicitly removed.
 Other AI services sign in the same way when their own apps have a browser sign-in:
 **Sign In with Google** or **Sign In with GitHub** opens the service's page, and the
 app saves the account encrypted beside API keys once the page is done. Google
-services (Gemini, Antigravity) come back to a loopback listener; Kiro, Kilo and
-Copilot use a device sign-in, and Copilot's one-time code is copied to the
+services (Gemini, Antigravity) come back to a loopback listener; Kiro, Kilo, Cline
+and Copilot use a device sign-in, and Copilot's one-time code is copied to the
 clipboard to paste on GitHub's page; Cursor, Codebuff and Ollama finish on their own
 site while the app waits. Each row of the Add Account list has a plus button that
 opens the first sign-in at once; picking the row shows every way to connect,
 including an API key or cookie. These sign-ins are the card's own, so the app renews
-them when they rotate (Kiro, Cursor) and never touches the service's app login.
+them when they rotate (Kiro, Cursor, Cline) and never touches the service's app login.
 
 Cards the app has never seen start enabled. `knownProviders` in `settings.json`
 records the cards seen so far, so a card hidden in Customize stays hidden when its
@@ -189,7 +189,7 @@ feature; `all` is the default.
 | Atlas Cloud | a pasted Atlas Cloud API key (or `ATLASCLOUD_API_KEY`) |
 | Bifrost | a pasted virtual key with Server address |
 | ClawRouter | an API key with Server address (or `CLAWROUTER_API_KEY`) |
-| Cline | the Cline login on this computer; or an API key (or `CLINE_API_KEY`, `CLINEPASS_API_KEY`) |
+| Cline | the Cline login on this computer; or a sign-in on Cline's page (Google, GitHub or email); or an API key (or `CLINE_API_KEY`, `CLINEPASS_API_KEY`) |
 | Deepgram | an API key with Project ID (optional), API URL (optional) (or `DEEPGRAM_API_KEY`) |
 | DeepInfra | an API key (or `DEEPINFRA_API_KEY`) |
 | DevPass | a pasted DevPass API key (or `DEVPASS_API_KEY`) |

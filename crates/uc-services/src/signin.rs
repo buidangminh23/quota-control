@@ -436,6 +436,7 @@ pub struct DeviceClient {
     pub device_url: &'static str,
     pub token_url: &'static str,
     pub client_id: &'static str,
+    /// Left out of the request when empty.
     pub scope: &'static str,
     /// Headers every request carries beside `Accept: application/json`.
     pub headers: &'static [(&'static str, &'static str)],
@@ -481,12 +482,13 @@ pub async fn start_device(
     convert: Convert,
 ) -> Result<Pending, SimpleProviderError> {
     let product = context.product;
+    let mut fields = vec![("client_id", client.client_id)];
+    if !client.scope.is_empty() {
+        fields.push(("scope", client.scope));
+    }
     let response = context
         .http
-        .send(client.request(
-            client.device_url,
-            &[("client_id", client.client_id), ("scope", client.scope)],
-        ))
+        .send(client.request(client.device_url, &fields))
         .await
         .map_err(|_| network(product))?;
     let body: Value = response.json().unwrap_or(Value::Null);
