@@ -7,6 +7,7 @@
  */
 import { PROVIDER_MARKS } from "@/assets/providerMarks";
 import { barFill, type StripContent, type StripMetric } from "@/model/menuBar";
+import { knownBrandColor } from "@/model/totalSpend";
 
 export type StripStyle = "taskbar" | "menuBar";
 
@@ -142,6 +143,16 @@ interface MeasuredGroup {
   width: number;
 }
 
+/**
+ * The color of `brand`'s mark on the strip: on the Windows taskbar the brand's own tint for the
+ * taskbar's light or dark theme, the one the popup gives the mark, or `color` for a brand without
+ * one; the macOS menu bar keeps every mark in `color`, a template the system tints.
+ */
+export function stripMarkColor(brand: string, color: "#000000" | "#ffffff", style: StripStyle): string {
+  if (style === "menuBar") return color;
+  return knownBrandColor(brand, color === "#ffffff") ?? color;
+}
+
 /** The text strip for a band `height` device pixels tall, or `null` when there is nothing to show. */
 export async function renderTextStrip(
   content: StripContent,
@@ -177,7 +188,7 @@ export async function renderTextStrip(
   const middle = height / 2;
   const offset = (metrics.stackedLineHeight * scale) / 2;
   for (const group of groups) {
-    drawMark(context, group.brand, x, middle - (metrics.markSide * scale) / 2, metrics.markSide * scale, color);
+    drawMark(context, group.brand, x, middle - (metrics.markSide * scale) / 2, metrics.markSide * scale, stripMarkColor(group.brand, color, style));
     const left = x + (metrics.markSide + metrics.markGap) * scale;
     const right = x + group.width;
     const lines = group.rows.length > 1 ? [middle - offset + scale, middle + offset] : [middle + scale];
