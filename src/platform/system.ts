@@ -47,11 +47,3 @@ export async function notify(title: string, body: string): Promise<void> {
   if (typeof Notification !== "undefined" && Notification.permission === "granted") new Notification(title, { body });
 }
 
-export function canRevealFiles(): boolean {
-  return isTauri();
-}
-
-export async function revealFile(path: string): Promise<void> {
-  const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
-  await revealItemInDir(path);
-}

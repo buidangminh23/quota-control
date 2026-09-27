@@ -250,9 +250,6 @@ export interface SettingsMessages {
   notificationNote(key: NotificationKey): string;
   notificationsDenied: string;
   allowNotifications: string;
-  copyLogPath: string;
-  revealLog(platform: PlatformKey): string;
-  logActionFailed: string;
   copied: string;
   resetAllSettings: string;
   resetAllSettingsTitle: string;

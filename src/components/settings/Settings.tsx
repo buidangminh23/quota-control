@@ -1,7 +1,7 @@
 /**
  * The Settings screen (upstream `SettingsScreen`): Customize-style cards of rows for language, total
  * spend, launch at login and the global shortcut; appearance; how usage reads; the taskbar strip;
- * pace notifications; app updates; and the log file plus a full reset. Changes apply live and
+ * pace notifications; app updates; and a full reset. Changes apply live and
  * persist to the shared settings document.
  */
 import { useEffect, useState } from "react";
@@ -10,12 +10,12 @@ import { insightsFor } from "@/i18n/insights";
 import type { NotificationKey, SettingsSectionKey } from "@/i18n/messages";
 import { barKind, platformKey } from "@/model/platform";
 import { anyNotificationEnabled, taskbarDisplayOf, taskbarDisplayPatch, type NotificationSettings, type TaskbarDisplay } from "@/model/settings";
-import { autostartEnabled, canRevealFiles, notificationAccess, requestNotificationAccess, revealFile, setAutostart, type NotificationAccess } from "@/platform/system";
+import { autostartEnabled, notificationAccess, requestNotificationAccess, setAutostart, type NotificationAccess } from "@/platform/system";
 import { localeOf } from "@/i18n/numbers";
 import { backend } from "@/lib/backend";
 import { offsetLabel, zoneName } from "@/model/timeZone";
 import { useNow, useSettings } from "@/state/hooks";
-import { navigate, resetAllSettings, showNotice, updateSettings, useApp } from "@/state/store";
+import { navigate, resetAllSettings, updateSettings, useApp } from "@/state/store";
 import { useTaskbarInfo } from "@/strip/support";
 import { CrossLink } from "../customize/Customize";
 import { IslandSection, StripRows, WidgetSection } from "./GlanceSettings";
@@ -91,7 +91,6 @@ export function Settings() {
   const [autostart, changeAutostart, autostartError] = useAutostart();
   const notificationsOn = anyNotificationEnabled(settings) || settings.notifyCodexResets;
   const [access, requestAccess] = useNotificationAccess(notificationsOn);
-  const [logError, setLogError] = useState<string | null>(null);
   const [shortcutError, setShortcutError] = useState<string | null>(null);
   const [shortcutGeneration, setShortcutGeneration] = useState(0);
   const stripSupported = useTaskbarInfo()?.supported === true;
@@ -107,21 +106,6 @@ export function Settings() {
     const notifications: NotificationSettings = { ...settings.notifications, [key]: on };
     updateSettings({ notifications });
     if (on && access !== "granted") requestAccess();
-  };
-
-  const copyLogPath = () => {
-    if (!info?.logFile) return;
-    setLogError(null);
-    backend()
-      .copyText(info.logFile)
-      .then(() => showNotice(text.copied, "positive"))
-      .catch(() => setLogError(text.logActionFailed));
-  };
-
-  const revealLog = () => {
-    if (!info?.logFile) return;
-    setLogError(null);
-    revealFile(info.logFile).catch(() => setLogError(text.logActionFailed));
   };
 
   const resetEverything = async () => {
@@ -253,19 +237,6 @@ export function Settings() {
       ) : null}
 
       <Section title={section("advanced")}>
-        {info?.logFile ? (
-          <div className="uc-settings-actions is-column">
-            <Button onClick={copyLogPath} className="is-small is-wide">
-              {text.copyLogPath}
-            </Button>
-            {canRevealFiles() ? (
-              <Button onClick={revealLog} className="is-small is-wide">
-                {text.revealLog(platform)}
-              </Button>
-            ) : null}
-          </div>
-        ) : null}
-        {logError ? <InlineNotice text={logError} /> : null}
         <div className="uc-settings-actions">
           <Button variant="destructive" onClick={() => void resetEverything()} className="is-small is-wide">
             {text.resetAllSettings}
