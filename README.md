@@ -288,15 +288,17 @@ Quota Control** menu remains available when direct left-click events are absent.
 
 ### Embedded official chat
 
-The tray menu includes **New Claude sign-in**, **New ChatGPT sign-in**, and
-**Saved chat sessions** (Vietnamese by default). Each session opens the official
-website in its own native window and persists a separate WebView profile under
-the app configuration directory. Closing a window preserves its session; opening
-an existing session focuses its window or reuses its saved profile. Session rows
-are independent of quota refresh and remain visible while offline.
+Chat sessions live in the popup: the Accounts screen's **In-App Chat Sessions**
+section lists them and starts a **New Claude Session** or **New ChatGPT Session**,
+and an account card's menu opens its product in the app; the tray menu has no chat
+entries. Each session opens the official website in its own native window and
+persists a separate WebView profile under the app configuration directory. Closing
+a window preserves its session; opening an existing session focuses its window or
+reuses its saved profile. Session rows are independent of quota refresh and remain
+visible while offline.
 
-`list_chat_sessions`, `create_chat_session`, and `open_chat_session` expose the
-same workflow to the popup. Creation persists metadata before opening the window;
+`list_chat_sessions`, `create_chat_session`, and `open_chat_session` expose this
+workflow to the popup. Creation persists metadata before opening the window;
 if window creation fails, the saved session remains available for retry. A
 `chat-sessions-changed` event targets the popup after creation.
 `TauriBackend.onChatSessionsChanged(listener)` subscribes to that event and

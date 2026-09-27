@@ -139,9 +139,6 @@ pub async fn create_session(
     let windows = app.state::<ChatWindows>();
     let _operation = windows.operations.lock().await;
     let session = store.create(provider, label)?;
-    if crate::update_tray_menu(app).is_err() {
-        tracing::warn!("Could not update the saved chat session menu");
-    }
     if app
         .emit_to("popup", "chat-sessions-changed", store.list()?)
         .is_err()

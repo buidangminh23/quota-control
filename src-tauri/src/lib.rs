@@ -19,7 +19,7 @@ mod taskbar_strip;
 mod updates;
 mod usage_commands;
 
-use tauri::menu::{ContextMenu, Menu, MenuItem, Submenu};
+use tauri::menu::{ContextMenu, Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalRect, PhysicalSize, WebviewUrl,
@@ -205,25 +205,6 @@ pub fn run() -> anyhow::Result<()> {
                         });
                     }
                     "quit" => app.exit(0),
-                    id if id.starts_with("chat:") || id.starts_with("chat-new:") => {
-                        let app = app.clone();
-                        let id = id.to_owned();
-                        tauri::async_runtime::spawn(async move {
-                            let store = app.state::<chat_store::ChatStore>();
-                            let result = if let Some(provider) = id.strip_prefix("chat-new:") {
-                                chat_commands::create_session(&app, &store, provider, None).await.map(|_| ())
-                            } else {
-                                chat_commands::open_session(&app, &store, &id[5..]).await
-                            };
-                            if result.is_err() {
-                                use tauri_plugin_notification::NotificationExt;
-                                let _ = app.notification().builder()
-                                    .title("Quota Control")
-                                    .body("Không mở được phiên chat. Phiên đã lưu vẫn được giữ nguyên.")
-                                    .show();
-                            }
-                        });
-                    }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -366,69 +347,6 @@ fn tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
         None::<&str>,
     )
     .map_err(safe_error)?;
-    let sessions = Submenu::with_id(
-        app,
-        "chat-sessions",
-        text("Các phiên chat đã lưu", "Saved chat sessions"),
-        true,
-    )
-    .map_err(safe_error)?;
-    match app.state::<chat_store::ChatStore>().list() {
-        Ok(records) if !records.is_empty() => {
-            for record in records {
-                let provider = if record.provider == "codex" {
-                    "ChatGPT"
-                } else {
-                    "Claude"
-                };
-                let label = format!("{provider} · {} · {}", record.label, &record.id[..8]);
-                sessions
-                    .append(
-                        &MenuItem::with_id(
-                            app,
-                            format!("chat:{}", record.id),
-                            label,
-                            true,
-                            None::<&str>,
-                        )
-                        .map_err(safe_error)?,
-                    )
-                    .map_err(safe_error)?;
-            }
-        }
-        result => {
-            let label = if result.is_err() {
-                text(
-                    "Không đọc được danh sách phiên",
-                    "Cannot read saved sessions",
-                )
-            } else {
-                text("Chưa có phiên chat", "No saved chat sessions")
-            };
-            sessions
-                .append(
-                    &MenuItem::with_id(app, "chat-empty", label, false, None::<&str>)
-                        .map_err(safe_error)?,
-                )
-                .map_err(safe_error)?;
-        }
-    }
-    let claude = MenuItem::with_id(
-        app,
-        "chat-new:claude",
-        text("Đăng nhập Claude mới…", "New Claude sign-in…"),
-        true,
-        None::<&str>,
-    )
-    .map_err(safe_error)?;
-    let codex = MenuItem::with_id(
-        app,
-        "chat-new:codex",
-        text("Đăng nhập ChatGPT mới…", "New ChatGPT sign-in…"),
-        true,
-        None::<&str>,
-    )
-    .map_err(safe_error)?;
     let update = app
         .state::<updates::Updates>()
         .menu_label(english)
@@ -437,8 +355,7 @@ fn tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
         .map_err(safe_error)?;
     let quit = MenuItem::with_id(app, "quit", text("Thoát", "Quit"), true, None::<&str>)
         .map_err(safe_error)?;
-    let mut items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
-        vec![&show, &refresh, &sessions, &claude, &codex];
+    let mut items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = vec![&show, &refresh];
     if let Some(update) = &update {
         items.push(update);
     }
