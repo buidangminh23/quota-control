@@ -63,6 +63,15 @@ impl HttpRequest {
         self
     }
 
+    /// An `application/x-www-form-urlencoded` body (OAuth token requests).
+    pub fn form_body(mut self, fields: &[(&str, &str)]) -> Self {
+        let encoded = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(fields)
+            .finish();
+        self.body = Some(encoded.into_bytes());
+        self.header("Content-Type", "application/x-www-form-urlencoded")
+    }
+
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self

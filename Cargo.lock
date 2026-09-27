@@ -5477,6 +5477,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "uc-services"
+version = "0.2.1"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "chrono",
+ "dirs 7.0.0",
+ "ring",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "tokio",
+ "toml 0.8.2",
+ "tracing",
+ "uc-accounts",
+ "uc-core",
+ "url",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "uds_windows"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

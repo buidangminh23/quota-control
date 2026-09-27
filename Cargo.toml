@@ -16,6 +16,7 @@ uc-accounts = { path = "crates/uc-accounts" }
 uc-pricing = { path = "crates/uc-pricing" }
 uc-logscan = { path = "crates/uc-logscan" }
 uc-providers = { path = "crates/uc-providers" }
+uc-services = { path = "crates/uc-services" }
 uc-engine = { path = "crates/uc-engine" }
 uc-api = { path = "crates/uc-api" }
 
