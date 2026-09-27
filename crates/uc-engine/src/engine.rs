@@ -2,6 +2,8 @@
 //! presentation half, `data(for:)`, lives in the popup).
 //!
 //! - All enabled providers refresh concurrently: once at launch, then every refresh interval.
+//! - A reading goes out of date when a limit window in it resets, so that provider is asked again a
+//!   few seconds after the reset instead of at the next interval.
 //! - A failed refresh never wipes data: the last good snapshot stays, the error is kept beside it.
 //! - A failing provider is backed off for 60 s so a wake burst can't re-probe it in a tight loop.
 //! - A provider that never returns is abandoned after 120 s and reported as timed out.
@@ -16,8 +18,8 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use tokio::sync::{Notify, broadcast};
 use uc_core::{
-    Clock, ErrorCategory, Provider, ProviderRuntime, ProviderSnapshot, ProviderUsageHistory,
-    RefreshContext, UsageHistoryDescriptor, WidgetDescriptor, system_clock,
+    Clock, ErrorCategory, MetricLine, Provider, ProviderRuntime, ProviderSnapshot,
+    ProviderUsageHistory, RefreshContext, UsageHistoryDescriptor, WidgetDescriptor, system_clock,
 };
 
 use crate::cache::SnapshotCache;
@@ -30,6 +32,13 @@ pub struct EngineConfig {
     pub slow_threshold: Duration,
     /// How often the scheduler checks whether a batch is due.
     pub tick: Duration,
+    /// How long after a limit window resets its provider is asked again, so the provider has
+    /// rolled the window over too even when its clock runs a little behind this machine's.
+    pub reset_settle: Duration,
+    /// How soon a reading that still shows a reset which has already passed is asked again...
+    pub reset_recheck: Duration,
+    /// ...for up to this long after that reset.
+    pub reset_recheck_window: Duration,
 }
 
 impl Default for EngineConfig {
@@ -40,8 +49,46 @@ impl Default for EngineConfig {
             failure_backoff: Duration::from_secs(60),
             slow_threshold: Duration::from_secs(10),
             tick: Duration::from_secs(15),
+            reset_settle: Duration::from_secs(5),
+            reset_recheck: Duration::from_secs(30),
+            reset_recheck_window: Duration::from_secs(2 * 60),
         }
     }
+}
+
+/// The scheduler's shortest sleep, so a reset it cannot act on yet never turns into a busy loop.
+const MIN_PAUSE: Duration = Duration::from_secs(1);
+
+fn delta(duration: Duration) -> chrono::Duration {
+    chrono::Duration::from_std(duration).unwrap_or_else(|_| chrono::Duration::zero())
+}
+
+/// When a limit window in `snapshot` puts it out of date: the first reset after the reading was
+/// taken, plus `reset_settle`. A reading that already shows a passed reset (the provider had not
+/// rolled that window over yet) is due `reset_recheck` after it was taken, for up to
+/// `reset_recheck_window` after that reset.
+fn reset_deadline(snapshot: &ProviderSnapshot, config: &EngineConfig) -> Option<DateTime<Utc>> {
+    let read = snapshot.refreshed_at;
+    snapshot
+        .lines
+        .iter()
+        .filter_map(|line| match line {
+            MetricLine::Progress(progress) => progress.resets_at,
+            _ => None,
+        })
+        .filter_map(|reset| {
+            if reset > read {
+                reset.checked_add_signed(delta(config.reset_settle))
+            } else if reset
+                .checked_add_signed(delta(config.reset_recheck_window))
+                .is_some_and(|end| read < end)
+            {
+                read.checked_add_signed(delta(config.reset_recheck))
+            } else {
+                None
+            }
+        })
+        .min()
 }
 
 /// Re-renders a snapshot's spend rows from preserved daily history (upstream
@@ -99,6 +146,8 @@ struct Inner {
     refreshing: HashSet<String>,
     errors: HashMap<String, String>,
     retry_after: HashMap<String, DateTime<Utc>>,
+    /// When each provider was last asked, whatever came of it.
+    attempted_at: HashMap<String, DateTime<Utc>>,
     last_refresh_at: Option<DateTime<Utc>>,
     enabled: HashSet<String>,
     batch_in_flight: bool,
@@ -360,7 +409,8 @@ impl Engine {
         outcomes
     }
 
-    /// Refresh one provider. `force` bypasses the cache and the failure backoff.
+    /// Refresh one provider. `force` bypasses the cache and the failure backoff; a reading that a
+    /// limit window reset has put out of date bypasses the cache too.
     pub async fn refresh(&self, provider_id: &str, force: bool) -> RefreshOutcome {
         let identity = self.identity_keys.get(provider_id).map(String::as_str);
         {
@@ -371,16 +421,22 @@ impl Engine {
             if !self.by_id.contains_key(provider_id) || inner.refreshing.contains(provider_id) {
                 return RefreshOutcome::Skipped;
             }
+            let now = (self.clock)();
             if !force
                 && let Some(retry_after) = inner.retry_after.get(provider_id)
-                && (self.clock)() < *retry_after
+                && now < *retry_after
             {
                 tracing::debug!(target: "refresh", "backoff skip {provider_id}");
                 return RefreshOutcome::BackedOff;
             }
             let stale_stamp = self.cache.has_stale_account_stamp(provider_id, identity);
+            let window_reset = !force
+                && self
+                    .reset_refresh_at(&inner, provider_id)
+                    .is_some_and(|due| due <= now);
             if !force
                 && !stale_stamp
+                && !window_reset
                 && let Some(cached) = self.cache.fresh_snapshot(provider_id)
             {
                 tracing::debug!(target: "refresh", "cache hit {provider_id}");
@@ -389,7 +445,11 @@ impl Engine {
                 }
                 return RefreshOutcome::CacheHit;
             }
+            if window_reset {
+                tracing::info!(target: "refresh", "{provider_id} limit window reset, refreshing ahead of the interval");
+            }
             inner.refreshing.insert(provider_id.to_string());
+            inner.attempted_at.insert(provider_id.to_string(), now);
         }
         let _refresh = RefreshGuard {
             engine: self,
@@ -567,15 +627,71 @@ impl Engine {
         }
     }
 
+    /// When `provider_id` should be asked again because a limit window in its reading has reset:
+    /// `None` while no window resets, while the provider is being asked, or once it has been asked
+    /// since. A backed-off provider waits for its backoff.
+    fn reset_refresh_at(&self, inner: &Inner, provider_id: &str) -> Option<DateTime<Utc>> {
+        if inner.refreshing.contains(provider_id) {
+            return None;
+        }
+        let deadline = reset_deadline(inner.snapshots.get(provider_id)?, &self.config)?;
+        if inner
+            .attempted_at
+            .get(provider_id)
+            .is_some_and(|attempt| *attempt >= deadline)
+        {
+            return None;
+        }
+        Some(match inner.retry_after.get(provider_id) {
+            Some(retry) if *retry > deadline => *retry,
+            _ => deadline,
+        })
+    }
+
+    /// Ask every enabled provider whose reading a limit window reset has put out of date, ahead of
+    /// the interval. The interval schedule stays as it was.
+    async fn refresh_reset_windows(&self) -> Vec<RefreshOutcome> {
+        let due: Vec<String> = {
+            let inner = self.inner.lock();
+            let now = (self.clock)();
+            self.runtimes
+                .iter()
+                .map(|runtime| runtime.provider().id.clone())
+                .filter(|id| inner.enabled.contains(id))
+                .filter(|id| {
+                    self.reset_refresh_at(&inner, id)
+                        .is_some_and(|due| due <= now)
+                })
+                .collect()
+        };
+        futures::future::join_all(due.iter().map(|id| self.refresh(id, false))).await
+    }
+
+    /// How long the scheduler sleeps: one tick, or until the next limit window reset is due.
+    fn pause(&self) -> Duration {
+        let inner = self.inner.lock();
+        let now = (self.clock)();
+        inner
+            .enabled
+            .iter()
+            .filter_map(|id| self.reset_refresh_at(&inner, id))
+            .map(|due| (due - now).to_std().unwrap_or(Duration::ZERO))
+            .fold(self.config.tick, Duration::min)
+            .max(MIN_PAUSE)
+    }
+
     /// The periodic loop: a pass at launch, then whenever one interval of wall-clock time has passed
-    /// since the last batch finished, or when woken (a provider was just enabled).
+    /// since the last batch finished, or when woken (a provider was just enabled). In between, each
+    /// provider is asked again right after a limit window in its reading resets.
     pub async fn run(self: Arc<Self>) {
         loop {
             if self.batch_due() {
                 self.refresh_all(false).await;
+            } else {
+                self.refresh_reset_windows().await;
             }
             tokio::select! {
-                () = tokio::time::sleep(self.config.tick) => {}
+                () = tokio::time::sleep(self.pause()) => {}
                 () = self.wake.notified() => {
                     self.refresh_all(false).await;
                 }
@@ -666,6 +782,248 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache = SnapshotCache::new(dir.path().join("cache.json"), config.refresh_interval);
         (Engine::new(runtimes, cache, config), dir)
+    }
+
+    fn at(text: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(text)
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    /// A clock the test moves by hand, shared by the engine, its cache and the provider.
+    struct TestClock(Arc<Mutex<DateTime<Utc>>>);
+
+    impl TestClock {
+        fn starting(text: &str) -> Self {
+            Self(Arc::new(Mutex::new(at(text))))
+        }
+
+        fn clock(&self) -> Clock {
+            let now = self.0.clone();
+            Arc::new(move || *now.lock())
+        }
+
+        fn set(&self, text: &str) {
+            *self.0.lock() = at(text);
+        }
+    }
+
+    /// A Claude-like provider whose five-hour Session window resets at a set moment.
+    struct WindowProvider {
+        provider: Provider,
+        clock: Clock,
+        used: Mutex<f64>,
+        resets_at: Mutex<Option<DateTime<Utc>>>,
+        fail: AtomicBool,
+        calls: AtomicUsize,
+    }
+
+    impl WindowProvider {
+        fn new(clock: Clock, used: f64, resets_at: &str) -> Arc<Self> {
+            Arc::new(Self {
+                provider: Provider::new("claude", "Claude"),
+                clock,
+                used: Mutex::new(used),
+                resets_at: Mutex::new(Some(at(resets_at))),
+                fail: AtomicBool::new(false),
+                calls: AtomicUsize::new(0),
+            })
+        }
+
+        fn roll_over(&self, used: f64, resets_at: &str) {
+            *self.used.lock() = used;
+            *self.resets_at.lock() = Some(at(resets_at));
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl ProviderRuntime for WindowProvider {
+        fn provider(&self) -> &Provider {
+            &self.provider
+        }
+
+        fn widget_descriptors(&self) -> Vec<WidgetDescriptor> {
+            Vec::new()
+        }
+
+        async fn refresh(&self, _context: RefreshContext) -> ProviderSnapshot {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.fail.load(Ordering::SeqCst) {
+                let mut snapshot = ProviderSnapshot::error_message(
+                    &self.provider,
+                    "Network unavailable",
+                    Some(ErrorCategory::Network),
+                );
+                snapshot.refreshed_at = (self.clock)();
+                return snapshot;
+            }
+            let line =
+                MetricLine::progress("Session", *self.used.lock(), 100.0, ProgressFormat::Percent)
+                    .period_ms(Some(5 * 3_600_000))
+                    .resets_at(*self.resets_at.lock())
+                    .into();
+            ProviderSnapshot::make(
+                &self.provider,
+                Some("Max 20x".into()),
+                vec![line],
+                (self.clock)(),
+            )
+        }
+
+        async fn has_local_credentials(&self) -> bool {
+            true
+        }
+    }
+
+    fn clocked_engine(
+        runtimes: Vec<Arc<dyn ProviderRuntime>>,
+        clock: &TestClock,
+    ) -> (Engine, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let config = EngineConfig::default();
+        let cache = SnapshotCache::with_options(
+            dir.path().join("cache.json"),
+            config.refresh_interval,
+            false,
+            clock.clock(),
+        );
+        let engine =
+            Engine::with_options(runtimes, cache, config, HashMap::new(), None, clock.clock());
+        (engine, dir)
+    }
+
+    fn session_used(engine: &Engine) -> f64 {
+        match engine.snapshots()["claude"].line("Session") {
+            Some(MetricLine::Progress(line)) => line.used,
+            other => panic!("no Session meter: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_window_reset_is_read_again_seconds_after_it_instead_of_at_the_interval() {
+        let clock = TestClock::starting("2026-09-27T06:09:08Z");
+        let claude = WindowProvider::new(clock.clock(), 100.0, "2026-09-27T06:10:00.119Z");
+        let (engine, _dir) = clocked_engine(vec![claude.clone()], &clock);
+        assert_eq!(
+            engine.refresh_all(false).await,
+            vec![RefreshOutcome::Refreshed]
+        );
+
+        clock.set("2026-09-27T06:10:01Z");
+        assert_eq!(
+            engine.refresh_all(false).await,
+            vec![RefreshOutcome::CacheHit]
+        );
+        assert_eq!(engine.pause(), Duration::from_millis(4_119));
+
+        claude.roll_over(2.0, "2026-09-27T11:09:59.612Z");
+        clock.set("2026-09-27T06:10:05.119Z");
+        assert_eq!(
+            engine.refresh_reset_windows().await,
+            vec![RefreshOutcome::Refreshed]
+        );
+        assert_eq!(session_used(&engine), 2.0);
+        assert_eq!(claude.calls(), 2);
+
+        clock.set("2026-09-27T06:10:20Z");
+        assert!(engine.refresh_reset_windows().await.is_empty());
+        assert_eq!(
+            engine.refresh("claude", false).await,
+            RefreshOutcome::CacheHit
+        );
+        assert_eq!(engine.pause(), EngineConfig::default().tick);
+        assert_eq!(
+            engine.state().last_refresh_at,
+            Some(at("2026-09-27T06:10:01Z")),
+            "a reset refresh leaves the interval schedule alone"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_reset_read_falls_back_to_the_interval() {
+        let clock = TestClock::starting("2026-09-27T06:09:08Z");
+        let claude = WindowProvider::new(clock.clock(), 100.0, "2026-09-27T06:10:00Z");
+        let (engine, _dir) = clocked_engine(vec![claude.clone()], &clock);
+        engine.refresh_all(false).await;
+
+        claude.fail.store(true, Ordering::SeqCst);
+        clock.set("2026-09-27T06:10:05Z");
+        assert_eq!(
+            engine.refresh_reset_windows().await,
+            vec![RefreshOutcome::Failed]
+        );
+        assert_eq!(session_used(&engine), 100.0, "the last good reading stays");
+
+        clock.set("2026-09-27T06:11:10Z");
+        assert!(engine.refresh_reset_windows().await.is_empty());
+        assert_eq!(
+            engine.refresh("claude", false).await,
+            RefreshOutcome::CacheHit
+        );
+        assert_eq!(engine.pause(), EngineConfig::default().tick);
+
+        claude.fail.store(false, Ordering::SeqCst);
+        claude.roll_over(0.0, "2026-09-27T11:14:08Z");
+        clock.set("2026-09-27T06:14:08Z");
+        assert_eq!(
+            engine.refresh("claude", false).await,
+            RefreshOutcome::Refreshed
+        );
+        assert_eq!(claude.calls(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_reading_that_still_shows_a_passed_reset_is_asked_again_for_two_minutes() {
+        let clock = TestClock::starting("2026-09-27T06:09:08Z");
+        let claude = WindowProvider::new(clock.clock(), 100.0, "2026-09-27T06:10:00Z");
+        let (engine, _dir) = clocked_engine(vec![claude.clone()], &clock);
+        engine.refresh_all(false).await;
+
+        for asked in [
+            "2026-09-27T06:10:05Z",
+            "2026-09-27T06:10:35Z",
+            "2026-09-27T06:11:05Z",
+            "2026-09-27T06:11:35Z",
+            "2026-09-27T06:12:05Z",
+        ] {
+            clock.set(asked);
+            assert_eq!(
+                engine.refresh_reset_windows().await,
+                vec![RefreshOutcome::Refreshed],
+                "asked at {asked}"
+            );
+        }
+        clock.set("2026-09-27T06:12:35Z");
+        assert!(engine.refresh_reset_windows().await.is_empty());
+        assert_eq!(claude.calls(), 6);
+    }
+
+    #[tokio::test]
+    async fn a_backed_off_provider_waits_for_its_backoff_before_a_reset_read() {
+        let clock = TestClock::starting("2026-09-27T06:09:08Z");
+        let claude = WindowProvider::new(clock.clock(), 100.0, "2026-09-27T06:10:00Z");
+        let (engine, _dir) = clocked_engine(vec![claude.clone()], &clock);
+        engine.refresh_all(false).await;
+
+        claude.fail.store(true, Ordering::SeqCst);
+        clock.set("2026-09-27T06:09:40Z");
+        assert_eq!(engine.refresh("claude", true).await, RefreshOutcome::Failed);
+        claude.fail.store(false, Ordering::SeqCst);
+
+        clock.set("2026-09-27T06:10:05Z");
+        assert!(engine.refresh_reset_windows().await.is_empty());
+        assert_eq!(engine.pause(), Duration::from_secs(15));
+        clock.set("2026-09-27T06:10:30Z");
+        assert_eq!(engine.pause(), Duration::from_secs(10));
+        clock.set("2026-09-27T06:10:40Z");
+        assert_eq!(
+            engine.refresh_reset_windows().await,
+            vec![RefreshOutcome::Refreshed]
+        );
     }
 
     #[tokio::test]
