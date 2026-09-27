@@ -107,6 +107,8 @@ pub enum StripButton {
 pub struct StripClick {
     pub button: StripButton,
     pub bounds: PhysicalRect<i32, u32>,
+    /// When the button went down on the strip, if it did.
+    pub pressed_at: Option<std::time::Instant>,
 }
 
 /// A decoded frame: premultiplied BGRA rows, top-down, ready for a 32-bit DIB.
@@ -596,7 +598,7 @@ pub fn set_taskbar_strip(
 
 #[cfg(windows)]
 mod platform {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
@@ -625,10 +627,10 @@ mod platform {
         IDC_ARROW, IsChild, IsWindow, LoadCursorW, MA_NOACTIVATE, MSG, PostMessageW,
         RegisterClassExW, RegisterWindowMessageW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
         SWP_SHOWWINDOW, SendMessageW, SetTimer, SetWindowPos, TranslateMessage, ULW_ALPHA,
-        UpdateLayeredWindow, WM_APP, WM_DISPLAYCHANGE, WM_LBUTTONUP, WM_MOUSEACTIVATE,
-        WM_NCDESTROY, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_CHILD,
-        WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-        WS_POPUP, WS_VISIBLE, WindowFromPoint,
+        UpdateLayeredWindow, WM_APP, WM_DISPLAYCHANGE, WM_LBUTTONDOWN, WM_LBUTTONUP,
+        WM_MOUSEACTIVATE, WM_NCDESTROY, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW,
+        WS_CHILD, WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE, WindowFromPoint,
     };
 
     use windows::Win32::System::Com::{
@@ -1228,6 +1230,7 @@ mod platform {
     thread_local! {
         static STATE: RefCell<Option<Box<dyn StripThread>>> = const { RefCell::new(None) };
         static CLICK: RefCell<Option<(ClickHandler, Dispatch)>> = const { RefCell::new(None) };
+        static PRESSED: Cell<Option<Instant>> = const { Cell::new(None) };
     }
 
     /// Object-safe view of the thread state, so the window procedures need no runtime generic.
@@ -1678,7 +1681,7 @@ mod platform {
         }
     }
 
-    fn click(hwnd: HWND, button: StripButton) {
+    fn click(hwnd: HWND, button: StripButton, pressed_at: Option<Instant>) {
         let mut rect: RECT = unsafe { std::mem::zeroed() };
         if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
             return;
@@ -1692,6 +1695,7 @@ mod platform {
                     (rect.bottom - rect.top).max(0) as u32,
                 ),
             },
+            pressed_at,
         };
         CLICK.with(|cell| {
             if let Ok(handler) = cell.try_borrow()
@@ -1744,12 +1748,16 @@ mod platform {
     ) -> LRESULT {
         match message {
             WM_MOUSEACTIVATE => MA_NOACTIVATE as LRESULT,
+            WM_LBUTTONDOWN => {
+                PRESSED.with(|pressed| pressed.set(Some(Instant::now())));
+                0
+            }
             WM_LBUTTONUP => {
-                click(hwnd, StripButton::Primary);
+                click(hwnd, StripButton::Primary, PRESSED.with(Cell::take));
                 0
             }
             WM_RBUTTONUP => {
-                click(hwnd, StripButton::Secondary);
+                click(hwnd, StripButton::Secondary, None);
                 0
             }
             WM_NCDESTROY => {

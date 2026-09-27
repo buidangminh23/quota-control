@@ -26,6 +26,8 @@ use tauri::{
     WebviewWindowBuilder, WindowEvent,
 };
 
+use std::time::{Duration, Instant};
+
 use service::{BackendService, safe_error};
 use tauri_plugin_autostart::ManagerExt as _;
 
@@ -150,6 +152,7 @@ pub fn run() -> anyhow::Result<()> {
             app.manage(chat_store::ChatStore::default_store());
             app.manage(chat_commands::ChatWindows::default());
             app.manage(PopupAnchor::default());
+            app.manage(PopupClicks::default());
             app.manage(commands::TrayImage::default());
             app.manage(limit_resets::Redemptions::default());
             app.manage(updates::Updates::new(app.handle()));
@@ -173,6 +176,9 @@ pub fn run() -> anyhow::Result<()> {
                     let _ = hide_popup(&handle);
                 }
                 WindowEvent::Focused(false) => {
+                    if popup_visible(&handle) {
+                        *handle.state::<PopupClicks>().blurred_at.lock() = Some(Instant::now());
+                    }
                     let _ = hide_popup(&handle);
                 }
                 _ => {}
@@ -208,13 +214,22 @@ pub fn run() -> anyhow::Result<()> {
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
+                    let TrayIconEvent::Click {
                         button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
+                        button_state,
                         ..
                     } = event
-                        && let Err(error) = toggle_popup(tray.app_handle(), None)
-                    {
+                    else {
+                        return;
+                    };
+                    let app = tray.app_handle();
+                    let pressed_at = &app.state::<PopupClicks>().tray_pressed_at;
+                    if button_state == MouseButtonState::Down {
+                        *pressed_at.lock() = Some(Instant::now());
+                        return;
+                    }
+                    let pressed = pressed_at.lock().take();
+                    if let Err(error) = click_popup(app, None, pressed) {
                         tracing::warn!("{error}");
                     }
                 })
@@ -226,7 +241,7 @@ pub fn run() -> anyhow::Result<()> {
                 move |click| {
                     let result = match click.button {
                         taskbar_strip::StripButton::Primary => {
-                            toggle_popup(&strip_app, Some(click.bounds))
+                            click_popup(&strip_app, Some(click.bounds), click.pressed_at)
                         }
                         taskbar_strip::StripButton::Secondary => show_tray_menu(&strip_app),
                     };
@@ -370,16 +385,59 @@ pub(crate) fn update_tray_menu(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn toggle_popup(app: &AppHandle, anchor: Option<PhysicalRect<i32, u32>>) -> Result<(), String> {
-    let visible = app
-        .get_webview_window("popup")
+fn popup_visible(app: &AppHandle) -> bool {
+    app.get_webview_window("popup")
         .and_then(|window| window.is_visible().ok())
-        .unwrap_or(false);
-    if visible {
+        .unwrap_or(false)
+}
+
+fn toggle_popup(app: &AppHandle, anchor: Option<PhysicalRect<i32, u32>>) -> Result<(), String> {
+    if popup_visible(app) {
         hide_popup(app)
     } else {
         show_popup_at(app, anchor)
     }
+}
+
+/// How long before a click's press the popup may have hidden and still count as closed by that
+/// click: its focus loss and the press reach the app on different threads, a little apart.
+const CLICK_CLOSE_SLACK: Duration = Duration::from_millis(150);
+
+/// Without a recorded press, how recent a hide must be to count as closed by the click.
+const CLICK_CLOSE_WINDOW: Duration = Duration::from_millis(500);
+
+/// When the popup last hid because it lost focus, and when the tray icon's button last went down.
+#[derive(Default)]
+struct PopupClicks {
+    blurred_at: parking_lot::Mutex<Option<Instant>>,
+    tray_pressed_at: parking_lot::Mutex<Option<Instant>>,
+}
+
+/// Whether a click that ended at `now` closed the popup rather than asking for it. Pressing the
+/// tray icon or the taskbar strip takes focus from an open popup, which hides it before the
+/// button comes back up, so the popup is already gone when the click arrives.
+fn closed_by_click(pressed_at: Option<Instant>, blurred_at: Option<Instant>, now: Instant) -> bool {
+    let Some(blurred) = blurred_at.filter(|blurred| *blurred <= now) else {
+        return false;
+    };
+    match pressed_at {
+        Some(pressed) => blurred + CLICK_CLOSE_SLACK >= pressed,
+        None => now.duration_since(blurred) <= CLICK_CLOSE_WINDOW,
+    }
+}
+
+/// A primary click on the tray icon or the taskbar strip: opens the popup, and closes it when it is
+/// open, including when the click's own press already hid it.
+fn click_popup(
+    app: &AppHandle,
+    anchor: Option<PhysicalRect<i32, u32>>,
+    pressed_at: Option<Instant>,
+) -> Result<(), String> {
+    let blurred_at = app.state::<PopupClicks>().blurred_at.lock().take();
+    if !popup_visible(app) && closed_by_click(pressed_at, blurred_at, Instant::now()) {
+        return Ok(());
+    }
+    toggle_popup(app, anchor)
 }
 
 /// The tray icon's menu at the pointer, for a right click on the taskbar strip.
@@ -645,6 +703,40 @@ fn diagnose() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_click_whose_press_hid_the_popup_leaves_it_closed() {
+        let pressed = Instant::now();
+        let after = |ms| pressed + Duration::from_millis(ms);
+        assert!(closed_by_click(Some(pressed), Some(after(40)), after(120)));
+        assert!(closed_by_click(Some(after(20)), Some(pressed), after(120)));
+    }
+
+    #[test]
+    fn a_popup_that_hid_before_the_press_opens_again() {
+        let blurred = Instant::now();
+        let after = |ms| blurred + Duration::from_millis(ms);
+        assert!(!closed_by_click(
+            Some(after(400)),
+            Some(blurred),
+            after(480)
+        ));
+        assert!(!closed_by_click(
+            Some(after(5_000)),
+            Some(blurred),
+            after(5_080)
+        ));
+        assert!(!closed_by_click(Some(after(400)), None, after(480)));
+        assert!(!closed_by_click(None, None, after(10)));
+    }
+
+    #[test]
+    fn without_a_press_only_a_recent_hide_counts() {
+        let blurred = Instant::now();
+        let after = |ms| blurred + Duration::from_millis(ms);
+        assert!(closed_by_click(None, Some(blurred), after(200)));
+        assert!(!closed_by_click(None, Some(blurred), after(1_500)));
+    }
 
     const POPUP: PhysicalSize<u32> = PhysicalSize {
         width: 336,
