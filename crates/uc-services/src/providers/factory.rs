@@ -6,8 +6,8 @@
 //! found as a Droid login identified by the key's SHA-256 digest. Browser sessions and rotating
 //! WorkOS tokens are never read. Every request goes to `https://api.factory.ai` with the key as a
 //! bearer token and the origin, referer and client headers of Factory's web app. A refresh sends
-//! `GET /api/billing/limits` and, at most once every 12 hours, `GET /api/app/auth/me` for the plan
-//! and the user id. A plan billed by token rate limits shows its session, weekly and monthly
+//! `GET /api/billing/limits` and, at most once every 12 hours, `GET /api/app/auth/me` for the plan,
+//! the user id and the account's email. A plan billed by token rate limits shows its session, weekly and monthly
 //! windows from the limits answer; an older plan also sends
 //! `GET /api/organization/subscription/usage?useCache=true&userId=<id>` and shows how much of its
 //! standard and premium token allowances is used. The extra-usage balance follows, then the core
@@ -205,7 +205,7 @@ impl Service for Factory {
         if out.is_empty() {
             return Err(http::decoding(NAME));
         }
-        Ok(Reading::new(plan, out))
+        Ok(Reading::new(plan, out).with_account(value::text(&account, "/userProfile/email")))
     }
 }
 
@@ -238,7 +238,7 @@ mod tests {
     use uc_core::ErrorCategory;
 
     const LIMITS: &str = r#"{"usesTokenRateLimitsBilling":true,"limits":{"standard":{"fiveHour":{"usedPercent":25,"windowEnd":"2026-09-28T00:00:00Z"}},"core":{"fiveHour":{"usedPercent":10}}},"extraUsageBalanceCents":1234}"#;
-    const ACCOUNT: &str = r#"{"organization":{"subscription":{"factoryTier":"pro"}}}"#;
+    const ACCOUNT: &str = r#"{"organization":{"subscription":{"factoryTier":"pro"}},"userProfile":{"id":"u-1","email":"me@example.com"}}"#;
 
     #[tokio::test]
     async fn a_token_rate_limit_plan_shows_its_windows_balance_and_core_windows() {
@@ -248,6 +248,7 @@ mod tests {
         let scope = context_at(&http, json!({"apiKey":"test"}), Utc::now());
         let reading = Factory.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan.as_deref(), Some("Pro"));
+        assert_eq!(reading.account.as_deref(), Some("me@example.com"));
         assert_eq!(
             reading.lines,
             vec![

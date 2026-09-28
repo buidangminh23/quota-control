@@ -9,12 +9,13 @@
 //! dropped: `Amp Free` gives the dollars (or the percentage) left of the free allowance,
 //! `Individual credits` the Balance row, each `Workspace <name>` a dollar row of its own, and the
 //! subscription or tier line the plan name and the Monthly and Orb meters, which reset when the
-//! billing period it names ends or after the renewal it counts down to. An `auth-required` error
-//! code means Amp rejected the key.
+//! billing period it names ends or after the renewal it counts down to. A stated billing period's
+//! end is also the plan's renewal date, and a `Signed in as <email>` line names the account. An
+//! `auth-required` error code means Amp rejected the key.
 
 use async_trait::async_trait;
 use serde_json::Value;
-use uc_core::{HttpRequest, Provider, SimpleProviderError, WidgetDescriptor};
+use uc_core::{HttpRequest, PlanTerm, Provider, SimpleProviderError, WidgetDescriptor};
 
 use crate::service::{ApiKeyHelp, Connection, FetchContext, Reading, Service};
 use crate::support::{http, lines, value};
@@ -97,9 +98,15 @@ fn parse(body: &Value, context: &FetchContext<'_>) -> Result<Reading, SimpleProv
     let mut orb = None;
     let mut balance = None;
     let mut plan = None;
+    let mut period_end = None;
+    let mut account = None;
     let mut workspaces = Vec::new();
     for line in text.lines() {
         let line = line.trim();
+        if let Some(rest) = line.strip_prefix("Signed in as ") {
+            account = rest.split_whitespace().next().map(str::to_string);
+            continue;
+        }
         let Some((label, details)) = line.split_once(':') else {
             continue;
         };
@@ -162,26 +169,26 @@ fn parse(body: &Value, context: &FetchContext<'_>) -> Result<Reading, SimpleProv
                 .ok()?;
                 (end > start).then_some((start, end))
             });
-            let reset = period
+            period_end = period
                 .and_then(|(_, end)| end.and_hms_opt(0, 0, 0))
-                .map(|midnight| midnight.and_utc())
-                .or_else(|| {
-                    details.split_once("renewal in ").and_then(|(_, rest)| {
-                        let units = amount(rest)?;
-                        if units < 0.0 || units > u32::MAX as f64 {
-                            return None;
-                        }
-                        if rest.contains("month") {
-                            context
-                                .now
-                                .checked_add_months(chrono::Months::new(units as u32))
-                        } else {
-                            context
-                                .now
-                                .checked_add_signed(chrono::Duration::try_days(units as i64)?)
-                        }
-                    })
-                });
+                .map(|midnight| midnight.and_utc());
+            let reset = period_end.or_else(|| {
+                details.split_once("renewal in ").and_then(|(_, rest)| {
+                    let units = amount(rest)?;
+                    if units < 0.0 || units > u32::MAX as f64 {
+                        return None;
+                    }
+                    if rest.contains("month") {
+                        context
+                            .now
+                            .checked_add_months(chrono::Months::new(units as u32))
+                    } else {
+                        context
+                            .now
+                            .checked_add_signed(chrono::Duration::try_days(units as i64)?)
+                    }
+                })
+            });
             let duration = period
                 .map(|(start, end)| (end - start).num_milliseconds())
                 .or(Some(lines::MONTH_MS));
@@ -248,7 +255,12 @@ fn parse(body: &Value, context: &FetchContext<'_>) -> Result<Reading, SimpleProv
     if rows.is_empty() {
         return Err(http::decoding(NAME));
     }
-    Ok(Reading::new(plan, rows))
+    Ok(Reading::new(plan, rows)
+        .with_plan_term(period_end.map(|ends_at| PlanTerm::Stated {
+            ends_at,
+            checked_at: None,
+        }))
+        .with_account(account))
 }
 
 /// The number `text` starts with, after spaces and a `$`, with its thousands commas dropped.
@@ -293,6 +305,7 @@ mod tests {
 
     const FREE_CREDITS_AND_WORKSPACE: &str = r###"{"ok":true,"result":{"displayText":"Amp Free: $3 / $10 remaining (replenishes +$1 / hour)\nIndividual credits: $12.50 remaining\nWorkspace Team: $45 remaining"}}"###;
     const TIER_WITH_PERIOD: &str = "\u{1b}[32mAmp Pro Tier: agent usage $30 of $100 remaining, orb usage 8h of 10h a1.small orb hours remaining, period 2026-01-01 to 2026-02-01 resets upon renewal in 1 months\u{1b}[0m";
+    const SIGNED_IN_TIER: &str = "Signed in as fixture@example.com (Fixture Org)\nAmp Pro Tier: agent usage $30 of $100 remaining, period 2026-01-01 to 2026-02-01";
     const PERCENT_SUBSCRIPTION: &str = "Subscription Pro: 60% other usage and 20% orb usage remaining - resets upon renewal in 1 months";
 
     #[tokio::test]
@@ -359,6 +372,10 @@ mod tests {
                     lines::count("Orb", 2.0, 10.0, "hours", reset, Some(31 * lines::DAY_MS))
                 ]
             )
+            .with_plan_term(reset.map(|ends_at| PlanTerm::Stated {
+                ends_at,
+                checked_at: None,
+            }))
         );
         let body = json!({"ok":true,"result":{"displayText":PERCENT_SUBSCRIPTION}});
         assert_eq!(
@@ -381,6 +398,32 @@ mod tests {
                 ]
             )
         );
+    }
+
+    #[tokio::test]
+    async fn the_signed_in_line_names_the_account_and_the_stated_period_end_the_renewal() {
+        let http = Scripted::new();
+        let scope = context_at(
+            &http,
+            json!({}),
+            Utc.with_ymd_and_hms(2026, 1, 20, 10, 0, 0).unwrap(),
+        );
+        let body = json!({"ok":true,"result":{"displayText":SIGNED_IN_TIER}});
+        let reading = parse(&body, &scope.context()).unwrap();
+        assert_eq!(reading.plan.as_deref(), Some("Pro"));
+        assert_eq!(reading.account.as_deref(), Some("fixture@example.com"));
+        assert_eq!(
+            reading.plan_term,
+            Some(PlanTerm::Stated {
+                ends_at: Utc.with_ymd_and_hms(2026, 2, 1, 0, 0, 0).unwrap(),
+                checked_at: None,
+            })
+        );
+        // A renewal only counted down to is not a stated date.
+        let body = json!({"ok":true,"result":{"displayText":PERCENT_SUBSCRIPTION}});
+        let reading = parse(&body, &scope.context()).unwrap();
+        assert_eq!(reading.plan_term, None);
+        assert_eq!(reading.account, None);
     }
 
     #[tokio::test]

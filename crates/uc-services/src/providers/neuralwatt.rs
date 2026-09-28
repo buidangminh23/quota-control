@@ -231,7 +231,12 @@ impl Service for Neuralwatt {
             }
         }
         let plan = value::text(subscription, "/plan").and_then(lines::plan_name);
-        Ok(Reading::new(plan, rows))
+        Ok(
+            Reading::new(plan, rows).with_plan_term(end.map(|ends_at| uc_core::PlanTerm::Stated {
+                ends_at,
+                checked_at: None,
+            })),
+        )
     }
 }
 
@@ -266,6 +271,13 @@ mod tests {
         );
         let reading = Neuralwatt.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan, Some("Power Pro".into()));
+        assert_eq!(
+            reading.plan_term,
+            Some(uc_core::PlanTerm::Stated {
+                ends_at: "2026-10-01T00:00:00Z".parse().unwrap(),
+                checked_at: None,
+            })
+        );
         assert_eq!(reading.lines[1], lines::dollar_value("Balance", 7.0));
         assert_eq!(
             reading.lines[3],

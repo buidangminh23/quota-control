@@ -150,6 +150,7 @@ impl ServiceRuntime {
         Ok(
             ProviderSnapshot::make(&self.provider, reading.plan, reading.lines, now)
                 .with_plan_term(reading.plan_term)
+                .with_account(reading.account)
                 .with_warning(reading.warning),
         )
     }

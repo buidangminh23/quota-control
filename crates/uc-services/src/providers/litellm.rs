@@ -6,8 +6,8 @@
 //! plain HTTP to this computer or a private network only, and a trailing `/v1` is dropped. Every
 //! request is a read-only `GET` with the key as a bearer token. A refresh asks `/key/info` which
 //! user and team the key belongs to, keeping that answer for 12 hours, then reads the user's
-//! budget, spend and team budget from `/user/info`, or a team key's budget and spend from
-//! `/team/info`. When `/key/info` answers 401, 403 or 404, it reads this month's spend from
+//! budget, spend, team budget and `user_email` from `/user/info`, or a team key's budget and spend
+//! from `/team/info`. When `/key/info` answers 401, 403 or 404, it reads this month's spend from
 //! `/key/spend/report` instead, and from `/user/spend/report` when that answers the same. With
 //! model activity turned on it also reads the user's last 30 days of `/user/daily/activity`, at
 //! most two pages, so a refresh sends at most four requests; activity that needs more pages is left
@@ -160,6 +160,7 @@ impl Service for LiteLLM {
             )
             .await;
         let mut out = vec![];
+        let mut email = None;
         if let Some(user) = user {
             let url = query(base, "user/info", &[("user_id", user)]);
             let response = request(context, key, &url, false)
@@ -171,6 +172,7 @@ impl Service for LiteLLM {
             if returned.is_some_and(|id| id != user) {
                 return Err(http::decoding(NAME));
             }
+            email = value::text(personal, "/user_email").map(str::to_string);
             let personal = budget(personal, "Personal Budget")?;
             if let Some(line) = personal.0 {
                 out.push(line);
@@ -225,7 +227,7 @@ impl Service for LiteLLM {
             }
             out.push(lines::dollar_value("Total Usage", spend));
         }
-        Ok(Reading::new(None, out))
+        Ok(Reading::new(None, out).with_account(email))
     }
 }
 
@@ -443,7 +445,7 @@ mod tests {
     use serde_json::json;
     use uc_core::ErrorCategory;
 
-    const USER_INFO: &str = r#"{"user_info":{"user_id":"u1","spend":212.35,"max_budget":300},"teams":[{"team_id":"other","spend":1,"max_budget":2},{"team_id":"t1","spend":215.32,"max_budget":1000,"budget_reset_at":"2026-10-01T00:00:00Z"}]}"#;
+    const USER_INFO: &str = r#"{"user_info":{"user_id":"u1","user_email":"dev@example.com","spend":212.35,"max_budget":300},"teams":[{"team_id":"other","spend":1,"max_budget":2},{"team_id":"t1","spend":215.32,"max_budget":1000,"budget_reset_at":"2026-10-01T00:00:00Z"}]}"#;
     const DAILY_ACTIVITY: &str = r#"{"results":[{"date":"2026-09-27","breakdown":{"models":{"gpt-4o":{"metrics":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"api_requests":3}}}}}],"metadata":{"page":1,"total_pages":1}}"#;
     const USER_SPEND_REPORT: &str =
         "https://gateway.example/user/spend/report?start_date=2026-09-01&end_date=2026-09-27";
@@ -480,6 +482,7 @@ mod tests {
         let scope = context_at(&http, secret(), now());
         let reading = LiteLLM.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan, None);
+        assert_eq!(reading.account.as_deref(), Some("dev@example.com"));
         assert_eq!(
             reading.lines,
             vec![

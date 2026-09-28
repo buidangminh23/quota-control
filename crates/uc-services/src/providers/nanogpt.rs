@@ -7,7 +7,8 @@
 //! dollar Balance and the Nano balance. The second,
 //! `GET https://api.nano-gpt.com/api/subscription/v1/usage`, gives the subscription's state, shown
 //! as the plan, and its daily and weekly input tokens, daily images and trial tokens, each as a
-//! meter against its limit when NanoGPT reports one and as a plain count otherwise. When that
+//! meter against its limit when NanoGPT reports one and as a plain count otherwise, and the end of
+//! the subscription's billing period (`period.currentPeriodEnd`). When that
 //! endpoint answers 404 the balances are shown with a warning that no subscription usage was
 //! provided, and counters NanoGPT marks as degraded are left out with a warning. The endpoints are
 //! documented at https://docs.nano-gpt.com/api-reference/endpoint/check-balance.md and
@@ -15,7 +16,7 @@
 
 use async_trait::async_trait;
 use serde_json::Value;
-use uc_core::{HttpRequest, Provider, SimpleProviderError, WidgetDescriptor};
+use uc_core::{HttpRequest, PlanTerm, Provider, SimpleProviderError, WidgetDescriptor};
 
 use crate::service::{ApiKeyHelp, Connection, FetchContext, Reading, Service};
 use crate::support::{http, lines, value};
@@ -170,12 +171,17 @@ impl Service for NanoGpt {
             };
             rows.push(row);
         }
+        let term =
+            value::time(&usage, "/period/currentPeriodEnd").map(|ends_at| PlanTerm::Stated {
+                ends_at,
+                checked_at: None,
+            });
         Ok(
-            Reading::new(value::text(&usage, "/state").map(str::to_owned), rows).with_warning(
-                degraded.then(|| {
+            Reading::new(value::text(&usage, "/state").map(str::to_owned), rows)
+                .with_plan_term(term)
+                .with_warning(degraded.then(|| {
                     "Some NanoGPT subscription counters are temporarily unavailable.".into()
-                }),
-            ),
+                })),
         )
     }
 }
@@ -188,7 +194,7 @@ mod tests {
     use serde_json::json;
     use uc_core::ErrorCategory;
 
-    const SUBSCRIPTION: &str = r#"{"active":true,"state":"active","limits":{"dailyInputTokens":100,"weeklyInputTokens":500,"dailyImages":null},"dailyInputTokens":{"used":120,"remaining":0,"percentUsed":1.2,"resetAt":1790812800000},"weeklyInputTokens":{"used":200,"remaining":300,"percentUsed":0.4,"resetAt":1790812800000},"dailyImages":null}"#;
+    const SUBSCRIPTION: &str = r#"{"active":true,"state":"active","limits":{"dailyInputTokens":100,"weeklyInputTokens":500,"dailyImages":null},"dailyInputTokens":{"used":120,"remaining":0,"percentUsed":1.2,"resetAt":1790812800000},"weeklyInputTokens":{"used":200,"remaining":300,"percentUsed":0.4,"resetAt":1790812800000},"dailyImages":null,"period":{"currentPeriodEnd":"2026-10-15T00:00:00.000Z"}}"#;
     const DEGRADED: &str =
         r#"{"dailyInputTokens":{"degraded":true,"used":null},"limits":{"dailyInputTokens":100}}"#;
 
@@ -205,6 +211,13 @@ mod tests {
         let scope = context_at(&http, json!({"apiKey":"test"}), Utc::now());
         let reading = NanoGpt.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan.as_deref(), Some("active"));
+        assert_eq!(
+            reading.plan_term,
+            value::as_time(&json!("2026-10-15T00:00:00Z")).map(|ends_at| PlanTerm::Stated {
+                ends_at,
+                checked_at: None,
+            })
+        );
         assert_eq!(
             reading.lines,
             vec![

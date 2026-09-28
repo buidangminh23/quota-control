@@ -79,8 +79,10 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
   const bar = useBarKind();
   const providerId = group.provider.id;
   const title = providerTitle(group.provider, language);
-  const email = isLocalHistoryCard(providerId) ? null : accountEmailOf(group.provider);
-  const heading = email ? brandName(providerBrand(group.provider)) : title;
+  const labelEmail = isLocalHistoryCard(providerId) ? null : accountEmailOf(group.provider);
+  // A label that is already an email wins; otherwise the email the provider's API reported.
+  const email = labelEmail ?? (isLocalHistoryCard(providerId) ? null : runtime?.snapshot?.account) ?? null;
+  const heading = labelEmail ? brandName(providerBrand(group.provider)) : title;
   const layout = useApp((state) => state.layout);
   const catalog = useApp((state) => state.catalog);
   const open = layout.openProviders.includes(providerId);

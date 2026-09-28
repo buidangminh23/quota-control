@@ -7,11 +7,12 @@
 //! the subscription's daily, weekly and monthly dollar limits, or without a subscription the key's
 //! own quota, then the balance, today's and total requests, tokens and cost, and each rate-limit
 //! window with its reset time; the key quota and the balance use the unit the answer names,
-//! dollars by default. A key the gateway marks invalid reads as refused.
+//! dollars by default. `planName` names the plan and the subscription's `expires_at` is when it
+//! ends. A key the gateway marks invalid reads as refused.
 
 use async_trait::async_trait;
 use serde_json::Value;
-use uc_core::{HttpRequest, Provider, SimpleProviderError, WidgetDescriptor};
+use uc_core::{HttpRequest, PlanTerm, Provider, SimpleProviderError, WidgetDescriptor};
 
 use crate::service::{ApiKeyHelp, Connection, FetchContext, Reading, Service};
 use crate::support::{http, lines, value};
@@ -160,10 +161,16 @@ fn parse(body: &Value) -> Result<Reading, SimpleProviderError> {
     if out.is_empty() {
         return Err(http::decoding(NAME));
     }
+    // sub2api writes Go times; the zero time (year 1) stands for no end.
+    let ends_at = value::time(body, "/subscription/expires_at").filter(|end| end.timestamp() > 0);
     Ok(Reading::new(
         value::text(body, "/planName").and_then(lines::plan_name),
         out,
-    ))
+    )
+    .with_plan_term(ends_at.map(|ends_at| PlanTerm::Stated {
+        ends_at,
+        checked_at: None,
+    })))
 }
 
 #[cfg(test)]
@@ -174,7 +181,7 @@ mod tests {
     use serde_json::json;
     use uc_core::ErrorCategory;
 
-    const USAGE: &str = r###"{"isValid":true,"planName":"pro","balance":12,"subscription":{"daily_usage_usd":2,"daily_limit_usd":10},"usage":{"today":{"requests":4,"total_tokens":100,"actual_cost":0.2}},"rate_limits":[{"window":"5h","used":1,"limit":5,"remaining":4,"reset_at":"2026-09-27T15:00:00Z"}]}"###;
+    const USAGE: &str = r###"{"isValid":true,"planName":"pro","balance":12,"subscription":{"daily_usage_usd":2,"daily_limit_usd":10,"expires_at":"2026-10-27T08:00:00+08:00"},"usage":{"today":{"requests":4,"total_tokens":100,"actual_cost":0.2}},"rate_limits":[{"window":"5h","used":1,"limit":5,"remaining":4,"reset_at":"2026-09-27T15:00:00Z"}]}"###;
 
     #[tokio::test]
     async fn a_subscription_key_shows_its_limits_balance_usage_and_rate_limits_from_one_read() {
@@ -210,6 +217,10 @@ mod tests {
                     )
                 ]
             )
+            .with_plan_term(Some(PlanTerm::Stated {
+                ends_at: Utc.with_ymd_and_hms(2026, 10, 27, 0, 0, 0).unwrap(),
+                checked_at: None,
+            }))
         );
         let requests = http.requests();
         assert_eq!(requests.len(), 1);
@@ -238,6 +249,12 @@ mod tests {
             assert_eq!(error.category, category);
             assert!(!error.message.contains("secret"));
         }
+    }
+
+    #[test]
+    fn a_zero_go_time_is_no_end() {
+        let body = json!({"planName":"pro","subscription":{"daily_usage_usd":0,"daily_limit_usd":10,"expires_at":"0001-01-01T00:00:00Z"}});
+        assert_eq!(parse(&body).unwrap().plan_term, None);
     }
 
     #[tokio::test]

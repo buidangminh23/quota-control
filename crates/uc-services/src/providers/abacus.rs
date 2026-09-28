@@ -6,11 +6,12 @@
 //! reads, and shows the points used (`totalComputePoints` minus `computePointsLeft`) out of
 //! `totalComputePoints`. It then sends `POST https://apps.abacus.ai/api/_getBillingInfo` with the
 //! same cookie and an empty JSON body: when that succeeds, its `currentTier` names the plan and its
-//! `nextBillingDate` becomes the credits' reset time; when it fails, the credits show without them.
+//! `nextBillingDate` becomes the credits' reset time and the plan's renewal date; when it fails, the
+//! credits show without them.
 
 use async_trait::async_trait;
 use serde_json::Value;
-use uc_core::{HttpRequest, Provider, SimpleProviderError, WidgetDescriptor};
+use uc_core::{HttpRequest, PlanTerm, Provider, SimpleProviderError, WidgetDescriptor};
 
 use crate::service::{ApiKeyHelp, Connection, FetchContext, KeyFormat, Reading, Service};
 use crate::support::{http, lines, value};
@@ -86,9 +87,14 @@ impl Service for Abacus {
             && billing.get("success") == Some(&Value::Bool(true))
         {
             reading.plan = value::text(&billing, "/result/currentTier").and_then(lines::plan_name);
+            let next_billing = value::time(&billing, "/result/nextBillingDate");
             if let Some(uc_core::MetricLine::Progress(line)) = reading.lines.first_mut() {
-                line.resets_at = value::time(&billing, "/result/nextBillingDate");
+                line.resets_at = next_billing;
             }
+            reading.plan_term = next_billing.map(|ends_at| PlanTerm::Stated {
+                ends_at,
+                checked_at: None,
+            });
         }
         Ok(reading)
     }
@@ -156,6 +162,10 @@ mod tests {
                     Some(lines::MONTH_MS)
                 )]
             )
+            .with_plan_term(Some(PlanTerm::Stated {
+                ends_at: Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap(),
+                checked_at: None,
+            }))
         );
         let requests = http.requests();
         assert_eq!(requests.len(), 2);

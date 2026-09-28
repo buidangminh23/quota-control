@@ -394,12 +394,28 @@ describe("popup", () => {
     expect(personal.querySelector("header")).not.toHaveClass("has-term");
   });
 
+  it("removes a card found on this computer without touching its login, and shows it again", async () => {
+    await renderApp();
+    act(() => useApp.setState({ screen: "accounts" }));
+    await screen.findByRole("heading", { name: "Tài khoản" });
+    fireEvent.click(screen.getByRole("button", { name: "Xóa Antigravity · minh@example.com" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(/Đăng nhập Antigravity trên máy vẫn giữ nguyên/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Xóa" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Xóa Antigravity · minh@example.com" })).not.toBeInTheDocument());
+    const add = screen.getByRole("list", { name: "Thêm tài khoản" });
+    fireEvent.click(within(add).getByRole("button", { name: "Antigravity" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Hiện lại tài khoản đã xóa" }));
+    expect(await screen.findByRole("button", { name: "Xóa Antigravity · minh@example.com" })).toBeInTheDocument();
+  });
+
   it("lists connected accounts with a Google sign-in, without chat buttons or a sessions list", async () => {
     await renderApp();
     act(() => useApp.setState({ screen: "accounts" }));
     expect(await screen.findByRole("heading", { name: "Tài khoản" })).toBeInTheDocument();
     expect(screen.getByText("Tự động từ Codex CLI trên máy này")).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /^Xóa (?!OpenRouter|Copilot)/ })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: /^Xóa (?!OpenRouter|Copilot|Antigravity)/ })).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Xóa Antigravity · minh@example.com" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Xóa OpenRouter/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Xóa Copilot/ })).toBeInTheDocument();
     expect(screen.getByText("Đăng nhập bằng GitHub")).toBeInTheDocument();
@@ -409,9 +425,10 @@ describe("popup", () => {
       .getAllByRole("listitem")
       .map((row) => within(row).getAllByRole("button")[0]?.getAttribute("aria-label"));
     expect(offered.slice(0, 2)).toEqual(["Claude", "Codex"]);
-    expect(offered).toEqual(expect.arrayContaining(["Copilot", "DeepSeek", "Gemini", "Ollama", "OpenRouter", "Perplexity", "Windsurf", "Zed"]));
+    expect(offered).toEqual(expect.arrayContaining(["Copilot", "DeepSeek", "Ollama", "OpenRouter", "Perplexity", "Windsurf", "Zed"]));
     expect(within(add).getByRole("button", { name: "Claude" })).toHaveTextContent("Google");
-    expect(within(add).getByRole("button", { name: "Gemini" })).toHaveTextContent("Google");
+    expect(within(add).getByRole("button", { name: "Antigravity" })).toHaveTextContent("Google");
+    expect(within(add).queryByRole("button", { name: "Gemini" })).not.toBeInTheDocument();
     expect(within(add).getByRole("button", { name: "Copilot" })).toHaveTextContent("GitHub");
     expect(within(add).getByRole("button", { name: "Ollama" })).toHaveTextContent("Google · GitHub · API key");
     expect(within(add).getByRole("button", { name: "Windsurf" })).toHaveTextContent("API key");

@@ -5,7 +5,8 @@
 //!
 //! Endpoints: `retrieveUserQuotaSummary` (the four pools: Gemini and third-party models, each with
 //! a 5-hour and a weekly window), falling back to `fetchAvailableModels` pooled per family on older
-//! accounts, and `loadCodeAssist` for the plan. An expired access token is renewed in memory with
+//! accounts, `loadCodeAssist` for the plan, and Google's userinfo endpoint for the account's email
+//! (both looked up twice a day, best-effort). An expired access token is renewed in memory with
 //! the app's public client; Google keeps the refresh token valid, so the app stays signed in.
 //!
 //! Signing in from Quota Control opens Google's sign-in page for the app's own client and comes back
@@ -33,6 +34,8 @@ pub(crate) struct Antigravity;
 const APP: &str = "Antigravity";
 const KEYRING_SERVICE: &str = "gemini";
 const KEYRING_USER: &str = "antigravity";
+/// Google's documented OAuth2 userinfo endpoint; the app's token carries the `userinfo.email` scope.
+const USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v2/userinfo";
 const BASES: [&str; 2] = [
     "https://daily-cloudcode-pa.googleapis.com",
     "https://cloudcode-pa.googleapis.com",
@@ -197,7 +200,8 @@ impl Service for Antigravity {
         let mut meters = summary_lines.unwrap_or_else(|| pooled_meters(&models));
         meters.extend(model_meters(&models));
         let plan = plan(context, &token).await;
-        Ok(Reading::new(plan, meters))
+        let email = email(context, &token).await;
+        Ok(Reading::new(plan, meters).with_account(email))
     }
 }
 
@@ -369,6 +373,39 @@ async fn plan(context: &FetchContext<'_>, token: &str) -> Option<String> {
     plan
 }
 
+/// The account's email from Google's userinfo endpoint, looked up twice a day; a failure leaves it
+/// empty and never affects the reading.
+async fn email(context: &FetchContext<'_>, token: &str) -> Option<String> {
+    if let Some(memo) = context.memo.get("antigravity.email", context.now).await {
+        return memo.as_str().map(str::to_string);
+    }
+    let request = HttpRequest::get(USERINFO_URL)
+        .bearer(token)
+        .header("Accept", "application/json");
+    let response = match http::send(context.http, request, APP).await {
+        Ok(response) if response.is_success() => response,
+        Ok(response) => {
+            tracing::debug!(target: "antigravity", "userinfo answered {}", response.status);
+            return None;
+        }
+        Err(error) => {
+            tracing::debug!(target: "antigravity", "userinfo unavailable: {}", error.message);
+            return None;
+        }
+    };
+    let body = http::parse(&response, APP).ok()?;
+    let email = value::text(&body, "/email").map(str::to_string);
+    context
+        .memo
+        .put(
+            "antigravity.email",
+            email.clone().map(Value::String).unwrap_or(Value::Null),
+            Some(context.now + Duration::hours(12)),
+        )
+        .await;
+    email
+}
+
 /// `Google AI Ultra` → `Ultra`; otherwise the first of Ultra, Pro and Free the name contains.
 fn format_plan(raw: Option<&str>) -> Option<String> {
     let raw = raw?.trim();
@@ -535,10 +572,17 @@ mod tests {
                 &format!("{}/v1internal:loadCodeAssist", BASES[0]),
                 200,
                 r#"{"paidTier":{"id":"g1-pro-tier","name":"Google AI Pro"},"currentTier":{"name":"Free"}}"#,
+            )
+            .on(
+                "GET",
+                USERINFO_URL,
+                200,
+                r#"{"id":"1","email":"minh@example.com","verified_email":true}"#,
             );
         let scope = context_at(&http, secret(now() + Duration::minutes(30)), now());
         let reading = Antigravity.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan.as_deref(), Some("Pro"));
+        assert_eq!(reading.account.as_deref(), Some("minh@example.com"));
         let rows = meters(&reading);
         assert_eq!(
             rows[4..].to_vec(),

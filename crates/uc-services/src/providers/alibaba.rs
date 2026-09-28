@@ -17,10 +17,13 @@
 //! `RUNNING`, else the first listed) gives the plan name. The quotas come from its
 //! `codingPlanQuotaInfo`, or from the answer's own when the instance has none: for each window,
 //! the requests used, the request limit and, when the answer includes it, the time it refills.
+//! The active instance's `endTime`, when it states one, is when the plan ends (the field CodexBar's
+//! `AlibabaCodingPlanUsageFetcher` reads from these instances); a time without a zone reads as
+//! UTC+8, the zone of both consoles' regions (Singapore and Beijing).
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use uc_core::{HttpRequest, Provider, SimpleProviderError, WidgetDescriptor};
+use uc_core::{HttpRequest, PlanTerm, Provider, SimpleProviderError, WidgetDescriptor};
 
 use crate::service::{ApiKeyHelp, Connection, FetchContext, Reading, Service};
 use crate::support::{http, lines, value};
@@ -274,7 +277,33 @@ fn parse(body: &Value) -> Result<Reading, SimpleProviderError> {
     )
     .and_then(Value::as_str)
     .and_then(lines::plan_name);
-    Ok(Reading::new(plan, rows))
+    let term = active.and_then(plan_end).map(|ends_at| PlanTerm::Stated {
+        ends_at,
+        checked_at: None,
+    });
+    Ok(Reading::new(plan, rows).with_plan_term(term))
+}
+
+/// The instance's `endTime`: epoch milliseconds or seconds, an RFC 3339 time, or a console time
+/// such as `2026-04-01 17:00`.
+fn plan_end(instance: &Value) -> Option<chrono::DateTime<chrono::Utc>> {
+    if let Some(text) = value::text(instance, "/endTime") {
+        let console_zone = chrono::FixedOffset::east_opt(8 * 3600)?;
+        for format in [
+            "%Y-%m-%d %H:%M",
+            "%Y-%m-%dT%H:%M",
+            "%Y-%m-%d %H:%M:%S%.f",
+            "%Y-%m-%dT%H:%M:%S%.f",
+        ] {
+            if let Ok(time) = chrono::NaiveDateTime::parse_from_str(text.trim(), format) {
+                return time
+                    .and_local_timezone(console_zone)
+                    .single()
+                    .map(|time| time.with_timezone(&chrono::Utc));
+            }
+        }
+    }
+    value::time(instance, "/endTime")
 }
 
 #[cfg(test)]
@@ -285,6 +314,33 @@ mod tests {
     use uc_core::ErrorCategory;
 
     const PRO_PLAN: &str = r#"{"data":{"codingPlanInstanceInfos":[{"planName":"pro"}],"codingPlanQuotaInfo":{"per5HourUsedQuota":52,"per5HourTotalQuota":1000,"per5HourQuotaNextRefreshTime":1700000300000,"perWeekUsedQuota":800,"perWeekTotalQuota":5000,"perBillMonthUsedQuota":1200,"perBillMonthTotalQuota":20000}}}"#;
+
+    #[test]
+    fn console_expiry_uses_utc_plus_eight_at_every_precision() {
+        let expected = Utc.with_ymd_and_hms(2026, 10, 1, 9, 0, 0).unwrap();
+        for text in [
+            "2026-10-01 17:00",
+            "2026-10-01T17:00",
+            "2026-10-01 17:00:00",
+            "2026-10-01T17:00:00",
+            "2026-10-01 17:00:00.000",
+            "2026-10-01T17:00:00.000",
+            "2026-10-01T09:00:00Z",
+            "2026-10-01T17:00:00+08:00",
+        ] {
+            assert_eq!(
+                plan_end(&serde_json::json!({"endTime": text})),
+                Some(expected),
+                "{text}"
+            );
+        }
+        for epoch in [expected.timestamp(), expected.timestamp_millis()] {
+            assert_eq!(
+                plan_end(&serde_json::json!({"endTime": epoch})),
+                Some(expected)
+            );
+        }
+    }
 
     #[tokio::test]
     async fn a_key_the_international_console_refuses_is_read_in_cn_beijing_and_remembered() {
@@ -339,6 +395,39 @@ mod tests {
             serde_json::from_slice::<Value>(requests[1].body.as_ref().unwrap()).unwrap(),
             json!({"queryCodingPlanInstanceInfoRequest":{"commodityCode":"sfm_codingplan_public_cn"}})
         );
+    }
+
+    #[test]
+    fn the_active_instance_states_when_the_plan_ends() {
+        // The instance shape of CodexBar's AlibabaCodingPlanProviderTests fixture.
+        let body = json!({"data":{"codingPlanInstanceInfos":[
+            {"planName":"Expired Starter","status":"EXPIRED","endTime":"2025-04-01 17:00"},
+            {"planName":"Coding Plan Lite","status":"VALID","endTime":"2026-10-01 17:00",
+             "codingPlanQuotaInfo":{"per5HourUsedQuota":1,"per5HourTotalQuota":10}}]}});
+        let reading = parse(&body).unwrap();
+        assert_eq!(reading.plan.as_deref(), Some("Coding Plan Lite"));
+        assert_eq!(
+            reading.plan_term,
+            Some(PlanTerm::Stated {
+                // 17:00 in the consoles' UTC+8.
+                ends_at: chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 10, 1, 9, 0, 0)
+                    .unwrap(),
+                checked_at: None,
+            })
+        );
+        let millis = json!({"data":{"codingPlanInstanceInfos":[{"planName":"pro",
+            "endTime":1790812800000i64}],
+            "codingPlanQuotaInfo":{"per5HourUsedQuota":1,"per5HourTotalQuota":10}}});
+        assert_eq!(
+            parse(&millis).unwrap().plan_term,
+            chrono::DateTime::from_timestamp(1790812800, 0).map(|ends_at| PlanTerm::Stated {
+                ends_at,
+                checked_at: None
+            })
+        );
+        let unstated = json!({"data":{"codingPlanInstanceInfos":[{"planName":"pro"}],
+            "codingPlanQuotaInfo":{"per5HourUsedQuota":1,"per5HourTotalQuota":10}}});
+        assert_eq!(parse(&unstated).unwrap().plan_term, None);
     }
 
     #[tokio::test]

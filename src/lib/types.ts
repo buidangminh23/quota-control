@@ -142,6 +142,8 @@ export interface ProviderSnapshot {
   displayName: string;
   plan?: string;
   planTerm?: PlanTerm;
+  /** The account's email as the provider's API reports it. */
+  account?: string;
   lines: MetricLine[];
   refreshedAt: string;
   usageHistory?: ProviderUsageHistory;
@@ -381,6 +383,8 @@ export interface ServiceEntry {
   signIn: SignInMethod[];
   detected: DetectedCard[];
   keys: SavedKey[];
+  /** Cards found on this computer that were removed here; the logins and keys themselves are untouched. */
+  dismissed: DetectedCard[];
 }
 
 /** Where a sign-in page opened: Google Chrome when it is installed, otherwise the default browser. */

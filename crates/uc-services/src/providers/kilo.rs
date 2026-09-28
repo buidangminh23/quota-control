@@ -11,7 +11,10 @@
 //! Credits row shows how much of all credit blocks is used (their amounts come in millionths of a
 //! dollar), the Kilo Pass row this period's usage of its base and bonus credits until the next
 //! billing date, and every credit block with a description or name gets a balance row of its own.
-//! The pass's `tier_19`, `tier_49` and `tier_199` read as the Starter, Pro and Expert plans.
+//! The pass's `tier_19`, `tier_49` and `tier_199` read as the Starter, Pro and Expert plans, and its
+//! `nextBillingAt` is the plan's renewal date. A second request, `GET https://api.kilo.ai/api/profile`
+//! with the same bearer token (the profile the Kilo CLI reads, `{"user": {"email", ...}}`), names
+//! the account; when it fails the card shows without the email.
 //!
 //! Signing in from Quota Control uses the device sign-in of the Kilo CLI: app.kilo.ai's page opens
 //! with the code in it, the user signs in there (Google, GitHub and the others Kilo offers) and
@@ -20,7 +23,7 @@
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use uc_core::{HttpRequest, Provider, SimpleProviderError, WidgetDescriptor};
+use uc_core::{HttpRequest, PlanTerm, Provider, SimpleProviderError, WidgetDescriptor};
 
 use crate::service::{
     ApiKeyHelp, Connection, FetchContext, Login, Reading, Roots, Secret, Service,
@@ -34,6 +37,8 @@ pub(crate) struct Kilo;
 
 const URL: &str = "https://app.kilo.ai/api/trpc/user.getCreditBlocks,kiloPass.getState";
 const EXPIRED: &str = "The Kilo login expired. Open Kilo once to renew it.";
+/// The account profile the Kilo CLI reads for the signed-in email.
+const PROFILE_URL: &str = "https://api.kilo.ai/api/profile";
 /// The device sign-in of the Kilo CLI: a code, and where the app asks whether it was approved.
 const DEVICE_CODES: &str = "https://api.kilo.ai/api/device-auth/codes";
 const DEVICE_TOKEN: &str = "https://api.kilo.ai/api/device-auth/token";
@@ -168,6 +173,7 @@ impl Service for Kilo {
             None,
         )];
         let mut plan = None;
+        let mut renews_at = None;
         if let Some(subscription) = payload(1)
             .and_then(|state| state.get("subscription"))
             .filter(|subscription| !subscription.is_null())
@@ -177,11 +183,12 @@ impl Service for Kilo {
             let base = value::number(subscription, "/currentPeriodBaseCreditsUsd")
                 .ok_or_else(|| http::decoding("Kilo"))?;
             let bonus = value::number(subscription, "/currentPeriodBonusCreditsUsd").unwrap_or(0.0);
+            renews_at = value::time(subscription, "/nextBillingAt");
             rows.push(lines::dollars(
                 "Kilo Pass",
                 used,
                 base + bonus,
-                value::time(subscription, "/nextBillingAt"),
+                renews_at,
                 Some(lines::MONTH_MS),
             ));
             plan = value::text(subscription, "/tier").map(|tier| {
@@ -202,7 +209,26 @@ impl Service for Kilo {
                 rows.push(lines::dollar_value(label, balance / 1_000_000.0));
             }
         }
-        Ok(Reading::new(plan, rows))
+        let account = http::json(
+            context.http,
+            HttpRequest::get(PROFILE_URL)
+                .bearer(key)
+                .header("Accept", "application/json"),
+            "Kilo",
+        )
+        .await
+        .ok()
+        .and_then(|profile| {
+            value::text(&profile, "/user/email")
+                .or_else(|| value::text(&profile, "/email"))
+                .map(str::to_string)
+        });
+        Ok(Reading::new(plan, rows)
+            .with_plan_term(renews_at.map(|ends_at| PlanTerm::Stated {
+                ends_at,
+                checked_at: None,
+            }))
+            .with_account(account))
     }
 }
 
@@ -398,10 +424,23 @@ mod tests {
 
     #[tokio::test]
     async fn credits_kilo_pass_and_block_balances_come_from_one_batched_get() {
-        let http = Scripted::new().on("GET", URL, 200, CREDITS_AND_PASS);
+        let http = Scripted::new().on("GET", URL, 200, CREDITS_AND_PASS).on(
+            "GET",
+            PROFILE_URL,
+            200,
+            r#"{"user":{"name":"Fixture","email":"fixture@example.com"},"organizations":[]}"#,
+        );
         let scope = context_at(&http, json!({"apiKey":"test"}), Utc::now());
         let reading = Kilo.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan.as_deref(), Some("Pro"));
+        assert_eq!(reading.account.as_deref(), Some("fixture@example.com"));
+        assert_eq!(
+            reading.plan_term,
+            value::as_time(&json!("2026-10-01T00:00:00Z")).map(|ends_at| PlanTerm::Stated {
+                ends_at,
+                checked_at: None,
+            })
+        );
         assert_eq!(
             reading.lines,
             vec![
@@ -421,6 +460,23 @@ mod tests {
             Some("Bearer test")
         );
         assert!(http.requests()[0].url.contains("batch=1"));
+        assert_eq!(
+            header(&http.requests()[1], "Authorization"),
+            Some("Bearer test")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_profile_leaves_only_the_email_out() {
+        let http =
+            Scripted::new()
+                .on("GET", URL, 200, CREDITS_AND_PASS)
+                .on("GET", PROFILE_URL, 500, "{}");
+        let scope = context_at(&http, json!({"apiKey":"test"}), Utc::now());
+        let reading = Kilo.fetch(&scope.context()).await.unwrap();
+        assert_eq!(reading.plan.as_deref(), Some("Pro"));
+        assert_eq!(reading.account, None);
+        assert_eq!(reading.lines.len(), 3);
     }
 
     #[tokio::test]

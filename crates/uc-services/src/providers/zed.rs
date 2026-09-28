@@ -21,7 +21,8 @@
 //!
 //! Endpoint: `GET https://cloud.zed.dev/client/users/me` with `Authorization: <user id> <token>`.
 //! A rejected token cannot be renewed here, since Zed has no refresh token: signing in to Zed again
-//! replaces it.
+//! replaces it. A paid plan or trial reads as ending with its `subscription_period`; the answer
+//! names the GitHub login but no email.
 
 use std::path::{Path, PathBuf};
 #[cfg(any(unix, test))]
@@ -179,7 +180,20 @@ fn reading(body: &Value) -> Option<Reading> {
         })
         .collect();
     let overdue = value::flag(plan, "/has_overdue_invoices") == Some(true);
-    Some(Reading::new(plan_label(plan), meters).with_warning(overdue.then(|| OVERDUE.to_string())))
+    let label = plan_label(plan);
+    // A paid plan or trial renews or ends with its subscription period; Zed Free's period only
+    // resets its quotas, so it states no end of the plan.
+    let term = resets_at
+        .filter(|_| label.as_deref().is_some_and(|label| label != "Free"))
+        .map(|ends_at| uc_core::PlanTerm::Stated {
+            ends_at,
+            checked_at: None,
+        });
+    Some(
+        Reading::new(label, meters)
+            .with_plan_term(term)
+            .with_warning(overdue.then(|| OVERDUE.to_string())),
+    )
 }
 
 /// One usage bucket (`{used, limit}`): a count meter against a positive limit, an "Unlimited"
@@ -721,6 +735,13 @@ mod tests {
     async fn unlimited_predictions_read_unlimited_and_per_token_requests_are_left_out() {
         let reading = fetch(200, PRO, secret()).await.unwrap();
         assert_eq!(reading.plan.as_deref(), Some("Pro"));
+        assert_eq!(
+            reading.plan_term,
+            Some(uc_core::PlanTerm::Stated {
+                ends_at: Utc.with_ymd_and_hms(2026, 10, 13, 8, 30, 0).unwrap(),
+                checked_at: None,
+            })
+        );
         assert_eq!(
             reading.lines,
             vec![MetricLine::Badge(BadgeLine {

@@ -1,11 +1,12 @@
 //! Windows, macOS and Linux: Hermes auth.json files or pasted Nous access token;
-//! GET /api/oauth/account at a trusted Nous portal host.
+//! GET /api/oauth/account at a trusted Nous portal host, which also names the plan, the account's
+//! `user.email` and the subscription's `current_period_end`.
 //! Hermes owns token renewal; this reader never refreshes rotating tokens.
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use uc_core::{HttpRequest, Provider, SimpleProviderError, WidgetDescriptor};
+use uc_core::{HttpRequest, PlanTerm, Provider, SimpleProviderError, WidgetDescriptor};
 
 use crate::service::{
     ApiKeyHelp, Connection, FetchContext, Login, Reading, Roots, Secret, Service,
@@ -187,6 +188,15 @@ impl Service for Nous {
         Ok(Reading::new(
             value::text(&body, "/subscription/plan").and_then(lines::plan_name),
             output,
+        )
+        .with_account(value::text(&body, "/user/email"))
+        .with_plan_term(
+            value::time(&body, "/subscription/current_period_end").map(|ends_at| {
+                PlanTerm::Stated {
+                    ends_at,
+                    checked_at: None,
+                }
+            }),
         ))
     }
 }
@@ -227,7 +237,7 @@ mod tests {
     }
     #[tokio::test]
     async fn exact_credits_and_request() {
-        let http=Scripted::new().on("GET",URL,200,r#"{"subscription":{"monthly_credits":100,"credits_remaining":75,"plan":"pro","current_period_end":"2026-10-01T00:00:00Z"},"paid_service_access":{"total_usable_credits":90}}"#);
+        let http=Scripted::new().on("GET",URL,200,r#"{"subscription":{"monthly_credits":100,"credits_remaining":75,"plan":"pro","current_period_end":"2026-10-01T00:00:00Z"},"paid_service_access":{"total_usable_credits":90},"user":{"email":"me@example.com"}}"#);
         let scope = context_at(&http, json!({"apiKey":"test"}), Utc::now());
         assert_eq!(
             Nous.fetch(&scope.context()).await.unwrap(),
@@ -244,6 +254,11 @@ mod tests {
                     lines::dollar_value("Balance", 90.0)
                 ]
             )
+            .with_account(Some("me@example.com"))
+            .with_plan_term(Some(PlanTerm::Stated {
+                ends_at: Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap(),
+                checked_at: None,
+            }))
         );
         let requests = http.requests();
         assert_eq!(requests.len(), 1);

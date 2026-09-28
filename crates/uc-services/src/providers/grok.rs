@@ -6,7 +6,7 @@
 //! credit pool, the pay-as-you-go cap and what pay-as-you-go spent (proto3 JSON: amounts wrapped as
 //! `{"val": n}`, zero values left out). The plan comes from the same answer when it names one, else
 //! from `GET /v1/settings` (then `GET /v1/user?include=subscription`), looked up twice a day, else
-//! from the access token's `tier` claim.
+//! from the access token's `tier` claim. The access token's `email` claim names the account.
 //!
 //! A renewed login is written back to `auth.json` and its refresh token may rotate, so the saved
 //! access token is used as it is and never renewed here: once it has expired, or Grok refuses it, the
@@ -166,7 +166,7 @@ impl Service for Grok {
                 .await
                 .or_else(|| token_tier(token)),
         };
-        Ok(Reading::new(plan, lines))
+        Ok(Reading::new(plan, lines).with_account(jwt::claim(token, &["email"])))
     }
 }
 
@@ -678,7 +678,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_pasted_cli_token_is_read_like_the_login_and_asks_for_a_fresh_copy_when_refused() {
-        let token = access_token(json!({}));
+        let token = access_token(json!({ "email": "fixture@example.com" }));
         let http = Scripted::new()
             .on("GET", CREDITS, 200, &credits(captured()))
             .on(
@@ -690,6 +690,7 @@ mod tests {
         let scope = context_at(&http, json!({ "apiKey": token }), now());
         let reading = Grok.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan.as_deref(), Some("SuperGrok"));
+        assert_eq!(reading.account.as_deref(), Some("fixture@example.com"));
         assert_eq!(
             header(&http.requests()[0], "Authorization"),
             Some(format!("Bearer {token}").as_str())

@@ -350,6 +350,8 @@ pub struct Reading {
     pub plan: Option<String>,
     pub lines: Vec<MetricLine>,
     pub plan_term: Option<PlanTerm>,
+    /// The account's email when the service's API names it; the card shows it under the title.
+    pub account: Option<String>,
     /// A soft notice shown on a card that did refresh.
     pub warning: Option<String>,
 }
@@ -362,6 +364,7 @@ impl Reading {
                 .filter(|plan| !plan.is_empty()),
             lines,
             plan_term: None,
+            account: None,
             warning: None,
         }
     }
@@ -371,9 +374,31 @@ impl Reading {
         self
     }
 
+    /// Keep only a value that reads as an email address, so a user id never shows as one.
+    pub fn with_account(mut self, account: Option<impl Into<String>>) -> Self {
+        self.account = account
+            .map(|account| account.into().trim().to_string())
+            .filter(|account| is_email(account));
+        self
+    }
+
     pub fn with_warning(mut self, warning: Option<String>) -> Self {
         self.warning = warning;
         self
+    }
+}
+
+fn is_email(value: &str) -> bool {
+    match value.split_once('@') {
+        Some((user, domain)) => {
+            !user.is_empty()
+                && domain.contains('.')
+                && !domain.starts_with('.')
+                && !domain.ends_with('.')
+                && !value.chars().any(char::is_whitespace)
+                && !domain.contains('@')
+        }
+        None => false,
     }
 }
 
@@ -434,6 +459,23 @@ pub trait Service: Send + Sync + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reading_keeps_only_an_email_as_its_account() {
+        let account = |value: &str| Reading::default().with_account(Some(value)).account;
+        assert_eq!(
+            account(" dev@example.com ").as_deref(),
+            Some("dev@example.com")
+        );
+        assert_eq!(account("user_2abc"), None);
+        assert_eq!(account("dev@localhost"), None);
+        assert_eq!(account("dev@example.com extra"), None);
+        assert_eq!(account("@example.com"), None);
+        assert_eq!(
+            Reading::default().with_account(None::<String>).account,
+            None
+        );
+    }
 
     #[test]
     fn a_token_keeps_no_inner_spaces() {

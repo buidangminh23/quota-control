@@ -26,8 +26,11 @@ export interface ServiceCardRow {
   /** An app's login, an environment key, a saved key, or an account signed in to here with Google or GitHub. */
   source: "login" | "env" | "key" | SignInMethod;
   detail: string;
-  /** Only keys and sign-ins saved here can be removed here; logins and environment keys belong to their owners. */
-  removable: boolean;
+}
+
+/** A card found on this computer: removing it only stops Quota Control reading it. */
+function isFound(row: ServiceCardRow): row is ServiceCardRow & { source: "login" | "env" } {
+  return row.source === "login" || row.source === "env";
 }
 
 function titleOf(service: ServiceEntry, label: string | null): string {
@@ -41,10 +44,10 @@ export function serviceCardRows(services: readonly ServiceEntry[]): ServiceCardR
   for (const service of services) {
     for (const found of service.detected) {
       const env = service.keyEnv.includes(found.origin);
-      rows.push({ id: found.id, service, title: titleOf(service, found.label), source: env ? "env" : "login", detail: found.origin, removable: false });
+      rows.push({ id: found.id, service, title: titleOf(service, found.label), source: env ? "env" : "login", detail: found.origin });
     }
     for (const key of service.keys) {
-      rows.push({ id: key.id, service, title: titleOf(service, key.label), source: key.signIn ?? "key", detail: key.hint, removable: true });
+      rows.push({ id: key.id, service, title: titleOf(service, key.label), source: key.signIn ?? "key", detail: key.hint });
     }
   }
   return rows.sort((a, b) => a.title.localeCompare(b.title));
@@ -55,8 +58,16 @@ export function ServiceRow({ row, runtime, messages, language }: { row: ServiceC
   const notice = status === "error" ? headerNotice(runtime, language) : null;
   const signedIn = row.source === "google" || row.source === "github";
   const remove = async () => {
+    const found = isFound(row);
     const confirmed = await confirmAction(
-      signedIn
+      found
+        ? {
+            title: messages.accounts.dismissTitle(row.title),
+            message: messages.accounts.dismissMessage(row.source, row.detail, row.service.name),
+            confirmLabel: messages.accounts.remove,
+            cancelLabel: messages.accounts.cancel,
+          }
+        : signedIn
         ? {
             title: messages.accounts.removeTitle(row.title),
             message: messages.accounts.removeMessage,
@@ -72,7 +83,7 @@ export function ServiceRow({ row, runtime, messages, language }: { row: ServiceC
     );
     if (!confirmed) return;
     try {
-      await backend().removeApiKey(row.id);
+      await (found ? backend().dismissDetectedCard(row.id) : backend().removeApiKey(row.id));
       await reloadServices();
     } catch (error) {
       showNotice(messages.accounts.failed(errorText(error, language)), "notice");
@@ -93,11 +104,9 @@ export function ServiceRow({ row, runtime, messages, language }: { row: ServiceC
           {row.service.startsHidden && !runtime ? messages.accounts.hiddenNote : messages.accounts.status(status)}
         </span>
       </span>
-      {row.removable ? (
-        <button type="button" className="uc-icon-button" aria-label={`${messages.accounts.remove} ${row.title}`} onClick={() => void remove()} {...tooltipProps(messages.accounts.remove)}>
-          <CloseIcon size={11} />
-        </button>
-      ) : null}
+      <button type="button" className="uc-icon-button" aria-label={`${messages.accounts.remove} ${row.title}`} onClick={() => void remove()} {...tooltipProps(messages.accounts.remove)}>
+        <CloseIcon size={11} />
+      </button>
     </div>
   );
 }
@@ -150,11 +159,30 @@ function PanelHead({ brand, name, messages, onBack }: { brand: string; name: str
   );
 }
 
+/** Bring back the cards of `service` found on this computer that were removed here. */
+function RestoreDismissed({ service, messages, language }: { service: ServiceEntry; messages: Messages; language: Language }) {
+  if (service.dismissed.length === 0) return null;
+  const restore = async () => {
+    try {
+      await backend().restoreDismissedCards(service.id);
+      await reloadServices();
+    } catch (error) {
+      showNotice(messages.accounts.failed(errorText(error, language)), "notice");
+    }
+  };
+  return (
+    <Button onClick={() => void restore()} className="is-small is-wide">
+      {messages.accounts.restoreDismissed(service.dismissed.length)}
+    </Button>
+  );
+}
+
 /** A service that only reads another app's login on this computer: signing in to that app adds it. */
-export function ServiceAppNote({ service, messages, onBack }: { service: ServiceEntry; messages: Messages; onBack: () => void }) {
+export function ServiceAppNote({ service, messages, language, onBack }: { service: ServiceEntry; messages: Messages; language: Language; onBack: () => void }) {
   return (
     <div className="uc-card uc-add-account">
       <PanelHead brand={service.id} name={service.name} messages={messages} onBack={onBack} />
+      <RestoreDismissed service={service} messages={messages} language={language} />
       <p className="uc-settings-note is-flush">{messages.accounts.appLoginNote(service.name, service.loginFrom ?? service.name)}</p>
     </div>
   );
@@ -182,6 +210,7 @@ export function ServicePanel({
   return (
     <div className="uc-card uc-add-account">
       <PanelHead brand={service.id} name={service.name} messages={messages} onBack={onBack} />
+      <RestoreDismissed service={service} messages={messages} language={language} />
       {ways.length > 1 ? (
         <div className="uc-capsule-picker" role="radiogroup" aria-label={messages.accounts.methodsLabel}>
           {ways.map((candidate) => (

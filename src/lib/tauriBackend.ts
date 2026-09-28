@@ -103,6 +103,14 @@ export class TauriBackend implements Backend {
     return invoke("remove_api_key", { keyId });
   }
 
+  dismissDetectedCard(cardId: string): Promise<void> {
+    return invoke("dismiss_detected_card", { cardId });
+  }
+
+  restoreDismissedCards(serviceId: string): Promise<void> {
+    return invoke("restore_dismissed_cards", { serviceId });
+  }
+
   listChatSessions(): Promise<ChatSession[]> {
     return invoke("list_chat_sessions");
   }

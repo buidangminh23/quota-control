@@ -35,7 +35,8 @@
 //! refuses it there, the card reads GitHub's documented billing API instead: `GET /user` for the
 //! login, then `GET /users/{login}/settings/billing/premium_request/usage?year=&month=` for this
 //! month, whose `usageItems` add up to the premium requests used (`grossQuantity`) and what they
-//! cost (`netAmount`, US dollars). That API takes classic tokens only and covers plans the user pays
+//! cost (`netAmount`, US dollars). The public `email` of that `/user` answer, when the user shows
+//! one, names the account. That API takes classic tokens only and covers plans the user pays
 //! for; a seat an organization pays for is billed to the organization.
 
 use std::collections::HashMap;
@@ -351,7 +352,8 @@ async fn premium_request_usage(
             lines::count_value(PREMIUM_REQUESTS, sum("grossQuantity").max(0.0), "requests"),
             lines::dollar_value(SPEND, sum("netAmount").max(0.0)),
         ],
-    ))
+    )
+    .with_account(value::text(&user, "/email")))
 }
 
 /// The tokens a login holds, as `(token, origin)` in the order they were found.
@@ -1197,7 +1199,12 @@ mod tests {
     async fn a_refused_pasted_token_reads_this_months_premium_requests_from_billing() {
         let http = Scripted::new()
             .on("GET", USAGE_URL, 404, "{}")
-            .on("GET", USER_URL, 200, r#"{"login":"octocat"}"#)
+            .on(
+                "GET",
+                USER_URL,
+                200,
+                r#"{"login":"octocat","email":"octocat@example.com"}"#,
+            )
             .on(
                 "GET",
                 BILLING,
@@ -1221,6 +1228,7 @@ mod tests {
                 lines::dollar_value(SPEND, 0.8),
             ]
         );
+        assert_eq!(reading.account.as_deref(), Some("octocat@example.com"));
         let requests = http.requests();
         assert_eq!(
             header(&requests[2], "Authorization"),

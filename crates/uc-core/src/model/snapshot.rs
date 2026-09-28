@@ -42,6 +42,9 @@ pub struct ProviderSnapshot {
     /// The plan's paid period, when the account states or implies one.
     #[serde(rename = "planTerm", default, skip_serializing_if = "Option::is_none")]
     pub plan_term: Option<PlanTerm>,
+    /// The signed-in account's email as the provider reports it, when its API names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     pub lines: Vec<MetricLine>,
     #[serde(rename = "refreshedAt")]
     pub refreshed_at: DateTime<Utc>,
@@ -64,6 +67,7 @@ impl ProviderSnapshot {
             display_name: provider.display_name.clone(),
             plan,
             plan_term: None,
+            account: None,
             lines,
             refreshed_at,
             usage_history: None,
@@ -79,6 +83,11 @@ impl ProviderSnapshot {
 
     pub fn with_plan_term(mut self, term: Option<PlanTerm>) -> Self {
         self.plan_term = term;
+        self
+    }
+
+    pub fn with_account(mut self, account: Option<String>) -> Self {
+        self.account = account;
         self
     }
 
@@ -99,6 +108,7 @@ impl ProviderSnapshot {
             display_name: provider.display_name.clone(),
             plan: None,
             plan_term: None,
+            account: None,
             lines: vec![MetricLine::Badge(BadgeLine {
                 label: MetricLine::ERROR_BADGE_LABEL.to_string(),
                 text: message.into(),

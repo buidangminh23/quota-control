@@ -253,6 +253,60 @@ impl KeyStore {
         self.save_registry(&registry)
     }
 
+    /// Cards found on this computer (another app's login, an environment key) that the user
+    /// removed here. They are kept apart from the saved keys, so an older version still reads
+    /// `keys.json`, and the logins themselves are never touched.
+    pub fn dismissed(&self) -> Result<Vec<String>> {
+        let _lock = storage::lock(&self.root)?;
+        Ok(self.dismissed_list()?.ids)
+    }
+
+    /// Stop showing the found card `id`.
+    pub fn dismiss(&self, id: &str) -> Result<()> {
+        if !valid_card_id(id) {
+            return Err(AccountError::InvalidAccount);
+        }
+        let _lock = storage::lock(&self.root)?;
+        let mut list = self.dismissed_list()?;
+        if list.ids.iter().any(|known| known == id) {
+            return Ok(());
+        }
+        if list.ids.len() >= MAX_DISMISSED {
+            list.ids.remove(0);
+        }
+        list.ids.push(id.into());
+        self.save_dismissed(&list)
+    }
+
+    /// Show the found cards `ids` again.
+    pub fn restore(&self, ids: &[String]) -> Result<()> {
+        let _lock = storage::lock(&self.root)?;
+        let mut list = self.dismissed_list()?;
+        let before = list.ids.len();
+        list.ids.retain(|id| !ids.contains(id));
+        if list.ids.len() == before {
+            return Ok(());
+        }
+        self.save_dismissed(&list)
+    }
+
+    fn dismissed_list(&self) -> Result<DismissedList> {
+        let Some(bytes) = storage::read(&self.root.join(DISMISSED_FILE), 256 * 1024)? else {
+            return Ok(DismissedList::default());
+        };
+        let list: DismissedList =
+            serde_json::from_slice(&bytes).map_err(|_| AccountError::InvalidRegistry)?;
+        if list.version != 1 || list.ids.iter().any(|id| !valid_card_id(id)) {
+            return Err(AccountError::InvalidRegistry);
+        }
+        Ok(list)
+    }
+
+    fn save_dismissed(&self, list: &DismissedList) -> Result<()> {
+        let bytes = serde_json::to_vec_pretty(list).map_err(|_| AccountError::Storage)?;
+        storage::write_atomic(&self.root.join(DISMISSED_FILE), &bytes)
+    }
+
     fn secret_path(&self, id: &str, revision: Uuid) -> PathBuf {
         self.root
             .join("credentials")
@@ -292,6 +346,31 @@ impl KeyStore {
         let bytes = serde_json::to_vec_pretty(registry).map_err(|_| AccountError::Storage)?;
         storage::write_atomic(&self.root.join("keys.json"), &bytes)
     }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DismissedList {
+    version: u32,
+    ids: Vec<String>,
+}
+
+impl Default for DismissedList {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            ids: Vec::new(),
+        }
+    }
+}
+
+const DISMISSED_FILE: &str = "dismissed.json";
+const MAX_DISMISSED: usize = 512;
+
+/// A found card's id: `<service>@<64 lowercase hex digits>` for any valid service.
+fn valid_card_id(id: &str) -> bool {
+    id.split_once('@')
+        .is_some_and(|(service, _)| validate(service, "x").is_ok() && valid_id(id, service))
 }
 
 /// `<service>@<64 lowercase hex digits>`.
@@ -516,6 +595,35 @@ mod tests {
         let huge = json!({"token": "t".repeat(MAX_DOCUMENT_BYTES)});
         assert!(add(&id, "copilot", "github", &huge).is_err());
         assert!(store.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn dismissed_cards_are_kept_apart_from_the_keys_and_restored() {
+        let (store, _dir) = store();
+        let key = store.add("zai", "Z.ai", "key-1", &Value::Null).unwrap();
+        let gemini = login_id("gemini", 'a');
+        let copilot = login_id("copilot", 'b');
+        assert!(store.dismissed().unwrap().is_empty());
+        store.dismiss(&gemini).unwrap();
+        store.dismiss(&gemini).unwrap();
+        store.dismiss(&copilot).unwrap();
+        assert_eq!(
+            store.dismissed().unwrap(),
+            vec![gemini.clone(), copilot.clone()]
+        );
+        assert_eq!(store.list().unwrap(), vec![key]);
+        let registry = std::fs::read_to_string(store.root.join("keys.json")).unwrap();
+        assert!(!registry.contains(&gemini));
+        store.restore(std::slice::from_ref(&gemini)).unwrap();
+        assert_eq!(store.dismissed().unwrap(), vec![copilot]);
+        assert!(matches!(
+            store.dismiss("gemini@abc"),
+            Err(AccountError::InvalidAccount)
+        ));
+        assert!(matches!(
+            store.dismiss("../x@0000"),
+            Err(AccountError::InvalidAccount)
+        ));
     }
 
     #[test]

@@ -357,6 +357,10 @@ export interface AccountsMessages {
   removeKeyTitle(label: string): string;
   removeKeyMessage: string;
   removeKeyConfirm: string;
+  dismissTitle(label: string): string;
+  /** Why removing a found card leaves the login alone: `kind` says whether it is an app's login or an environment key. */
+  dismissMessage(kind: "login" | "env", origin: string, service: string): string;
+  restoreDismissed(count: number): string;
 }
 
 export interface StripMessages {

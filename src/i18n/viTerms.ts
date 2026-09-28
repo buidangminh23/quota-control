@@ -524,8 +524,6 @@ const EXACT: Readonly<Record<string, string>> = {
   "This CodeBuddy account has no active credit packages.": "Tài khoản CodeBuddy này không có gói tín dụng nào đang hoạt động.",
   "This GitHub Copilot login holds no GitHub token. Sign in to Copilot again.":
     "Phiên đăng nhập GitHub Copilot này không có token GitHub. Hãy đăng nhập lại Copilot.",
-  "This Google account has no Gemini Code Assist project yet. Run gemini once to set it up.":
-    "Tài khoản Google này chưa có dự án Gemini Code Assist. Hãy chạy gemini một lần để thiết lập.",
   "This key cannot read the team's prepaid credit.": "Key này không xem được tín dụng trả trước của nhóm.",
   "This key cannot read the team's usage, so Spend This Month is missing.":
     "Key này không xem được mức dùng của nhóm nên thiếu Chi tiêu tháng này.",

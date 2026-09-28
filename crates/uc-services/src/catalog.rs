@@ -18,6 +18,11 @@ pub fn services() -> &'static [&'static dyn Service] {
     providers::ALL
 }
 
+/// Services Quota Control no longer reads. Their saved sign-ins and keys are forgotten on start:
+/// Google stopped answering the Gemini CLI's client for personal accounts, and Antigravity reads the
+/// same accounts' Gemini quota.
+pub const RETIRED_SERVICES: &[&str] = &["gemini"];
+
 pub fn service(id: &str) -> Option<&'static dyn Service> {
     services()
         .iter()
