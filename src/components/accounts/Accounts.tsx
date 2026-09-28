@@ -1,7 +1,7 @@
 /**
- * The Accounts screen: one list of every connected account (Claude and Codex first, each with a
- * button that opens its product's official site in the app, then every other AI provider connected
- * here or read from an app's login on this computer, each with its own live status), and adding an
+ * The Accounts screen: one list of every connected account (Claude and Codex first, then every
+ * other AI provider connected here or read from an app's login on this computer, each with its own
+ * live status), and adding an
  * account of any provider from one list (Claude and Codex through a Google sign-in in the browser;
  * the other services every way they connect: a Google or GitHub sign-in in the browser, an API key
  * or a session cookie, or signing in to the app whose login they read). Claude Code and the Codex
@@ -13,17 +13,16 @@ import { backend } from "@/lib/backend";
 import type { AccountProvider, ConnectedAccount, ProviderRuntimeState } from "@/lib/types";
 import { brandName, headerNotice } from "@/model/providerText";
 import { useLanguage } from "@/state/hooks";
-import { cancelAccountLogin, loginBrandIn, openChatFor, reloadAccounts, reloadServices, reopenAccountLogin, showNotice, startAccountLogin, useApp } from "@/state/store";
+import { cancelAccountLogin, loginBrandIn, reloadAccounts, reloadServices, reopenAccountLogin, showNotice, startAccountLogin, useApp } from "@/state/store";
 import { Button } from "../ui/controls";
 import { confirmAction } from "../ui/dialog";
-import { ChatIcon, CloseIcon, PlusIcon, Spinner } from "../ui/icons";
+import { CloseIcon, PlusIcon, Spinner } from "../ui/icons";
 import { ProviderMark } from "../ui/ProviderMark";
 import { tooltipProps, truncatedTooltipProps } from "../ui/tooltip";
 import { addKind, connectsHere, isAddable, matchesProvider, ServiceAppNote, ServicePanel, serviceCardRows, ServiceRow } from "./Services";
 import { errorText, statusOf } from "./status";
 
 const PROVIDERS: readonly AccountProvider[] = ["claude", "codex"];
-const CHAT_PRODUCTS: Record<AccountProvider, string> = { claude: "Claude", codex: "ChatGPT" };
 const CLI_PRODUCTS: Record<AccountProvider, string> = { claude: "Claude Code", codex: "Codex CLI" };
 
 /** `Claude · Công ty`, or just the brand when the label is the default CLI name. */
@@ -51,8 +50,6 @@ function AccountRow({ account, runtime, messages, language }: { account: Connect
       showNotice(messages.accounts.failed(errorText(error, language)), "notice");
     }
   };
-  const chat = () =>
-    openChatFor(account.provider, account.label).catch(() => showNotice(messages.accounts.chatOpenFailed, "notice"));
   return (
     <div className="uc-list-row is-account">
       <span className="uc-list-mark">
@@ -68,9 +65,6 @@ function AccountRow({ account, runtime, messages, language }: { account: Connect
           {messages.accounts.status(status)}
         </span>
       </span>
-      <button type="button" className="uc-icon-button" aria-label={messages.dashboard.openChat(CHAT_PRODUCTS[account.provider])} onClick={() => void chat()} {...tooltipProps(messages.dashboard.openChat(CHAT_PRODUCTS[account.provider]))}>
-        <ChatIcon size={13} />
-      </button>
       {account.credentialMode === "cli" ? null : (
         <button type="button" className="uc-icon-button" aria-label={`${messages.accounts.remove} ${title}`} onClick={() => void remove()} {...tooltipProps(messages.accounts.remove)}>
           <CloseIcon size={11} />

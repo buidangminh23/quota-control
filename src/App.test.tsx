@@ -394,7 +394,7 @@ describe("popup", () => {
     expect(personal.querySelector("header")).not.toHaveClass("has-term");
   });
 
-  it("lists connected accounts with a Google sign-in and a chat button each, without a sessions list", async () => {
+  it("lists connected accounts with a Google sign-in, without chat buttons or a sessions list", async () => {
     await renderApp();
     act(() => useApp.setState({ screen: "accounts" }));
     expect(await screen.findByRole("heading", { name: "Tài khoản" })).toBeInTheDocument();
@@ -422,7 +422,7 @@ describe("popup", () => {
     fireEvent.click(within(add).getByRole("button", { name: "Claude" }));
     expect(screen.getByRole("button", { name: "Đăng nhập bằng Google" })).toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Mở Claude trong ứng dụng" }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: /^Mở (Claude|ChatGPT) trong ứng dụng$/ })).not.toBeInTheDocument();
     expect(screen.queryByText("Phiên chat trong ứng dụng")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Phiên (Claude|ChatGPT) mới/ })).not.toBeInTheDocument();
   });

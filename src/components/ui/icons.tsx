@@ -204,19 +204,6 @@ export function PersonIcon(props: IconProps) {
   );
 }
 
-export function ChatIcon(props: IconProps) {
-  return (
-    <Svg {...props}>
-      <path
-        d="M3 3.2h10a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7.2L4.4 13.4V11.2H3a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1z"
-        stroke="currentColor"
-        strokeWidth="1.3"
-        strokeLinejoin="round"
-      />
-    </Svg>
-  );
-}
-
 export function PlusIcon(props: IconProps) {
   return (
     <Svg {...props}>
