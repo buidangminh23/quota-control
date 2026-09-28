@@ -439,6 +439,12 @@ export const vi: Messages = {
     removeKeyTitle: (label) => `Xóa key ${label}?`,
     removeKeyMessage: "API key đã lưu sẽ bị xóa khỏi máy, thẻ của nó biến mất.",
     removeKeyConfirm: "Xóa key",
+    dismissTitle: (label) => `Xóa ${label}?`,
+    dismissMessage: (kind, origin, service) =>
+      kind === "env"
+        ? `Quota Control thôi đọc key trong ${origin}. Biến môi trường vẫn giữ nguyên. Muốn hiện lại, chọn ${service} ở mục Thêm tài khoản.`
+        : `Quota Control thôi đọc tài khoản này. Đăng nhập ${origin} trên máy vẫn giữ nguyên. Muốn hiện lại, chọn ${service} ở mục Thêm tài khoản.`,
+    restoreDismissed: (count) => (count === 1 ? "Hiện lại tài khoản đã xóa" : `Hiện lại ${count} tài khoản đã xóa`),
   },
   strip: {
     tooltipEmpty: "Quota Control — chưa có chỉ số nào có dữ liệu",

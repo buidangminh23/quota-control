@@ -401,6 +401,12 @@ export const en: Messages = {
     removeKeyTitle: (label) => `Remove the key ${label}?`,
     removeKeyMessage: "The saved API key is removed from this computer and its card disappears.",
     removeKeyConfirm: "Remove key",
+    dismissTitle: (label) => `Remove ${label}?`,
+    dismissMessage: (kind, origin, service) =>
+      kind === "env"
+        ? `Quota Control stops reading the key in ${origin}. The environment variable itself is not changed. To show it again, pick ${service} under Add account.`
+        : `Quota Control stops reading this account. The ${origin} login on this computer stays signed in. To show it again, pick ${service} under Add account.`,
+    restoreDismissed: (count) => (count === 1 ? "Show the removed account again" : `Show the ${count} removed accounts again`),
   },
   strip: {
     tooltipEmpty: "Quota Control — no metric has data yet",

@@ -184,6 +184,8 @@ pub struct ServiceEntry {
     detected: Vec<Detected>,
     /// Keys saved in Quota Control; the keys themselves never leave the store.
     keys: Vec<KeyRecord>,
+    /// Logins and environment keys found here that the user removed from Quota Control.
+    dismissed: Vec<Detected>,
 }
 
 #[tauri::command]
@@ -206,6 +208,12 @@ fn service_entries(cards: &uc_api::ServiceCards) -> Vec<ServiceEntry> {
                 .saved
                 .iter()
                 .filter(|record| record.service == info.id)
+                .cloned()
+                .collect(),
+            dismissed: cards
+                .dismissed
+                .iter()
+                .filter(|found| found.service == info.id)
                 .cloned()
                 .collect(),
             info,
@@ -311,6 +319,63 @@ pub async fn remove_api_key(
     let _changes = accounts.changes.lock().await;
     let keys = accounts.keys();
     tauri::async_runtime::spawn_blocking(move || keys.remove(&key_id))
+        .await
+        .map_err(safe_error)?
+        .map_err(safe_error)?;
+    rescan_services(&accounts).await;
+    service.replace_runtimes(accounts.runtimes()?, &app)
+}
+
+/// Remove a card found on this computer (another app's login, an environment key) from Quota
+/// Control. The login or key itself is left alone; the card stays away until restored.
+#[tauri::command]
+pub async fn dismiss_detected_card(
+    app: AppHandle,
+    accounts: State<'_, Accounts>,
+    service: State<'_, BackendService>,
+    card_id: String,
+) -> Result<(), String> {
+    let _changes = accounts.changes.lock().await;
+    if !accounts
+        .services
+        .lock()
+        .detected
+        .iter()
+        .any(|found| found.id == card_id)
+    {
+        return Err("This card is not one found on this computer".into());
+    }
+    let keys = accounts.keys();
+    tauri::async_runtime::spawn_blocking(move || keys.dismiss(&card_id))
+        .await
+        .map_err(safe_error)?
+        .map_err(safe_error)?;
+    rescan_services(&accounts).await;
+    service.replace_runtimes(accounts.runtimes()?, &app)
+}
+
+/// Show again every card of `service_id` found on this computer that was removed.
+#[tauri::command]
+pub async fn restore_dismissed_cards(
+    app: AppHandle,
+    accounts: State<'_, Accounts>,
+    service: State<'_, BackendService>,
+    service_id: String,
+) -> Result<(), String> {
+    let _changes = accounts.changes.lock().await;
+    let ids: Vec<String> = accounts
+        .services
+        .lock()
+        .dismissed
+        .iter()
+        .filter(|found| found.service == service_id)
+        .map(|found| found.id.clone())
+        .collect();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let keys = accounts.keys();
+    tauri::async_runtime::spawn_blocking(move || keys.restore(&ids))
         .await
         .map_err(safe_error)?
         .map_err(safe_error)?;
@@ -617,8 +682,8 @@ mod tests {
             Ok(LoginTarget::Account(ProviderKind::Claude))
         ));
         assert!(matches!(
-            login_target("gemini"),
-            Ok(LoginTarget::Service(known)) if known.id() == "gemini"
+            login_target("antigravity"),
+            Ok(LoginTarget::Service(known)) if known.id() == "antigravity"
         ));
         assert!(login_target("../accounts").is_err());
         assert!(login_target("").is_err());

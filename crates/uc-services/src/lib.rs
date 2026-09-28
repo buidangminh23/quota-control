@@ -18,8 +18,8 @@ pub mod support;
 pub(crate) mod testing;
 
 pub use catalog::{
-    Detected, DetectedSource, ServiceInfo, detect, identity_hash, login_card_id, runtimes, service,
-    service_infos, services,
+    Detected, DetectedSource, RETIRED_SERVICES, ServiceInfo, detect, identity_hash, login_card_id,
+    runtimes, service, service_infos, services,
 };
 pub use runtime::{CredentialSource, ServiceRuntime};
 pub use service::{

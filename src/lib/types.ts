@@ -381,6 +381,8 @@ export interface ServiceEntry {
   signIn: SignInMethod[];
   detected: DetectedCard[];
   keys: SavedKey[];
+  /** Cards found on this computer that were removed here; the logins and keys themselves are untouched. */
+  dismissed: DetectedCard[];
 }
 
 /** Where a sign-in page opened: Google Chrome when it is installed, otherwise the default browser. */

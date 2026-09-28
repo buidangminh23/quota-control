@@ -190,7 +190,7 @@ function AddAccount({ messages, language }: { messages: Messages; language: Lang
     return connectsHere(service) ? (
       <ServicePanel key={service.id} service={service} messages={messages} language={language} onBack={back} onSaved={saved} />
     ) : (
-      <ServiceAppNote service={service} messages={messages} onBack={back} />
+      <ServiceAppNote service={service} messages={messages} language={language} onBack={back} />
     );
   }
   const options: AddOption[] = [
