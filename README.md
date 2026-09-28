@@ -6,7 +6,7 @@ AI usage limits, reset countdowns and token history in your Windows/Linux system
 
 ## Preview
 
-https://github.com/buidangminh23/quota-control/releases/download/v0.3.9/Quota-Control-PR-16x9-4K60.mp4
+https://github.com/user-attachments/assets/05afff30-24bb-41df-a1bd-a7db58bdaac7
 
 **Usage at a glance in the system tray**
 
