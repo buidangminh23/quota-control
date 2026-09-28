@@ -142,6 +142,8 @@ export interface ProviderSnapshot {
   displayName: string;
   plan?: string;
   planTerm?: PlanTerm;
+  /** The account's email as the provider's API reports it. */
+  account?: string;
   lines: MetricLine[];
   refreshedAt: string;
   usageHistory?: ProviderUsageHistory;
