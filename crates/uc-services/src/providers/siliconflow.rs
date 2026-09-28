@@ -16,6 +16,7 @@
 //! the card warns. SiliconFlow is retiring this endpoint (the China site's API reference no longer
 //! lists it, and clients have reported HTTP 410 since August 2026), so a 410, or balances left
 //! blank the way it blanked the profile fields, reads as a balance that is no longer reported.
+//! The answer's documented `email` names the account when it is not blank.
 
 use async_trait::async_trait;
 use chrono::Duration;
@@ -149,7 +150,9 @@ impl Service for SiliconFlow {
             .ok_or_else(|| http::decoding(NAME))?;
         let balances = balances(data, site)?;
         let warning = (balances.total < 0.0).then(|| overdue(site.currency, -balances.total));
-        Ok(Reading::new(None, balances.rows(site.currency)).with_warning(warning))
+        Ok(Reading::new(None, balances.rows(site.currency))
+            .with_account(value::text(data, "/email"))
+            .with_warning(warning))
     }
 }
 
@@ -353,6 +356,16 @@ mod tests {
     async fn fetch(http: &Scripted) -> Result<Reading, SimpleProviderError> {
         let scope = context_at(http, secret(), now());
         SiliconFlow.fetch(&scope.context()).await
+    }
+
+    #[tokio::test]
+    async fn the_documented_email_names_the_account_and_a_blank_one_is_left_out() {
+        let answer = GLOBAL_ANSWER.replace(r#""email":"""#, r#""email":"minh@example.com""#);
+        let http = Scripted::new().on("GET", GLOBAL_INFO, 200, &answer);
+        let reading = fetch(&http).await.unwrap();
+        assert_eq!(reading.account.as_deref(), Some("minh@example.com"));
+        let http = Scripted::new().on("GET", GLOBAL_INFO, 200, GLOBAL_ANSWER);
+        assert_eq!(fetch(&http).await.unwrap().account, None);
     }
 
     #[tokio::test]

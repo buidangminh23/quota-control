@@ -10,7 +10,9 @@
 //! `GET https://api.fireworks.ai/v1/accounts/{slug}/billing/summary` with a `startTime` 30 days
 //! back and an `endTime` of now: the line items' `totalCost` in the first currency met, in dollars
 //! for USD, with a warning when other currencies were left out. A summary that answers 404 forgets
-//! the remembered account and looks the account up again for one more try.
+//! the remembered account and looks the account up again for one more try. After a summary is
+//! read, `GET https://api.fireworks.ai/v1/accounts/{slug}` (looked up twice a day, best-effort)
+//! gives the account's `email` and, for an `ENTERPRISE` `accountType`, the Enterprise plan.
 
 use std::collections::BTreeSet;
 
@@ -172,15 +174,63 @@ impl Service for Fireworks {
                 Some(context.now + Duration::hours(12)),
             )
             .await;
+        let profile = profile(context, key, &slug, &fingerprint).await;
+        let plan = (profile["accountType"] == "ENTERPRISE").then(|| "Enterprise".to_string());
+        let email = profile["email"].as_str().map(str::to_string);
         let line = if code.eq_ignore_ascii_case("USD") {
             lines::dollar_value("Last 30 Days", total)
         } else {
             lines::count_value("Last 30 Days", total, code)
         };
-        Ok(Reading::new(None, vec![line]).with_warning(mixed.then(|| {
-            "Fireworks returned multiple currencies. Only the first currency is shown.".into()
-        })))
+        Ok(Reading::new(plan, vec![line])
+            .with_account(email)
+            .with_warning(mixed.then(|| {
+                "Fireworks returned multiple currencies. Only the first currency is shown.".into()
+            })))
     }
+}
+
+/// The account resource (`GET /v1/accounts/{slug}`), looked up twice a day per key and slug.
+/// Best-effort: any failure gives `Null` and never affects the reading.
+async fn profile(context: &FetchContext<'_>, key: &str, slug: &str, fingerprint: &str) -> Value {
+    if let Some(saved) = context
+        .memo
+        .get("fireworks.profile", context.now)
+        .await
+        .filter(|saved| saved["fingerprint"] == fingerprint && saved["slug"] == slug)
+    {
+        return saved["account"].clone();
+    }
+    let response = match http::send(
+        context.http,
+        HttpRequest::get(format!("{BASE}/{slug}")).bearer(key),
+        NAME,
+    )
+    .await
+    {
+        Ok(response) if response.is_success() => response,
+        Ok(response) => {
+            tracing::debug!(target: "fireworks", "account answered {}", response.status);
+            return Value::Null;
+        }
+        Err(error) => {
+            tracing::debug!(target: "fireworks", "account unavailable: {}", error.message);
+            return Value::Null;
+        }
+    };
+    let account = http::parse(&response, NAME)
+        .ok()
+        .filter(Value::is_object)
+        .unwrap_or(Value::Null);
+    context
+        .memo
+        .put(
+            "fireworks.profile",
+            json!({"fingerprint": fingerprint, "slug": slug, "account": account}),
+            Some(context.now + Duration::hours(12)),
+        )
+        .await;
+    account
 }
 
 /// Whether `slug` can name an account in a request path: 1 to 256 ASCII letters, digits, dots,
@@ -336,12 +386,48 @@ mod tests {
             vec![lines::dollar_value("Last 30 Days", 3.5)]
         );
         Fireworks.fetch(&scope.context()).await.unwrap();
-        assert_eq!(http.requests().len(), 3);
+        assert_eq!(http.requests().len(), 4);
         assert_eq!(
             header(&http.requests()[0], "authorization"),
             Some("Bearer fixture")
         );
         assert!(http.requests()[1].url.contains("startTime="));
+    }
+
+    #[tokio::test]
+    async fn the_account_resource_names_the_email_and_an_enterprise_plan() {
+        let http = Scripted::new()
+            .on("GET", &format!("{BASE}/acct/billing"), 200, BILL)
+            .on(
+                "GET",
+                &format!("{BASE}/acct"),
+                200,
+                r#"{"name":"accounts/acct","displayName":"Acct","accountType":"ENTERPRISE",
+                    "email":"billing@example.com","state":"READY"}"#,
+            );
+        let scope = context_at(
+            &http,
+            json!({"apiKey": "fixture", "accountSlug": "acct"}),
+            chrono::Utc::now(),
+        );
+        let reading = Fireworks.fetch(&scope.context()).await.unwrap();
+        assert_eq!(reading.plan.as_deref(), Some("Enterprise"));
+        assert_eq!(reading.account.as_deref(), Some("billing@example.com"));
+        assert_eq!(http.requests()[1].url, format!("{BASE}/acct"));
+        let http = Scripted::new()
+            .on("GET", &format!("{BASE}/acct/billing"), 200, BILL)
+            .on("GET", &format!("{BASE}/acct"), 500, "{}");
+        let scope = context_at(
+            &http,
+            json!({"apiKey": "fixture", "accountSlug": "acct"}),
+            chrono::Utc::now(),
+        );
+        let reading = Fireworks.fetch(&scope.context()).await.unwrap();
+        assert_eq!((reading.plan, reading.account), (None, None));
+        assert_eq!(
+            reading.lines,
+            vec![lines::dollar_value("Last 30 Days", 3.5)]
+        );
     }
 
     #[tokio::test]
@@ -400,7 +486,7 @@ mod tests {
             chrono::Utc::now(),
         );
         assert!(Fireworks.fetch(&scope.context()).await.is_ok());
-        assert_eq!(http.requests().len(), 3);
+        assert_eq!(http.requests().len(), 4);
         for (status, body, category) in [
             (401, "{}", ErrorCategory::AuthExpired),
             (403, "{}", ErrorCategory::AuthExpired),

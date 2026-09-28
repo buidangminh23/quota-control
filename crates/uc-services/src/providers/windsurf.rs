@@ -6,6 +6,7 @@
 //! application data folder: `%APPDATA%` on Windows, `~/Library/Application Support` on macOS and
 //! `$XDG_CONFIG_HOME` (by default `~/.config`) on Linux. The database is opened read-only where it
 //! is, without a copy, and the item's JSON may be stored as text or as UTF-8 or UTF-16LE bytes.
+//! The `email` of the app's `windsurfAuthStatus` item, when it holds one, labels the login.
 //!
 //! A refresh sends no request: it reads the `quotaUsage`, `usage`, `planName` and `endTimestamp`
 //! of the JSON the login carries, so the card shows what Windsurf fetched the last time it
@@ -74,15 +75,10 @@ impl Service for Windsurf {
 
     fn discover(&self, roots: &Roots) -> Vec<Login> {
         let path = apps::state_db(roots, "Windsurf");
-        let Some(data) = read(&path) else {
+        let Some((data, email)) = read(&path) else {
             return vec![];
         };
-        vec![Login::new(
-            "local-windsurf",
-            "Windsurf",
-            &path,
-            Secret::new(data),
-        )]
+        vec![Login::new("local-windsurf", "Windsurf", &path, Secret::new(data)).with_label(email)]
     }
 
     fn descriptors(&self, provider: &Provider) -> Vec<WidgetDescriptor> {
@@ -287,9 +283,10 @@ async fn team_balance(
     )
 }
 
-/// The `cachedPlanInfo` JSON of the Windsurf state database at `path`, opened read-only in place.
-/// A blob of at most 4 MiB may hold UTF-8 or UTF-16LE text.
-fn read(path: &std::path::Path) -> Option<Value> {
+/// The `cachedPlanInfo` JSON of the Windsurf state database at `path`, opened read-only in place,
+/// and the signed-in account's email from the app's `windsurfAuthStatus` item beside it (the item
+/// open-source Windsurf account tools read `email` from), when it names one.
+fn read(path: &std::path::Path) -> Option<(Value, Option<String>)> {
     let db = rusqlite::Connection::open_with_flags(
         path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -297,10 +294,19 @@ fn read(path: &std::path::Path) -> Option<Value> {
     .ok()?;
     db.busy_timeout(std::time::Duration::from_millis(250))
         .ok()?;
+    let plan_info = item(&db, "windsurf.settings.cachedPlanInfo")?;
+    let email = item(&db, "windsurfAuthStatus")
+        .and_then(|status| value::text(&status, "/email").map(str::to_string))
+        .filter(|email| email.contains('@'));
+    Some((plan_info, email))
+}
+
+/// The JSON of one `ItemTable` item. A blob of at most 4 MiB may hold UTF-8 or UTF-16LE text.
+fn item(db: &rusqlite::Connection, key: &str) -> Option<Value> {
     let raw: rusqlite::types::Value = db
         .query_row(
-            "SELECT value FROM ItemTable WHERE key = 'windsurf.settings.cachedPlanInfo' LIMIT 1",
-            [],
+            "SELECT value FROM ItemTable WHERE key = ?1 LIMIT 1",
+            [key],
             |row| row.get(0),
         )
         .ok()?;
@@ -450,5 +456,15 @@ mod tests {
         let logins = Windsurf.discover(&roots);
         assert_eq!(logins.len(), 1);
         assert_eq!(logins[0].secret.str("/planName"), Some("Pro"));
+        assert_eq!(logins[0].label, None);
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute(
+            "INSERT INTO ItemTable VALUES('windsurfAuthStatus',?1)",
+            [r#"{"name":"Minh","apiKey":"sk-ws","email":"minh@example.com"}"#],
+        )
+        .unwrap();
+        drop(db);
+        let logins = Windsurf.discover(&roots);
+        assert_eq!(logins[0].label.as_deref(), Some("minh@example.com"));
     }
 }

@@ -9,7 +9,8 @@
 //!
 //! The answer is read line by line as JSON, and the first line holding the usage object gives the
 //! Session meter (the four-hour window) and the Monthly meter (the month, or else the billing
-//! period). The plan is the subscription's product name, or else the answer's `subTier`.
+//! period). The plan is the subscription's product name, or else the answer's `subTier`, and it
+//! renews at the subscription's `currentPeriodEnd`.
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -128,6 +129,14 @@ fn parse(body: &Value) -> Result<Reading, SimpleProviderError> {
             .or_else(|| value::text(usage, "/subTier"))
             .and_then(lines::plan_name),
         rows,
+    )
+    .with_plan_term(
+        value::time(usage, "/subscription/currentPeriodEnd").map(|ends_at| {
+            uc_core::PlanTerm::Stated {
+                ends_at,
+                checked_at: None,
+            }
+        }),
     ))
 }
 
@@ -184,6 +193,10 @@ mod tests {
                     )
                 ]
             )
+            .with_plan_term(Some(uc_core::PlanTerm::Stated {
+                ends_at: value::as_time(&json!(1790812800)).unwrap(),
+                checked_at: None,
+            }))
         );
         let requests = http.requests();
         assert_eq!(requests.len(), 1);

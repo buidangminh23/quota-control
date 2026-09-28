@@ -222,7 +222,7 @@ impl Service for Kiro {
                 api_key: true,
             };
             let body = usage_limits(context, &session).await?;
-            return Ok(Reading::new(plan(&body), meters(&body, context.now)));
+            return Ok(reading(&body, context.now));
         }
         let renewed = renew_if_due(context).await?;
         let fresh;
@@ -236,8 +236,14 @@ impl Service for Kiro {
         };
         let session = session_of(secret, context.now)?;
         let body = usage_limits(context, &session).await?;
-        Ok(Reading::new(plan(&body), meters(&body, context.now)))
+        Ok(reading(&body, context.now))
     }
+}
+
+/// The card's reading from a usage answer: the plan, the meters and the account's email when the
+/// answer names one under `userInfo`.
+fn reading(body: &Value, now: DateTime<Utc>) -> Reading {
+    Reading::new(plan(body), meters(body, now)).with_account(value::text(body, "/userInfo/email"))
 }
 
 #[async_trait]
@@ -1141,6 +1147,7 @@ mod tests {
         let scope = context_at(&http, json!({"apiKey": "ksk_test"}), now());
         let reading = Kiro.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan.as_deref(), Some("Power"));
+        assert_eq!(reading.account.as_deref(), Some("person@example.com"));
         let request = &http.requests()[0];
         assert_eq!(header(request, "Authorization"), Some("Bearer ksk_test"));
         assert_eq!(header(request, "tokentype"), Some("API_KEY"));

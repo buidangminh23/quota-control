@@ -9,6 +9,9 @@
 //! A refresh sends one request, `GET https://api.cline.bot/api/v1/users/me/plan/usage-limits`,
 //! with the key or token as a bearer token. A login token is used as saved and never renewed here:
 //! an expired one is not sent, and an expired or refused login asks for Cline to be opened once.
+//! After it, `GET https://api.cline.bot/api/v1/users/me/plan` (the account's current plan, as the
+//! Cline SDK's `fetchCurrentUserPlan` reads it) names the plan and when its period ends; it is
+//! looked up twice a day, and its failure leaves the usage rows as they are.
 //!
 //! Signing in from Quota Control uses the device sign-in of the Cline CLI and extension: WorkOS's
 //! page for Cline's client opens with the code in it (the user signs in there with Google, GitHub or
@@ -34,6 +37,7 @@ pub(crate) struct Cline;
 
 const NAME: &str = "Cline";
 const URL: &str = "https://api.cline.bot/api/v1/users/me/plan/usage-limits";
+const PLAN_URL: &str = "https://api.cline.bot/api/v1/users/me/plan";
 const EXPIRED: &str = "The Cline login expired. Open Cline once to renew it.";
 /// Where Cline turns WorkOS tokens into its own, and renews its own.
 const REGISTER: &str = "https://api.cline.bot/api/v1/auth/register";
@@ -215,8 +219,68 @@ impl Service for Cline {
             }
             rows.extend(last);
         }
-        Ok(Reading::new(None, rows))
+        let current = current_plan(context, key).await;
+        let plan = value::text(&current, "/plan/displayName")
+            .map(str::to_string)
+            .or_else(|| value::text(&current, "/plan/name").and_then(lines::plan_name));
+        let ends_at = value::time(&current, "/cancelAt")
+            .or_else(|| value::time(&current, "/currentPeriodEnd"));
+        Ok(
+            Reading::new(plan, rows).with_plan_term(ends_at.map(|ends_at| {
+                uc_core::PlanTerm::Stated {
+                    ends_at,
+                    checked_at: None,
+                }
+            })),
+        )
     }
+}
+
+/// The account's current plan (`data` of Cline's envelope), looked up twice a day. Best-effort: any
+/// failure gives `Null` and never affects the usage rows.
+async fn current_plan(context: &FetchContext<'_>, key: &str) -> Value {
+    if let Some(memo) = context.memo.get("cline.plan", context.now).await {
+        return memo;
+    }
+    let response = match http::send(
+        context.http,
+        HttpRequest::get(PLAN_URL)
+            .bearer(key)
+            .header("Accept", "application/json"),
+        NAME,
+    )
+    .await
+    {
+        Ok(response) if response.is_success() => response,
+        Ok(response) => {
+            tracing::debug!(target: "cline", "current plan answered {}", response.status);
+            return Value::Null;
+        }
+        Err(error) => {
+            tracing::debug!(target: "cline", "current plan unavailable: {}", error.message);
+            return Value::Null;
+        }
+    };
+    let Ok(body) = http::parse(&response, NAME) else {
+        return Value::Null;
+    };
+    let current = if body["success"].is_boolean() {
+        if body["success"] != true {
+            return Value::Null;
+        }
+        body["data"].clone()
+    } else {
+        body
+    };
+    context
+        .memo
+        .put(
+            "cline.plan",
+            current.clone(),
+            Some(context.now + Duration::hours(12)),
+        )
+        .await;
+    current
 }
 
 #[async_trait]
@@ -524,12 +588,40 @@ mod tests {
             )
         );
         let requests = http.requests();
-        assert_eq!(requests.len(), 1);
+        assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].url, URL);
         assert_eq!(
             header(&requests[0], "authorization"),
             Some("Bearer workos:fixture")
         );
+        assert_eq!(requests[1].url, PLAN_URL);
+    }
+
+    #[tokio::test]
+    async fn the_current_plan_names_the_plan_and_its_period_end() {
+        let http = Scripted::new().on("GET", URL, 200, THREE_WINDOWS).on(
+            "GET",
+            PLAN_URL,
+            200,
+            r#"{"success":true,"data":{"currentPeriodStart":"2026-09-10T00:00:00Z",
+                "currentPeriodEnd":"2026-10-10T00:00:00Z",
+                "plan":{"id":"p1","name":"pro","displayName":"Pro","interval":"month"}}}"#,
+        );
+        let scope = context_at(
+            &http,
+            json!({"apiKey":"workos:fixture","oauth":true}),
+            now(),
+        );
+        let reading = Cline.fetch(&scope.context()).await.unwrap();
+        assert_eq!(reading.plan.as_deref(), Some("Pro"));
+        assert_eq!(
+            reading.plan_term,
+            Some(uc_core::PlanTerm::Stated {
+                ends_at: "2026-10-10T00:00:00Z".parse().unwrap(),
+                checked_at: None,
+            })
+        );
+        assert_eq!(reading.lines.len(), 3);
     }
 
     #[tokio::test]
