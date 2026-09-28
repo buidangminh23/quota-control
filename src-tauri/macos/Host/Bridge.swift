@@ -65,7 +65,17 @@ public func qcMenuBarAppearanceStart(_ handler: QCAppearanceHandler?) {
 
 @_cdecl("qc_widgets_reload")
 public func qcWidgetsReload() {
-    WidgetCenter.shared.reloadAllTimelines()
+    onMain { WidgetCenter.shared.reloadAllTimelines() }
+}
+
+/// Stop widget extension processes left from an earlier version of the app, then reload the
+/// widgets, so the desktop widget always runs this version's extension (`WidgetExtension`). Works
+/// on a background queue and returns at once.
+@_cdecl("qc_widgets_adopt_current")
+public func qcWidgetsAdoptCurrent() {
+    WidgetExtension.adoptInBackground {
+        onMain { WidgetCenter.shared.reloadAllTimelines() }
+    }
 }
 
 enum PopupWindow {

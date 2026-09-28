@@ -262,7 +262,10 @@ pub fn run() -> anyhow::Result<()> {
                 },
             ));
             #[cfg(target_os = "macos")]
-            macos::start_island(app.handle());
+            {
+                macos::start_island(app.handle());
+                macos::adopt_current_widget();
+            }
             app.state::<BackendService>().start(app.handle());
             app.state::<updates::Updates>().start(app.handle());
             usage_commands::start(app.handle());

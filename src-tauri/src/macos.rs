@@ -1,6 +1,7 @@
-//! macOS: the popup's window style, the Dynamic Island and the desktop widget reload. They are
-//! written in Swift (`macos/Host`, built by `build.rs`) and reached through this C interface. The
-//! Swift side hops to the main thread itself, so every function here may run on any thread.
+//! macOS: the popup's window style, the Dynamic Island, and the desktop widget's reload and upkeep.
+//! They are written in Swift (`macos/Host`, built by `build.rs`) and reached through this C
+//! interface. The Swift side hops to the main thread itself, so every function here may run on any
+//! thread.
 
 use std::ffi::c_void;
 use std::sync::OnceLock;
@@ -17,6 +18,7 @@ unsafe extern "C" {
     fn qc_island_update(bytes: *const u8, length: usize);
     fn qc_island_popup_visible(visible: bool);
     fn qc_widgets_reload();
+    fn qc_widgets_adopt_current();
     fn qc_menu_bar_appearance_start(handler: Option<AppearanceHandler>);
 }
 
@@ -77,6 +79,14 @@ extern "C" fn menu_bar_appearance(dark: bool) {
 /// Ask WidgetKit to reload the desktop widget's timeline.
 pub fn reload_widgets() {
     unsafe { qc_widgets_reload() }
+}
+
+/// Stop desktop widget extension processes left over from an earlier version of the app (an
+/// in-app update deletes the old bundle while its extension keeps running), register this bundle's
+/// extension again and reload the widgets, so the widget always runs this version (Rules.md §0.61).
+/// Returns at once; the work runs on a background queue.
+pub fn adopt_current_widget() {
+    unsafe { qc_widgets_adopt_current() }
 }
 
 /// The island was clicked: open the popup right under it. The rectangle arrives in global points
