@@ -10,8 +10,8 @@
 //! key (`OLLAMA_API_KEY`, or one saved in Accounts) is sent as a bearer token instead.
 //!
 //! Endpoints: `GET https://ollama.com/api/usage` for the meters (undocumented; it backs the
-//! settings page) and `POST https://ollama.com/api/me` for the plan and signup date, looked up twice
-//! a day; a failed lookup keeps the meters and adds a warning.
+//! settings page) and `POST https://ollama.com/api/me` for the plan, email and signup date, looked
+//! up twice a day; a failed lookup keeps the meters and adds a warning.
 //!
 //! Signing in from Quota Control links a key of the card's own the way `ollama signin` links the
 //! computer's: ollama.com's connect page asks the user to sign in (Google, GitHub or email, chosen
@@ -194,7 +194,9 @@ impl Service for Ollama {
         let warning = account.is_none().then(|| PLAN_WARNING.to_string());
         let account = account.unwrap_or_default();
         let meters = meters(&usage, &account, context.now);
-        Ok(Reading::new(account.plan, meters).with_warning(warning))
+        Ok(Reading::new(account.plan, meters)
+            .with_account(account.email)
+            .with_warning(warning))
     }
 }
 
@@ -351,6 +353,7 @@ impl Credential {
 #[derive(Default)]
 struct Account {
     plan: Option<String>,
+    email: Option<String>,
     signed_up: Option<DateTime<Utc>>,
 }
 
@@ -360,6 +363,7 @@ async fn account(context: &FetchContext<'_>, credential: &Credential) -> Option<
     if let Some(memo) = context.memo.get(ACCOUNT_MEMO, context.now).await {
         return Some(Account {
             plan: value::text(&memo, "/plan").map(str::to_string),
+            email: value::text(&memo, "/email").map(str::to_string),
             signed_up: value::time(&memo, "/signedUp"),
         });
     }
@@ -388,6 +392,10 @@ async fn account(context: &FetchContext<'_>, credential: &Credential) -> Option<
             .iter()
             .find_map(|pointer| value::text(&body, pointer))
             .and_then(lines::plan_name),
+        email: ["/Email", "/email"]
+            .iter()
+            .find_map(|pointer| value::text(&body, pointer))
+            .map(str::to_string),
         signed_up: ["/CreatedAt", "/createdAt", "/created_at"]
             .iter()
             .find_map(|pointer| value::time(&body, pointer))
@@ -399,6 +407,7 @@ async fn account(context: &FetchContext<'_>, credential: &Credential) -> Option<
             ACCOUNT_MEMO,
             json!({
                 "plan": account.plan,
+                "email": account.email,
                 "signedUp": account.signed_up.map(|time| time.to_rfc3339()),
             }),
             Some(context.now + Duration::hours(12)),
@@ -948,6 +957,9 @@ mod tests {
         let scope = context_at(&http, json!({ "apiKey": "ollama-test-key" }), now());
         let reading = Ollama.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan.as_deref(), Some("Pro"));
+        assert_eq!(reading.account.as_deref(), Some("someone@example.com"));
+        let remembered = Ollama.fetch(&scope.context()).await.unwrap();
+        assert_eq!(remembered.account.as_deref(), Some("someone@example.com"));
         let requests = http.requests();
         assert_eq!(requests[0].method, "GET");
         assert_eq!(requests[0].url, "https://ollama.com/api/usage");
@@ -1300,6 +1312,7 @@ mod tests {
         let paid = Account {
             plan: Some("Pro".into()),
             signed_up: Some(anchor),
+            ..Account::default()
         };
         assert_eq!(free_plan_reset(&paid, at(2026, 9, 27, 10, 0)), None);
     }

@@ -463,12 +463,18 @@ mod tests {
     #[test]
     fn a_reading_keeps_only_an_email_as_its_account() {
         let account = |value: &str| Reading::default().with_account(Some(value)).account;
-        assert_eq!(account(" dev@example.com ").as_deref(), Some("dev@example.com"));
+        assert_eq!(
+            account(" dev@example.com ").as_deref(),
+            Some("dev@example.com")
+        );
         assert_eq!(account("user_2abc"), None);
         assert_eq!(account("dev@localhost"), None);
         assert_eq!(account("dev@example.com extra"), None);
         assert_eq!(account("@example.com"), None);
-        assert_eq!(Reading::default().with_account(None::<String>).account, None);
+        assert_eq!(
+            Reading::default().with_account(None::<String>).account,
+            None
+        );
     }
 
     #[test]

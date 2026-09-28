@@ -10,7 +10,9 @@
 //! left. This month's spend is the `total_cost`, in cents, of the last month the usage answer
 //! lists, or the `recent` amount when it lists none. An account with a positive `limit` also gets
 //! a billing cycle meter of the `recent` amount against that limit, and a `suspended` account gets
-//! a warning.
+//! a warning. A third request, `GET https://api.deepinfra.com/v1/me` (the account profile in
+//! DeepInfra's OpenAPI description, https://api.deepinfra.com/openapi.json), names the account's
+//! `email`; it waits two seconds at most, and its failure only leaves the email out.
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -23,6 +25,7 @@ pub(crate) struct DeepInfra;
 
 const NAME: &str = "DeepInfra";
 const BASE: &str = "https://api.deepinfra.com/payment/";
+const ME_URL: &str = "https://api.deepinfra.com/v1/me";
 const SUSPENDED: &str = "DeepInfra has suspended this account. Check the billing dashboard.";
 
 #[async_trait]
@@ -137,7 +140,19 @@ impl Service for DeepInfra {
                 rows.push(lines::dollars("Billing Cycle", recent, limit, None, None));
             }
         }
+        let email = http::json(
+            context.http,
+            HttpRequest::get(ME_URL)
+                .bearer(key)
+                .header("Accept", "application/json")
+                .timeout(std::time::Duration::from_secs(2)),
+            NAME,
+        )
+        .await
+        .ok()
+        .and_then(|me| me["email"].as_str().map(str::to_string));
         Ok(Reading::new(None, rows)
+            .with_account(email)
             .with_warning((checklist["suspended"] == true).then(|| SUSPENDED.into())))
     }
 }
@@ -164,6 +179,12 @@ mod tests {
                 &format!("{BASE}usage"),
                 200,
                 r#"{"months":[{"period":"2026-09","total_cost":375}]}"#,
+            )
+            .on(
+                "GET",
+                ME_URL,
+                200,
+                r#"{"uid":"u-1","email":"dev@example.com","email_verified":true}"#,
             );
         let scope = context_at(&http, json!({"apiKey":"fixture"}), Utc::now());
         assert_eq!(
@@ -177,10 +198,16 @@ mod tests {
                     lines::dollars("Billing Cycle", 2.5, 20.0, None, None)
                 ]
             )
+            .with_account(Some("dev@example.com"))
             .with_warning(Some(SUSPENDED.into()))
         );
         let requests = http.requests();
-        assert_eq!(requests.len(), 2);
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[2].url, ME_URL);
+        assert_eq!(
+            header(&requests[2], "authorization"),
+            Some("Bearer fixture")
+        );
         assert_eq!(
             requests[0].url,
             format!("{BASE}checklist?compute_owed=true")
@@ -190,6 +217,24 @@ mod tests {
             header(&requests[0], "authorization"),
             Some("Bearer fixture")
         );
+    }
+
+    #[tokio::test]
+    async fn a_failed_profile_lookup_only_leaves_the_email_out() {
+        let http = Scripted::new()
+            .on(
+                "GET",
+                &format!("{BASE}checklist"),
+                200,
+                r#"{"recent":0,"stripe_balance":0}"#,
+            )
+            .on("GET", &format!("{BASE}usage"), 200, r#"{"months":[]}"#)
+            .on("GET", ME_URL, 500, "{}");
+        let scope = context_at(&http, json!({"apiKey":"fixture"}), Utc::now());
+        let reading = DeepInfra.fetch(&scope.context()).await.unwrap();
+        assert_eq!(reading.account, None);
+        assert_eq!(reading.warning, None);
+        assert_eq!(reading.lines.len(), 3);
     }
 
     #[tokio::test]

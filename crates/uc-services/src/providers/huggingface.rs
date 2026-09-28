@@ -8,9 +8,9 @@
 //! `GET https://huggingface.co/api/settings/billing/usage-v2` from the start of the UTC month to
 //! now, then `GET https://huggingface.co/api/spaces/zero-gpu/quota`, whose failure only leaves out
 //! the ZeroGPU row, and, unless the plan was asked for this token in the last 12 hours,
-//! `GET https://huggingface.co/api/whoami-v2` for a PRO or Free plan. The last two wait two seconds
-//! at most. Billable usage is the inference usage past the included amount, against the account's
-//! limit when it sets one.
+//! `GET https://huggingface.co/api/whoami-v2` for a PRO or Free plan and the account's `email`.
+//! The last two wait two seconds at most. Billable usage is the inference usage past the included
+//! amount, against the account's limit when it sets one.
 
 use async_trait::async_trait;
 use chrono::{Datelike, Duration, TimeZone, Utc};
@@ -195,8 +195,11 @@ impl Service for HuggingFace {
             .get("identity", context.now)
             .await
             .filter(|saved| saved["fingerprint"] == fingerprint);
-        let plan = if let Some(cache) = cache {
-            cache["plan"].as_str().map(str::to_string)
+        let (plan, email) = if let Some(cache) = cache {
+            (
+                cache["plan"].as_str().map(str::to_string),
+                cache["email"].as_str().map(str::to_string),
+            )
         } else {
             let profile = http::json(
                 context.http,
@@ -208,19 +211,24 @@ impl Service for HuggingFace {
             .await
             .ok();
             let plan = profile
+                .as_ref()
                 .and_then(|profile| profile["isPro"].as_bool())
                 .map(|pro| if pro { "PRO" } else { "Free" });
+            let email = profile
+                .as_ref()
+                .and_then(|profile| profile["email"].as_str())
+                .map(str::to_string);
             context
                 .memo
                 .put(
                     "identity",
-                    json!({"fingerprint": fingerprint, "plan": plan}),
+                    json!({"fingerprint": fingerprint, "plan": plan, "email": email}),
                     Some(context.now + Duration::hours(12)),
                 )
                 .await;
-            plan.map(str::to_string)
+            (plan.map(str::to_string), email)
         };
-        Ok(Reading::new(plan, rows))
+        Ok(Reading::new(plan, rows).with_account(email))
     }
 }
 
@@ -274,11 +282,12 @@ mod tests {
                 "GET",
                 &format!("{BASE}/api/whoami-v2"),
                 200,
-                r#"{"isPro":true}"#,
+                r#"{"type":"user","name":"fixture","email":"dev@example.com","isPro":true}"#,
             );
         let scope = context_at(&http, json!({"apiKey": "fixture"}), Utc::now());
         let reading = HuggingFace.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan, Some("PRO".into()));
+        assert_eq!(reading.account.as_deref(), Some("dev@example.com"));
         assert_eq!(
             reading.lines[0],
             lines::dollars("Billable Usage", 3.0, 10.0, None, None)
@@ -291,7 +300,8 @@ mod tests {
             header(&http.requests()[0], "authorization"),
             Some("Bearer fixture")
         );
-        HuggingFace.fetch(&scope.context()).await.unwrap();
+        let remembered = HuggingFace.fetch(&scope.context()).await.unwrap();
+        assert_eq!(remembered.account.as_deref(), Some("dev@example.com"));
         assert_eq!(http.requests().len(), 5);
     }
 

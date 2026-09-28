@@ -4,11 +4,13 @@
 //!
 //! A refresh sends one request, `GET https://zenmux.ai/api/v1/management/subscription/detail`,
 //! with the key as a bearer token. The answer's `quota_5_hour` and `quota_7_day` give the flows
-//! used, the flow limit and the time each window resets, and `plan.tier` names the plan.
+//! used, the flow limit and the time each window resets, `plan.tier` names the plan and
+//! `plan.expires_at` is when the current subscription period ends
+//! (https://zenmux.ai/docs/api/platform/subscription-detail.html).
 
 use async_trait::async_trait;
 use serde_json::Value;
-use uc_core::{HttpRequest, Provider, SimpleProviderError, WidgetDescriptor};
+use uc_core::{HttpRequest, PlanTerm, Provider, SimpleProviderError, WidgetDescriptor};
 
 use crate::service::{ApiKeyHelp, Connection, FetchContext, Reading, Service};
 use crate::support::{http, lines, value};
@@ -95,7 +97,11 @@ fn parse(body: &Value) -> Result<Reading, SimpleProviderError> {
         ));
     }
     let plan = value::text(data, "/plan/tier").and_then(lines::plan_name);
-    Ok(Reading::new(plan, rows))
+    let term = value::time(data, "/plan/expires_at").map(|ends_at| PlanTerm::Stated {
+        ends_at,
+        checked_at: None,
+    });
+    Ok(Reading::new(plan, rows).with_plan_term(term))
 }
 
 #[cfg(test)]
@@ -106,7 +112,7 @@ mod tests {
     use serde_json::json;
     use uc_core::ErrorCategory;
 
-    const PRO_QUOTAS: &str = r###"{"success":true,"data":{"plan":{"tier":"pro"},"account_status":"healthy","quota_5_hour":{"used_flows":20,"max_flows":100,"remaining_flows":80,"usage_percentage":0.2,"resets_at":"2026-09-27T15:00:00Z"},"quota_7_day":{"used_flows":50,"max_flows":1000,"remaining_flows":950,"usage_percentage":0.05,"resets_at":"2026-10-01T00:00:00Z"}}}"###;
+    const PRO_QUOTAS: &str = r###"{"success":true,"data":{"plan":{"tier":"pro","amount_usd":20,"interval":"month","expires_at":"2026-10-12T08:26:56.000Z"},"account_status":"healthy","quota_5_hour":{"used_flows":20,"max_flows":100,"remaining_flows":80,"usage_percentage":0.2,"resets_at":"2026-09-27T15:00:00Z"},"quota_7_day":{"used_flows":50,"max_flows":1000,"remaining_flows":950,"usage_percentage":0.05,"resets_at":"2026-10-01T00:00:00Z"}}}"###;
 
     #[tokio::test]
     async fn the_session_and_weekly_flow_quotas_come_from_one_authorized_get() {
@@ -137,6 +143,10 @@ mod tests {
                     )
                 ]
             )
+            .with_plan_term(Some(PlanTerm::Stated {
+                ends_at: Utc.with_ymd_and_hms(2026, 10, 12, 8, 26, 56).unwrap(),
+                checked_at: None,
+            }))
         );
         let requests = http.requests();
         assert_eq!(requests.len(), 1);

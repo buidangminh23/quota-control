@@ -5,12 +5,14 @@
 //! `COMMANDCODE_API_KEY` environment variable or from a key saved in Quota Control. A refresh calls
 //! the CLI's undocumented `alpha` API on `https://api.commandcode.ai`, with the key as a bearer
 //! token:
-//! - `GET /alpha/whoami?limits=1` for the organization the key belongs to, looked up twice a day;
+//! - `GET /alpha/whoami?limits=1` for the organization the key belongs to and the account's
+//!   `user.email`, looked up twice a day;
 //! - `GET /alpha/billing/credits?orgId=<org>` for the credits left (the monthly grant, top-ups and
 //!   free credits) and the rolling 5-hour and weekly windows (`windowLimits`: `used` of `cap`
 //!   credits, `resetAt`), read at every refresh;
-//! - `GET /alpha/billing/subscriptions?orgId=<org>` for the plan and the end of its billing period,
-//!   looked up every 6 hours and never required.
+//! - `GET /alpha/billing/subscriptions?orgId=<org>` for the plan and the end of its billing period
+//!   (`currentPeriodEnd`, also shown as the plan's renewal date), looked up every 6 hours and never
+//!   required.
 //!
 //! The monthly grant's size is the credits' `monthlyCreditsGranted`, else the allowance
 //! commandcode.ai/pricing lists for the plan (checked on 2026-09-27).
@@ -21,7 +23,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use uc_core::{
     ErrorCategory, HttpRequest, LimitResourceKind, LimitResourceSource, MetricKind, MetricLine,
-    Provider, ProviderLink, SessionStartSignal, SimpleProviderError, WidgetDescriptor,
+    PlanTerm, Provider, ProviderLink, SessionStartSignal, SimpleProviderError, WidgetDescriptor,
 };
 use url::form_urlencoded;
 
@@ -166,7 +168,17 @@ async fn read(context: &FetchContext<'_>, key: &str) -> Result<Reading, SimplePr
     }
     meters.push(lines::dollar_value(CREDITS, credits.spendable));
     let warning = lookup.is_none().then(|| PLAN_UNREAD.to_string());
-    Ok(Reading::new(plan, meters).with_warning(warning))
+    let term = period_end
+        .filter(|end| *end > context.now)
+        .map(|ends_at| PlanTerm::Stated {
+            ends_at,
+            checked_at: None,
+        });
+    let email = remembered_email(context, &print).await;
+    Ok(Reading::new(plan, meters)
+        .with_plan_term(term)
+        .with_account(email)
+        .with_warning(warning))
 }
 
 /// The key's organization and its credits. When the credits call refuses a remembered
@@ -194,7 +206,15 @@ async fn remembered_org(context: &FetchContext<'_>, print: &str) -> Option<Optio
     (memo["key"].as_str() == Some(print)).then(|| memo["org"].as_str().map(str::to_string))
 }
 
-/// The organization the key belongs to, remembered for 12 hours. An answer without one leaves the
+/// The account's email that the last whoami for this key named.
+async fn remembered_email(context: &FetchContext<'_>, print: &str) -> Option<String> {
+    let memo = context.memo.get(ORG_MEMO, context.now).await?;
+    (memo["key"].as_str() == Some(print))
+        .then(|| memo["email"].as_str().map(str::to_string))
+        .flatten()
+}
+
+/// The organization the key belongs to (and the account's email), remembered for 12 hours. An answer without one leaves the
 /// organization out of the billing requests, as the Command Code CLI does.
 async fn whoami(
     context: &FetchContext<'_>,
@@ -207,11 +227,12 @@ async fn whoami(
         Some(Value::Number(id)) => Some(id.to_string()),
         _ => None,
     };
+    let email = value::text(&body, "/user/email");
     context
         .memo
         .put(
             ORG_MEMO,
-            json!({ "key": print, "org": org }),
+            json!({ "key": print, "org": org, "email": email }),
             Some(context.now + Duration::hours(12)),
         )
         .await;
@@ -510,6 +531,20 @@ mod tests {
         lines::dollar_value("Credits", amount)
     }
 
+    /// A reading of the whoami fixture's account, whose plan renews at `period_end()`.
+    fn of_account(reading: Reading, renews: bool) -> Reading {
+        reading
+            .with_plan_term(
+                period_end()
+                    .filter(|_| renews)
+                    .map(|ends_at| PlanTerm::Stated {
+                        ends_at,
+                        checked_at: None,
+                    }),
+            )
+            .with_account(Some("dev@example.com"))
+    }
+
     fn goat_account(credits: &str, subscription: &str) -> Scripted {
         Scripted::new()
             .on("GET", WHOAMI, 200, WHOAMI_BODY)
@@ -535,14 +570,17 @@ mod tests {
         let reading = fetch_once(&http).await.unwrap();
         assert_eq!(
             reading,
-            Reading::new(
-                Some("GOAT".into()),
-                vec![
-                    session(25.0),
-                    weekly(50.0),
-                    monthly(17.5, 70.0, period_end()),
-                    credits_row(65.0),
-                ]
+            of_account(
+                Reading::new(
+                    Some("GOAT".into()),
+                    vec![
+                        session(25.0),
+                        weekly(50.0),
+                        monthly(17.5, 70.0, period_end()),
+                        credits_row(65.0),
+                    ]
+                ),
+                true
             )
         );
         let MetricLine::Progress(month) = &reading.lines[2] else {
@@ -554,7 +592,14 @@ mod tests {
         );
         assert_eq!(month.resets_at, period_end());
         assert_eq!(month.period_duration_ms, Some(30 * 24 * 3_600_000));
-        assert_eq!(reading.plan_term, None);
+        assert_eq!(
+            reading.plan_term,
+            Some(PlanTerm::Stated {
+                ends_at: period_end().unwrap(),
+                checked_at: None
+            })
+        );
+        assert_eq!(reading.account.as_deref(), Some("dev@example.com"));
     }
 
     #[tokio::test]
@@ -699,14 +744,17 @@ mod tests {
         let reading = fetch_once(&goat_account(credits, &pro)).await.unwrap();
         assert_eq!(
             reading,
-            Reading::new(
-                Some("Pro".into()),
-                vec![
-                    session(25.0),
-                    weekly(25.0),
-                    monthly(7.5, 80.0, period_end()),
-                    credits_row(72.5),
-                ]
+            of_account(
+                Reading::new(
+                    Some("Pro".into()),
+                    vec![
+                        session(25.0),
+                        weekly(25.0),
+                        monthly(7.5, 80.0, period_end()),
+                        credits_row(72.5),
+                    ]
+                ),
+                true
             )
         );
     }
@@ -736,7 +784,7 @@ mod tests {
             expected.push(credits_row(100.0));
             assert_eq!(
                 reading,
-                Reading::new(Some(name.into()), expected),
+                of_account(Reading::new(Some(name.into()), expected), true),
                 "{plan_id}"
             );
         }
@@ -750,7 +798,10 @@ mod tests {
         let reading = CommandCode.fetch(&scope.context()).await.unwrap();
         assert_eq!(
             reading,
-            Reading::new(Some("Free".into()), vec![credits_row(6.25)])
+            of_account(
+                Reading::new(Some("Free".into()), vec![credits_row(6.25)]),
+                false
+            )
         );
         CommandCode.fetch(&scope.context()).await.unwrap();
         assert_eq!(
@@ -776,14 +827,17 @@ mod tests {
             )
             .on("GET", SUBSCRIPTIONS_URL, 200, SUBSCRIPTION_BODY);
         let scope = context_at(&http, secret(), now());
-        let warned = Reading::new(
-            None,
-            vec![
-                session(25.0),
-                weekly(50.0),
-                monthly(17.5, 70.0, None),
-                credits_row(65.0),
-            ],
+        let warned = of_account(
+            Reading::new(
+                None,
+                vec![
+                    session(25.0),
+                    weekly(50.0),
+                    monthly(17.5, 70.0, None),
+                    credits_row(65.0),
+                ],
+            ),
+            false,
         )
         .with_warning(Some(PLAN_UNREAD.into()));
         let first = CommandCode.fetch(&scope.context()).await.unwrap();
