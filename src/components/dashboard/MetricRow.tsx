@@ -66,7 +66,7 @@ function BoundedRow({ data, now, interactive }: { data: WidgetData; now: Date; i
     <div className="uc-row is-bounded">
       <div className="uc-row-label">
         <span className="uc-row-title uc-truncate">{data.title}</span>
-        <PaceWarning data={data} state={state} language={language} interactive={interactive} />
+        <PaceWarning data={data} state={state} language={language} />
       </div>
       <Meter data={data} state={state} now={now} />
       <div className="uc-row-readout">
@@ -96,7 +96,7 @@ function BoundedRow({ data, now, interactive }: { data: WidgetData; now: Date; i
   );
 }
 
-function PaceWarning({ data, state, language, interactive }: { data: WidgetData; state: MeterState; language: Language; interactive: boolean }) {
+function PaceWarning({ data, state, language }: { data: WidgetData; state: MeterState; language: Language }) {
   const tooltip = meterTooltip(state, language);
   const severity = meterSeverity(state);
   const flameColor = severity ? `var(--uc-${severity === "critical" ? "red" : severity === "warning" ? "yellow" : "blue"})` : undefined;
@@ -108,27 +108,8 @@ function PaceWarning({ data, state, language, interactive }: { data: WidgetData;
           <span>{messagesFor(language).meter.limitReached}</span>
         </span>
       );
-    case "runningOut": {
-      const flame = <FlameIcon size={11} style={{ color: flameColor }} />;
-      if (state.eta === null) {
-        return (
-          <span className="uc-row-warning" aria-label={tooltip ?? undefined} {...tooltipProps(tooltip)}>
-            {flame}
-          </span>
-        );
-      }
-      return interactive ? (
-        <button type="button" className="uc-row-warning uc-num" onClick={() => toggleResetDisplay(data)} {...tooltipProps(tooltip)}>
-          {flame}
-          <span>{state.eta}</span>
-        </button>
-      ) : (
-        <span className="uc-row-warning uc-num">
-          {flame}
-          <span>{state.eta}</span>
-        </span>
-      );
-    }
+    case "runningOut":
+      return null;
     case "closeToLimit":
       return (
         <span className="uc-row-warning uc-num" {...tooltipProps(tooltip)}>
