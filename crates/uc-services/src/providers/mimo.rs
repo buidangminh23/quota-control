@@ -6,14 +6,15 @@
 //! into Accounts. A refresh sends three `GET`s to `https://platform.xiaomimimo.com/api/v1`, each
 //! with both cookies, the console's `Origin` and `Referer` and `x-timeZone: UTC+00:00`:
 //! - `/balance` for the balance and its currency (shown in dollars for USD);
-//! - `/tokenPlan/detail` for the plan and the end of the current period;
+//! - `/tokenPlan/detail` for the plan and the end of its current period, which is also the plan's
+//!   renewal date;
 //! - `/tokenPlan/usage` for the month's share used and each model's `used` of `limit` tokens.
 //!
 //! Each answer's `code` is 0 beside the `data`, or 401 or 403 once the session has expired.
 
 use async_trait::async_trait;
 use serde_json::Value;
-use uc_core::{HttpRequest, Provider, SimpleProviderError, WidgetDescriptor};
+use uc_core::{HttpRequest, PlanTerm, Provider, SimpleProviderError, WidgetDescriptor};
 
 use crate::service::{ApiKeyHelp, Connection, FetchContext, KeyFormat, Reading, Service};
 use crate::support::{http, lines, value};
@@ -121,7 +122,11 @@ impl Service for MiMo {
         Ok(Reading::new(
             value::text(&detail, "/planCode").and_then(lines::plan_name),
             found,
-        ))
+        )
+        .with_plan_term(reset.map(|ends_at| PlanTerm::Stated {
+            ends_at,
+            checked_at: None,
+        })))
     }
 }
 
@@ -185,6 +190,13 @@ mod tests {
         let reading = MiMo.fetch(&scope.context()).await.unwrap();
         let reset = value::as_time(&json!("2026-10-01T00:00:00Z"));
         assert_eq!(reading.plan.as_deref(), Some("Pro"));
+        assert_eq!(
+            reading.plan_term,
+            reset.map(|ends_at| PlanTerm::Stated {
+                ends_at,
+                checked_at: None,
+            })
+        );
         assert_eq!(
             reading.lines,
             vec![

@@ -14,15 +14,17 @@
 //! daily promotional credits), so its `Cycle*` figures feed the Monthly or Daily meter and reset
 //! when the cycle ends; any other package runs a single cycle and expires (gift, bonus and top-up
 //! packs), so its lifetime `Capacity*` figures add up to the Bonus Credits row with each
-//! package's expiry. Times without an offset are China Standard Time (UTC+8), as the billing
-//! service writes them.
+//! package's expiry. The largest refill package names the plan, and the time its credits stop
+//! counting (`DeductionEndTime`) is the plan's end, unless that lies so far ahead that it stands
+//! for no end at all (the free base package's `2049-12-31`). Times without an offset are China
+//! Standard Time (UTC+8), as the billing service writes them.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use serde_json::{Value, json};
 use uc_core::{
     HttpRequest, LimitResourceKind, LimitResourceSource, MetricKind, MetricLine, MetricValue,
-    Provider, ProviderLink, SimpleProviderError, ValuesLine, WidgetDescriptor,
+    PlanTerm, Provider, ProviderLink, SimpleProviderError, ValuesLine, WidgetDescriptor,
 };
 
 use crate::service::{ApiKeyHelp, Connection, FetchContext, Reading, Service};
@@ -50,6 +52,8 @@ const REFILL_GAP_HOURS: i64 = 48;
 const DAILY_CYCLE_HOURS: i64 = 36;
 /// The longest cycle trusted as a meter's window.
 const LONGEST_CYCLE_DAYS: i64 = 400;
+/// A plan package valid for longer than this has no real end (the free base runs to 2049).
+const LONGEST_PLAN_DAYS: i64 = 3_660;
 
 /// The two CodeBuddy sites; a key belongs to one of them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -258,7 +262,19 @@ fn read(body: &Value, now: DateTime<Utc>) -> Result<Reading, SimpleProviderError
             "This CodeBuddy account has no active credit packages.",
         ));
     }
-    Ok(Reading::new(plan(&packages), meters(&packages, now)))
+    let plan = plan(&packages);
+    let term = plan
+        .and_then(|package| package.expires)
+        .filter(|expires| *expires - now <= Duration::days(LONGEST_PLAN_DAYS))
+        .map(|ends_at| PlanTerm::Stated {
+            ends_at,
+            checked_at: None,
+        });
+    Ok(Reading::new(
+        plan.and_then(|package| package.name.clone()),
+        meters(&packages, now),
+    )
+    .with_plan_term(term))
 }
 
 /// One credit package that still counts at the time of the reading.
@@ -438,8 +454,8 @@ fn bonus(packages: &[&Package]) -> MetricLine {
     })
 }
 
-/// The name of the largest refill package, a monthly one before a daily one.
-fn plan(packages: &[Package]) -> Option<String> {
+/// The plan's package: the largest refill package, a monthly one before a daily one.
+fn plan(packages: &[Package]) -> Option<&Package> {
     packages
         .iter()
         .filter(|package| package.refills)
@@ -448,7 +464,6 @@ fn plan(packages: &[Package]) -> Option<String> {
                 .cmp(&!b.daily())
                 .then(a.size.total_cmp(&b.size))
         })
-        .and_then(|package| package.name.clone())
 }
 
 /// A billing time: `2006-01-02 15:04:05` text in China Standard Time (UTC+8), as the service
@@ -642,6 +657,13 @@ mod tests {
         let scope = context_at(&http, key(), now());
         let reading = CodeBuddy.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan.as_deref(), Some("Pro"));
+        assert_eq!(
+            reading.plan_term,
+            Some(PlanTerm::Stated {
+                ends_at: china(2027, 9, 14, 23, 59, 59),
+                checked_at: None,
+            })
+        );
         let labels: Vec<&str> = reading.lines.iter().map(MetricLine::label).collect();
         assert_eq!(
             labels,
@@ -905,6 +927,7 @@ mod tests {
         let scope = context_at(&http, key(), now());
         let reading = CodeBuddy.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan.as_deref(), Some("Free Base"));
+        assert_eq!(reading.plan_term, None, "2049 stands for no end");
         let labels: Vec<&str> = reading.lines.iter().map(MetricLine::label).collect();
         assert_eq!(labels, ["Monthly", "Bonus Credits", "Free Base"]);
         let MetricLine::Values(bonus) = &reading.lines[1] else {

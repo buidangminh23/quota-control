@@ -5,12 +5,13 @@
 //! `GET https://app.augmentcode.com/api/credits` with that cookie for the Credits meter (the
 //! credits used this billing cycle against those available) and the Balance row (the credits
 //! left), then `GET https://app.augmentcode.com/api/subscription` with the same cookie for the
-//! plan name and the end of the billing period, which becomes the meter's reset time. When that
-//! second request fails, the credits are still shown, without a plan or a reset time.
+//! plan name, the account's `email` and the end of the billing period, which becomes the meter's
+//! reset time and the plan's renewal date. When that second request fails, the credits are still
+//! shown, without a plan or a reset time.
 
 use async_trait::async_trait;
 use serde_json::Value;
-use uc_core::{HttpRequest, Provider, SimpleProviderError, WidgetDescriptor};
+use uc_core::{HttpRequest, PlanTerm, Provider, SimpleProviderError, WidgetDescriptor};
 
 use crate::service::{ApiKeyHelp, Connection, FetchContext, KeyFormat, Reading, Service};
 use crate::support::{http, lines, value};
@@ -95,9 +96,16 @@ impl Service for Augment {
         .await
         {
             reading.plan = value::text(&subscription, "/planName").and_then(lines::plan_name);
+            let period_end = value::time(&subscription, "/billingPeriodEnd");
             if let Some(uc_core::MetricLine::Progress(line)) = reading.lines.first_mut() {
-                line.resets_at = value::time(&subscription, "/billingPeriodEnd");
+                line.resets_at = period_end;
             }
+            reading = reading
+                .with_plan_term(period_end.map(|ends_at| PlanTerm::Stated {
+                    ends_at,
+                    checked_at: None,
+                }))
+                .with_account(value::text(&subscription, "/email"));
         }
         Ok(reading)
     }
@@ -151,7 +159,7 @@ mod tests {
             "GET",
             "https://app.augmentcode.com/api/subscription",
             200,
-            r#"{"planName":"pro","billingPeriodEnd":"2026-10-01T00:00:00Z"}"#,
+            r#"{"planName":"pro","billingPeriodEnd":"2026-10-01T00:00:00Z","email":"fixture@example.com"}"#,
         );
         let now = Utc.with_ymd_and_hms(2026, 9, 27, 10, 0, 0).unwrap();
         let scope = context_at(&http, json!({"apiKey":"test"}), now);
@@ -172,6 +180,11 @@ mod tests {
                     lines::count_value("Balance", 800.0, "credits")
                 ]
             )
+            .with_plan_term(Some(PlanTerm::Stated {
+                ends_at: Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap(),
+                checked_at: None,
+            }))
+            .with_account(Some("fixture@example.com"))
         );
         let requests = http.requests();
         assert_eq!(requests.len(), 2);
