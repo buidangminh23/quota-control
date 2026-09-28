@@ -12,6 +12,11 @@
 //! Kiro rotates its refresh token at every renewal, so the saved access token is used as it is and
 //! never renewed here: renewing it would sign the IDE out.
 //!
+//! A Kiro API key (`ksk_…`, created at app.kiro.dev on Pro plans and above, or found in
+//! `KIRO_API_KEY`) is sent as the bearer with `tokentype: API_KEY`, first as the AWS JSON `POST` to
+//! `https://q.us-east-1.amazonaws.com/` with only the origin and resource type, then as the
+//! CodeWhisperer `GET`; a key names its own account, so no profile ARN is sent.
+//!
 //! Signing in from Quota Control uses the device sign-in the Kiro CLI uses on a remote machine:
 //! Kiro's page opens with Google or GitHub already chosen, and once the user approves, the tokens are
 //! saved in Quota Control. That refresh token is the card's own, so the card renews it shortly
@@ -25,7 +30,9 @@ use uc_core::{
     HttpRequest, MetricLine, Provider, ProviderLink, SimpleProviderError, WidgetDescriptor,
 };
 
-use crate::service::{Connection, FetchContext, Login, Memo, Reading, Roots, Secret, Service};
+use crate::service::{
+    ApiKeyHelp, Connection, FetchContext, Login, Memo, Reading, Roots, Secret, Service,
+};
 use crate::signin::{
     self, Converted, Look, Method, Pending, Poll, Polling, SignIn, SignedIn, StartContext,
 };
@@ -35,6 +42,7 @@ pub(crate) struct Kiro;
 
 const NAME: &str = "Kiro";
 const EXPIRED: &str = "The Kiro login expired. Open Kiro once to renew it.";
+const KEY_REFUSED: &str = "Kiro refused the API key. Create one at app.kiro.dev (Pro plans and above), or ask your administrator to allow API keys.";
 const CODEWHISPERER: &str = "https://codewhisperer.us-east-1.amazonaws.com";
 const Q: &str = "https://q.us-east-1.amazonaws.com";
 const FRANKFURT: &str = "https://q.eu-central-1.amazonaws.com/";
@@ -144,7 +152,11 @@ impl Service for Kiro {
     }
 
     fn connection(&self) -> Connection {
-        Connection::login(NAME)
+        Connection::login(NAME).or_api_key(ApiKeyHelp {
+            env: &["KIRO_API_KEY"],
+            url: "https://app.kiro.dev",
+            fields: &[],
+        })
     }
 
     fn sign_in(&self) -> Option<&'static dyn SignIn> {
@@ -201,6 +213,17 @@ impl Service for Kiro {
     }
 
     async fn fetch(&self, context: &FetchContext<'_>) -> Result<Reading, SimpleProviderError> {
+        if let Some(key) = context.secret.key() {
+            let session = Session {
+                token: key,
+                profile: String::new(),
+                frankfurt: None,
+                external_idp: false,
+                api_key: true,
+            };
+            let body = usage_limits(context, &session).await?;
+            return Ok(Reading::new(plan(&body), meters(&body, context.now)));
+        }
         let renewed = renew_if_due(context).await?;
         let fresh;
         let secret = match renewed {
@@ -461,6 +484,7 @@ fn session_of(secret: &Secret, now: DateTime<Utc>) -> Result<Session<'_>, Simple
             .unwrap_or_else(|| default_profile(secret).to_string()),
         frankfurt: saved.filter(|arn| profile_region(arn) == Some(FRANKFURT_REGION)),
         external_idp: secret.str("/authMethod").is_some_and(is_external_idp),
+        api_key: false,
     })
 }
 
@@ -473,6 +497,8 @@ struct Session<'a> {
     frankfurt: Option<&'a str>,
     /// Microsoft Entra ID sign-ins, whose token the service reads only when it is marked.
     external_idp: bool,
+    /// A Kiro API key, which the service reads only when it is marked.
+    api_key: bool,
 }
 
 /// One way to call `GetUsageLimits`.
@@ -482,6 +508,8 @@ enum Route {
     CodeWhispererPost,
     QGet,
     FrankfurtPost,
+    /// The AWS JSON `POST` to the Q host without a profile, the way API-key clients ask.
+    KeyPost,
 }
 
 impl Route {
@@ -491,6 +519,7 @@ impl Route {
             Self::CodeWhispererPost => "codewhisperer-post",
             Self::QGet => "q-get",
             Self::FrankfurtPost => "q-eu-central-1-post",
+            Self::KeyPost => "q-key-post",
         }
     }
 
@@ -526,10 +555,16 @@ impl Route {
                 FRANKFURT,
                 &json!({ "profileArn": session.frankfurt.unwrap_or_default() }),
             ),
+            Self::KeyPost => json_call(
+                &format!("{Q}/"),
+                &json!({ "origin": ORIGIN, "resourceType": RESOURCE }),
+            ),
         }
         .bearer(session.token)
         .header("Accept", "application/json");
-        if session.external_idp {
+        if session.api_key {
+            request.header("tokentype", "API_KEY")
+        } else if session.external_idp {
             request.header("TokenType", "EXTERNAL_IDP")
         } else {
             request
@@ -558,11 +593,15 @@ async fn usage_limits(
     context: &FetchContext<'_>,
     session: &Session<'_>,
 ) -> Result<Value, SimpleProviderError> {
-    let mut routes = vec![
-        Route::CodeWhispererGet,
-        Route::CodeWhispererPost,
-        Route::QGet,
-    ];
+    let mut routes = if session.api_key {
+        vec![Route::KeyPost, Route::CodeWhispererGet]
+    } else {
+        vec![
+            Route::CodeWhispererGet,
+            Route::CodeWhispererPost,
+            Route::QGet,
+        ]
+    };
     if session.frankfurt.is_some() {
         routes.push(Route::FrankfurtPost);
     }
@@ -605,7 +644,11 @@ async fn usage_limits(
         }
     }
     if refused {
-        return Err(http::expired(EXPIRED));
+        return Err(if session.api_key {
+            http::invalid(KEY_REFUSED)
+        } else {
+            http::expired(EXPIRED)
+        });
     }
     Err(failure.unwrap_or_else(|| http::decoding(NAME)))
 }
@@ -1090,6 +1133,35 @@ mod tests {
 
     fn october(day: u32) -> Option<DateTime<Utc>> {
         Some(Utc.with_ymd_and_hms(2026, 10, day, 0, 0, 0).unwrap())
+    }
+
+    #[tokio::test]
+    async fn an_api_key_is_sent_as_a_marked_bearer_without_a_profile() {
+        let http = Scripted::new().on("POST", "https://q.us-east-1.amazonaws.com/", 200, POWER);
+        let scope = context_at(&http, json!({"apiKey": "ksk_test"}), now());
+        let reading = Kiro.fetch(&scope.context()).await.unwrap();
+        assert_eq!(reading.plan.as_deref(), Some("Power"));
+        let request = &http.requests()[0];
+        assert_eq!(header(request, "Authorization"), Some("Bearer ksk_test"));
+        assert_eq!(header(request, "tokentype"), Some("API_KEY"));
+        let body: Value = serde_json::from_slice(request.body.as_deref().unwrap()).unwrap();
+        assert_eq!(body, json!({"origin": ORIGIN, "resourceType": RESOURCE}));
+    }
+
+    #[tokio::test]
+    async fn a_refused_api_key_says_where_keys_come_from() {
+        let http = Scripted::new()
+            .on("POST", "https://q.us-east-1.amazonaws.com/", 403, "{}")
+            .on(
+                "GET",
+                "https://codewhisperer.us-east-1.amazonaws.com/getUsageLimits?isEmailRequired=true&origin=AI_EDITOR&resourceType=AGENTIC_REQUEST",
+                401,
+                "{}",
+            );
+        let scope = context_at(&http, json!({"apiKey": "ksk_bad"}), now());
+        let error = Kiro.fetch(&scope.context()).await.unwrap_err();
+        assert_eq!(error.message, KEY_REFUSED);
+        assert_eq!(http.requests().len(), 2);
     }
 
     fn secret(expires: DateTime<Utc>) -> Value {

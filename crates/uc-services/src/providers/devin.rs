@@ -14,11 +14,17 @@
 //! login's server (`https://server.codeium.com` unless the CLI names another), with the key in the
 //! JSON body. It answers the daily and weekly quota left and the extra usage balance. Keys are
 //! never renewed here: a refused key means signing in to Devin again.
+//!
+//! A key pasted in Quota Control (or found in `DEVIN_API_KEY`) is read the same way when it is the
+//! CLI's `windsurf_api_key`. An Enterprise admin's personal key (`apk_user_…`) instead reads the
+//! organization's ACUs this month from `GET https://api.devin.ai/v2/enterprise/consumption/daily`
+//! (Bearer), whose days start at 08:00 UTC; Devin allows ten such calls an hour per team, so the
+//! total is kept for an hour.
 
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Datelike, Duration, SecondsFormat, Utc};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use uc_core::{
@@ -26,7 +32,9 @@ use uc_core::{
     Provider, ProviderLink, SimpleProviderError, WidgetDescriptor,
 };
 
-use crate::service::{Connection, FetchContext, Login, Reading, Roots, Secret, Service};
+use crate::service::{
+    ApiKeyHelp, Connection, FetchContext, Login, Reading, Roots, Secret, Service,
+};
 use crate::support::{apps, http, lines, value};
 
 pub(crate) struct Devin;
@@ -45,10 +53,30 @@ const MAX_CREDENTIALS_BYTES: u64 = 64 * 1024;
 const DAILY: &str = "Daily quota";
 const WEEKLY: &str = "Weekly quota";
 const EXTRA: &str = "Extra usage balance";
+const ENTERPRISE_ACUS: &str = "Enterprise ACUs";
 
 const EXPIRED: &str = "The Devin login expired. Run devin auth login or sign in to Devin again.";
 const UNAVAILABLE: &str = "Devin quota data unavailable. Try again later.";
 const NO_KEY: &str = "The Devin login has no API key. Run devin auth login or sign in to Devin.";
+const ENTERPRISE_REFUSED: &str = "Devin refused the key. Enterprise usage needs an enterprise admin's personal key (apk_user_…).";
+
+/// How a `GetUserStatus` answer is named on Devin's card; Windsurf reads the same answer with its own.
+const DEVIN_CARD: StatusCard = StatusCard {
+    name: NAME,
+    ide: "devin",
+    expired: EXPIRED,
+    unavailable: UNAVAILABLE,
+    daily: DAILY,
+    weekly: WEEKLY,
+    extra: EXTRA,
+};
+
+/// The Enterprise daily consumption endpoint an admin's personal key reads.
+const CONSUMPTION: &str = "https://api.devin.ai/v2/enterprise/consumption/daily";
+/// Memo key: the last ACU total and the month it covers, kept for an hour.
+const CONSUMPTION_MEMO: &str = "devin.consumption";
+/// Devin's billing day starts at 08:00 UTC (midnight Pacific standard time).
+const DAY_START_HOURS: i64 = 8;
 
 /// Memo key: the fingerprint of the key and server that answered last.
 const WORKING: &str = "devin.working";
@@ -71,7 +99,11 @@ impl Service for Devin {
     }
 
     fn connection(&self) -> Connection {
-        Connection::login(APP)
+        Connection::login(APP).or_api_key(ApiKeyHelp {
+            env: &["DEVIN_API_KEY"],
+            url: "https://app.devin.ai/settings/api-keys",
+            fields: &[],
+        })
     }
 
     fn discover(&self, roots: &Roots) -> Vec<Login> {
@@ -130,10 +162,34 @@ impl Service for Devin {
                 },
                 false,
             ),
+            WidgetDescriptor::values(
+                format!("{}.enterprise", provider.id),
+                provider,
+                ENTERPRISE_ACUS,
+                None,
+                Some(MetricKind::Count),
+                None,
+                true,
+                None,
+                false,
+            )
+            .exporting_limit(
+                "enterpriseAcus",
+                LimitResourceKind::Consumption,
+                "count",
+                LimitResourceSource::Value {
+                    kind: MetricKind::Count,
+                    label: None,
+                },
+                false,
+            ),
         ]
     }
 
     async fn fetch(&self, context: &FetchContext<'_>) -> Result<Reading, SimpleProviderError> {
+        if let Some(key) = context.secret.key().filter(|key| is_enterprise_key(key)) {
+            return enterprise_usage(context, key).await;
+        }
         let mut attempts = attempts(context.secret);
         if attempts.is_empty() {
             return Err(http::invalid(NO_KEY));
@@ -347,32 +403,57 @@ async fn user_status(
     context: &FetchContext<'_>,
     attempt: &Attempt<'_>,
 ) -> Result<Reading, SimpleProviderError> {
-    let request = HttpRequest::post(format!("{}/{USER_STATUS}", attempt.server))
+    read_user_status(context, attempt.key, attempt.server, &DEVIN_CARD).await
+}
+
+/// How a `GetUserStatus` answer is named on a card of the Codeium-backed services.
+pub(crate) struct StatusCard {
+    pub name: &'static str,
+    /// The IDE the request metadata names.
+    pub ide: &'static str,
+    pub expired: &'static str,
+    pub unavailable: &'static str,
+    pub daily: &'static str,
+    pub weekly: &'static str,
+    pub extra: &'static str,
+}
+
+/// The Codeium server a key without a named server belongs to.
+pub(crate) const USER_STATUS_SERVER: &str = DEFAULT_SERVER;
+
+/// The daily and weekly quota and the extra usage balance of the account behind `key`.
+pub(crate) async fn read_user_status(
+    context: &FetchContext<'_>,
+    key: &str,
+    server: &str,
+    card: &StatusCard,
+) -> Result<Reading, SimpleProviderError> {
+    let request = HttpRequest::post(format!("{server}/{USER_STATUS}"))
         .header("Connect-Protocol-Version", "1")
         .json_body(&json!({
             "metadata": {
-                "apiKey": attempt.key,
-                "ideName": "devin",
+                "apiKey": key,
+                "ideName": card.ide,
                 "ideVersion": CLIENT_VERSION,
-                "extensionName": "devin",
+                "extensionName": card.ide,
                 "extensionVersion": CLIENT_VERSION,
                 "locale": "en"
             }
         }));
-    let response = http::send(context.http, request, NAME).await?;
+    let response = http::send(context.http, request, card.name).await?;
     match response.status {
-        401 | 403 => Err(http::expired(EXPIRED)),
-        _ if !response.is_success() => Err(http::status_error(&response, NAME)),
-        _ => usage(&http::parse(&response, NAME)?),
+        401 | 403 => Err(http::expired(card.expired)),
+        _ if !response.is_success() => Err(http::status_error(&response, card.name)),
+        _ => usage(&http::parse(&response, card.name)?, card),
     }
 }
 
 /// The plan and meters of a `GetUserStatus` answer.
-fn usage(body: &Value) -> Result<Reading, SimpleProviderError> {
+fn usage(body: &Value, card: &StatusCard) -> Result<Reading, SimpleProviderError> {
     let status = body
         .get("userStatus")
         .filter(|status| status.is_object())
-        .ok_or_else(|| http::decoding(NAME))?;
+        .ok_or_else(|| http::decoding(card.name))?;
     let field = |name: &str| status.pointer(&format!("/planStatus/{name}"));
     let plan = value::text(status, "/planStatus/planInfo/planName").map(str::to_string);
     let hide_daily = truthy(field("planInfo/hideDailyQuota"));
@@ -380,13 +461,13 @@ fn usage(body: &Value) -> Result<Reading, SimpleProviderError> {
     let weekly_field = field("weeklyQuotaRemainingPercent");
     let weekly = weekly_field.and_then(value::as_number);
     if weekly_field.is_some() && weekly.is_none() {
-        return Err(http::decoding(NAME));
+        return Err(http::decoding(card.name));
     }
     let daily_reset = field("dailyQuotaResetAtUnix").and_then(value::as_time);
     let weekly_reset = field("weeklyQuotaResetAtUnix").and_then(value::as_time);
     let mut meters = Vec::new();
     if let Some(remaining) = daily.filter(|_| !hide_daily) {
-        meters.push(quota(DAILY, remaining, daily_reset, lines::DAY_MS));
+        meters.push(quota(card.daily, remaining, daily_reset, lines::DAY_MS));
     }
     // Proto3 JSON leaves zeros out, so a weekly reset without a percentage is a week used up. With
     // neither and the daily quota hidden, the daily figure stands in for the week.
@@ -394,15 +475,79 @@ fn usage(body: &Value) -> Result<Reading, SimpleProviderError> {
         .or(weekly_reset.map(|_| 0.0))
         .or(daily.filter(|_| hide_daily));
     if let Some(remaining) = weekly {
-        meters.push(quota(WEEKLY, remaining, weekly_reset, lines::WEEK_MS));
+        meters.push(quota(card.weekly, remaining, weekly_reset, lines::WEEK_MS));
     }
     if let Some(micros) = field("overageBalanceMicros").and_then(value::as_number) {
-        meters.push(lines::dollar_value(EXTRA, micros.max(0.0) / 1_000_000.0));
+        meters.push(lines::dollar_value(
+            card.extra,
+            micros.max(0.0) / 1_000_000.0,
+        ));
     }
     if meters.is_empty() {
-        return Err(http::not_available(UNAVAILABLE));
+        return Err(http::not_available(card.unavailable));
     }
     Ok(Reading::new(plan, meters))
+}
+
+/// An Enterprise admin's personal key, which reads the organization's consumption instead of an
+/// account's quota.
+fn is_enterprise_key(key: &str) -> bool {
+    key.starts_with("apk_")
+}
+
+/// When Devin's current billing month began: the first of the month at 08:00 UTC.
+fn month_start(now: DateTime<Utc>) -> DateTime<Utc> {
+    let shifted = (now - Duration::hours(DAY_START_HOURS)).date_naive();
+    let first = shifted.with_day(1).unwrap_or(shifted);
+    first.and_hms_opt(0, 0, 0).unwrap_or_default().and_utc() + Duration::hours(DAY_START_HOURS)
+}
+
+/// The organization's ACUs since the month began, asked at most once an hour.
+async fn enterprise_usage(
+    context: &FetchContext<'_>,
+    key: &str,
+) -> Result<Reading, SimpleProviderError> {
+    let stamp = month_start(context.now).to_rfc3339_opts(SecondsFormat::Secs, true);
+    if let Some(saved) = context.memo.get(CONSUMPTION_MEMO, context.now).await
+        && value::text(&saved, "/since") == Some(stamp.as_str())
+        && let Some(total) = value::number(&saved, "/acus")
+    {
+        return Ok(enterprise_reading(total));
+    }
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("start_date", &stamp)
+        .append_pair(
+            "end_date",
+            &context.now.to_rfc3339_opts(SecondsFormat::Secs, true),
+        )
+        .finish();
+    let request = HttpRequest::get(format!("{CONSUMPTION}?{query}"))
+        .bearer(key)
+        .header("Accept", "application/json");
+    let response = http::send(context.http, request, NAME).await?;
+    match response.status {
+        401 | 403 => return Err(http::invalid(ENTERPRISE_REFUSED)),
+        _ if !response.is_success() => return Err(http::status_error(&response, NAME)),
+        _ => {}
+    }
+    let body = http::parse(&response, NAME)?;
+    let total = value::number(&body, "/total_acus").ok_or_else(|| http::decoding(NAME))?;
+    context
+        .memo
+        .put(
+            CONSUMPTION_MEMO,
+            json!({ "since": stamp, "acus": total }),
+            Some(context.now + Duration::hours(1)),
+        )
+        .await;
+    Ok(enterprise_reading(total))
+}
+
+fn enterprise_reading(total: f64) -> Reading {
+    Reading::new(
+        Some("Enterprise".to_string()),
+        vec![lines::count_value(ENTERPRISE_ACUS, total.max(0.0), "ACUs")],
+    )
 }
 
 /// Devin reports the share left; the meter shows the share used.
@@ -659,11 +804,14 @@ mod tests {
 
     #[test]
     fn a_hidden_daily_quota_stands_in_for_a_missing_weekly_one() {
-        let reading = usage(&status(json!({
-            "planInfo": {"planName": "Max", "hideDailyQuota": true},
-            "dailyQuotaRemainingPercent": 30,
-            "dailyQuotaResetAtUnix": "1790553600"
-        })))
+        let reading = usage(
+            &status(json!({
+                "planInfo": {"planName": "Max", "hideDailyQuota": true},
+                "dailyQuotaRemainingPercent": 30,
+                "dailyQuotaResetAtUnix": "1790553600"
+            })),
+            &DEVIN_CARD,
+        )
         .unwrap();
         assert_eq!(
             meters(&reading),
@@ -674,13 +822,16 @@ mod tests {
     #[test]
     fn a_weekly_reset_without_a_percentage_means_the_week_is_used_up() {
         for hide_daily in [true, false] {
-            let reading = usage(&status(json!({
-                "planInfo": {"planName": "Max", "hideDailyQuota": hide_daily},
-                "dailyQuotaRemainingPercent": 100,
-                "dailyQuotaResetAtUnix": "1790553600",
-                "weeklyQuotaResetAtUnix": "1790812800",
-                "overageBalanceMicros": "-44347"
-            })))
+            let reading = usage(
+                &status(json!({
+                    "planInfo": {"planName": "Max", "hideDailyQuota": hide_daily},
+                    "dailyQuotaRemainingPercent": 100,
+                    "dailyQuotaResetAtUnix": "1790553600",
+                    "weeklyQuotaResetAtUnix": "1790812800",
+                    "overageBalanceMicros": "-44347"
+                })),
+                &DEVIN_CARD,
+            )
             .unwrap();
             let meters = meters(&reading);
             assert_eq!(
@@ -695,11 +846,14 @@ mod tests {
     #[test]
     fn a_malformed_weekly_percentage_is_unreadable_rather_than_used_up() {
         for malformed in [json!("abc"), json!(true), Value::Null] {
-            let error = usage(&status(json!({
-                "planInfo": {"planName": "Max"},
-                "weeklyQuotaRemainingPercent": malformed,
-                "weeklyQuotaResetAtUnix": "1790812800"
-            })))
+            let error = usage(
+                &status(json!({
+                    "planInfo": {"planName": "Max"},
+                    "weeklyQuotaRemainingPercent": malformed,
+                    "weeklyQuotaResetAtUnix": "1790812800"
+                })),
+                &DEVIN_CARD,
+            )
             .unwrap_err();
             assert_eq!(error.category, ErrorCategory::Decoding);
         }
@@ -707,16 +861,20 @@ mod tests {
 
     #[test]
     fn answers_without_quota_are_unavailable_and_other_shapes_unreadable() {
-        let error = usage(&status(json!({"planInfo": {"planName": "Max"}}))).unwrap_err();
+        let error = usage(
+            &status(json!({"planInfo": {"planName": "Max"}})),
+            &DEVIN_CARD,
+        )
+        .unwrap_err();
         assert_eq!(error.category, ErrorCategory::NotAvailable);
         assert_eq!(error.message, UNAVAILABLE);
-        let error = usage(&json!({"code": "internal"})).unwrap_err();
+        let error = usage(&json!({"code": "internal"}), &DEVIN_CARD).unwrap_err();
         assert_eq!(error.category, ErrorCategory::Decoding);
     }
 
     #[test]
     fn a_zero_balance_stays_a_real_zero_and_no_plan_name_means_no_plan() {
-        let reading = usage(&status(json!({"overageBalanceMicros": "0"}))).unwrap();
+        let reading = usage(&status(json!({"overageBalanceMicros": "0"})), &DEVIN_CARD).unwrap();
         assert_eq!(balance(&reading), Some(0.0));
         assert_eq!(reading.plan, None);
     }
@@ -868,6 +1026,57 @@ mod tests {
         assert_eq!(tried, vec![(APP_KEY, CUSTOM), (APP_KEY, DEFAULT_SERVER)]);
     }
 
+    #[tokio::test]
+    async fn a_pasted_cli_key_reads_the_quota_on_the_default_server() {
+        let http = Scripted::new().on("POST", &url(DEFAULT_SERVER), 200, &answer("Pro"));
+        let scope = context_at(&http, json!({ "apiKey": "cli-key" }), now());
+        let reading = Devin.fetch(&scope.context()).await.unwrap();
+        assert_eq!(reading.plan.as_deref(), Some("Pro"));
+        assert_eq!(body(&http.requests()[0])["metadata"]["apiKey"], "cli-key");
+    }
+
+    #[tokio::test]
+    async fn an_enterprise_admin_key_reads_this_months_acus_once_an_hour() {
+        let consumption = "https://api.devin.ai/v2/enterprise/consumption/daily?start_date=2026-09-01T08%3A00%3A00Z&end_date=2026-09-27T10%3A00%3A00Z";
+        let http = Scripted::new().on("GET", consumption, 200, r#"{"total_acus": 412.5}"#);
+        let scope = context_at(&http, json!({ "apiKey": "apk_user_abc" }), now());
+        for _ in 0..2 {
+            let reading = Devin.fetch(&scope.context()).await.unwrap();
+            assert_eq!(reading.plan.as_deref(), Some("Enterprise"));
+            assert_eq!(
+                reading.lines,
+                vec![lines::count_value(ENTERPRISE_ACUS, 412.5, "ACUs")]
+            );
+        }
+        let requests = http.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            header(&requests[0], "Authorization"),
+            Some("Bearer apk_user_abc")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_enterprise_key_says_which_key_is_needed() {
+        let http = Scripted::new().on(
+            "GET",
+            "https://api.devin.ai/v2/enterprise/consumption/daily?start_date=2026-09-01T08%3A00%3A00Z&end_date=2026-09-27T10%3A00%3A00Z",
+            403,
+            "{}",
+        );
+        let scope = context_at(&http, json!({ "apiKey": "apk_user_abc" }), now());
+        let error = Devin.fetch(&scope.context()).await.unwrap_err();
+        assert_eq!(error.message, ENTERPRISE_REFUSED);
+    }
+
+    #[test]
+    fn the_billing_month_starts_on_the_first_at_eight_utc() {
+        let at = |month, day, hour| Utc.with_ymd_and_hms(2026, month, day, hour, 0, 0).unwrap();
+        assert_eq!(month_start(at(9, 27, 10)), at(9, 1, 8));
+        assert_eq!(month_start(at(10, 1, 7)), at(9, 1, 8));
+        assert_eq!(month_start(at(10, 1, 8)), at(10, 1, 8));
+    }
+
     #[test]
     fn descriptors_read_the_lines_the_reader_writes() {
         let provider = Provider::new("devin@abc", NAME);
@@ -888,6 +1097,7 @@ mod tests {
                 ("devin@abc.daily", "Daily", DAILY),
                 ("devin@abc.weekly", "Weekly", WEEKLY),
                 ("devin@abc.extra", "Extra Usage", EXTRA),
+                ("devin@abc.enterprise", ENTERPRISE_ACUS, ENTERPRISE_ACUS),
             ]
         );
         let exports: Vec<(&str, LimitResourceKind, &str)> = descriptors
@@ -901,6 +1111,7 @@ mod tests {
                 ("daily", LimitResourceKind::Consumption, "percent"),
                 ("weekly", LimitResourceKind::Consumption, "percent"),
                 ("extraUsageBalance", LimitResourceKind::Balance, "usd"),
+                ("enterpriseAcus", LimitResourceKind::Consumption, "count"),
             ]
         );
         assert_eq!(

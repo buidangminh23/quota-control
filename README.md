@@ -161,13 +161,13 @@ feature; `all` is the default.
 | --- | --- |
 | Gemini | the Gemini CLI login on this computer; or a Google sign-in |
 | Antigravity | the Antigravity login on this computer; or a Google sign-in |
-| Copilot | the GitHub Copilot login on this computer; or a GitHub sign-in |
-| Cursor | the Cursor login on this computer; or a sign-in on cursor.com (Google, GitHub or email) |
-| Kiro | the Kiro login on this computer; or a Google or GitHub sign-in |
-| Grok | the Grok CLI login on this computer |
+| Copilot | the GitHub Copilot login on this computer; or a GitHub sign-in; or a classic personal access token (the quota, else this month's premium requests from GitHub billing) |
+| Cursor | the Cursor login on this computer; or a sign-in on cursor.com (Google, GitHub or email); or a pasted session cookie (WorkosCursorSessionToken); or an Enterprise team's Admin API key (team spend) |
+| Kiro | the Kiro login on this computer; or a Google or GitHub sign-in; or an API key (or `KIRO_API_KEY`) |
+| Grok | the Grok CLI login on this computer; or its pasted access token (lasts about a week) |
 | OpenCode | the OpenCode login on this computer; or an API key (or `OPENCODE_API_KEY`) |
 | Ollama | the Ollama login on this computer; or a sign-in on ollama.com (Google, GitHub or email) that links a key of its own; or an API key (or `OLLAMA_API_KEY`) (card starts hidden) |
-| Devin | the Devin login on this computer |
+| Devin | the Devin login on this computer; or the CLI's API key, or an Enterprise admin's personal key for the organization's ACUs (or `DEVIN_API_KEY`) |
 | Zed | the Zed login on this computer |
 | Qoder | the Qoder login on this computer; or an API key (or `QODER_PERSONAL_ACCESS_TOKEN`) |
 | CodeBuddy | an API key (or `CODEBUDDY_API_KEY`, `CODEBUDDY_AUTH_TOKEN`) |
@@ -238,7 +238,7 @@ feature; `all` is the default.
 | Vertex AI | the gcloud ADC login on this computer; or a pasted Google OAuth access token with Google Cloud project ID |
 | Warp | an API key (or `WARP_API_KEY`, `WARP_TOKEN`) |
 | Wayfinder | a pasted connection label (not sent) with Server address |
-| Windsurf | the Windsurf login on this computer |
+| Windsurf | the Windsurf login on this computer; or an account API key, or an Enterprise service key for the team's add-on credits (or `WINDSURF_API_KEY`) |
 | ZoomMate | a pasted session bearer token (Authorization) |
 | IBM Bob | an API key (or `BOBSHELL_API_KEY`) |
 | Cerebras | an API key (or `CEREBRAS_API_KEY`) |
@@ -246,8 +246,9 @@ feature; `all` is the default.
 | Novita AI | an API key (or `NOVITA_API_KEY`) |
 | NanoGPT | an API key (or `NANOGPT_API_KEY`) |
 | Hyperbolic | an API key (or `HYPERBOLIC_API_KEY`) |
+| OpenAI-compatible relay (One API, New API) | an API key with Relay address |
 
-Not readable yet: TypeSafe (its billing needs a page action discovered at run time), CodeRabbit (it shows usage only through its CLI), OpenAI-compatible relay (its billing does not say whether amounts are dollars, yuan or tokens).
+Not readable yet: TypeSafe (its billing needs a page action discovered at run time), CodeRabbit (it shows usage only through its CLI).
 
 <!-- services:end -->
 

@@ -11,6 +11,9 @@
 //! A renewed login is written back to `auth.json` and its refresh token may rotate, so the saved
 //! access token is used as it is and never renewed here: once it has expired, or Grok refuses it, the
 //! card asks to run `grok` once, which renews it.
+//!
+//! The CLI's access token (`key` in `auth.json`) can also be pasted in Quota Control; it is read the
+//! same way and lasts about a week, after which the card asks for a fresh copy.
 
 use std::path::{Path, PathBuf};
 
@@ -22,7 +25,9 @@ use uc_core::{
     HttpRequest, MetricLine, Provider, ProviderLink, SimpleProviderError, WidgetDescriptor,
 };
 
-use crate::service::{Connection, FetchContext, Login, Reading, Roots, Secret, Service};
+use crate::service::{
+    ApiKeyHelp, Connection, FetchContext, Login, Reading, Roots, Secret, Service,
+};
 use crate::support::{apps, http, jwt, lines, value};
 
 pub(crate) struct Grok;
@@ -84,7 +89,15 @@ impl Service for Grok {
     }
 
     fn connection(&self) -> Connection {
-        Connection::login(APP)
+        Connection::login(APP).or_api_key(ApiKeyHelp {
+            env: &[],
+            url: "https://grok.com",
+            fields: &[],
+        })
+    }
+
+    fn key_label(&self) -> &'static str {
+        "Grok CLI access token (key in ~/.grok/auth.json)"
     }
 
     fn discover(&self, roots: &Roots) -> Vec<Login> {
@@ -120,9 +133,19 @@ impl Service for Grok {
     }
 
     async fn fetch(&self, context: &FetchContext<'_>) -> Result<Reading, SimpleProviderError> {
-        let token = context.secret.str("/key").ok_or_else(|| {
-            http::invalid("The Grok CLI login has no access token. Run grok login again.")
-        })?;
+        let pasted = context.secret.key();
+        let token = pasted
+            .or_else(|| context.secret.str("/key"))
+            .ok_or_else(|| {
+                http::invalid("The Grok CLI login has no access token. Run grok login again.")
+            })?;
+        let expired = || {
+            if pasted.is_some() {
+                http::expired(PASTED_EXPIRED)
+            } else {
+                expired()
+            }
+        };
         let expires =
             jwt::expires_at(token).or_else(|| value::time(context.secret.value(), "/expiresAt"));
         if expires.is_some_and(|expires| expires <= context.now) {
@@ -231,6 +254,10 @@ fn fingerprint(secret: &str) -> String {
         .map(|byte| format!("{byte:02x}"))
         .collect()
 }
+
+/// A pasted CLI token lasts about a week; the CLI renews its own.
+const PASTED_EXPIRED: &str =
+    "The pasted Grok token expired. Run grok once, then copy key from ~/.grok/auth.json again.";
 
 fn expired() -> SimpleProviderError {
     http::expired("The Grok CLI login expired. Run grok once to renew it.")
@@ -647,6 +674,30 @@ mod tests {
             assert_eq!(header(request, "X-XAI-Token-Auth"), Some("xai-grok-cli"));
             assert_eq!(header(request, "Accept"), Some("application/json"));
         }
+    }
+
+    #[tokio::test]
+    async fn a_pasted_cli_token_is_read_like_the_login_and_asks_for_a_fresh_copy_when_refused() {
+        let token = access_token(json!({}));
+        let http = Scripted::new()
+            .on("GET", CREDITS, 200, &credits(captured()))
+            .on(
+                "GET",
+                SETTINGS,
+                200,
+                r#"{"subscription_tier_display":"SuperGrok"}"#,
+            );
+        let scope = context_at(&http, json!({ "apiKey": token }), now());
+        let reading = Grok.fetch(&scope.context()).await.unwrap();
+        assert_eq!(reading.plan.as_deref(), Some("SuperGrok"));
+        assert_eq!(
+            header(&http.requests()[0], "Authorization"),
+            Some(format!("Bearer {token}").as_str())
+        );
+        let refused = Scripted::new().on("GET", CREDITS, 401, "{}");
+        let scope = context_at(&refused, json!({ "apiKey": token }), now());
+        let error = Grok.fetch(&scope.context()).await.unwrap_err();
+        assert_eq!(error.message, PASTED_EXPIRED);
     }
 
     #[tokio::test]

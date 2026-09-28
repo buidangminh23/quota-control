@@ -10,13 +10,47 @@
 //! A refresh sends no request: it reads the `quotaUsage`, `usage`, `planName` and `endTimestamp`
 //! of the JSON the login carries, so the card shows what Windsurf fetched the last time it
 //! refreshed its plan.
+//!
+//! A key pasted in Quota Control (or found in `WINDSURF_API_KEY`) is read live instead. An
+//! account's own API key goes to the same `GetUserStatus` Connect RPC on `server.codeium.com` that
+//! Devin's card reads (Windsurf and Devin share the account server), for the daily and weekly quota
+//! and the extra usage balance. A key that endpoint refuses is tried as an Enterprise team's service
+//! key (Billing Read) against `POST https://server.codeium.com/api/v1/GetTeamCreditBalance`, whose
+//! add-on credits used and still available this billing cycle make the Add-on Credits meter. The
+//! kind of key that answered is remembered for 12 hours.
 
 use async_trait::async_trait;
-use serde_json::Value;
-use uc_core::{Provider, SimpleProviderError, WidgetDescriptor};
+use chrono::Duration;
+use serde_json::{Value, json};
+use uc_core::{
+    ErrorCategory, HttpRequest, LimitResourceKind, LimitResourceSource, MetricKind, Provider,
+    SimpleProviderError, WidgetDescriptor,
+};
 
-use crate::service::{Connection, FetchContext, Login, Reading, Roots, Secret, Service};
+use super::devin::{StatusCard, USER_STATUS_SERVER, read_user_status};
+use crate::service::{
+    ApiKeyHelp, Connection, FetchContext, Login, Reading, Roots, Secret, Service,
+};
 use crate::support::{apps, http, lines, value};
+
+const NAME: &str = "Windsurf";
+const EXTRA: &str = "Extra Usage";
+const ADD_ON: &str = "Add-on Credits";
+const KEY_REFUSED: &str = "Windsurf refused the key. Paste your account's API key, or an Enterprise service key with Billing Read.";
+const TEAM_BALANCE: &str = "https://server.codeium.com/api/v1/GetTeamCreditBalance";
+/// Memo key: which kind of key answered last, "account" or "team".
+const KEY_KIND: &str = "windsurf.key";
+
+/// How a `GetUserStatus` answer is named on Windsurf's card.
+const WINDSURF_CARD: StatusCard = StatusCard {
+    name: NAME,
+    ide: "windsurf",
+    expired: KEY_REFUSED,
+    unavailable: "Windsurf quota data unavailable. Try again later.",
+    daily: "Daily",
+    weekly: "Weekly",
+    extra: EXTRA,
+};
 
 pub(crate) struct Windsurf;
 
@@ -31,7 +65,11 @@ impl Service for Windsurf {
     }
 
     fn connection(&self) -> Connection {
-        Connection::login("Windsurf")
+        Connection::login("Windsurf").or_api_key(ApiKeyHelp {
+            env: &["WINDSURF_API_KEY"],
+            url: "https://windsurf.com/subscription/usage",
+            fields: &[],
+        })
     }
 
     fn discover(&self, roots: &Roots) -> Vec<Login> {
@@ -48,7 +86,7 @@ impl Service for Windsurf {
     }
 
     fn descriptors(&self, provider: &Provider) -> Vec<WidgetDescriptor> {
-        [("daily", "Daily"), ("weekly", "Weekly")]
+        let mut descriptors: Vec<WidgetDescriptor> = [("daily", "Daily"), ("weekly", "Weekly")]
             .into_iter()
             .map(|(id, title)| {
                 WidgetDescriptor::percent(
@@ -60,10 +98,43 @@ impl Service for Windsurf {
                 )
                 .exporting_progress(id, "percent")
             })
-            .collect()
+            .collect();
+        descriptors.push(
+            WidgetDescriptor::dollar_balance(
+                format!("{}.extra", provider.id),
+                provider,
+                EXTRA,
+                None,
+                "left",
+            )
+            .exporting_limit(
+                "extraUsageBalance",
+                LimitResourceKind::Balance,
+                "usd",
+                LimitResourceSource::Value {
+                    kind: MetricKind::Dollars,
+                    label: None,
+                },
+                false,
+            ),
+        );
+        descriptors.push(
+            WidgetDescriptor::percent(
+                format!("{}.addOn", provider.id),
+                provider,
+                ADD_ON,
+                None,
+                None,
+            )
+            .exporting_progress("addOnCredits", "percent"),
+        );
+        descriptors
     }
 
     async fn fetch(&self, context: &FetchContext<'_>) -> Result<Reading, SimpleProviderError> {
+        if let Some(key) = context.secret.key() {
+            return keyed(context, key).await;
+        }
         let plan_info = context.secret.value();
         let mut meters = vec![];
         for (field, reset, title, period) in [
@@ -124,6 +195,96 @@ impl Service for Windsurf {
             }
         })))
     }
+}
+
+/// A pasted key: the account's quota, else the team's add-on credits, starting with the kind of
+/// key that answered last.
+async fn keyed(context: &FetchContext<'_>, key: &str) -> Result<Reading, SimpleProviderError> {
+    let team_first = context
+        .memo
+        .get(KEY_KIND, context.now)
+        .await
+        .is_some_and(|kind| kind.as_str() == Some("team"));
+    let order: [bool; 2] = if team_first {
+        [true, false]
+    } else {
+        [false, true]
+    };
+    let mut refused = false;
+    let mut failure = None;
+    for team in order {
+        let result = if team {
+            team_balance(context, key).await
+        } else {
+            read_user_status(context, key, USER_STATUS_SERVER, &WINDSURF_CARD).await
+        };
+        match result {
+            Ok(reading) => {
+                let kind = if team { "team" } else { "account" };
+                context
+                    .memo
+                    .put(
+                        KEY_KIND,
+                        json!(kind),
+                        Some(context.now + Duration::hours(12)),
+                    )
+                    .await;
+                return Ok(reading);
+            }
+            Err(error) if error.category == ErrorCategory::RateLimited => return Err(error),
+            Err(error) => {
+                refused |= error.category == ErrorCategory::AuthExpired;
+                failure.get_or_insert(error);
+            }
+        }
+    }
+    if refused {
+        return Err(http::invalid(KEY_REFUSED));
+    }
+    Err(failure.unwrap_or_else(|| http::invalid(KEY_REFUSED)))
+}
+
+/// An Enterprise team's add-on credits this billing cycle, read with its service key.
+async fn team_balance(
+    context: &FetchContext<'_>,
+    key: &str,
+) -> Result<Reading, SimpleProviderError> {
+    let request = HttpRequest::post(TEAM_BALANCE)
+        .header("Accept", "application/json")
+        .json_body(&json!({ "service_key": key }));
+    let response = http::send(context.http, request, NAME).await?;
+    match response.status {
+        401 | 403 => return Err(http::expired(KEY_REFUSED)),
+        _ if !response.is_success() => return Err(http::status_error(&response, NAME)),
+        _ => {}
+    }
+    let body = http::parse(&response, NAME)?;
+    let used = value::number(&body, "/addOnCreditsUsed")
+        .unwrap_or(0.0)
+        .max(0.0);
+    let left = value::number(&body, "/addOnCreditsAvailable")
+        .ok_or_else(|| http::decoding(NAME))?
+        .max(0.0);
+    let ends_at = value::time(&body, "/billingCycleEnd");
+    let period = value::time(&body, "/billingCycleStart")
+        .zip(ends_at)
+        .map(|(start, end)| (end - start).num_milliseconds())
+        .filter(|period| *period > 0);
+    let meter = lines::percent_of(ADD_ON, used, used + left, ends_at, period)
+        .unwrap_or_else(|| lines::percent(ADD_ON, 0.0, ends_at, period));
+    let seats = value::number(&body, "/numSeats").filter(|seats| *seats > 0.0);
+    let plan = match seats {
+        Some(seats) => format!("Enterprise · {seats:.0} seats"),
+        None => "Enterprise".to_string(),
+    };
+    Ok(
+        Reading::new(Some(plan), vec![meter]).with_plan_term(ends_at.map(|ends_at| {
+            uc_core::PlanTerm::Stated {
+                ends_at,
+                checked_at: None,
+            }
+        })),
+    )
 }
 
 /// The `cachedPlanInfo` JSON of the Windsurf state database at `path`, opened read-only in place.
@@ -203,6 +364,67 @@ mod tests {
             ]
         );
         assert!(http.requests().is_empty());
+    }
+
+    const STATUS: &str =
+        "https://server.codeium.com/exa.seat_management_pb.SeatManagementService/GetUserStatus";
+
+    #[tokio::test]
+    async fn an_account_key_reads_the_live_quota_under_windsurfs_titles() {
+        let answer = json!({"userStatus": {"planStatus": {
+            "planInfo": {"planName": "Pro"},
+            "dailyQuotaRemainingPercent": 80,
+            "weeklyQuotaRemainingPercent": 60,
+            "overageBalanceMicros": "2500000"
+        }}});
+        let http = Scripted::new().on("POST", STATUS, 200, &answer.to_string());
+        let scope = context_at(&http, json!({"apiKey": "ws-key"}), Utc::now());
+        let reading = Windsurf.fetch(&scope.context()).await.unwrap();
+        assert_eq!(reading.plan.as_deref(), Some("Pro"));
+        let labels: Vec<&str> = reading.lines.iter().map(|line| line.label()).collect();
+        assert_eq!(labels, vec!["Daily", "Weekly", EXTRA]);
+        let request = &http.requests()[0];
+        let body: Value = serde_json::from_slice(request.body.as_deref().unwrap()).unwrap();
+        assert_eq!(body["metadata"]["apiKey"], "ws-key");
+        assert_eq!(body["metadata"]["ideName"], "windsurf");
+    }
+
+    #[tokio::test]
+    async fn a_service_key_the_account_endpoint_refuses_reads_the_teams_add_on_credits() {
+        let http = Scripted::new().on("POST", STATUS, 401, "{}").on(
+            "POST",
+            TEAM_BALANCE,
+            200,
+            r#"{"promptCreditsPerSeat":500,"numSeats":50,"addOnCreditsAvailable":6500,
+                    "addOnCreditsUsed":3500,"billingCycleStart":"2026-09-01T00:00:00Z",
+                    "billingCycleEnd":"2026-10-01T00:00:00Z"}"#,
+        );
+        let scope = context_at(&http, json!({"apiKey": "svc-key"}), Utc::now());
+        let reading = Windsurf.fetch(&scope.context()).await.unwrap();
+        assert_eq!(reading.plan.as_deref(), Some("Enterprise · 50 seats"));
+        assert_eq!(reading.lines.len(), 1);
+        assert_eq!(reading.lines[0].label(), ADD_ON);
+        let requests = http.requests();
+        let body: Value = serde_json::from_slice(requests[1].body.as_deref().unwrap()).unwrap();
+        assert_eq!(body, json!({"service_key": "svc-key"}));
+        let again = Windsurf.fetch(&scope.context()).await.unwrap();
+        assert_eq!(again.lines.len(), 1);
+        assert_eq!(
+            http.requests().len(),
+            3,
+            "the team route is tried first once it answered"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_key_both_endpoints_refuse_says_which_keys_work() {
+        let http =
+            Scripted::new()
+                .on("POST", STATUS, 401, "{}")
+                .on("POST", TEAM_BALANCE, 403, "{}");
+        let scope = context_at(&http, json!({"apiKey": "bad"}), Utc::now());
+        let error = Windsurf.fetch(&scope.context()).await.unwrap_err();
+        assert_eq!(error.message, KEY_REFUSED);
     }
 
     #[test]

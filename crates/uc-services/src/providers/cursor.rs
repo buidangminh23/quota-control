@@ -13,6 +13,12 @@
 //! from the same token. A refresh sends at most four requests; the plan and the credit balance are
 //! remembered between refreshes.
 //!
+//! A key pasted in Quota Control is either the `WorkosCursorSessionToken` cookie of a signed-in
+//! cursor.com tab (`<user id>%3A%3A<token>`, or the token alone), read exactly as the app's login,
+//! or an Enterprise team's Admin API key, read against `POST https://api.cursor.com/teams/spend`
+//! with the key as the Basic user name: the team's spend this billing cycle (`spendCents`) and its
+//! fast premium requests, added up over every page of members (at most five pages of 100).
+//!
 //! Signing in from Quota Control uses the browser sign-in of the Cursor SDK and CLI: cursor.com's
 //! page links a random id and a PKCE challenge to the account the user signs in with (Google,
 //! GitHub or email, chosen on that page), and the app asks `api2.cursor.sh/auth/poll` for the tokens
@@ -32,7 +38,9 @@ use uc_core::{
     ProviderLink, SimpleProviderError, WidgetDescriptor,
 };
 
-use crate::service::{Connection, FetchContext, Login, Reading, Roots, Secret, Service};
+use crate::service::{
+    ApiKeyHelp, Connection, FetchContext, Login, Reading, Roots, Secret, Service,
+};
 use crate::signin::{
     self, Converted, Look, Method, Pending, Poll, Polling, SignIn, SignedIn, StartContext,
 };
@@ -63,6 +71,14 @@ const REQUESTS: &str = "Requests";
 const CREDITS: &str = "Credits";
 
 const EXPIRED: &str = "The Cursor login expired. Open Cursor once to renew it.";
+const COOKIE_EXPIRED: &str =
+    "The pasted Cursor session expired. Copy WorkosCursorSessionToken from cursor.com again.";
+const ADMIN_REFUSED: &str = "Cursor refused the key. Paste an Enterprise team's Admin API key, or the WorkosCursorSessionToken cookie of cursor.com.";
+const TEAM_SPEND_URL: &str = "https://api.cursor.com/teams/spend";
+const TEAM_SPEND: &str = "Team Spend";
+const TEAM_REQUESTS: &str = "Team Premium Requests";
+/// Pages of 100 members read from `teams/spend` at most.
+const MAX_SPEND_PAGES: u64 = 5;
 const NO_SUBSCRIPTION: &str = "No active Cursor subscription.";
 const ENTERPRISE_UNAVAILABLE: &str = "Enterprise usage data unavailable. Try again later.";
 const TEAM_UNAVAILABLE: &str = "Team request-based usage data unavailable. Try again later.";
@@ -100,7 +116,15 @@ impl Service for Cursor {
     }
 
     fn connection(&self) -> Connection {
-        Connection::login(APP)
+        Connection::login(APP).or_api_key(ApiKeyHelp {
+            env: &[],
+            url: "https://cursor.com/dashboard",
+            fields: &[],
+        })
+    }
+
+    fn key_label(&self) -> &'static str {
+        "Admin API key or session cookie (WorkosCursorSessionToken)"
     }
 
     fn sign_in(&self) -> Option<&'static dyn SignIn> {
@@ -187,10 +211,64 @@ impl Service for Cursor {
                     },
                     false,
                 ),
+            WidgetDescriptor::values(
+                id("teamSpend"),
+                provider,
+                TEAM_SPEND,
+                None,
+                Some(MetricKind::Dollars),
+                None,
+                true,
+                None,
+                false,
+            )
+            .exporting_limit(
+                "teamSpend",
+                LimitResourceKind::Consumption,
+                "usd",
+                LimitResourceSource::Value {
+                    kind: MetricKind::Dollars,
+                    label: None,
+                },
+                false,
+            ),
+            WidgetDescriptor::values(
+                id("teamRequests"),
+                provider,
+                TEAM_REQUESTS,
+                None,
+                Some(MetricKind::Count),
+                None,
+                true,
+                None,
+                false,
+            )
+            .exporting_limit(
+                "teamPremiumRequests",
+                LimitResourceKind::Consumption,
+                "count",
+                LimitResourceSource::Value {
+                    kind: MetricKind::Count,
+                    label: None,
+                },
+                false,
+            ),
         ]
     }
 
     async fn fetch(&self, context: &FetchContext<'_>) -> Result<Reading, SimpleProviderError> {
+        let pasted_session;
+        let pasted = context.secret.key();
+        let base = match pasted {
+            Some(key) => match cookie_token(key) {
+                Some(token) => {
+                    pasted_session = Secret::new(json!({ "accessToken": token }));
+                    &pasted_session
+                }
+                None => return team_spend(context, key).await,
+            },
+            None => context.secret,
+        };
         let renewed = renew_if_due(context).await;
         let fresh;
         let secret = match renewed {
@@ -199,10 +277,12 @@ impl Service for Cursor {
                 fresh = Secret::owned(document);
                 &fresh
             }
-            None => context.secret,
+            None => base,
         };
         let expired = || {
-            http::expired(if secret.is_owned() {
+            http::expired(if pasted.is_some() {
+                COOKIE_EXPIRED
+            } else if secret.is_owned() {
                 oauth::SIGN_IN_EXPIRED
             } else {
                 EXPIRED
@@ -467,6 +547,71 @@ fn connect(method: &str, token: &str) -> HttpRequest {
         .bearer(token)
         .header("Connect-Protocol-Version", "1")
         .json_body(&json!({}))
+}
+
+/// The session token inside a pasted `WorkosCursorSessionToken` value (`<user>%3A%3A<token>`, with
+/// or without the cookie's name), or a pasted token alone; `None` for anything that is not a JWT,
+/// which is then taken for an Admin API key.
+fn cookie_token(pasted: &str) -> Option<&str> {
+    let value = pasted
+        .strip_prefix("WorkosCursorSessionToken=")
+        .unwrap_or(pasted);
+    let token = value
+        .rsplit_once("%3A%3A")
+        .or_else(|| value.rsplit_once("::"))
+        .map_or(value, |(_, token)| token);
+    (token.split('.').count() == 3 && jwt::expires_at(token).is_some()).then_some(token)
+}
+
+/// An Enterprise team's spend and fast premium requests this billing cycle, over every page of
+/// members, read with its Admin API key.
+async fn team_spend(context: &FetchContext<'_>, key: &str) -> Result<Reading, SimpleProviderError> {
+    use base64::Engine;
+    let basic = base64::engine::general_purpose::STANDARD.encode(format!("{key}:"));
+    let mut cents = 0.0;
+    let mut requests = 0.0;
+    let mut members = None;
+    let mut page = 1;
+    loop {
+        let request = HttpRequest::post(TEAM_SPEND_URL)
+            .header("Authorization", format!("Basic {basic}"))
+            .header("Accept", "application/json")
+            .json_body(&json!({ "page": page, "pageSize": 100 }));
+        let response = http::send(context.http, request, APP).await?;
+        match response.status {
+            401 | 403 => return Err(http::invalid(ADMIN_REFUSED)),
+            _ if !response.is_success() => return Err(http::status_error(&response, APP)),
+            _ => {}
+        }
+        let body = http::parse(&response, APP)?;
+        let spend = body
+            .get("teamMemberSpend")
+            .and_then(Value::as_array)
+            .ok_or_else(|| http::decoding(APP))?;
+        for member in spend {
+            cents += value::number(member, "/spendCents").unwrap_or(0.0).max(0.0);
+            requests += value::number(member, "/fastPremiumRequests")
+                .unwrap_or(0.0)
+                .max(0.0);
+        }
+        members = members.or_else(|| value::number(&body, "/totalMembers"));
+        let pages = value::number(&body, "/totalPages").unwrap_or(1.0);
+        if (page as f64) >= pages || page >= MAX_SPEND_PAGES {
+            break;
+        }
+        page += 1;
+    }
+    let plan = match members.filter(|members| *members > 0.0) {
+        Some(members) => format!("Team · {members:.0} members"),
+        None => "Team".to_string(),
+    };
+    Ok(Reading::new(
+        Some(plan),
+        vec![
+            lines::dollar_value(TEAM_SPEND, cents / 100.0),
+            lines::count_value(TEAM_REQUESTS, requests, "requests"),
+        ],
+    ))
 }
 
 /// A `cursor.com` dashboard API call with the web session cookie.
@@ -1213,6 +1358,82 @@ mod tests {
             .on("POST", &rpc("GetSandUsageStatus"), 200, GROK)
             .on("POST", &rpc("GetCreditGrantsBalance"), 200, GRANTS)
             .on("GET", &format!("{WEB}/auth/stripe"), 200, STRIPE)
+    }
+
+    #[tokio::test]
+    async fn a_pasted_session_cookie_is_read_as_the_apps_login() {
+        let jwt = token("auth0|user_123", now() + Duration::days(30));
+        let cookie = format!("user_123%3A%3A{jwt}");
+        let http = pro_account();
+        let scope = context_at(&http, json!({ "apiKey": cookie }), now());
+        let reading = Cursor.fetch(&scope.context()).await.unwrap();
+        assert!(!reading.lines.is_empty());
+        let requests = http.requests();
+        assert_eq!(requests[0].url, rpc("GetCurrentPeriodUsage"));
+        assert_eq!(
+            header(&requests[0], "Authorization"),
+            Some(format!("Bearer {jwt}").as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn an_expired_pasted_cookie_asks_for_a_fresh_one() {
+        let jwt = token("auth0|user_123", now() - Duration::days(1));
+        let scope = context_at(
+            &Scripted::new(),
+            json!({ "apiKey": format!("WorkosCursorSessionToken=user_123::{jwt}") }),
+            now(),
+        );
+        let error = Cursor.fetch(&scope.context()).await.unwrap_err();
+        assert_eq!(error.message, COOKIE_EXPIRED);
+    }
+
+    #[tokio::test]
+    async fn an_admin_key_adds_up_the_teams_spend_over_every_page() {
+        let page = |members: &str, page: u32| {
+            format!(
+                r#"{{"teamMemberSpend":[{members}],"subscriptionCycleStart":1788220800000,"totalMembers":3,"totalPages":2,"page":{page}}}"#
+            )
+        };
+        let http = Scripted::new()
+            .on(
+                "POST",
+                TEAM_SPEND_URL,
+                200,
+                &page(r#"{"spendCents":2450.5,"fastPremiumRequests":1250},{"spendCents":1875.5,"fastPremiumRequests":980}"#, 1),
+            );
+        let scope = context_at(&http, json!({ "apiKey": "key_admin" }), now());
+        let reading = Cursor.fetch(&scope.context()).await.unwrap();
+        assert_eq!(reading.plan.as_deref(), Some("Team · 3 members"));
+        assert_eq!(
+            reading.lines,
+            vec![
+                lines::dollar_value(TEAM_SPEND, 86.52),
+                lines::count_value(TEAM_REQUESTS, 4460.0, "requests"),
+            ]
+        );
+        let requests = http.requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            header(&requests[0], "Authorization"),
+            Some(
+                format!(
+                    "Basic {}",
+                    base64::engine::general_purpose::STANDARD.encode("key_admin:")
+                )
+                .as_str()
+            )
+        );
+        let second: Value = serde_json::from_slice(requests[1].body.as_deref().unwrap()).unwrap();
+        assert_eq!(second["page"], 2);
+    }
+
+    #[tokio::test]
+    async fn a_refused_admin_key_says_which_keys_work() {
+        let http = Scripted::new().on("POST", TEAM_SPEND_URL, 401, "{}");
+        let scope = context_at(&http, json!({ "apiKey": "key_bad" }), now());
+        let error = Cursor.fetch(&scope.context()).await.unwrap_err();
+        assert_eq!(error.message, ADMIN_REFUSED);
     }
 
     fn start_context(http: &Scripted) -> StartContext {
@@ -1970,6 +2191,20 @@ mod tests {
                     "requests"
                 ),
                 ("cursor@abc.credits", CREDITS, CREDITS, "credits", "usd"),
+                (
+                    "cursor@abc.teamSpend",
+                    TEAM_SPEND,
+                    TEAM_SPEND,
+                    "teamSpend",
+                    "usd"
+                ),
+                (
+                    "cursor@abc.teamRequests",
+                    TEAM_REQUESTS,
+                    TEAM_REQUESTS,
+                    "teamPremiumRequests",
+                    "count"
+                ),
             ]
         );
         assert_eq!(
