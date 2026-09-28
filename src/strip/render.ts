@@ -2,8 +2,9 @@
  * Canvas renderers for the taskbar: the Bars glyph pushed into the tray icon (upstream
  * `MenuBarBars`, with the same pad/gap/radius rules and fill geometry) and the text strip of provider
  * marks with their values stacked two high (upstream `MenuBarTextStrip`). The taskbar style is
- * scaled to the Windows taskbar the way the system clock stacks time over date; the menu bar style
- * keeps upstream's own macOS metrics, drawn black so macOS tints the template for the menu bar.
+ * scaled to the Windows taskbar the way the system clock stacks time over date; the menu bar and
+ * panel styles keep the same picture (colored marks, window names, stacked readings) at the macOS
+ * menu bar's and the GNOME top bar's own sizes, so the three systems look alike.
  */
 import { colorArtUrl, PROVIDER_COLOR_ART } from "@/assets/providerColorArt";
 import { PROVIDER_MARKS } from "@/assets/providerMarks";
@@ -31,7 +32,7 @@ interface StripMetrics {
   labelGap: number;
 }
 
-const STRIP_METRICS: Readonly<Record<StripStyle, StripMetrics>> = {
+export const STRIP_METRICS: Readonly<Record<StripStyle, StripMetrics>> = {
   taskbar: {
     font: '"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif',
     singleSize: 14,
@@ -53,8 +54,8 @@ const STRIP_METRICS: Readonly<Record<StripStyle, StripMetrics>> = {
     markGap: 4,
     groupGap: 11,
     sidePadding: 2,
-    labelSize: null,
-    labelGap: 0,
+    labelSize: 7,
+    labelGap: 2,
   },
   panel: {
     font: 'Ubuntu, Cantarell, "Noto Sans", system-ui, sans-serif',
@@ -177,13 +178,12 @@ interface MeasuredGroup {
 }
 
 /**
- * The color of `brand`'s mark on the strip: on the Windows taskbar the brand's own tint for the
- * taskbar's light or dark theme, the one the popup gives the mark, or `color` for a brand without
- * one; the macOS menu bar keeps every mark in `color`, a template the system tints. A brand with an
- * official color logo (`providerColorArt.ts`) shows that logo on the taskbar instead.
+ * The color of `brand`'s mark on the strip: the brand's own tint for the bar's light or dark look,
+ * the one the popup gives the mark, or `color` for a brand without one. The Windows taskbar, the
+ * macOS menu bar and the Linux panel all show the same colored marks (Rules.md §0.58); a brand
+ * with an official color logo (`providerColorArt.ts`) shows that logo instead.
  */
-export function stripMarkColor(brand: string, color: "#000000" | "#ffffff", style: StripStyle): string {
-  if (style === "menuBar") return color;
+export function stripMarkColor(brand: string, color: "#000000" | "#ffffff", _style: StripStyle): string {
   return knownBrandColor(brand, color === "#ffffff") ?? color;
 }
 
@@ -215,7 +215,7 @@ export async function renderTextStrip(
   const width = Math.ceil(
     metrics.sidePadding * 2 * scale + groups.reduce((sum, group) => sum + group.width, 0) + metrics.groupGap * scale * (groups.length - 1),
   );
-  const art = new Map(await Promise.all(groups.map(async (group) => [group.brand, style !== "menuBar" ? await colorArtImage(group.brand) : null] as const)));
+  const art = new Map(await Promise.all(groups.map(async (group) => [group.brand, await colorArtImage(group.brand)] as const)));
   const [element, context] = canvas(width, height);
   context.textBaseline = "middle";
   context.textAlign = "right";

@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 use tauri::{AppHandle, PhysicalPosition, PhysicalRect, PhysicalSize, WebviewWindow};
 
 type IslandHandler = extern "C" fn(i32, f64, f64, f64, f64, f64);
+type AppearanceHandler = extern "C" fn(bool);
 
 unsafe extern "C" {
     fn qc_popup_configure(window: *mut c_void, radius: f64);
@@ -16,6 +17,7 @@ unsafe extern "C" {
     fn qc_island_update(bytes: *const u8, length: usize);
     fn qc_island_popup_visible(visible: bool);
     fn qc_widgets_reload();
+    fn qc_menu_bar_appearance_start(handler: Option<AppearanceHandler>);
 }
 
 /// Corner radius of the popup, in points.
@@ -24,6 +26,7 @@ const POPUP_RADIUS: f64 = 12.0;
 const ISLAND_OPEN: i32 = 1;
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
+static APPEARANCE: OnceLock<Box<dyn Fn(bool) + Send + Sync>> = OnceLock::new();
 
 /// Float the popup above the menu bar on every Space, full-screen apps included, with rounded
 /// corners and the system shadow.
@@ -55,6 +58,20 @@ pub fn update_island(document: &[u8]) {
 /// hover nor an alert covers the popup.
 pub fn set_popup_visible(visible: bool) {
     unsafe { qc_island_popup_visible(visible) }
+}
+
+/// Hear whether the menu bar reads dark, once now and on every change, on the main thread. Only
+/// the first listener is kept.
+pub fn watch_menu_bar_appearance(on_change: impl Fn(bool) + Send + Sync + 'static) {
+    if APPEARANCE.set(Box::new(on_change)).is_ok() {
+        unsafe { qc_menu_bar_appearance_start(Some(menu_bar_appearance)) }
+    }
+}
+
+extern "C" fn menu_bar_appearance(dark: bool) {
+    if let Some(listener) = APPEARANCE.get() {
+        listener(dark);
+    }
 }
 
 /// Ask WidgetKit to reload the desktop widget's timeline.

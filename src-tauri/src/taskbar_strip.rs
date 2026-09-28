@@ -67,7 +67,7 @@ const MAX_PNG_BYTES: usize = 4 * 1_048_576;
 const MAX_TEXT_CHARS: usize = 512;
 const MAX_TOOLTIP_CHARS: usize = 1024;
 /// Popup event carrying a changed [`TaskbarInfo`].
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 pub const TASKBAR_INFO_EVENT: &str = "taskbar-info";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -2077,17 +2077,20 @@ mod platform {
 #[cfg(target_os = "macos")]
 mod platform {
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use parking_lot::Mutex;
     use tauri::image::Image;
-    use tauri::{AppHandle, Runtime};
+    use tauri::{AppHandle, Emitter, Runtime};
 
-    use super::{Bitmap, StripClick, TaskbarEdge, TaskbarInfo, TaskbarTheme};
+    use super::{Bitmap, StripClick, TASKBAR_INFO_EVENT, TaskbarEdge, TaskbarInfo, TaskbarTheme};
 
     const TRAY_ID: &str = "main";
-    /// tray-icon draws every status item image this many points tall. Its plain `set_icon` also
-    /// clears the template flag, which leaves the black drawing black on a dark menu bar, so every
-    /// image goes through `set_icon_with_as_template`.
+    /// tray-icon draws every status item image this many points tall. The strip is drawn in color
+    /// like the Windows taskbar and the Linux panel, its text in the menu bar's own light or dark
+    /// color, so it goes up as a plain image; the Bars glyph and the resting icon stay templates
+    /// the system tints. Every image goes through `set_icon_with_as_template`, because plain
+    /// `set_icon` clears the flag.
     const ICON_POINTS: f64 = 18.0;
 
     #[derive(Default)]
@@ -2097,12 +2100,27 @@ mod platform {
         tooltip: String,
     }
 
-    type Show = Box<dyn Fn(Option<Image<'static>>, String) + Send + Sync>;
+    type Show = Box<dyn Fn(Option<Image<'static>>, String, bool) + Send + Sync>;
 
     pub struct Strip {
         images: Mutex<Images>,
         scale: f64,
+        dark: Arc<AtomicBool>,
         show: Show,
+    }
+
+    fn info_for(scale: f64, dark: bool) -> TaskbarInfo {
+        TaskbarInfo {
+            supported: true,
+            height: (ICON_POINTS * scale).round() as u32,
+            scale,
+            theme: if dark {
+                TaskbarTheme::Dark
+            } else {
+                TaskbarTheme::Light
+            },
+            edge: TaskbarEdge::Top,
+        }
     }
 
     impl Strip {
@@ -2118,15 +2136,31 @@ mod platform {
                 .map(|monitor| monitor.scale_factor())
                 .filter(|scale| scale.is_finite() && *scale >= 1.0)
                 .unwrap_or(2.0);
+            let dark = Arc::new(AtomicBool::new(false));
+            let watcher = app.clone();
+            let seen = Arc::clone(&dark);
+            crate::macos::watch_menu_bar_appearance(move |now| {
+                seen.store(now, Ordering::Relaxed);
+                if watcher
+                    .emit_to("popup", TASKBAR_INFO_EVENT, info_for(scale, now))
+                    .is_err()
+                {
+                    tracing::warn!("could not publish the menu bar appearance");
+                }
+            });
             Self {
                 images: Mutex::new(Images::default()),
                 scale,
-                show: Box::new(move |image, tooltip| {
+                dark,
+                show: Box::new(move |image, tooltip, template| {
                     let Some(tray) = app.tray_by_id(TRAY_ID) else {
                         return;
                     };
-                    let image = image.or_else(|| crate::menu_bar_icon().ok());
-                    if tray.set_icon_with_as_template(image, true).is_err()
+                    let (image, template) = match image {
+                        Some(image) => (Some(image), template),
+                        None => (crate::menu_bar_icon().ok(), true),
+                    };
+                    if tray.set_icon_with_as_template(image, template).is_err()
                         || tray
                             .set_tooltip(Some(tooltip).filter(|tip| !tip.is_empty()))
                             .is_err()
@@ -2138,13 +2172,7 @@ mod platform {
         }
 
         pub fn info(&self) -> TaskbarInfo {
-            TaskbarInfo {
-                supported: true,
-                height: (ICON_POINTS * self.scale).round() as u32,
-                scale: self.scale,
-                theme: TaskbarTheme::Light,
-                edge: TaskbarEdge::Top,
-            }
+            info_for(self.scale, self.dark.load(Ordering::Relaxed))
         }
 
         pub fn set(&self, bitmap: Option<Bitmap>) {
@@ -2168,14 +2196,14 @@ mod platform {
         }
 
         fn apply(&self) {
-            let (image, tooltip) = {
+            let (image, tooltip, template) = {
                 let images = self.images.lock();
                 match &images.strip {
-                    Some((image, tooltip)) => (Some(image.clone()), tooltip.clone()),
-                    None => (images.glyph.clone(), images.tooltip.clone()),
+                    Some((image, tooltip)) => (Some(image.clone()), tooltip.clone(), false),
+                    None => (images.glyph.clone(), images.tooltip.clone(), true),
                 }
             };
-            (self.show)(image, tooltip);
+            (self.show)(image, tooltip, template);
         }
     }
 }

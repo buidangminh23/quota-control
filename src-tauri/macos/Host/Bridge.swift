@@ -7,6 +7,8 @@ import WidgetKit
 
 public typealias QCIslandHandler = @convention(c) (Int32, Double, Double, Double, Double, Double) -> Void
 
+public typealias QCAppearanceHandler = @convention(c) (Bool) -> Void
+
 /// Island event codes passed to the handler.
 enum IslandEvent: Int32 {
     /// The island was clicked; the rectangle (top-left origin, points) and scale follow.
@@ -54,6 +56,13 @@ public func qcIslandPopupVisible(_ visible: Bool) {
     onMain { IslandController.shared.setPopupVisible(visible) }
 }
 
+/// Report whether the menu bar reads dark now and whenever that changes. The strip is drawn in
+/// color, not as a template the system tints, so its text color follows this.
+@_cdecl("qc_menu_bar_appearance_start")
+public func qcMenuBarAppearanceStart(_ handler: QCAppearanceHandler?) {
+    onMain { MenuBarAppearance.shared.start(handler: handler) }
+}
+
 @_cdecl("qc_widgets_reload")
 public func qcWidgetsReload() {
     WidgetCenter.shared.reloadAllTimelines()
@@ -76,5 +85,38 @@ enum PopupWindow {
             view.layer?.masksToBounds = true
         }
         window.invalidateShadow()
+    }
+}
+
+/// The menu bar's light or dark look. The status item's own window carries the appearance the
+/// menu bar draws with (on a transparent menu bar it follows the wallpaper), so it is read there,
+/// falling back to the app's appearance before the status item exists. A two-second check catches
+/// wallpaper and theme changes, which post no single notification.
+@MainActor
+final class MenuBarAppearance {
+    static let shared = MenuBarAppearance()
+
+    private var handler: QCAppearanceHandler?
+    private var timer: Timer?
+    private var last: Bool?
+
+    func start(handler: QCAppearanceHandler?) {
+        self.handler = handler
+        last = nil
+        check()
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+            MainActor.assumeIsolated { MenuBarAppearance.shared.check() }
+        }
+    }
+
+    private func check() {
+        let statusWindow = NSApp.windows.first { String(describing: type(of: $0)) == "NSStatusBarWindow" }
+        let appearance = statusWindow?.effectiveAppearance ?? NSApp.effectiveAppearance
+        let match = appearance.bestMatch(from: [.aqua, .darkAqua, .vibrantLight, .vibrantDark])
+        let dark = match == .darkAqua || match == .vibrantDark
+        guard dark != last else { return }
+        last = dark
+        handler?(dark)
     }
 }
