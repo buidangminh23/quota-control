@@ -5,7 +5,7 @@
 import type { ErrorCategory, LimitResetResult, UpdateFailureReason, UpdateFailureStage } from "@/lib/types";
 import type { PlanTermLeft } from "@/model/planTerm";
 import type { SpecialWing } from "@/model/glance";
-import type { GlanceContent, IslandLayout, IslandStyle, IslandView, TaskbarDisplay } from "@/model/settings";
+import type { GlanceContent, IslandLayout, IslandStyle, IslandView, ResetPart, TaskbarDisplay } from "@/model/settings";
 import type { PriceMessages, UsageMessages } from "./usageMessages";
 
 export type DisplayModeKey = "used" | "remaining";
@@ -228,17 +228,39 @@ export interface SettingsMessages {
   desktopWidgetNote: string;
   /** The widgets beyond the limit ones and which of them the content settings shape. */
   desktopWidgetKindsNote: string;
-  glanceContent: string;
-  glanceContentOption(content: GlanceContent): string;
-  glanceContentNote(content: GlanceContent): string;
-  glanceMetrics: string;
-  glanceMetricsNote: string;
+  /** The small headings that split a glance card: while closed, while open, how it behaves. */
+  glanceGroup(group: "closed" | "open" | "behavior" | "content"): string;
+  /** A view's name, as the popup's tab reads. */
+  glanceTabName(view: IslandView): string;
+  /** The chips choosing the views: the island's tabs, the Overview widget's parts. */
+  glanceTabs(surface: "island" | "widget"): string;
+  glanceTabsNote(surface: "island" | "widget"): string;
+  /** What each view's editor changes on the widgets. */
+  glanceWidgetScope(view: IslandView): string;
+  /** The editor of a view that is switched off on the island. */
+  glanceTabOff: string;
+  /** Quick ways to fill the metric list; `dashboard` and `starred` keep following the popup. */
+  glancePresets: string;
+  glancePreset(preset: GlanceContent | "all" | "none"): string;
+  /** What the list follows now, and that picking a metric by hand makes it a custom list. */
+  glanceFollowNote(content: GlanceContent): string;
+  /** A view editor's one-line summary, beside its name. */
+  glanceQuotaSummary(content: GlanceContent, metrics: number, accounts: number): string;
   glanceMetricsNone: string;
-  glanceShowAccount: string;
-  glanceShowPlan: string;
-  glanceShowResets: string;
-  glanceShowProblems: string;
+  /** `2/4` metrics of one account shown. */
+  glanceAccountCount(shown: number, total: number): string;
+  /** The chips choosing what each account shows besides its readings. */
+  glanceShows: string;
+  glanceShow(part: "account" | "plan" | "resets" | "problems"): string;
   glanceShowProblemsNote: string;
+  resetParts: string;
+  resetPart(part: ResetPart): string;
+  resetPartsSummary(shown: number, total: number): string;
+  /** Neither the Reset tab nor reset notifications is on, so the tracker has no data. */
+  resetPartsOff: string;
+  upcomingLimit: string;
+  upcomingLimitOption(limit: number): string;
+  upcomingNote: string;
   stripValues: string;
   stripValuesOption(count: 1 | 2): string;
   islandStyle: string;
@@ -250,12 +272,6 @@ export interface SettingsMessages {
   islandLayout: string;
   islandLayoutOption(layout: IslandLayout): string;
   islandLayoutNote(layout: IslandLayout): string;
-  /** The heading of the switches that pick what a combined island shows. */
-  islandSections: string;
-  islandView: string;
-  islandViewOption(view: IslandView): string;
-  /** `trackerOff`: neither the Reset tab nor reset notifications is on, so the tracker has no data. */
-  islandViewNote(view: IslandView, trackerOff: boolean): string;
   islandExpandOnHover: string;
   islandExpandOnHoverNote: string;
   islandAlerts: string;
@@ -369,6 +385,8 @@ export interface GlanceMessages {
   upcomingEmpty: string;
   /** The label of the wing counting the time since the last Codex reset. */
   sinceReset: string;
+  /** The open island's tab names, as the popup's tabs read. */
+  tabs: Record<IslandView, string>;
   /** A wing counting down to a moment, `span` being the time left: `sau 2 giờ`, `in 2h`. */
   wingIn(span: string): string;
   /** A wing counting the time since a moment: `đã 2 ngày`, `2d ago`. */

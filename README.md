@@ -64,8 +64,9 @@ After that the app updates itself like the Windows and Linux versions (see [Upda
   (marks at 16 points, one value at 12 points or two stacked, each with its window name such as
   `5h` or `week`), drawn in white on a dark menu bar and in black on a light one, or the Bars glyph
   as a template image.
-  **Settings → Menu Bar** picks what it lists (the Limits tab's accounts, the starred metrics, or a
-  hand-picked set) and whether each account shows one reading or two stacked.
+  **Settings → Menu Bar** picks what it lists (quick picks follow the Limits tab or the starred
+  metrics; any metric picked by hand makes a custom list) and whether each account shows one reading
+  or two stacked.
 - **Dynamic Island.** On a MacBook with a notch, a black island hugs the notch and its two wings
   carry a reading each, as a percentage, a ring or a bar. Hovering opens the details (or a click,
   when **Expand on Hover** is off): the accounts the island lists, with their meters, plans, emails
@@ -75,9 +76,13 @@ After that the app updates itself like the Windows and Linux versions (see [Upda
   the middle of the menu bar. **Settings → Dynamic Island** chooses the style, what sits beside
   each side of the notch (a metric, the soonest limit to come back, or the Codex reset tracker: the
   announced reset's countdown, the chance of a reset within 24 hours, 3 or 7 days, or the time since
-  the last one), what the open island shows (separate: one of the limits, the Codex reset tracker
-  or the limits coming back next; combined: any of them together) and which parts of an account it
-  shows.
+  the last one) and the tabs of the open island: **Limits**, **Codex Resets** and **Coming Back**,
+  any of them. With several tabs the open island has a tab bar, and a click on a tab shows that tab
+  in full (every account and reading, or the whole reset tracker with its calendar and rhythm),
+  trimming detail only when the screen is too short; **Stacked** shows the tabs together instead.
+  Each tab has its own options: the accounts and metrics of Limits (quick picks follow the Limits
+  tab or the stars, any metric can be switched on or off by hand) and what each account shows, the
+  parts of the reset tracker, and how many limits coming back are listed.
 - **Desktop widgets.** Right-click the desktop, choose **Edit Widgets** and search for Quota Control.
   Three quota styles come in small, medium, large and extra large: **Details** (meters, headlines
   and live reset countdowns), **Rings** (a percentage ring per metric) and **Compact** (one line per
@@ -88,8 +93,9 @@ After that the app updates itself like the Windows and Linux versions (see [Upda
   the chance of a reset within 24 hours, 3 and 7 days and the time since the last one, and **Codex
   Reset Calendar** shows the 20-week calendar and when resets tend to come (from
   [codex-resets.com](https://codex-resets.com), shown while the Reset tab or reset notifications are
-  on). **Settings → Desktop Widget** picks what the quota widgets list and which parts of an account
-  they show. At every launch the app also stops a widget process left over from an earlier version,
+  on). **Settings → Desktop Widget** picks the parts the Overview combines and, like the island, has
+  options per part: the accounts and metrics of the quota widgets, the parts of the reset tracker
+  the reset widgets show, and how many limits Coming Back lists. At every launch the app also stops a widget process left over from an earlier version,
   so the widgets always run the installed version's code. The app writes the readings to
   `~/Library/Application Support/usage-control/widget/glance.json` and asks WidgetKit to reload
   when a reading changes; the sandboxed widgets may read only that folder, not the accounts beside it. While the app is closed the

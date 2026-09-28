@@ -1,37 +1,50 @@
 /**
- * What the menu bar strip, the Dynamic Island and the desktop widgets show: the Hạn mức cards, the
- * starred metrics or a hand-picked set, plus how each account reads there (email, plan, reset time,
- * accounts that need attention) and, for the island, its closed style, the readings beside the
- * notch (a metric, the soonest limit reset or a Codex reset reading) and what the open island lists.
+ * What the menu bar strip, the Dynamic Island and the desktop widgets show. Each surface picks its
+ * views (the island's tabs, the Overview widget's parts), then tunes every view on its own: the
+ * limits list by account and metric with quick picks that can keep following the Hạn mức tab or the
+ * stars, the parts of the Codex reset tracker, and how many limits coming back are listed. The island
+ * also has its closed look (style and the readings beside the notch) and how it opens.
  */
-import { useMemo } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { messagesFor, type Language } from "@/i18n";
 import type { SettingsMessages } from "@/i18n/messages";
 import type { WidgetDescriptor } from "@/lib/types";
 import { SPECIAL_WINGS, type SpecialWing } from "@/model/glance";
-import { displayGroups, glanceCandidates, type ProviderMetrics } from "@/model/layout";
+import { glanceCandidates, glanceGroups, type ProviderMetrics } from "@/model/layout";
 import { cardIdentity, providerBrand } from "@/model/providerText";
 import {
-  GLANCE_CONTENTS,
   ISLAND_LAYOUTS,
-  ISLAND_VIEWS,
   ISLAND_STYLES,
+  ISLAND_VIEWS,
+  RESET_PARTS,
+  UPCOMING_LIMITS,
   type GlanceContent,
   type GlanceSurfaceSettings,
   type IslandSettings,
   type IslandView,
+  type ResetPart,
+  type ResetParts,
   type StripSettings,
   type TaskbarDisplay,
 } from "@/model/settings";
 import { descriptorTitle } from "@/model/widgetData";
 import { useIsEnabled, useSettings } from "@/state/hooks";
 import { updateSettings, useApp } from "@/state/store";
-import { Picker, Switch } from "../ui/controls";
+import { Chip, Picker, Switch } from "../ui/controls";
+import { ChevronRight } from "../ui/icons";
 import { ProviderMark } from "../ui/ProviderMark";
 import { Row, Section } from "./parts";
 
 const AUTO_WING = "auto";
 const STRIP_VALUES = ["two", "one"] as const;
+const SHOW_PARTS = ["account", "plan", "resets", "problems"] as const;
+type ShowPart = (typeof SHOW_PARTS)[number];
+const SHOW_KEYS: Readonly<Record<ShowPart, "showAccount" | "showPlan" | "showResets" | "showProblems">> = {
+  account: "showAccount",
+  plan: "showPlan",
+  resets: "showResets",
+  problems: "showProblems",
+};
 
 function patchStrip(patch: Partial<StripSettings>): void {
   updateSettings({ strip: { ...useApp.getState().settings.strip, ...patch } });
@@ -45,7 +58,7 @@ function patchWidget(patch: Partial<GlanceSurfaceSettings>): void {
   updateSettings({ widget: { ...useApp.getState().settings.widget, ...patch } });
 }
 
-/** Every enabled account card with all its metrics, the choices of a hand-picked set. */
+/** Every enabled account card with all its metrics: the choices of the limits list. */
 function useCandidates(): ProviderMetrics[] {
   const layout = useApp((state) => state.layout);
   const catalog = useApp((state) => state.catalog);
@@ -53,76 +66,183 @@ function useCandidates(): ProviderMetrics[] {
   return useMemo(() => glanceCandidates(layout, catalog, isEnabled), [layout, catalog, isEnabled]);
 }
 
-interface ContentProps {
-  content: GlanceContent;
-  metrics: readonly string[];
-  onChange: (patch: { content?: GlanceContent; metrics?: string[] }) => void;
-  text: SettingsMessages;
-  language: Language;
-}
-
-/** The content picker and, for a hand-picked set, one switch per metric under each account. */
-function ContentRows({ content, metrics, onChange, text, language }: ContentProps) {
+/** The metric ids a content choice shows now: what the tab or the stars hold, or the picked set. */
+function useShown(content: GlanceContent, metrics: readonly string[]): Set<string> {
   const layout = useApp((state) => state.layout);
   const catalog = useApp((state) => state.catalog);
   const isEnabled = useIsEnabled();
-  const candidates = useCandidates();
-  const picked = new Set(metrics);
+  return useMemo(
+    () => new Set(glanceGroups(content, metrics, layout, catalog, isEnabled).flatMap((group) => [...group.always, ...group.onDemand].map((descriptor) => descriptor.id))),
+    [content, metrics, layout, catalog, isEnabled],
+  );
+}
 
-  const choose = (value: GlanceContent) => {
-    if (value === "custom" && metrics.length === 0) {
-      const seeded = displayGroups(layout, catalog, isEnabled).flatMap((group) => [...group.always, ...group.onDemand].map((descriptor) => descriptor.id));
-      onChange({ content: value, metrics: seeded });
-      return;
-    }
-    onChange({ content: value });
+/** A small heading inside a settings card, splitting it into steps. */
+function SubHeading({ children }: { children: ReactNode }) {
+  return <h3 className="uc-settings-subhead">{children}</h3>;
+}
+
+/** Chips on their own lines under a label, with an optional note. */
+function ChipRow({ label, note, children }: { label?: string; note?: string; children: ReactNode }) {
+  return (
+    <div className="uc-chip-row">
+      {label ? <span className="uc-chip-row-label">{label}</span> : null}
+      <div className="uc-chips">{children}</div>
+      {note ? <p className="uc-settings-note is-flush">{note}</p> : null}
+    </div>
+  );
+}
+
+/** A view's options behind its name and a one-line summary; one opens at a time per surface. */
+function Disclosure({ title, summary, open, onToggle, children }: { title: string; summary: string; open: boolean; onToggle: () => void; children: ReactNode }) {
+  return (
+    <div className={`uc-disclosure${open ? " is-open" : ""}`}>
+      <button type="button" className="uc-disclosure-head" aria-expanded={open} onClick={onToggle}>
+        <span className="uc-disclosure-chevron">
+          <ChevronRight size={10} />
+        </span>
+        <span className="uc-disclosure-text">
+          <span className="uc-disclosure-title">{title}</span>
+          <span className="uc-disclosure-summary">{summary}</span>
+        </span>
+      </button>
+      {open ? <div className="uc-disclosure-body">{children}</div> : null}
+    </div>
+  );
+}
+
+/** The views as chips, kept in the popup's tab order; the last one on cannot be switched off. */
+function TabChips({ tabs, onChange, text }: { tabs: readonly IslandView[]; onChange: (tabs: IslandView[]) => void; text: SettingsMessages }) {
+  const toggle = (view: IslandView, on: boolean) => {
+    const next = ISLAND_VIEWS.filter((candidate) => (candidate === view ? on : tabs.includes(candidate)));
+    if (next.length > 0) onChange(next);
   };
-
-  const toggle = (id: string, on: boolean) => {
-    const offered = candidates.flatMap((group) => group.always.map((descriptor) => descriptor.id));
-    const known = new Set(offered);
-    const kept = metrics.filter((candidate) => !known.has(candidate));
-    const chosen = offered.filter((candidate) => (candidate === id ? on : picked.has(candidate)));
-    onChange({ metrics: [...chosen, ...kept] });
-  };
-
   return (
     <>
-      <Row label={text.glanceContent} note={text.glanceContentNote(content)}>
-        <Picker value={content} options={GLANCE_CONTENTS} label={text.glanceContentOption} onChange={choose} ariaLabel={text.glanceContent} />
-      </Row>
-      {content === "custom" ? (
-        candidates.length === 0 ? (
-          <p className="uc-settings-note">{text.glanceMetricsNone}</p>
-        ) : (
-          <div className="uc-settings-row-group" role="group" aria-label={text.glanceMetrics}>
-            <p className="uc-settings-note is-lead">{text.glanceMetricsNote}</p>
-            {candidates.map((group) => (
-              <AccountChecklist key={group.provider.id} group={group} picked={picked} onToggle={toggle} language={language} />
-            ))}
-          </div>
-        )
-      ) : null}
+      {ISLAND_VIEWS.map((view) => {
+        const on = tabs.includes(view);
+        return (
+          <Chip key={view} checked={on} disabled={on && tabs.length === 1} onChange={(value) => toggle(view, value)}>
+            {text.glanceTabName(view)}
+          </Chip>
+        );
+      })}
     </>
   );
 }
 
-function AccountChecklist({
+interface QuotaValue {
+  content: GlanceContent;
+  metrics: readonly string[];
+}
+
+/** One line saying what the limits list shows, for the closed editor. */
+function useQuotaSummary(value: QuotaValue, text: SettingsMessages): string {
+  const shown = useShown(value.content, value.metrics);
+  const candidates = useCandidates();
+  const accounts = candidates.filter((group) => group.always.some((descriptor) => shown.has(descriptor.id))).length;
+  return text.glanceQuotaSummary(value.content, shown.size, accounts);
+}
+
+/**
+ * The limits list: quick picks (following the Hạn mức tab or the stars, every metric, none), then
+ * each account with a switch for all its metrics and a chip per metric. Picking a metric by hand
+ * turns the list into a custom one seeded with what showed, so nothing else moves.
+ */
+function QuotaEditor({
+  value,
+  onChange,
+  shows,
+  text,
+  language,
+}: {
+  value: QuotaValue;
+  onChange: (patch: { content?: GlanceContent; metrics?: string[] }) => void;
+  shows?: { value: GlanceSurfaceSettings; onChange: (patch: Partial<GlanceSurfaceSettings>) => void };
+  text: SettingsMessages;
+  language: Language;
+}) {
+  const candidates = useCandidates();
+  const shown = useShown(value.content, value.metrics);
+  const offered = useMemo(() => candidates.flatMap((group) => group.always.map((descriptor) => descriptor.id)), [candidates]);
+
+  const pick = (chosen: ReadonlySet<string>) => {
+    const known = new Set(offered);
+    const kept = value.content === "custom" ? value.metrics.filter((id) => !known.has(id)) : [];
+    onChange({ content: "custom", metrics: [...offered.filter((id) => chosen.has(id)), ...kept] });
+  };
+  const toggle = (ids: readonly string[], on: boolean) => {
+    const next = new Set(shown);
+    for (const id of ids) {
+      if (on) next.add(id);
+      else next.delete(id);
+    }
+    pick(next);
+  };
+  const allOn = offered.length > 0 && offered.every((id) => shown.has(id));
+
+  return (
+    <div className="uc-editor">
+      <ChipRow label={text.glancePresets}>
+        <Chip kind="radio" checked={value.content === "dashboard"} onChange={() => onChange({ content: "dashboard" })}>
+          {text.glancePreset("dashboard")}
+        </Chip>
+        <Chip kind="radio" checked={value.content === "starred"} onChange={() => onChange({ content: "starred" })}>
+          {text.glancePreset("starred")}
+        </Chip>
+        <Chip kind="radio" checked={value.content === "custom" && allOn} disabled={offered.length === 0} onChange={() => pick(new Set(offered))}>
+          {text.glancePreset("all")}
+        </Chip>
+        <Chip kind="radio" checked={value.content === "custom" && shown.size === 0} onChange={() => pick(new Set())}>
+          {text.glancePreset("none")}
+        </Chip>
+      </ChipRow>
+      <p className="uc-settings-note is-flush">{text.glanceFollowNote(value.content)}</p>
+      {candidates.length === 0 ? (
+        <p className="uc-settings-note is-flush">{text.glanceMetricsNone}</p>
+      ) : (
+        <div className="uc-editor-accounts">
+          {candidates.map((group) => (
+            <AccountPicker key={group.provider.id} group={group} shown={shown} onToggle={toggle} text={text} language={language} />
+          ))}
+        </div>
+      )}
+      {shows ? (
+        <ChipRow label={text.glanceShows} note={shows.value.showProblems ? text.glanceShowProblemsNote : undefined}>
+          {SHOW_PARTS.map((part) => {
+            const key = SHOW_KEYS[part];
+            return (
+              <Chip key={part} checked={shows.value[key]} onChange={(on) => shows.onChange({ [key]: on })}>
+                {text.glanceShow(part)}
+              </Chip>
+            );
+          })}
+        </ChipRow>
+      ) : null}
+    </div>
+  );
+}
+
+function AccountPicker({
   group,
-  picked,
+  shown,
   onToggle,
+  text,
   language,
 }: {
   group: ProviderMetrics;
-  picked: ReadonlySet<string>;
-  onToggle: (id: string, on: boolean) => void;
+  shown: ReadonlySet<string>;
+  onToggle: (ids: readonly string[], on: boolean) => void;
+  text: SettingsMessages;
   language: Language;
 }) {
   const identity = cardIdentity(group.provider, undefined, language);
   const snapshot = useApp((state) => state.engine?.providers[group.provider.id]?.snapshot);
+  const ids = group.always.map((descriptor) => descriptor.id);
+  const count = ids.filter((id) => shown.has(id)).length;
   return (
-    <>
-      <div className="uc-list-row is-glance-account">
+    <div className={`uc-account-picker${count === 0 ? " is-off" : ""}`}>
+      <div className="uc-account-picker-head">
         <span className="uc-list-mark">
           <ProviderMark brand={providerBrand(group.provider)} size={14} />
         </span>
@@ -130,36 +250,91 @@ function AccountChecklist({
           <span className="uc-list-title uc-truncate">{identity.name}</span>
           {identity.account ? <span className="uc-list-subtitle uc-truncate">{identity.account}</span> : null}
         </span>
+        <span className="uc-account-picker-count">{text.glanceAccountCount(count, ids.length)}</span>
+        <Switch checked={count > 0} label={identity.name} onChange={(on) => onToggle(ids, on)} />
       </div>
-      {group.always.map((descriptor) => {
-        const title = descriptorTitle(descriptor, snapshot, language);
-        return (
-          <Row key={descriptor.id} label={title} nested>
-            <Switch checked={picked.has(descriptor.id)} label={title} onChange={(on) => onToggle(descriptor.id, on)} />
-          </Row>
-        );
-      })}
-    </>
+      <div className="uc-chips">
+        {group.always.map((descriptor) => (
+          <Chip key={descriptor.id} checked={shown.has(descriptor.id)} onChange={(on) => onToggle([descriptor.id], on)}>
+            {descriptorTitle(descriptor, snapshot, language)}
+          </Chip>
+        ))}
+      </div>
+    </div>
   );
 }
 
-/** Which parts of an account the surface shows. */
-function ShowRows({ value, onChange, text }: { value: GlanceSurfaceSettings; onChange: (patch: Partial<GlanceSurfaceSettings>) => void; text: SettingsMessages }) {
+/** The parts of the Codex reset tracker; the last one on stays on. */
+function ResetEditor({ parts, onChange, text, trackerOff }: { parts: ResetParts; onChange: (parts: ResetParts) => void; text: SettingsMessages; trackerOff: boolean }) {
+  const on = RESET_PARTS.filter((part) => parts[part]).length;
+  const toggle = (part: ResetPart, value: boolean) => {
+    const next = { ...parts, [part]: value };
+    if (RESET_PARTS.some((candidate) => next[candidate])) onChange(next);
+  };
   return (
-    <>
-      <Row label={text.glanceShowAccount}>
-        <Switch checked={value.showAccount} label={text.glanceShowAccount} onChange={(on) => onChange({ showAccount: on })} />
-      </Row>
-      <Row label={text.glanceShowPlan}>
-        <Switch checked={value.showPlan} label={text.glanceShowPlan} onChange={(on) => onChange({ showPlan: on })} />
-      </Row>
-      <Row label={text.glanceShowResets}>
-        <Switch checked={value.showResets} label={text.glanceShowResets} onChange={(on) => onChange({ showResets: on })} />
-      </Row>
-      <Row label={text.glanceShowProblems} note={text.glanceShowProblemsNote}>
-        <Switch checked={value.showProblems} label={text.glanceShowProblems} onChange={(on) => onChange({ showProblems: on })} />
-      </Row>
-    </>
+    <div className="uc-editor">
+      <ChipRow label={text.resetParts} note={trackerOff ? text.resetPartsOff : undefined}>
+        {RESET_PARTS.map((part) => (
+          <Chip key={part} checked={parts[part]} disabled={parts[part] && on === 1} onChange={(value) => toggle(part, value)}>
+            {text.resetPart(part)}
+          </Chip>
+        ))}
+      </ChipRow>
+    </div>
+  );
+}
+
+function UpcomingEditor({ limit, onChange, text }: { limit: number; onChange: (limit: number) => void; text: SettingsMessages }) {
+  return (
+    <div className="uc-editor">
+      <ChipRow label={text.upcomingLimit} note={text.upcomingNote}>
+        {UPCOMING_LIMITS.map((option) => (
+          <Chip key={option} kind="radio" checked={limit === option} onChange={() => onChange(option)}>
+            {text.upcomingLimitOption(option)}
+          </Chip>
+        ))}
+      </ChipRow>
+    </div>
+  );
+}
+
+/** Every view's options for one surface, one open at a time. */
+function ViewEditors({
+  views,
+  value,
+  onChange,
+  scope,
+  text,
+  language,
+  trackerOff,
+}: {
+  views: readonly IslandView[];
+  value: GlanceSurfaceSettings;
+  onChange: (patch: Partial<GlanceSurfaceSettings>) => void;
+  scope?: (view: IslandView) => string;
+  text: SettingsMessages;
+  language: Language;
+  trackerOff: boolean;
+}) {
+  const [open, setOpen] = useState<IslandView | null>(views[0] ?? null);
+  const quotaSummary = useQuotaSummary(value, text);
+  const resetsOn = RESET_PARTS.filter((part) => value.resetParts[part]).length;
+  const summary = (view: IslandView): string => {
+    if (view === "quota") return quotaSummary;
+    if (view === "resets") return text.resetPartsSummary(resetsOn, RESET_PARTS.length);
+    return text.upcomingLimitOption(value.upcomingLimit);
+  };
+  return (
+    <div className="uc-disclosures">
+      {views.map((view) => (
+        <Disclosure key={view} title={text.glanceTabName(view)} summary={summary(view)} open={open === view} onToggle={() => setOpen(open === view ? null : view)}>
+          {scope ? <p className="uc-settings-note is-flush">{scope(view)}</p> : null}
+          {view === "quota" ? <QuotaEditor value={value} onChange={onChange} shows={{ value, onChange }} text={text} language={language} /> : null}
+          {view === "resets" ? <ResetEditor parts={value.resetParts} onChange={(resetParts) => onChange({ resetParts })} text={text} trackerOff={trackerOff} /> : null}
+          {view === "upcoming" ? <UpcomingEditor limit={value.upcomingLimit} onChange={(upcomingLimit) => onChange({ upcomingLimit })} text={text} /> : null}
+        </Disclosure>
+      ))}
+    </div>
   );
 }
 
@@ -167,11 +342,17 @@ function ShowRows({ value, onChange, text }: { value: GlanceSurfaceSettings; onC
 export function StripRows({ display }: { display: TaskbarDisplay }) {
   const settings = useSettings();
   const text = messagesFor(settings.language).settings;
-  if (display === "icon") return null;
   const strip = settings.strip;
+  const summary = useQuotaSummary(strip, text);
+  const [open, setOpen] = useState(false);
+  if (display === "icon") return null;
   return (
     <>
-      <ContentRows content={strip.content} metrics={strip.metrics} onChange={patchStrip} text={text} language={settings.language} />
+      <div className="uc-disclosures is-inset">
+        <Disclosure title={text.glanceGroup("content")} summary={summary} open={open} onToggle={() => setOpen(!open)}>
+          <QuotaEditor value={strip} onChange={patchStrip} text={text} language={settings.language} />
+        </Disclosure>
+      </div>
       {display === "text" ? (
         <Row label={text.stripValues}>
           <Picker
@@ -187,6 +368,11 @@ export function StripRows({ display }: { display: TaskbarDisplay }) {
   );
 }
 
+function useTrackerOff(): boolean {
+  const settings = useSettings();
+  return !settings.showResetsTab && !settings.notifyCodexResets;
+}
+
 export function IslandSection() {
   const settings = useSettings();
   const language = settings.language;
@@ -194,6 +380,7 @@ export function IslandSection() {
   const island = settings.island;
   const candidates = useCandidates();
   const engine = useApp((state) => state.engine);
+  const trackerOff = useTrackerOff();
   const metricsById = useMemo(() => {
     const byId = new Map<string, { group: ProviderMetrics; descriptor: WidgetDescriptor }>();
     for (const group of candidates) for (const descriptor of group.always) byId.set(descriptor.id, { group, descriptor });
@@ -214,14 +401,6 @@ export function IslandSection() {
     wings[index] = id === AUTO_WING ? "" : id;
     patchIsland({ wings });
   };
-  const trackerOff = !settings.showResetsTab && !settings.notifyCodexResets;
-  const combined = island.layout === "combined";
-  const shown = combined ? island.sections : { quota: island.view === "quota", resets: island.view === "resets", upcoming: island.view === "upcoming" };
-  const setSection = (view: IslandView, on: boolean) => {
-    const sections = { ...island.sections, [view]: on };
-    if (!sections.quota && !sections.resets && !sections.upcoming) return;
-    patchIsland({ sections });
-  };
 
   return (
     <Section title={text.section("island")}>
@@ -230,6 +409,7 @@ export function IslandSection() {
       </Row>
       {settings.dynamicIsland ? (
         <>
+          <SubHeading>{text.glanceGroup("closed")}</SubHeading>
           <Row label={text.islandStyle}>
             <Picker value={island.style} options={ISLAND_STYLES} label={text.islandStyleOption} onChange={(style) => patchIsland({ style })} ariaLabel={text.islandStyle} />
           </Row>
@@ -239,29 +419,19 @@ export function IslandSection() {
           <Row label={text.islandWing("right")}>
             <Picker value={wingValue(island.wings[1])} options={wingOptions} label={wingLabel} onChange={(id) => setWing(1, id)} ariaLabel={text.islandWing("right")} />
           </Row>
-          <Row label={text.islandLayout} note={text.islandLayoutNote(island.layout)}>
-            <Picker value={island.layout} options={ISLAND_LAYOUTS} label={text.islandLayoutOption} onChange={(layout) => patchIsland({ layout })} ariaLabel={text.islandLayout} />
-          </Row>
-          {combined ? (
-            <div className="uc-settings-row-group" role="group" aria-label={text.islandSections}>
-              <p className="uc-settings-note is-lead">{text.islandSections}</p>
-              {ISLAND_VIEWS.map((view) => {
-                const label = text.islandViewOption(view);
-                const lastOn = island.sections[view] && ISLAND_VIEWS.filter((key) => island.sections[key]).length === 1;
-                return (
-                  <Row key={view} label={label} note={text.islandViewNote(view, trackerOff)} nested>
-                    <Switch checked={island.sections[view]} label={label} disabled={lastOn} onChange={(on) => setSection(view, on)} />
-                  </Row>
-                );
-              })}
-            </div>
-          ) : (
-            <Row label={text.islandView} note={text.islandViewNote(island.view, trackerOff)}>
-              <Picker value={island.view} options={ISLAND_VIEWS} label={text.islandViewOption} onChange={(view) => patchIsland({ view })} ariaLabel={text.islandView} />
+
+          <SubHeading>{text.glanceGroup("open")}</SubHeading>
+          <ChipRow label={text.glanceTabs("island")} note={text.glanceTabsNote("island")}>
+            <TabChips tabs={island.tabs} onChange={(tabs) => patchIsland({ tabs })} text={text} />
+          </ChipRow>
+          {island.tabs.length > 1 ? (
+            <Row label={text.islandLayout} note={text.islandLayoutNote(island.layout)}>
+              <Picker value={island.layout} options={ISLAND_LAYOUTS} label={text.islandLayoutOption} onChange={(layout) => patchIsland({ layout })} ariaLabel={text.islandLayout} />
             </Row>
-          )}
-          {shown.quota || shown.upcoming ? <ContentRows content={island.content} metrics={island.metrics} onChange={patchIsland} text={text} language={language} /> : null}
-          {shown.quota ? <ShowRows value={island} onChange={patchIsland} text={text} /> : null}
+          ) : null}
+          <ViewEditors views={island.tabs} value={island} onChange={patchIsland} text={text} language={language} trackerOff={trackerOff} />
+
+          <SubHeading>{text.glanceGroup("behavior")}</SubHeading>
           <Row label={text.islandExpandOnHover} note={text.islandExpandOnHoverNote}>
             <Switch checked={island.expandOnHover} label={text.islandExpandOnHover} onChange={(on) => patchIsland({ expandOnHover: on })} />
           </Row>
@@ -278,14 +448,18 @@ export function WidgetSection() {
   const settings = useSettings();
   const text = messagesFor(settings.language).settings;
   const widget = settings.widget;
+  const trackerOff = useTrackerOff();
   return (
     <Section title={text.section("widget")}>
       <Row label={text.desktopWidget} note={text.desktopWidgetNote}>
         <span />
       </Row>
       <p className="uc-settings-note">{text.desktopWidgetKindsNote}</p>
-      <ContentRows content={widget.content} metrics={widget.metrics} onChange={patchWidget} text={text} language={settings.language} />
-      <ShowRows value={widget} onChange={patchWidget} text={text} />
+      <ChipRow label={text.glanceTabs("widget")} note={text.glanceTabsNote("widget")}>
+        <TabChips tabs={widget.tabs} onChange={(tabs) => patchWidget({ tabs })} text={text} />
+      </ChipRow>
+      <SubHeading>{text.glanceGroup("content")}</SubHeading>
+      <ViewEditors views={ISLAND_VIEWS} value={widget} onChange={patchWidget} scope={text.glanceWidgetScope} text={text} language={settings.language} trackerOff={trackerOff} />
     </Section>
   );
 }

@@ -284,23 +284,53 @@ export const en: Messages = {
     desktopWidgetNote:
       "Right-click the desktop, choose Edit Widgets and search for Quota Control. There are three styles: Details (usage bars and reset times), Rings (percentage gauges) and Compact (one line per metric), each in four sizes.",
     desktopWidgetKindsNote:
-      "To keep them separate, add the Codex Resets, Codex Reset Calendar or Coming Back widget; to combine them, add Overview (your limits with Codex resets, plus Coming Back at the largest size). The content settings below shape the limit widgets, Coming Back and Overview.",
-    glanceContent: "Content",
-    glanceContentOption: (content) => ({ dashboard: "Like the Limits tab", starred: "Starred metrics", custom: "Custom" })[content],
-    glanceContentNote: (content) =>
+      "To keep them separate, add the Codex Resets, Codex Reset Calendar or Coming Back widget; to combine them, add Overview and choose the parts it combines right below.",
+    glanceGroup: (group) => ({ closed: "Closed", open: "Open", behavior: "Behavior", content: "Content" })[group],
+    glanceTabName: (view) => ({ quota: "Limits", resets: "Codex Resets", upcoming: "Coming Back" })[view],
+    glanceTabs: (surface) => (surface === "island" ? "Tabs When Open" : "Overview Widget Shows"),
+    glanceTabsNote: (surface) =>
+      surface === "island"
+        ? "Click to turn a tab on or off; at least one stays on. Each tab has its own options in the list below."
+        : "Choose the parts the Overview widget combines. The single widgets always follow each part's options below.",
+    glanceWidgetScope: (view) =>
       ({
-        dashboard: "Every account and metric the Limits tab shows, in the same order.",
-        starred: "Only the metrics starred on the Limits tab.",
-        custom: "Only the metrics switched on in the list below.",
+        quota: "Applies to the Details, Rings, Compact and Overview widgets.",
+        resets: "Applies to the Codex Resets, Codex Reset Calendar and Overview widgets.",
+        upcoming: "Applies to the Coming Back and Overview widgets.",
+      })[view],
+    glanceTabOff: "Tab off",
+    glancePresets: "Quick Pick",
+    glancePreset: (preset) => ({ dashboard: "Like Limits", starred: "Starred", custom: "Custom", all: "All", none: "None" })[preset],
+    glanceFollowNote: (content) =>
+      ({
+        dashboard: "Following the Limits tab: accounts and metrics turned on there show here too. Click a metric below to pick your own.",
+        starred: "Following the metrics starred on the Limits tab. Click a metric below to pick your own.",
+        custom: "Custom: only the checked metrics show, in the Limits tab's order.",
       })[content],
-    glanceMetrics: "Chosen Metrics",
-    glanceMetricsNote: "Switch on the metrics to show. They follow the Limits tab's order.",
+    glanceQuotaSummary: (content, metrics, accounts) => {
+      const count = metrics === 0 ? "No metric chosen" : `${metrics} ${metrics === 1 ? "metric" : "metrics"} · ${accounts} ${accounts === 1 ? "account" : "accounts"}`;
+      return content === "custom" ? count : `${({ dashboard: "Like Limits", starred: "Starred" })[content]} · ${count}`;
+    },
     glanceMetricsNone: "No account is enabled.",
-    glanceShowAccount: "Show Account Email",
-    glanceShowPlan: "Show Plan (Pro, Plus…)",
-    glanceShowResets: "Show Reset Times",
-    glanceShowProblems: "Show Accounts Needing Attention",
-    glanceShowProblemsNote: "An account signed out or without readings keeps a line saying why instead of disappearing.",
+    glanceAccountCount: (shown, total) => `${shown}/${total}`,
+    glanceShows: "Also Show",
+    glanceShow: (part) => ({ account: "Email", plan: "Plan", resets: "Reset time", problems: "Accounts needing attention" })[part],
+    glanceShowProblemsNote: "Accounts needing attention: an account signed out or without readings keeps a line saying why instead of disappearing.",
+    resetParts: "Parts",
+    resetPart: (part) =>
+      ({
+        next: "Next reset",
+        latest: "Last reset",
+        chances: "Chance of a reset",
+        wait: "Wait so far",
+        calendar: "Reset calendar",
+        rhythm: "Reset rhythm",
+      })[part],
+    resetPartsSummary: (shown, total) => (shown === total ? "Every part" : `${shown}/${total} parts`),
+    resetPartsOff: "No data yet: turn on the Resets tab or Codex reset notifications.",
+    upcomingLimit: "Show at Most",
+    upcomingLimitOption: (limit) => (limit === 0 ? "All that fit" : `${limit} limits`),
+    upcomingNote: "The limits coming back next among the accounts chosen under Limits, soonest first.",
     stripValues: "Readings per Account",
     stripValuesOption: (count) => (count === 2 ? "Two, stacked" : "One"),
     islandStyle: "Closed Style",
@@ -316,24 +346,13 @@ export const en: Messages = {
         "codex-resets:chance-7": "Codex Resets · Chance in 7 Days",
         "codex-resets:since": "Codex Resets · Time Since the Last Reset",
       })[wing],
-    islandLayout: "When Open",
-    islandLayoutOption: (layout) => ({ separate: "Separate", combined: "Combined" })[layout],
+    islandLayout: "Arrange Tabs",
+    islandLayoutOption: (layout) => ({ separate: "Switch tabs", combined: "Stacked" })[layout],
     islandLayoutNote: (layout) =>
       ({
-        separate: "One view at a time: your limits, Codex resets or what comes back next.",
-        combined: "Several views together, top to bottom, as switched on below.",
+        separate: "The island has a tab bar on top; click a tab to see that tab in full.",
+        combined: "Every tab shows at once, top to bottom; the island trims detail when space runs out.",
       })[layout],
-    islandSections: "Combine",
-    islandView: "When the Island Opens, Show",
-    islandViewOption: (view) => ({ quota: "Limits", resets: "Codex Resets", upcoming: "Coming Back" })[view],
-    islandViewNote: (view, trackerOff) =>
-      ({
-        quota: "The accounts and metrics chosen under Content below.",
-        resets: trackerOff
-          ? "The next free reset, the chance of a reset and the time since the last one. Needs the Resets tab or Codex reset notifications."
-          : "The next free reset, the chance of a reset and the time since the last one.",
-        upcoming: "The limits coming back next, soonest first.",
-      })[view],
     islandExpandOnHover: "Expand on Hover",
     islandExpandOnHoverNote: "When off, click once to expand and again to open Quota Control.",
     islandAlerts: "Open for Alerts",
@@ -455,6 +474,7 @@ export const en: Messages = {
     wingSince: (span) => `${span} ago`,
     calendarMonth: (month) => ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][month] ?? "",
     sinceReset: "Since reset",
+    tabs: { quota: "Limits", resets: "Codex Resets", upcoming: "Coming Back" },
   },
   update: {
     availableTitle: "Update Available",

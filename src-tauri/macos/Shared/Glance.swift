@@ -96,6 +96,20 @@ struct GlanceDocument: Decodable, Equatable {
         (providers + widget.providers).flatMap(\.metrics).compactMap(\.resetsAt).filter { $0 > now }.min()
     }
 
+    /// The document as the open island draws it: the reset tracker cut down to the island's parts.
+    var forIsland: GlanceDocument {
+        var copy = self
+        copy.resets = resets?.showing(island.resetParts)
+        return copy
+    }
+
+    /// The document as the widgets draw it: the reset tracker cut down to the widget's parts.
+    var forWidget: GlanceDocument {
+        var copy = self
+        copy.resets = resets?.showing(widget.resetParts)
+        return copy
+    }
+
     /// The moments after `now` when something drawn from the reset tracker changes on its own: the
     /// announced reset's countdown ends or its row goes away.
     func resetMoments(after now: Date) -> [Date] {
@@ -144,9 +158,11 @@ struct GlanceLabels: Decodable, Equatable {
     /// The heading of the next limits to come back, and what it says when none has a reset time.
     var upcoming: String
     var upcomingEmpty: String
+    /// The open island's tab names, as the popup's tabs read.
+    var tabs: GlanceTabLabels
 
     private enum CodingKeys: String, CodingKey {
-        case title, empty, updated, resetsIn, resetting, open, notRunning, noData, more, units, resetsOff, upcoming, upcomingEmpty
+        case title, empty, updated, resetsIn, resetting, open, notRunning, noData, more, units, resetsOff, upcoming, upcomingEmpty, tabs
     }
 
     init(
@@ -162,7 +178,8 @@ struct GlanceLabels: Decodable, Equatable {
         units: GlanceUnits,
         resetsOff: String = "",
         upcoming: String = "",
-        upcomingEmpty: String = ""
+        upcomingEmpty: String = "",
+        tabs: GlanceTabLabels = .fallback
     ) {
         self.title = title
         self.empty = empty
@@ -177,6 +194,7 @@ struct GlanceLabels: Decodable, Equatable {
         self.resetsOff = resetsOff
         self.upcoming = upcoming
         self.upcomingEmpty = upcomingEmpty
+        self.tabs = tabs
     }
 
     init(from decoder: Decoder) throws {
@@ -194,7 +212,76 @@ struct GlanceLabels: Decodable, Equatable {
         resetsOff = try container.decodeIfPresent(String.self, forKey: .resetsOff) ?? ""
         upcoming = try container.decodeIfPresent(String.self, forKey: .upcoming) ?? ""
         upcomingEmpty = try container.decodeIfPresent(String.self, forKey: .upcomingEmpty) ?? ""
+        tabs = (try? container.decodeIfPresent(GlanceTabLabels.self, forKey: .tabs)) ?? .fallback
     }
+}
+
+/// The names of the open island's tabs.
+struct GlanceTabLabels: Decodable, Equatable {
+    var quota: String
+    var resets: String
+    var upcoming: String
+
+    static let fallback = GlanceTabLabels(quota: "Limits", resets: "Codex Resets", upcoming: "Coming Back")
+
+    func name(_ view: GlanceView) -> String {
+        switch view {
+        case .quota: return quota
+        case .resets: return resets
+        case .upcoming: return upcoming
+        }
+    }
+}
+
+/// A view a glance surface can show, named after the popup tab it mirrors.
+enum GlanceView: String, Decodable, Equatable, Hashable, CaseIterable {
+    case quota
+    case resets
+    case upcoming
+}
+
+/// How the open island shows several views: one at a time behind a tab bar, or stacked.
+enum IslandArrangement: String, Decodable, Equatable {
+    case tabs
+    case stacked
+}
+
+/// The parts of the reset tracker a surface shows; a part missing from an older document shows.
+struct GlanceResetParts: Decodable, Equatable {
+    var next = true
+    var latest = true
+    var chances = true
+    var wait = true
+    var calendar = true
+    var rhythm = true
+
+    static let all = GlanceResetParts()
+
+    init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case next, latest, chances, wait, calendar, rhythm
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        next = (try? container.decodeIfPresent(Bool.self, forKey: .next)) ?? true
+        latest = (try? container.decodeIfPresent(Bool.self, forKey: .latest)) ?? true
+        chances = (try? container.decodeIfPresent(Bool.self, forKey: .chances)) ?? true
+        wait = (try? container.decodeIfPresent(Bool.self, forKey: .wait)) ?? true
+        calendar = (try? container.decodeIfPresent(Bool.self, forKey: .calendar)) ?? true
+        rhythm = (try? container.decodeIfPresent(Bool.self, forKey: .rhythm)) ?? true
+    }
+}
+
+/// Decodes a list of views, keeping the known ones once each in order.
+private func decodeViews<Key: CodingKey>(_ container: KeyedDecodingContainer<Key>, forKey key: Key) -> [GlanceView]? {
+    guard let raw = try? container.decodeIfPresent([String].self, forKey: key) else { return nil }
+    var views: [GlanceView] = []
+    for name in raw {
+        if let view = GlanceView(rawValue: name), !views.contains(view) { views.append(view) }
+    }
+    return views.isEmpty ? nil : views
 }
 
 /// Suffixes for countdowns, so the island words them like the popup (`4 ngày 3 giờ`, `4d 3h`).
@@ -232,9 +319,15 @@ struct GlanceIsland: Decodable, Equatable {
     var empty: String?
     /// What the open island lists, top to bottom.
     var sections: GlanceIslandSections
+    /// The chosen views in order; an older document lists its switched-on sections.
+    var tabs: [GlanceView]
+    var arrangement: IslandArrangement
+    var resetParts: GlanceResetParts
+    /// The most limits coming back listed; `0` for as many as fit.
+    var upcomingLimit: Int
 
     private enum CodingKeys: String, CodingKey {
-        case enabled, alerts, style, wings, expandOnHover, shows, empty, sections
+        case enabled, alerts, style, wings, expandOnHover, shows, empty, sections, tabs, arrangement, resetParts, upcomingLimit
     }
 
     init(
@@ -245,7 +338,11 @@ struct GlanceIsland: Decodable, Equatable {
         expandOnHover: Bool = true,
         shows: GlanceShows = .all,
         empty: String? = nil,
-        sections: GlanceIslandSections = .quotaOnly
+        sections: GlanceIslandSections = .quotaOnly,
+        tabs: [GlanceView]? = nil,
+        arrangement: IslandArrangement = .stacked,
+        resetParts: GlanceResetParts = .all,
+        upcomingLimit: Int = 6
     ) {
         self.enabled = enabled
         self.alerts = alerts
@@ -255,6 +352,10 @@ struct GlanceIsland: Decodable, Equatable {
         self.shows = shows
         self.empty = empty
         self.sections = sections
+        self.tabs = tabs ?? sections.views
+        self.arrangement = arrangement
+        self.resetParts = resetParts
+        self.upcomingLimit = upcomingLimit
     }
 
     init(from decoder: Decoder) throws {
@@ -267,6 +368,10 @@ struct GlanceIsland: Decodable, Equatable {
         shows = try container.decodeIfPresent(GlanceShows.self, forKey: .shows) ?? .all
         empty = try container.decodeIfPresent(String.self, forKey: .empty)
         sections = (try? container.decodeIfPresent(GlanceIslandSections.self, forKey: .sections)) ?? .quotaOnly
+        tabs = decodeViews(container, forKey: .tabs) ?? sections.views
+        arrangement = (try? container.decodeIfPresent(IslandArrangement.self, forKey: .arrangement)) ?? .stacked
+        resetParts = (try? container.decodeIfPresent(GlanceResetParts.self, forKey: .resetParts)) ?? .all
+        upcomingLimit = max(0, (try? container.decodeIfPresent(Int.self, forKey: .upcomingLimit)) ?? 6)
     }
 }
 
@@ -277,6 +382,18 @@ struct GlanceIslandSections: Decodable, Equatable {
     var upcoming: Bool
 
     static let quotaOnly = GlanceIslandSections(quota: true, resets: false, upcoming: false)
+
+    /// The switched-on sections in drawing order.
+    var views: [GlanceView] {
+        let views = GlanceView.allCases.filter { view in
+            switch view {
+            case .quota: return quota
+            case .resets: return resets
+            case .upcoming: return upcoming
+            }
+        }
+        return views.isEmpty ? [.quota] : views
+    }
 }
 
 /// What the desktop widgets list.
@@ -284,6 +401,36 @@ struct GlanceWidgetContent: Decodable, Equatable {
     var providers: [GlanceProvider]
     var shows: GlanceShows
     var empty: String
+    /// The Overview widget's parts, in order.
+    var tabs: [GlanceView]
+    var resetParts: GlanceResetParts
+    /// The most limits coming back listed; `0` for as many as fit.
+    var upcomingLimit: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case providers, shows, empty, tabs, resetParts, upcomingLimit
+    }
+
+    init(providers: [GlanceProvider], shows: GlanceShows, empty: String, tabs: [GlanceView] = GlanceView.allCases, resetParts: GlanceResetParts = .all, upcomingLimit: Int = 0) {
+        self.providers = providers
+        self.shows = shows
+        self.empty = empty
+        self.tabs = tabs
+        self.resetParts = resetParts
+        self.upcomingLimit = upcomingLimit
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        providers = try container.decode([GlanceProvider].self, forKey: .providers)
+        shows = try container.decodeIfPresent(GlanceShows.self, forKey: .shows) ?? .all
+        empty = try container.decodeIfPresent(String.self, forKey: .empty) ?? ""
+        tabs = decodeViews(container, forKey: .tabs) ?? GlanceView.allCases
+        resetParts = (try? container.decodeIfPresent(GlanceResetParts.self, forKey: .resetParts)) ?? .all
+        upcomingLimit = max(0, (try? container.decodeIfPresent(Int.self, forKey: .upcomingLimit)) ?? 0)
+    }
+
+    func has(_ view: GlanceView) -> Bool { tabs.contains(view) }
 
     /// Accounts with something to show: readings, or a notice saying why there are none.
     var visibleProviders: [GlanceProvider] {
@@ -443,6 +590,25 @@ struct GlanceResets: Decodable, Equatable {
 
     func chance(days: Int) -> GlanceResetChance? {
         forecast.first { $0.days == days }
+    }
+
+    /// The tracker with only `parts`: the announced reset, the last one, the chances, the wait
+    /// with its median, the calendar and the rhythm each go when switched off.
+    func showing(_ parts: GlanceResetParts) -> GlanceResets {
+        var copy = self
+        if !parts.next { copy.upcoming = nil }
+        if !parts.latest { copy.latest = nil }
+        if !parts.chances {
+            copy.forecast = []
+            copy.forecastNote = ""
+        }
+        if !parts.wait {
+            copy.wait = nil
+            copy.median = nil
+        }
+        if !parts.calendar { copy.calendar = nil }
+        if !parts.rhythm { copy.rhythm = nil }
+        return copy
     }
 }
 

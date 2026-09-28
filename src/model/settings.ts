@@ -50,15 +50,19 @@ export const GLANCE_CONTENTS: readonly GlanceContent[] = ["dashboard", "starred"
 /** How the closed Dynamic Island shows a reading beside the notch. */
 export type IslandStyle = "percent" | "ring" | "bar";
 export const ISLAND_STYLES: readonly IslandStyle[] = ["percent", "ring", "bar"];
-/** What the open Dynamic Island shows, one at a time: the limits, the Codex free-reset tracker, or
- * the next limits to come back. */
+/** The views a glance surface can show, each named after the popup tab it mirrors: the limits, the
+ * Codex free-reset tracker, or the next limits to come back. */
 export type IslandView = "quota" | "resets" | "upcoming";
 export const ISLAND_VIEWS: readonly IslandView[] = ["quota", "resets", "upcoming"];
-/** Whether the open island shows one view at a time or several of them together, top to bottom. */
+/** How the open island shows several chosen views: one at a time behind a tab bar, or stacked. */
 export type IslandLayout = "separate" | "combined";
 export const ISLAND_LAYOUTS: readonly IslandLayout[] = ["separate", "combined"];
-/** The views the island shows together when combined; at least one is always on. */
-export type IslandSections = Record<IslandView, boolean>;
+/** The parts of the Codex reset tracker a surface can show, each switched on its own. */
+export type ResetPart = "next" | "latest" | "chances" | "wait" | "calendar" | "rhythm";
+export const RESET_PARTS: readonly ResetPart[] = ["next", "latest", "chances", "wait", "calendar", "rhythm"];
+export type ResetParts = Record<ResetPart, boolean>;
+/** How many limits coming back a surface lists at most; `0` lists every one that fits. */
+export const UPCOMING_LIMITS: readonly number[] = [3, 5, 8, 0];
 /** At most this many metrics can be picked by hand; more would not fit any surface. */
 export const MAX_GLANCE_METRICS = 64;
 
@@ -72,6 +76,12 @@ export interface GlanceSurfaceSettings {
   showResets: boolean;
   /** Accounts without readings (signed out, session expired) still get a line saying why. */
   showProblems: boolean;
+  /** The views shown, in order, never empty: the open island's tabs, the Overview widget's parts. */
+  tabs: IslandView[];
+  /** The parts of the Codex reset tracker shown. */
+  resetParts: ResetParts;
+  /** The most limits coming back listed, one of `UPCOMING_LIMITS`. */
+  upcomingLimit: number;
 }
 
 /** What the taskbar strip (the macOS menu bar item) lists. */
@@ -91,11 +101,9 @@ export interface IslandSettings extends GlanceSurfaceSettings {
   expandOnHover: boolean;
   /** Open the island for a few seconds when a limit runs low or comes back. */
   alerts: boolean;
-  /** Separate: the island opens on `view` alone, so the reset tracker is never mixed into the
-   * limits. Combined: it shows every view `sections` turns on, top to bottom. */
+  /** Separate: the open island shows one of `tabs` at a time, with a tab bar to switch. Combined:
+   * it shows every tab, top to bottom. */
   layout: IslandLayout;
-  view: IslandView;
-  sections: IslandSections;
 }
 
 export interface NotificationSettings {
@@ -177,8 +185,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     expandOnHover: true,
     alerts: true,
     layout: "separate",
-    view: "quota",
-    sections: { quota: true, resets: true, upcoming: false },
+    tabs: ["quota", "resets", "upcoming"],
+    resetParts: { next: true, latest: true, chances: true, wait: true, calendar: true, rhythm: true },
+    upcomingLimit: 5,
   },
   widget: {
     content: "dashboard",
@@ -187,6 +196,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     showPlan: true,
     showResets: true,
     showProblems: true,
+    tabs: ["quota", "resets", "upcoming"],
+    resetParts: { next: true, latest: true, chances: true, wait: true, calendar: true, rhythm: true },
+    upcomingLimit: 0,
   },
   showTotalSpend: true,
   showBenchmarkTab: true,
@@ -234,7 +246,19 @@ function metricIds(value: unknown): string[] {
   return [...new Set(ids)].slice(0, MAX_GLANCE_METRICS);
 }
 
-function parseSurface(value: unknown, defaults: GlanceSurfaceSettings): GlanceSurfaceSettings {
+function parseTabs(value: unknown, fallback: readonly IslandView[]): IslandView[] {
+  if (!Array.isArray(value)) return [...fallback];
+  const tabs = [...new Set(value.filter((tab): tab is IslandView => (ISLAND_VIEWS as readonly unknown[]).includes(tab)))];
+  return tabs.length > 0 ? tabs : [...fallback];
+}
+
+function parseResetParts(value: unknown, defaults: ResetParts): ResetParts {
+  const stored = asRecord(value);
+  const parts = Object.fromEntries(RESET_PARTS.map((part) => [part, flag(stored[part], defaults[part])])) as ResetParts;
+  return RESET_PARTS.some((part) => parts[part]) ? parts : { ...defaults };
+}
+
+function parseSurface(value: unknown, defaults: GlanceSurfaceSettings, legacyTabs?: IslandView[]): GlanceSurfaceSettings {
   const stored = asRecord(value);
   return {
     content: oneOf(stored.content, GLANCE_CONTENTS, defaults.content),
@@ -243,6 +267,9 @@ function parseSurface(value: unknown, defaults: GlanceSurfaceSettings): GlanceSu
     showPlan: flag(stored.showPlan, defaults.showPlan),
     showResets: flag(stored.showResets, defaults.showResets),
     showProblems: flag(stored.showProblems, defaults.showProblems),
+    tabs: parseTabs(stored.tabs, legacyTabs ?? defaults.tabs),
+    resetParts: parseResetParts(stored.resetParts, defaults.resetParts),
+    upcomingLimit: typeof stored.upcomingLimit === "number" && UPCOMING_LIMITS.includes(stored.upcomingLimit) ? stored.upcomingLimit : defaults.upcomingLimit,
   };
 }
 
@@ -255,14 +282,17 @@ function parseStrip(value: unknown, defaults: StripSettings): StripSettings {
   };
 }
 
-function parseSections(value: unknown, defaults: IslandSections): IslandSections {
-  const stored = asRecord(value);
-  const sections: IslandSections = {
-    quota: flag(stored.quota, defaults.quota),
-    resets: flag(stored.resets, defaults.resets),
-    upcoming: flag(stored.upcoming, defaults.upcoming),
-  };
-  return sections.quota || sections.resets || sections.upcoming ? sections : { ...sections, quota: true };
+/**
+ * The tabs of an island stored before tabs existed: combined showed the switched-on `sections`;
+ * separate opened on `view` alone, which comes first, followed by the sections that were on.
+ */
+function legacyIslandTabs(stored: Record<string, unknown>): IslandView[] | undefined {
+  if (stored.tabs !== undefined || (stored.view === undefined && stored.sections === undefined)) return undefined;
+  const sections = asRecord(stored.sections);
+  const on = ISLAND_VIEWS.filter((view) => sections[view] === true);
+  if (stored.layout === "combined") return on.length > 0 ? on : ["quota"];
+  const view = oneOf(stored.view, ISLAND_VIEWS, "quota");
+  return [view, ...on.filter((other) => other !== view)];
 }
 
 function parseIsland(value: unknown, defaults: IslandSettings): IslandSettings {
@@ -270,14 +300,12 @@ function parseIsland(value: unknown, defaults: IslandSettings): IslandSettings {
   const wings = Array.isArray(stored.wings) ? stored.wings : [];
   const wing = (index: number) => (typeof wings[index] === "string" && wings[index].length <= 512 ? (wings[index] as string) : "");
   return {
-    ...parseSurface(value, defaults),
+    ...parseSurface(value, defaults, legacyIslandTabs(stored)),
     style: oneOf(stored.style, ISLAND_STYLES, defaults.style),
     wings: [wing(0), wing(1)],
     expandOnHover: flag(stored.expandOnHover, defaults.expandOnHover),
     alerts: flag(stored.alerts, defaults.alerts),
     layout: oneOf(stored.layout, ISLAND_LAYOUTS, defaults.layout),
-    view: oneOf(stored.view, ISLAND_VIEWS, defaults.view),
-    sections: parseSections(stored.sections, defaults.sections),
   };
 }
 
@@ -349,8 +377,14 @@ export function mergeSettingsDocument(
     ...settings,
     notifications: { ...settings.notifications },
     strip: { ...settings.strip, metrics: [...settings.strip.metrics] },
-    island: { ...settings.island, metrics: [...settings.island.metrics], wings: [...settings.island.wings], sections: { ...settings.island.sections } },
-    widget: { ...settings.widget, metrics: [...settings.widget.metrics] },
+    island: {
+      ...settings.island,
+      metrics: [...settings.island.metrics],
+      wings: [...settings.island.wings],
+      tabs: [...settings.island.tabs],
+      resetParts: { ...settings.island.resetParts },
+    },
+    widget: { ...settings.widget, metrics: [...settings.widget.metrics], tabs: [...settings.widget.tabs], resetParts: { ...settings.widget.resetParts } },
   };
 }
 

@@ -73,7 +73,10 @@ struct UpcomingList: View {
     var columns = 1
 
     var body: some View {
-        let limits = GlanceUpcomingLimit.list(document.widget.providers, now: now)
+        let all = GlanceUpcomingLimit.list(document.widget.providers, now: now)
+        let cap = document.widget.upcomingLimit
+        let limits = cap > 0 ? Array(all.prefix(cap)) : all
+        let beyond = all.count - limits.count
         let groups = UpcomingGroup.grouped(limits)
         if groups.isEmpty {
             Text(UpcomingText.empty(document))
@@ -86,20 +89,21 @@ struct UpcomingList: View {
             let wide = columnWidth(width, count: count) >= 230
             ViewThatFits(in: .vertical) {
                 if groups.count < limits.count {
-                    planned(UpcomingGroup.single(limits), shown: limits.count, columns: count, wide: wide)
+                    planned(UpcomingGroup.single(limits), shown: limits.count, columns: count, wide: wide, beyond: beyond)
                 }
                 ForEach(Array(stride(from: groups.count, through: 1, by: -1)), id: \.self) { shown in
-                    planned(groups, shown: shown, columns: count, wide: wide)
+                    planned(groups, shown: shown, columns: count, wide: wide, beyond: beyond)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 
-    private func planned(_ groups: [UpcomingGroup], shown: Int, columns: Int, wide: Bool) -> some View {
+    /// `beyond`: limits past the count Settings allow, counted with the ones that did not fit.
+    private func planned(_ groups: [UpcomingGroup], shown: Int, columns: Int, wide: Bool, beyond: Int) -> some View {
         let visible = Array(groups.prefix(shown))
         let perColumn = (visible.count + columns - 1) / columns
-        let hidden = groups.dropFirst(shown).reduce(0) { $0 + $1.metrics.count }
+        let hidden = groups.dropFirst(shown).reduce(0) { $0 + $1.metrics.count } + beyond
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: WidgetScale.columnSpacing) {
                 ForEach(0..<columns, id: \.self) { column in

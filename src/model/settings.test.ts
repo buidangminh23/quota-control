@@ -44,30 +44,52 @@ describe("glance surfaces", () => {
 
   it("saves copies, so later edits to the in-memory settings do not leak into the document", () => {
     const settings = parseSettings({ widget: { content: "custom", metrics: ["a"] } });
-    const merged = mergeSettingsDocument({}, settings, new Set()) as { widget: { metrics: string[] }; island: { wings: string[]; sections: { upcoming: boolean } } };
+    const merged = mergeSettingsDocument({}, settings, new Set()) as {
+      widget: { metrics: string[]; tabs: string[] };
+      island: { wings: string[]; tabs: string[]; resetParts: { rhythm: boolean } };
+    };
     settings.widget.metrics.push("b");
+    settings.widget.tabs.pop();
     settings.island.wings[0] = "x";
-    settings.island.sections.upcoming = true;
+    settings.island.tabs.pop();
+    settings.island.resetParts.rhythm = false;
     expect(merged.widget.metrics).toEqual(["a"]);
+    expect(merged.widget.tabs).toEqual(["quota", "resets", "upcoming"]);
     expect(merged.island.wings[0]).toBe("");
-    expect(merged.island.sections.upcoming).toBe(false);
+    expect(merged.island.tabs).toEqual(["quota", "resets", "upcoming"]);
+    expect(merged.island.resetParts.rhythm).toBe(true);
   });
 
-  it("keeps the island's views separate by default, and reads the combined choice and its parts", () => {
+  it("gives the island every tab behind a tab bar by default and reads the chosen tabs in the popup's order", () => {
     expect(DEFAULT_SETTINGS.island.layout).toBe("separate");
     expect(parseSettings({ island: { layout: "combined" } }).island.layout).toBe("combined");
     expect(parseSettings({ island: { layout: "both" } }).island.layout).toBe("separate");
-    expect(parseSettings({ island: {} }).island.sections).toEqual({ quota: true, resets: true, upcoming: false });
-    expect(parseSettings({ island: { sections: { quota: false, upcoming: true } } }).island.sections).toEqual({ quota: false, resets: true, upcoming: true });
-    expect(parseSettings({ island: { sections: { quota: false, resets: false, upcoming: false } } }).island.sections).toEqual({ quota: true, resets: false, upcoming: false });
+    expect(parseSettings({ island: {} }).island.tabs).toEqual(["quota", "resets", "upcoming"]);
+    expect(parseSettings({ island: { tabs: ["upcoming", "quota", "upcoming", "x"] } }).island.tabs).toEqual(["upcoming", "quota"]);
+    expect(parseSettings({ island: { tabs: [] } }).island.tabs).toEqual(["quota", "resets", "upcoming"]);
   });
 
-  it("opens the island on the limits by default and reads one view at a time", () => {
-    expect(DEFAULT_SETTINGS.island.view).toBe("quota");
-    expect(parseSettings({ island: {} }).island.view).toBe("quota");
-    expect(parseSettings({ island: { view: "resets" } }).island.view).toBe("resets");
-    expect(parseSettings({ island: { view: "upcoming" } }).island.view).toBe("upcoming");
-    expect(parseSettings({ island: { view: "all" } }).island.view).toBe("quota");
+  it("turns an island stored before tabs into tabs: combined keeps its sections, separate opens on its view first", () => {
+    expect(parseSettings({ island: { layout: "combined", sections: { quota: true, resets: false, upcoming: true } } }).island.tabs).toEqual(["quota", "upcoming"]);
+    expect(parseSettings({ island: { layout: "combined", sections: { quota: false, resets: false, upcoming: false } } }).island.tabs).toEqual(["quota"]);
+    expect(parseSettings({ island: { layout: "separate", view: "resets", sections: { quota: true, resets: true, upcoming: false } } }).island.tabs).toEqual(["resets", "quota"]);
+    expect(parseSettings({ island: { view: "upcoming" } }).island.tabs).toEqual(["upcoming"]);
+  });
+
+  it("reads each reset part and the coming-back limit on their own, never leaving no part on", () => {
+    expect(parseSettings({ widget: { resetParts: { calendar: false, rhythm: "no" } } }).widget.resetParts).toEqual({
+      next: true,
+      latest: true,
+      chances: true,
+      wait: true,
+      calendar: false,
+      rhythm: true,
+    });
+    const none = { next: false, latest: false, chances: false, wait: false, calendar: false, rhythm: false };
+    expect(parseSettings({ island: { resetParts: none } }).island.resetParts).toEqual(DEFAULT_SETTINGS.island.resetParts);
+    expect(parseSettings({ island: { upcomingLimit: 8 } }).island.upcomingLimit).toBe(8);
+    expect(parseSettings({ island: { upcomingLimit: 7 } }).island.upcomingLimit).toBe(5);
+    expect(parseSettings({ widget: {} }).widget.upcomingLimit).toBe(0);
   });
 
   it("keeps any wing id up to 512 characters, special ones included", () => {

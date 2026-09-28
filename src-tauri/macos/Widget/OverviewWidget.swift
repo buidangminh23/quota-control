@@ -99,14 +99,17 @@ struct ResetsSummary: View {
     }
 }
 
-/// The accounts' limits in the compact form beside the Codex reset summary, and on the widest
-/// widget the limits coming back next.
+/// The parts Settings chose for the Overview (the accounts' limits in the compact form, the Codex
+/// reset summary, the limits coming back next), laid out for the widget's size: side by side on the
+/// wide sizes, stacked on the large one. A part left out gives its room to the others.
 struct OverviewLayout: View {
     let document: GlanceDocument
     let providers: [GlanceProvider]
     let family: WidgetFamily
     let now: Date
     let size: CGSize
+
+    private var parts: [GlanceView] { document.widget.tabs }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -119,62 +122,89 @@ struct OverviewLayout: View {
         }
     }
 
-    private var quotaIsEmpty: Bool { providers.isEmpty }
-
     @ViewBuilder
-    private func quota(width: CGFloat, height: CGFloat, columns: Int, showsAccounts: Bool = false) -> some View {
-        if quotaIsEmpty {
+    private func quota(width: CGFloat, height: CGFloat, showsAccounts: Bool = false) -> some View {
+        if providers.isEmpty {
             Text(document.widget.empty)
                 .font(.system(size: WidgetScale.caption))
                 .foregroundStyle(.secondary)
                 .lineLimit(4)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
-            CompactQuota(document: document, providers: providers, now: now, width: width, height: height, columns: columns, showsAccounts: showsAccounts)
+            CompactQuota(document: document, providers: providers, now: now, width: width, height: height, columns: 1, showsAccounts: showsAccounts)
         }
     }
 
-    private var medium: some View {
-        let reset = min(150, size.width * 0.42)
-        let left = size.width - reset - WidgetScale.columnSpacing * 2 - 1
-        return HStack(alignment: .top, spacing: WidgetScale.columnSpacing) {
-            quota(width: left, height: size.height, columns: 1)
-                .frame(width: left)
-            Divider()
-            ResetsSummary(document: document, now: now, style: .narrow)
-                .frame(width: reset)
+    private func upcoming(width: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            UpcomingHeading(document: document)
+            UpcomingList(document: document, now: now, width: width)
         }
-        .frame(maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private func pane(_ part: GlanceView, width: CGFloat, style: ResetsSummaryStyle, showsAccounts: Bool = false) -> some View {
+        switch part {
+        case .quota:
+            quota(width: width, height: size.height, showsAccounts: showsAccounts)
+        case .resets:
+            ResetsSummary(document: document, now: now, style: style)
+        case .upcoming:
+            upcoming(width: width)
+        }
+    }
+
+    /// The limits beside one more part (the reset summary, else the limits coming back); without
+    /// the limits, the other two share the widget.
+    private var medium: some View {
+        let shown = parts.contains(.quota) ? [GlanceView.quota] + parts.filter { $0 != .quota }.prefix(1) : Array(parts.prefix(2))
+        return columns(shown, style: .narrow)
     }
 
     private var large: some View {
         VStack(alignment: .leading, spacing: WidgetScale.blockSpacing) {
-            quota(width: size.width, height: size.height, columns: 1)
-                .frame(maxHeight: .infinity, alignment: .top)
-            Divider()
-            ResetsSummary(document: document, now: now, style: .band)
-                .fixedSize(horizontal: false, vertical: true)
+            ForEach(Array(parts.enumerated()), id: \.element) { index, part in
+                if index > 0 {
+                    Divider()
+                }
+                if part == .resets {
+                    ResetsSummary(document: document, now: now, style: parts.count == 1 ? .column : .band)
+                        .fixedSize(horizontal: false, vertical: parts.count > 1)
+                } else {
+                    pane(part, width: size.width, style: .band, showsAccounts: parts.count == 1)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                }
+            }
         }
         .frame(maxHeight: .infinity, alignment: .top)
     }
 
     private var extraLarge: some View {
-        let reset: CGFloat = 200
-        let rest = size.width - reset - WidgetScale.columnSpacing * 4 - 2
-        let quotaWidth = (rest * 0.55).rounded(.down)
-        let upcomingWidth = rest - quotaWidth
+        columns(parts, style: .column, showsAccounts: true)
+    }
+
+    /// Parts side by side: the reset summary keeps a fixed column, the limits and the limits
+    /// coming back share the rest (the limits a little more).
+    private func columns(_ shown: [GlanceView], style: ResetsSummaryStyle, showsAccounts: Bool = false) -> some View {
+        let dividers = CGFloat(max(shown.count - 1, 0))
+        let available = size.width - dividers * (WidgetScale.columnSpacing * 2 + 1)
+        let resetWidth: CGFloat = shown.count == 1 ? available : (style == .narrow ? min(150, available * 0.42) : 200)
+        let rest = shown.contains(.resets) ? available - resetWidth : available
+        let flexible = shown.filter { $0 != .resets }
+        let width: (GlanceView) -> CGFloat = { part in
+            if part == .resets { return resetWidth }
+            if flexible.count < 2 { return rest }
+            return part == .quota ? (rest * 0.55).rounded(.down) : rest - (rest * 0.55).rounded(.down)
+        }
         return HStack(alignment: .top, spacing: WidgetScale.columnSpacing) {
-            quota(width: quotaWidth, height: size.height, columns: 1, showsAccounts: true)
-                .frame(width: quotaWidth)
-            Divider()
-            ResetsSummary(document: document, now: now, style: .column)
-                .frame(width: reset)
-            Divider()
-            VStack(alignment: .leading, spacing: 7) {
-                UpcomingHeading(document: document)
-                UpcomingList(document: document, now: now, width: upcomingWidth)
+            ForEach(Array(shown.enumerated()), id: \.element) { index, part in
+                if index > 0 {
+                    Divider()
+                }
+                pane(part, width: width(part), style: shown.count == 1 && part == .resets ? .column : style, showsAccounts: showsAccounts)
+                    .frame(width: width(part))
             }
-            .frame(width: upcomingWidth)
         }
         .frame(maxHeight: .infinity, alignment: .top)
     }

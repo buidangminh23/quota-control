@@ -187,19 +187,24 @@ const TRACKER: GlanceResets = {
 };
 
 describe("island sections and labels", () => {
-  it("opens the island on exactly the chosen view, never the reset tracker mixed into the limits", () => {
-    expect(glance().island.sections).toEqual({ quota: true, resets: false, upcoming: false });
-    expect(glance({ island: { view: "resets" } }).island.sections).toEqual({ quota: false, resets: true, upcoming: false });
-    expect(glance({ island: { view: "upcoming" } }).island.sections).toEqual({ quota: false, resets: false, upcoming: true });
-    expect(glance({ island: { view: "resets", sections: { quota: true, resets: true, upcoming: true } } }).island.sections).toEqual({ quota: false, resets: true, upcoming: false });
+  it("carries the chosen tabs, how they are arranged and each view's options, as copies of the settings", () => {
+    const tabs: ("quota" | "resets" | "upcoming")[] = ["quota", "upcoming"];
+    const document = glance({ island: { tabs, layout: "separate", upcomingLimit: 3 } });
+    expect(document.island.tabs).toEqual(["quota", "upcoming"]);
+    expect(document.island.sections).toEqual({ quota: true, resets: false, upcoming: true });
+    expect(document.island.arrangement).toBe("tabs");
+    expect(document.island.upcomingLimit).toBe(3);
+    tabs.push("resets");
+    expect(document.island.tabs).toEqual(["quota", "upcoming"]);
+    expect(glance({ island: { layout: "combined" } }).island.arrangement).toBe("stacked");
   });
 
-  it("shows every switched-on view together when combined, as a copy of the settings", () => {
-    const sections = { quota: true, resets: true, upcoming: false };
-    const document = glance({ island: { layout: "combined", view: "upcoming", sections } });
-    expect(document.island.sections).toEqual({ quota: true, resets: true, upcoming: false });
-    sections.upcoming = true;
-    expect(document.island.sections.upcoming).toBe(false);
+  it("carries the widget's Overview parts and reset parts", () => {
+    const resetParts = { next: true, latest: false, chances: true, wait: false, calendar: true, rhythm: false };
+    const document = glance({ widget: { tabs: ["resets"], resetParts } });
+    expect(document.widget.tabs).toEqual(["resets"]);
+    expect(document.widget.resetParts).toEqual(resetParts);
+    expect(document.widget.upcomingLimit).toBe(0);
   });
 
   it("carries the reset and coming-back labels", () => {
@@ -208,6 +213,7 @@ describe("island sections and labels", () => {
       resetsOff: "Bật tab Reset hoặc thông báo reset trong Quota Control để xem dự báo.",
       upcoming: "Sắp đặt lại",
       upcomingEmpty: "Chưa có hạn mức nào có giờ đặt lại.",
+      tabs: { quota: "Hạn mức", resets: "Reset Codex", upcoming: "Sắp đặt lại" },
     });
     expect(glance({ display: { ...DEFAULT_DISPLAY, language: "en" } }).labels.upcoming).toBe("Coming back");
   });

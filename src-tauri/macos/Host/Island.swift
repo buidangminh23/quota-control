@@ -51,7 +51,7 @@ final class IslandController {
     }
 
     func update(_ data: Data) {
-        guard let document = GlanceDocument.decode(data) else { return }
+        guard let document = GlanceDocument.decode(data)?.forIsland else { return }
         model.document = document
         relayout(animated: true)
         if let alert = document.alert, seenAlerts.insert(alert.id).inserted, document.island.enabled, document.island.alerts {
@@ -87,7 +87,7 @@ final class IslandController {
 
     private var shouldShow: Bool {
         guard let document = model.document, document.island.enabled else { return false }
-        return !model.slots.isEmpty || !IslandSection.visible(in: document, now: Date()).isEmpty
+        return !model.slots.isEmpty || IslandPlan.hasContent(document, now: Date())
     }
 
     /// Places the panel for the current screen and content. Every measurement follows the geometry,
@@ -145,7 +145,7 @@ final class IslandController {
         let panel = IslandPanel()
         let hosting = IslandHostingView(rootView: IslandRootView(model: model))
         hosting.onHover = { [weak self] inside in self?.hover(inside) }
-        hosting.onClick = { [weak self] in self?.click() }
+        hosting.onClick = { [weak self] point in self?.click(at: point) }
         panel.contentView = hosting
         self.panel = panel
         self.hosting = hosting
@@ -182,13 +182,28 @@ final class IslandController {
         }
     }
 
-    private func click() {
+    /// A click on a tab of the open island shows that tab; any other click on the open island
+    /// opens the popup, and one on the closed island opens it when hovering does not.
+    private func click(at point: CGPoint) {
+        if model.mode == .expanded, let tab = model.tab(at: point) {
+            select(tab)
+            return
+        }
         if model.mode == .compact && !expandsOnHover {
             pendingCollapse?.cancel()
             expand()
             return
         }
         open()
+    }
+
+    private func select(_ tab: GlanceView) {
+        guard model.selectedTab != tab || model.plan(now: Date())?.selected != tab else { return }
+        pendingCollapse?.cancel()
+        withAnimation(Self.spring) {
+            model.selectedTab = tab
+        }
+        relayout(animated: true)
     }
 
     private func expand() {
@@ -292,9 +307,9 @@ struct IslandGeometry: Equatable {
     static let wideExpandedWidth: CGFloat = 460
 
     /// Two columns of accounts need the wide island; so does nothing else.
-    static func expandedWidth(for document: GlanceDocument, budget: IslandBudget) -> CGFloat {
+    static func expandedWidth(for document: GlanceDocument, plan: IslandPlan, budget: IslandBudget) -> CGFloat {
         let accounts = min(document.visibleProviders.count, budget.maxAccounts ?? .max)
-        return document.island.sections.quota && accounts > 3 ? wideExpandedWidth : expandedWidth
+        return plan.sections.contains(.quota) && accounts > 3 ? wideExpandedWidth : expandedWidth
     }
     static let pillHeight: CGFloat = 22
     /// Room around the open island for its shadow.
@@ -411,6 +426,21 @@ final class IslandModel: ObservableObject {
     @Published var budget = IslandBudget.full
     /// The widest reading beside the notch, which both wings take so the notch stays centered.
     @Published var wingContent: CGFloat = 0
+    /// The tab last clicked on the open island; it stays picked while the island closes and opens.
+    @Published var selectedTab: GlanceView?
+    /// Where the open island's tabs sit, in the panel's top-left coordinates.
+    var tabFrames: [GlanceView: CGRect] = [:]
+
+    func plan(now: Date) -> IslandPlan? {
+        guard let document else { return nil }
+        return IslandPlan.make(document, now: now, selected: selectedTab)
+    }
+
+    /// The tab under `point`, when the open island shows a tab bar.
+    func tab(at point: CGPoint) -> GlanceView? {
+        guard let plan = plan(now: Date()), !plan.tabs.isEmpty else { return nil }
+        return plan.tabs.first { tabFrames[$0]?.insetBy(dx: -2, dy: -3).contains(point) == true }
+    }
 
     /// The left and right wings, as the popup chose them: a picked metric, or the next reading of
     /// the island's accounts.
@@ -462,13 +492,14 @@ final class IslandModel: ObservableObject {
         guard let document, let geometry else { return }
         let compact = compactSize(for: geometry).width
         let limit = geometry.maxOpenHeight
+        let plan = IslandPlan.make(document, now: now, selected: selectedTab)
         var chosen = IslandBudget.full
         var width = IslandGeometry.expandedWidth
         var height: CGFloat = 0
         for candidate in IslandBudget.ladder(accounts: document.visibleProviders.count) {
             chosen = candidate
-            width = max(IslandGeometry.expandedWidth(for: document, budget: candidate), compact)
-            let view = IslandDetails(document: document, now: now, topInset: geometry.detailsInset, budget: candidate)
+            width = max(IslandGeometry.expandedWidth(for: document, plan: plan, budget: candidate), compact)
+            let view = IslandDetails(document: document, now: now, topInset: geometry.detailsInset, budget: candidate, selected: selectedTab)
                 .frame(width: width)
             height = Self.size(of: view, proposing: CGSize(width: width, height: 4000)).height
             if height <= limit { break }
@@ -530,7 +561,8 @@ final class IslandPanel: NSPanel {
 /// Reports hover and clicks without activating the app.
 final class IslandHostingView<Content: View>: NSHostingView<Content> {
     var onHover: ((Bool) -> Void)?
-    var onClick: (() -> Void)?
+    /// The click's point in the view's top-left coordinates, as SwiftUI lays the island out.
+    var onClick: ((CGPoint) -> Void)?
     private var area: NSTrackingArea?
 
     override func updateTrackingAreas() {
@@ -550,7 +582,13 @@ final class IslandHostingView<Content: View>: NSHostingView<Content> {
     override func mouseExited(with event: NSEvent) { onHover?(false) }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) {}
-    override func mouseUp(with event: NSEvent) { onClick?() }
+    override func mouseUp(with event: NSEvent) {
+        var point = convert(event.locationInWindow, from: nil)
+        if !isFlipped {
+            point.y = bounds.height - point.y
+        }
+        onClick?(point)
+    }
 }
 
 /// The island's outline: flush with the top of the screen, with concave shoulders where it meets the
@@ -610,6 +648,10 @@ struct IslandRootView: View {
                     .clipped()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .coordinateSpace(name: IslandTabFrames.space)
+            .onPreferenceChange(IslandTabFrames.self) { frames in
+                model.tabFrames = frames
+            }
             .environment(\.locale, document.resolvedLocale)
         }
     }
@@ -650,7 +692,7 @@ struct IslandRootView: View {
             .transition(.opacity)
         case .expanded:
             TimelineView(.periodic(from: .now, by: 30)) { context in
-                IslandDetails(document: document, now: context.date, topInset: geometry.detailsInset, budget: model.budget)
+                IslandDetails(document: document, now: context.date, topInset: geometry.detailsInset, budget: model.budget, selected: model.selectedTab)
             }
             .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
         case let .alert(alert):

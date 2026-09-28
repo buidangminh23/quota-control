@@ -4,7 +4,7 @@
  * transient confirmation pill.
  */
 import { useRef, type ReactNode } from "react";
-import { CheckCircleFill, ChevronUpDown } from "./icons";
+import { CheckCircleFill, CheckIcon, ChevronUpDown } from "./icons";
 import { openMenuAt } from "./menu";
 import { tooltipProps } from "./tooltip";
 
@@ -64,6 +64,37 @@ export function Picker<T extends string>({ value, options, label, onChange, aria
     >
       <span className="uc-truncate">{label(value)}</span>
       <ChevronUpDown size={10} />
+    </button>
+  );
+}
+
+interface ChipProps {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  children: ReactNode;
+  /** `radio`: one of a set, so pressing the chosen one does nothing. */
+  kind?: "check" | "radio";
+  disabled?: boolean;
+  tooltip?: string;
+}
+
+/** A toggle that wraps with its neighbours: several fit on one line where switches would not. */
+export function Chip({ checked, onChange, children, kind = "check", disabled, tooltip }: ChipProps) {
+  return (
+    <button
+      type="button"
+      role={kind === "radio" ? "radio" : "checkbox"}
+      aria-checked={checked}
+      disabled={disabled}
+      className={`uc-chip${checked ? " is-on" : ""}`}
+      onClick={() => {
+        if (kind === "radio" && checked) return;
+        onChange(!checked);
+      }}
+      {...tooltipProps(tooltip)}
+    >
+      {kind === "check" ? <span className="uc-chip-box">{checked ? <CheckIcon size={8} /> : null}</span> : null}
+      <span className="uc-truncate">{children}</span>
     </button>
   );
 }

@@ -118,6 +118,12 @@ struct ChanceBars: View {
     var spacing: CGFloat = 6
 
     var body: some View {
+        if !resets.forecast.isEmpty {
+            bars
+        }
+    }
+
+    private var bars: some View {
         VStack(alignment: .leading, spacing: spacing) {
             if showsTitle {
                 SectionLabel(text: resets.forecastTitle)

@@ -322,23 +322,53 @@ export const vi: Messages = {
     desktopWidgetNote:
       "Bấm chuột phải lên màn hình nền, chọn Sửa tiện ích rồi tìm Quota Control. Có ba kiểu: Chi tiết (thanh mức dùng và giờ đặt lại), Vòng tròn (đồng hồ phần trăm) và Gọn (mỗi chỉ số một dòng), mỗi kiểu có bốn cỡ.",
     desktopWidgetKindsNote:
-      "Muốn tách riêng thì thêm widget Reset Codex, Lịch reset Codex hoặc Sắp đặt lại; muốn gộp chung thì thêm widget Tổng quan (hạn mức cùng Reset Codex, cỡ lớn nhất có thêm Sắp đặt lại). Nội dung bên dưới áp dụng cho các widget hạn mức, Sắp đặt lại và Tổng quan.",
-    glanceContent: "Nội dung",
-    glanceContentOption: (content) => ({ dashboard: "Như tab Hạn mức", starred: "Chỉ số gắn sao", custom: "Tự chọn" })[content],
-    glanceContentNote: (content) =>
+      "Muốn tách riêng thì thêm widget Reset Codex, Lịch reset Codex hoặc Sắp đặt lại; muốn gộp chung thì thêm widget Tổng quan và chọn các phần nó ghép ở ngay bên dưới.",
+    glanceGroup: (group) => ({ closed: "Khi thu gọn", open: "Khi mở rộng", behavior: "Cách hoạt động", content: "Nội dung" })[group],
+    glanceTabName: (view) => ({ quota: "Hạn mức", resets: "Reset Codex", upcoming: "Sắp đặt lại" })[view],
+    glanceTabs: (surface) => (surface === "island" ? "Các tab hiện khi mở" : "Widget Tổng quan gồm"),
+    glanceTabsNote: (surface) =>
+      surface === "island"
+        ? "Bấm để bật hoặc tắt tab, luôn giữ ít nhất một tab. Mỗi tab tuỳ chỉnh riêng ở danh sách bên dưới."
+        : "Chọn những phần ghép trong widget Tổng quan. Các widget riêng lẻ luôn theo tuỳ chỉnh của từng phần bên dưới.",
+    glanceWidgetScope: (view) =>
       ({
-        dashboard: "Mọi tài khoản và chỉ số đang hiện ở tab Hạn mức, theo đúng thứ tự ở đó.",
-        starred: "Chỉ các chỉ số đã gắn sao trong tab Hạn mức.",
-        custom: "Chỉ những chỉ số được bật trong danh sách dưới đây.",
+        quota: "Áp dụng cho widget Chi tiết, Vòng tròn, Gọn và Tổng quan.",
+        resets: "Áp dụng cho widget Reset Codex, Lịch reset Codex và Tổng quan.",
+        upcoming: "Áp dụng cho widget Sắp đặt lại và Tổng quan.",
+      })[view],
+    glanceTabOff: "Tab đang tắt",
+    glancePresets: "Chọn nhanh",
+    glancePreset: (preset) => ({ dashboard: "Như tab Hạn mức", starred: "Gắn sao", custom: "Tự chọn", all: "Tất cả", none: "Bỏ hết" })[preset],
+    glanceFollowNote: (content) =>
+      ({
+        dashboard: "Đang theo tab Hạn mức: tài khoản hay chỉ số bật thêm ở đó cũng tự hiện ở đây. Bấm một chỉ số bên dưới để tự chọn.",
+        starred: "Đang theo các chỉ số gắn sao ở tab Hạn mức. Bấm một chỉ số bên dưới để tự chọn.",
+        custom: "Tự chọn: chỉ các chỉ số được đánh dấu mới hiện, theo thứ tự ở tab Hạn mức.",
       })[content],
-    glanceMetrics: "Chỉ số được chọn",
-    glanceMetricsNote: "Bật những chỉ số muốn hiện. Thứ tự theo tab Hạn mức.",
+    glanceQuotaSummary: (content, metrics, accounts) => {
+      const count = metrics === 0 ? "Chưa chọn chỉ số nào" : `${metrics} chỉ số · ${accounts} tài khoản`;
+      return content === "custom" ? count : `${({ dashboard: "Như tab Hạn mức", starred: "Gắn sao" })[content]} · ${count}`;
+    },
     glanceMetricsNone: "Chưa có tài khoản nào đang bật.",
-    glanceShowAccount: "Hiện email tài khoản",
-    glanceShowPlan: "Hiện gói (Pro, Plus…)",
-    glanceShowResets: "Hiện thời gian đặt lại",
-    glanceShowProblems: "Hiện tài khoản cần chú ý",
-    glanceShowProblemsNote: "Tài khoản hết phiên đăng nhập hoặc chưa có số liệu vẫn có một dòng báo lý do, thay vì biến mất.",
+    glanceAccountCount: (shown, total) => `${shown}/${total}`,
+    glanceShows: "Hiện kèm",
+    glanceShow: (part) => ({ account: "Email", plan: "Gói", resets: "Giờ đặt lại", problems: "Tài khoản cần chú ý" })[part],
+    glanceShowProblemsNote: "Tài khoản cần chú ý: tài khoản hết phiên đăng nhập hoặc chưa có số liệu vẫn có một dòng báo lý do, thay vì biến mất.",
+    resetParts: "Phần hiện",
+    resetPart: (part) =>
+      ({
+        next: "Reset sắp tới",
+        latest: "Lần reset gần nhất",
+        chances: "Khả năng reset",
+        wait: "Thời gian chờ",
+        calendar: "Lịch reset",
+        rhythm: "Nhịp reset",
+      })[part],
+    resetPartsSummary: (shown, total) => (shown === total ? "Đủ mọi phần" : `${shown}/${total} phần`),
+    resetPartsOff: "Chưa có số liệu: bật tab Reset hoặc thông báo khi Codex reset.",
+    upcomingLimit: "Hiện tối đa",
+    upcomingLimitOption: (limit) => (limit === 0 ? "Tất cả vừa khung" : `${limit} hạn mức`),
+    upcomingNote: "Các hạn mức sắp được đặt lại của những tài khoản chọn ở phần Hạn mức, sớm nhất lên đầu.",
     stripValues: "Số liệu mỗi tài khoản",
     stripValuesOption: (count) => (count === 2 ? "Hai số xếp chồng" : "Một số"),
     islandStyle: "Kiểu thu gọn",
@@ -354,24 +384,13 @@ export const vi: Messages = {
         "codex-resets:chance-7": "Reset Codex · Khả năng 7 ngày tới",
         "codex-resets:since": "Reset Codex · Thời gian chưa reset",
       })[wing],
-    islandLayout: "Cách hiển thị khi mở",
-    islandLayoutOption: (layout) => ({ separate: "Tách riêng", combined: "Gộp chung" })[layout],
+    islandLayout: "Cách xếp các tab",
+    islandLayoutOption: (layout) => ({ separate: "Chuyển tab", combined: "Xếp chồng" })[layout],
     islandLayoutNote: (layout) =>
       ({
-        separate: "Mỗi lần chỉ hiện một nội dung: hạn mức, Reset Codex hoặc sắp đặt lại.",
-        combined: "Hiện nhiều nội dung cùng lúc, từ trên xuống, theo các công tắc bên dưới.",
+        separate: "Island có thanh tab ở trên cùng; bấm một tab để xem đầy đủ riêng tab đó.",
+        combined: "Mọi tab hiện cùng lúc, từ trên xuống; island tự rút gọn khi không đủ chỗ.",
       })[layout],
-    islandSections: "Gộp những phần",
-    islandView: "Khi mở island hiện",
-    islandViewOption: (view) => ({ quota: "Hạn mức", resets: "Reset Codex", upcoming: "Sắp đặt lại" })[view],
-    islandViewNote: (view, trackerOff) =>
-      ({
-        quota: "Các tài khoản và chỉ số theo mục Nội dung bên dưới.",
-        resets: trackerOff
-          ? "Reset free sắp tới, khả năng có reset và thời gian từ lần gần nhất. Cần bật tab Reset hoặc thông báo khi Codex reset."
-          : "Reset free sắp tới, khả năng có reset và thời gian từ lần gần nhất.",
-        upcoming: "Các hạn mức sắp được đặt lại, sớm nhất lên đầu.",
-      })[view],
     islandExpandOnHover: "Mở rộng khi rê chuột",
     islandExpandOnHoverNote: "Tắt đi thì bấm một lần để mở rộng, bấm lần nữa để mở Quota Control.",
     islandAlerts: "Tự mở khi có cảnh báo",
@@ -493,6 +512,7 @@ export const vi: Messages = {
     wingSince: (span) => `đã ${span}`,
     calendarMonth: (month) => `Th${month + 1}`,
     sinceReset: "Chưa reset",
+    tabs: { quota: "Hạn mức", resets: "Reset Codex", upcoming: "Sắp đặt lại" },
   },
   update: {
     availableTitle: "Có phiên bản mới",

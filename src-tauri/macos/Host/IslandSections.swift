@@ -1,65 +1,102 @@
 import SwiftUI
 
-/// A part of the open island, in the order it is drawn.
-enum IslandSection: Hashable {
-    case quota
-    case resets
-    case upcoming
-
-    /// The sections Settings switched on that have something to show at `now`: the quota list
-    /// needs an account, the forecast needs the reset tracker, the upcoming list a limit with a
-    /// reset time still ahead.
-    static func visible(in document: GlanceDocument, now: Date) -> [IslandSection] {
-        let sections = document.island.sections
-        var result: [IslandSection] = []
-        if sections.quota && !document.visibleProviders.isEmpty {
-            result.append(.quota)
+extension GlanceView {
+    /// Whether the view has something to draw at `now`: the quota list needs an account, the
+    /// forecast needs the reset tracker, the upcoming list a limit with a reset time still ahead.
+    func hasContent(in document: GlanceDocument, now: Date) -> Bool {
+        switch self {
+        case .quota: return !document.visibleProviders.isEmpty
+        case .resets: return document.resets != nil
+        case .upcoming: return !GlanceUpcomingLimit.list(document.providers, now: now).isEmpty
         }
-        if sections.resets && document.resets != nil {
-            result.append(.resets)
-        }
-        if sections.upcoming && !GlanceUpcomingLimit.list(document.providers, now: now).isEmpty {
-            result.append(.upcoming)
-        }
-        return result
     }
+}
+
+/// What the open island draws: behind a tab bar, the one tab picked (the first with something to
+/// show until one is clicked), in full; stacked, every chosen view that has something to show.
+struct IslandPlan: Equatable {
+    /// The tab bar, empty when there is none.
+    var tabs: [GlanceView]
+    /// The views drawn, top to bottom.
+    var sections: [GlanceView]
+    var selected: GlanceView?
+
+    static func make(_ document: GlanceDocument, now: Date, selected: GlanceView?) -> IslandPlan {
+        let chosen = document.island.tabs
+        if document.island.arrangement == .tabs, chosen.count > 1 {
+            let active = selected.flatMap { chosen.contains($0) ? $0 : nil }
+                ?? chosen.first { $0.hasContent(in: document, now: now) }
+                ?? chosen[0]
+            return IslandPlan(tabs: chosen, sections: [active], selected: active)
+        }
+        return IslandPlan(tabs: [], sections: chosen.filter { $0.hasContent(in: document, now: now) }, selected: nil)
+    }
+
+    /// Whether the open island has anything at all to show.
+    static func hasContent(_ document: GlanceDocument, now: Date) -> Bool {
+        document.island.tabs.contains { $0.hasContent(in: document, now: now) }
+    }
+}
+
+/// How big the open island draws the reset calendar.
+enum IslandCalendarSize: Equatable {
+    /// Every week as a grid, weekdays down the side and months across the top.
+    case grid
+    /// The last four weeks in one row.
+    case strip
+    case none
 }
 
 /// How much of each section the open island draws. The island measures the budgets of
 /// `ladder(accounts:)` in turn and keeps the first that fits on the screen.
 struct IslandBudget: Equatable {
-    /// Readings per account; `nil` picks by the number of accounts.
+    /// Readings per account; `nil` shows every reading.
     var metricsPerAccount: Int?
     /// The accounts listed; the rest are counted in a `+N` line.
     var maxAccounts: Int?
     var upcoming: Int
-    var calendar: Bool
+    var calendar: IslandCalendarSize
+    var rhythm: Bool
     var notes: Bool
 
-    static let full = IslandBudget(metricsPerAccount: nil, maxAccounts: nil, upcoming: 6, calendar: true, notes: true)
+    static let full = IslandBudget(metricsPerAccount: nil, maxAccounts: nil, upcoming: 12, calendar: .grid, rhythm: true, notes: true)
 
-    /// Budgets from the roomiest to the tightest: fewer upcoming limits, then fewer readings per
-    /// account and no calendar, then one reading per account without notes, then fewer accounts.
+    /// Budgets from the roomiest to the tightest: everything; then fewer readings per account (all
+    /// four for one or two accounts, two for up to four, one beyond) and no rhythm; then the
+    /// calendar as a strip; then no calendar; then one reading per account without notes; then
+    /// fewer accounts.
     static func ladder(accounts: Int) -> [IslandBudget] {
+        let automatic = accounts <= 2 ? 4 : (accounts <= 4 ? 2 : 1)
         var steps: [IslandBudget] = [
             .full,
-            IslandBudget(metricsPerAccount: nil, maxAccounts: nil, upcoming: 4, calendar: true, notes: true),
-            IslandBudget(metricsPerAccount: 2, maxAccounts: nil, upcoming: 4, calendar: false, notes: true),
-            IslandBudget(metricsPerAccount: 1, maxAccounts: nil, upcoming: 3, calendar: false, notes: false),
+            IslandBudget(metricsPerAccount: automatic, maxAccounts: nil, upcoming: 8, calendar: .grid, rhythm: false, notes: true),
+            IslandBudget(metricsPerAccount: automatic, maxAccounts: nil, upcoming: 5, calendar: .strip, rhythm: false, notes: true),
+            IslandBudget(metricsPerAccount: min(automatic, 2), maxAccounts: nil, upcoming: 4, calendar: .none, rhythm: false, notes: true),
+            IslandBudget(metricsPerAccount: 1, maxAccounts: nil, upcoming: 3, calendar: .none, rhythm: false, notes: false),
         ]
         var shown = accounts - 1
         while shown >= 1 {
-            steps.append(IslandBudget(metricsPerAccount: 1, maxAccounts: shown, upcoming: 2, calendar: false, notes: false))
+            steps.append(IslandBudget(metricsPerAccount: 1, maxAccounts: shown, upcoming: 2, calendar: .none, rhythm: false, notes: false))
             shown -= shown > 6 ? 2 : 1
         }
         return steps
     }
 
-    /// Readings per account for `count` accounts: all four for one or two, two for up to four,
-    /// one beyond that, never more than the budget allows.
-    func metrics(forAccounts count: Int) -> Int {
-        let automatic = count <= 2 ? 4 : (count <= 4 ? 2 : 1)
-        return min(automatic, metricsPerAccount ?? automatic)
+    var perAccount: Int { metricsPerAccount ?? Int.max }
+
+    /// The limits coming back listed: what fits, never more than Settings allow (`0` for no cap).
+    func upcoming(limit: Int) -> Int {
+        limit > 0 ? min(upcoming, limit) : upcoming
+    }
+}
+
+/// Where each tab of the open island's tab bar sits, so a click can pick it.
+struct IslandTabFrames: PreferenceKey {
+    static let space = "island"
+    static var defaultValue: [GlanceView: CGRect] = [:]
+
+    static func reduce(value: inout [GlanceView: CGRect], nextValue: () -> [GlanceView: CGRect]) {
+        value.merge(nextValue()) { $1 }
     }
 }
 
@@ -74,27 +111,29 @@ enum IslandInk {
     static let notice = Color(red: 1.0, green: 0.76, blue: 0.2)
 }
 
-/// The open island under the notch: the sections Settings chose (quota limits, the Codex reset
-/// forecast, the next limits to come back), separated by thin rules, over the footer.
+/// The open island under the notch: the tab bar and the picked tab, or the chosen views stacked
+/// and separated by thin rules, over the footer.
 struct IslandDetails: View {
     let document: GlanceDocument
     let now: Date
     let topInset: CGFloat
     var budget: IslandBudget = .full
+    var selected: GlanceView?
 
     var body: some View {
-        let sections = IslandSection.visible(in: document, now: now)
+        let plan = IslandPlan.make(document, now: now, selected: selected)
         VStack(alignment: .leading, spacing: 0) {
             Color.clear.frame(height: topInset)
-            if sections.isEmpty {
-                Text(emptyText)
-                    .font(.system(size: 12))
-                    .foregroundStyle(IslandInk.label)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 10)
+            if let active = plan.selected, !plan.tabs.isEmpty {
+                IslandTabBar(tabs: plan.tabs, selected: active, labels: document.labels.tabs)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
             }
-            ForEach(Array(sections.enumerated()), id: \.element) { index, section in
+            if plan.sections.isEmpty {
+                emptyLine(emptyText(nil))
+            }
+            ForEach(Array(plan.sections.enumerated()), id: \.element) { index, section in
                 if index > 0 {
                     Rectangle()
                         .fill(IslandInk.divider)
@@ -102,16 +141,20 @@ struct IslandDetails: View {
                         .padding(.horizontal, 20)
                         .padding(.vertical, 12)
                 }
-                content(section)
-                    .padding(.horizontal, 20)
-                    .padding(.top, index == 0 ? 10 : 0)
+                if section.hasContent(in: document, now: now) {
+                    content(section)
+                        .padding(.horizontal, 20)
+                        .padding(.top, index == 0 ? 10 : 0)
+                } else {
+                    emptyLine(emptyText(section))
+                }
             }
             footer
         }
     }
 
     @ViewBuilder
-    private func content(_ section: IslandSection) -> some View {
+    private func content(_ section: GlanceView) -> some View {
         switch section {
         case .quota:
             IslandQuotaSection(document: document, now: now, budget: budget)
@@ -120,19 +163,30 @@ struct IslandDetails: View {
                 IslandResetsSection(resets: resets, labels: document.labels, now: now, budget: budget)
             }
         case .upcoming:
-            IslandUpcomingSection(document: document, now: now, count: budget.upcoming)
+            IslandUpcomingSection(document: document, now: now, count: budget.upcoming(limit: document.island.upcomingLimit))
         }
     }
 
-    private var emptyText: String {
-        let sections = document.island.sections
-        if sections.resets, document.resets == nil, !sections.quota, !document.labels.resetsOff.isEmpty {
-            return document.labels.resetsOff
+    private func emptyLine(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12))
+            .foregroundStyle(IslandInk.label)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 20)
+            .padding(.top, 10)
+    }
+
+    /// Why a view (or, `nil`, the whole island) has nothing to show.
+    private func emptyText(_ section: GlanceView?) -> String {
+        let fallback = document.island.empty ?? document.labels.empty
+        switch section ?? (document.island.tabs.count == 1 ? document.island.tabs[0] : nil) {
+        case .resets:
+            return document.labels.resetsOff.isEmpty ? fallback : document.labels.resetsOff
+        case .upcoming:
+            return document.labels.upcomingEmpty.isEmpty ? fallback : document.labels.upcomingEmpty
+        case .quota, .none:
+            return fallback
         }
-        if sections.upcoming, !sections.quota, !sections.resets, !document.labels.upcomingEmpty.isEmpty {
-            return document.labels.upcomingEmpty
-        }
-        return document.island.empty ?? document.labels.empty
     }
 
     private var footer: some View {
@@ -152,6 +206,48 @@ struct IslandDetails: View {
     }
 }
 
+/// The open island's tabs as a segmented bar; the picked one lit. A click lands through the
+/// island's own click handling, which finds the tab by the frames reported here.
+struct IslandTabBar: View {
+    let tabs: [GlanceView]
+    let selected: GlanceView
+    let labels: GlanceTabLabels
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(tabs, id: \.self) { tab in
+                let on = tab == selected
+                Text(labels.name(tab))
+                    .font(.system(size: 11.5, weight: on ? .semibold : .medium))
+                    .foregroundStyle(on ? Color.white : IslandInk.caption)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .padding(.horizontal, 8)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 24)
+                    .background(
+                        Capsule()
+                            .fill(Color.white.opacity(on ? 0.17 : 0))
+                    )
+                    .contentShape(Capsule())
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear.preference(
+                                key: IslandTabFrames.self,
+                                value: [tab: proxy.frame(in: .named(IslandTabFrames.space))]
+                            )
+                        }
+                    )
+            }
+        }
+        .padding(3)
+        .background(
+            Capsule()
+                .fill(Color.white.opacity(0.07))
+        )
+    }
+}
+
 // MARK: Quota
 
 /// The island's accounts with their meters and countdowns: one column for up to three accounts,
@@ -165,7 +261,7 @@ struct IslandQuotaSection: View {
     var body: some View {
         let all = document.visibleProviders
         let shown = Array(all.prefix(budget.maxAccounts ?? all.count))
-        let perAccount = budget.metrics(forAccounts: all.count)
+        let perAccount = budget.perAccount
         VStack(alignment: .leading, spacing: 10) {
             if shown.count > 3 {
                 let split = Self.balancedSplit(shown, perAccount: perAccount, shows: document.island.shows)
@@ -332,8 +428,9 @@ struct IslandMoreLine: View {
 
 // MARK: Codex resets
 
-/// The Codex free-reset tracker: the announced reset (or the time since the last one), the chance
-/// of a reset over the next one, three and seven days, and the last four weeks of resets.
+/// The Codex free-reset tracker, as the Reset tab shows it and cut to the parts Settings chose: the
+/// announced reset, the time since the last one, the chance of a reset over the next one, three and
+/// seven days, how the wait compares, the calendar and the rhythm by weekday and hour.
 struct IslandResetsSection: View {
     let resets: GlanceResets
     let labels: GlanceLabels
@@ -341,18 +438,50 @@ struct IslandResetsSection: View {
     let budget: IslandBudget
 
     var body: some View {
+        let upcoming = resets.upcoming(at: now)
         VStack(alignment: .leading, spacing: 11) {
             header
-            if let upcoming = resets.upcoming(at: now) {
+            if let upcoming {
                 announced(upcoming)
-            } else if let latest = resets.latest {
-                last(latest)
+            }
+            if let latest = resets.latest {
+                last(latest, prominent: upcoming == nil)
             }
             if !resets.forecast.isEmpty {
                 chances
             }
-            if budget.calendar, let calendar = resets.calendar, calendar.weeks > 0 {
-                IslandResetStrip(calendar: calendar, tint: resets.tint)
+            if resets.wait != nil || (budget.notes && resets.median != nil) {
+                waiting
+            }
+            if let calendar = resets.calendar, calendar.weeks > 0 {
+                switch budget.calendar {
+                case .grid:
+                    IslandResetCalendar(calendar: calendar, tint: resets.tint)
+                case .strip:
+                    IslandResetStrip(calendar: calendar, tint: resets.tint)
+                case .none:
+                    EmptyView()
+                }
+            }
+            if budget.rhythm, let rhythm = resets.rhythm, rhythm.total > 0 {
+                IslandRhythm(rhythm: rhythm, tint: resets.tint)
+            }
+        }
+    }
+
+    private var waiting: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if let wait = resets.wait {
+                Text(wait)
+                    .font(.system(size: 11))
+                    .foregroundStyle(IslandInk.label)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if budget.notes, let median = resets.median {
+                Text(median)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(IslandInk.caption)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -425,7 +554,7 @@ struct IslandResetsSection: View {
         )
     }
 
-    private func last(_ latest: GlanceLatestReset) -> some View {
+    private func last(_ latest: GlanceLatestReset, prominent: Bool) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(latest.label)
@@ -439,8 +568,8 @@ struct IslandResetsSection: View {
                     .lineLimit(1)
             }
             Text(latest.since.text(now: now, units: labels.units))
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Color.white)
+                .font(.system(size: prominent ? 14 : 12, weight: .semibold))
+                .foregroundStyle(prominent ? Color.white : Color.white.opacity(0.88))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -529,27 +658,13 @@ struct IslandResetStrip: View {
                     }
                 }
             }
-            HStack(spacing: 10) {
-                legend(color: tint, text: calendar.legend.regular)
-                if rows.joined().contains(.banked) {
-                    legend(color: IslandInk.warning, text: calendar.legend.banked)
-                }
-                HStack(spacing: 4) {
-                    RoundedRectangle(cornerRadius: 2, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.85), lineWidth: 1)
-                        .frame(width: Self.cell, height: Self.cell)
-                    Text(calendar.legend.today)
-                }
-            }
-            .font(.system(size: 10))
-            .foregroundStyle(IslandInk.caption)
-            .lineLimit(1)
+            IslandCalendarLegend(calendar: calendar, tint: tint, banked: rows.joined().contains(.banked), cell: Self.cell)
         }
     }
 
     private func square(_ cell: GlanceResetCalendar.Cell, today: Bool) -> some View {
         RoundedRectangle(cornerRadius: 2, style: .continuous)
-            .fill(color(cell))
+            .fill(Self.color(cell, tint: tint))
             .frame(width: Self.cell, height: Self.cell)
             .overlay(
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
@@ -557,7 +672,7 @@ struct IslandResetStrip: View {
             )
     }
 
-    private func color(_ cell: GlanceResetCalendar.Cell) -> Color {
+    static func color(_ cell: GlanceResetCalendar.Cell, tint: Color) -> Color {
         switch cell {
         case .regular: return tint
         case .banked: return IslandInk.warning
@@ -565,14 +680,166 @@ struct IslandResetStrip: View {
         case .future: return Color.white.opacity(0.04)
         }
     }
+}
 
-    private func legend(color: Color, text: String) -> some View {
+/// Every week of the reset calendar as a grid: a column per week, oldest on the left, Monday on
+/// top, the month over the week it starts in, today outlined, with the legend under it.
+struct IslandResetCalendar: View {
+    let calendar: GlanceResetCalendar
+    let tint: Color
+
+    /// The width the grid may take inside the open island, after the weekday column.
+    private static let room: CGFloat = 300
+    private static let gap: CGFloat = 2
+    private static let labelWidth: CGFloat = 20
+
+    var body: some View {
+        let rows = calendar.weekRows()
+        let pitch = min(14, max(8, floor(Self.room / CGFloat(max(rows.count, 1)))))
+        let cell = pitch - Self.gap
+        VStack(alignment: .leading, spacing: 5) {
+            Text(calendar.title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(IslandInk.label)
+                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 3) {
+                months(pitch: pitch)
+                    .padding(.leading, Self.labelWidth)
+                HStack(alignment: .top, spacing: 0) {
+                    VStack(alignment: .leading, spacing: Self.gap) {
+                        ForEach(0..<7, id: \.self) { day in
+                            Text(day % 2 == 0 && day < calendar.weekdays.count ? calendar.weekdays[day] : "")
+                                .font(.system(size: 8.5))
+                                .foregroundStyle(IslandInk.faint)
+                                .frame(width: Self.labelWidth, height: cell, alignment: .leading)
+                                .lineLimit(1)
+                        }
+                    }
+                    HStack(alignment: .top, spacing: Self.gap) {
+                        ForEach(Array(rows.enumerated()), id: \.offset) { week, cells in
+                            VStack(spacing: Self.gap) {
+                                ForEach(Array(cells.enumerated()), id: \.offset) { day, value in
+                                    square(value, today: week * 7 + day == calendar.today, size: cell)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            IslandCalendarLegend(calendar: calendar, tint: tint, banked: rows.joined().contains(.banked), cell: 8)
+        }
+    }
+
+    private func months(pitch: CGFloat) -> some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(calendar.months, id: \.week) { month in
+                Text(month.label)
+                    .font(.system(size: 9))
+                    .foregroundStyle(IslandInk.faint)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .offset(x: CGFloat(month.week) * pitch)
+            }
+        }
+        .frame(height: 11, alignment: .topLeading)
+    }
+
+    private func square(_ value: GlanceResetCalendar.Cell, today: Bool, size: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: 2, style: .continuous)
+            .fill(IslandResetStrip.color(value, tint: tint))
+            .frame(width: size, height: size)
+            .overlay(
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .strokeBorder(Color.white.opacity(today ? 0.85 : 0), lineWidth: 1)
+            )
+    }
+}
+
+/// What the calendar's colors mean: a regular reset, a banked one (when any shows), today.
+struct IslandCalendarLegend: View {
+    let calendar: GlanceResetCalendar
+    let tint: Color
+    let banked: Bool
+    let cell: CGFloat
+
+    var body: some View {
+        HStack(spacing: 10) {
+            swatch(color: tint, text: calendar.legend.regular)
+            if banked {
+                swatch(color: IslandInk.warning, text: calendar.legend.banked)
+            }
+            HStack(spacing: 4) {
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.85), lineWidth: 1)
+                    .frame(width: cell, height: cell)
+                Text(calendar.legend.today)
+            }
+        }
+        .font(.system(size: 10))
+        .foregroundStyle(IslandInk.caption)
+        .lineLimit(1)
+    }
+
+    private func swatch(color: Color, text: String) -> some View {
         HStack(spacing: 4) {
             RoundedRectangle(cornerRadius: 2, style: .continuous)
                 .fill(color)
-                .frame(width: Self.cell, height: Self.cell)
+                .frame(width: cell, height: cell)
             Text(text)
         }
+    }
+}
+
+/// When resets were announced: bars by weekday and by four-hour block, side by side.
+struct IslandRhythm: View {
+    let rhythm: GlanceResetRhythm
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(rhythm.title)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(IslandInk.label)
+                    .lineLimit(1)
+                Spacer(minLength: 6)
+                Text("\(rhythm.total)")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(IslandInk.caption)
+                    .monospacedDigit()
+            }
+            HStack(alignment: .top, spacing: 16) {
+                bars(title: rhythm.weekdayTitle, buckets: rhythm.weekdays)
+                bars(title: rhythm.hourTitle, buckets: rhythm.hours)
+            }
+        }
+    }
+
+    private func bars(title: String, buckets: [GlanceResetBucket]) -> some View {
+        let peak = max(buckets.map(\.count).max() ?? 0, 1)
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 10))
+                .foregroundStyle(IslandInk.faint)
+                .lineLimit(1)
+            HStack(alignment: .bottom, spacing: 3) {
+                ForEach(Array(buckets.enumerated()), id: \.offset) { _, bucket in
+                    VStack(spacing: 3) {
+                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                            .fill(bucket.count == peak ? tint : tint.opacity(0.55))
+                            .frame(height: max(2, 30 * CGFloat(bucket.count) / CGFloat(peak)))
+                            .frame(height: 30, alignment: .bottom)
+                        Text(bucket.label)
+                            .font(.system(size: 8.5))
+                            .foregroundStyle(IslandInk.faint)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

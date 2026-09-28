@@ -13,12 +13,13 @@ import { COUNTDOWN_SPAN } from "./glanceResets";
 import { brandOf, type ProviderMetrics } from "./layout";
 import { boundedTrailingText, isFreshSessionWindow, meterSeverity, meterState } from "./meterState";
 import { SOURCE_COLORS } from "./palette";
-import type { GlanceSurfaceSettings, IslandSettings, IslandStyle } from "./settings";
+import type { GlanceSurfaceSettings, IslandSettings, IslandStyle, IslandView, ResetParts } from "./settings";
 import { boundedHeadline, fraction, isBounded, menuBarValue, unboundedDetail, type WidgetData } from "./widgetData";
 
 export const GLANCE_VERSION = 1;
-/** The open island lists at most this many accounts; the widget decides what fits its size. */
-const ISLAND_PROVIDER_LIMIT = 6;
+/** The open island lists at most this many accounts (in two columns); the widget decides what fits
+ * its size. */
+const ISLAND_PROVIDER_LIMIT = 12;
 
 export type GlanceSeverity = "normal" | "warning" | "critical" | "none";
 
@@ -92,8 +93,15 @@ export interface GlanceIsland {
   expandOnHover: boolean;
   shows: GlanceShows;
   empty: string;
-  /** What the open island lists, top to bottom; a section without data is left out. */
+  /** What the open island lists; a section without data is left out. Mirrors `tabs`. */
   sections: GlanceIslandSections;
+  /** The chosen views in order: behind a tab bar when `arrangement` is `tabs`, else stacked. */
+  tabs: IslandView[];
+  arrangement: "tabs" | "stacked";
+  /** The parts of the reset tracker the reset view shows. */
+  resetParts: ResetParts;
+  /** The most limits coming back listed; `0` for as many as fit. */
+  upcomingLimit: number;
 }
 
 /** The parts of the open island, each switched in Settings. */
@@ -134,6 +142,12 @@ export interface GlanceWidget {
   shows: GlanceShows;
   /** What an empty widget says, worded for the chosen content. */
   empty: string;
+  /** The parts of the Overview widget, in order. */
+  tabs: IslandView[];
+  /** The parts of the reset tracker the reset widgets and the Overview show. */
+  resetParts: ResetParts;
+  /** The most limits coming back listed; `0` for as many as fit. */
+  upcomingLimit: number;
 }
 
 export interface GlanceDocument {
@@ -162,6 +176,8 @@ export interface GlanceDocument {
     upcoming: string;
     /** What that list says when no limit has a reset time. */
     upcomingEmpty: string;
+    /** The open island's tab names, as the popup's tabs read. */
+    tabs: Record<IslandView, string>;
   };
   /** The open island's accounts. */
   providers: GlanceProvider[];
@@ -402,6 +418,7 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
       resetsOff: text.resetsOff,
       upcoming: text.upcoming,
       upcomingEmpty: text.upcomingEmpty,
+      tabs: { ...text.tabs },
     },
     providers: islandProviders,
     island: {
@@ -412,12 +429,19 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
       expandOnHover: input.island.settings.expandOnHover,
       shows: shows(input.island.settings),
       empty: text.empty[input.island.settings.content],
-      sections: islandSections(input.island.settings),
+      sections: islandSections(input.island.settings.tabs),
+      tabs: [...input.island.settings.tabs],
+      arrangement: input.island.settings.layout === "combined" ? "stacked" : "tabs",
+      resetParts: { ...input.island.settings.resetParts },
+      upcomingLimit: input.island.settings.upcomingLimit,
     },
     widget: {
       providers: widgetProviders,
       shows: shows(input.widget.settings),
       empty: text.empty[input.widget.settings.content],
+      tabs: [...input.widget.settings.tabs],
+      resetParts: { ...input.widget.settings.resetParts },
+      upcomingLimit: input.widget.settings.upcomingLimit,
     },
   };
   if (input.hour12 !== null) document.hour12 = input.hour12;
@@ -517,10 +541,9 @@ function specialWing(wing: SpecialWing, providers: readonly GlanceProvider[], in
   }
 }
 
-/** What the open island shows: the one chosen view when separate, the switched-on views when combined. */
-function islandSections(settings: IslandSettings): GlanceIslandSections {
-  if (settings.layout === "combined") return { ...settings.sections };
-  return { quota: settings.view === "quota", resets: settings.view === "resets", upcoming: settings.view === "upcoming" };
+/** Which views the open island has, whichever way it arranges them. */
+function islandSections(tabs: readonly IslandView[]): GlanceIslandSections {
+  return { quota: tabs.includes("quota"), resets: tabs.includes("resets"), upcoming: tabs.includes("upcoming") };
 }
 
 /** The island's metric whose limit comes back first after `now`, counting down to it. */

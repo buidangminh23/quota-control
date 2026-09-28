@@ -254,7 +254,8 @@ struct GlanceWidgetView: View {
     }
 
     @ViewBuilder
-    private func layout(_ document: GlanceDocument, size: CGSize) -> some View {
+    private func layout(_ full: GlanceDocument, size: CGSize) -> some View {
+        let document = full.forWidget
         let providers = document.widget.visibleProviders
         let now = entry.date
         switch style {
