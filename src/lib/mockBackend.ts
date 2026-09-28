@@ -199,6 +199,18 @@ export class MockBackend implements Backend {
     }
   }
 
+  async dismissDetectedCard(cardId: string): Promise<void> {
+    for (const service of this.services) {
+      const index = service.detected.findIndex((card) => card.id === cardId);
+      if (index >= 0) service.dismissed.push(...service.detected.splice(index, 1));
+    }
+  }
+
+  async restoreDismissedCards(serviceId: string): Promise<void> {
+    const service = this.services.find((candidate) => candidate.id === serviceId);
+    if (service) service.detected.push(...service.dismissed.splice(0));
+  }
+
   async removeAccount(accountId: string): Promise<void> {
     const index = this.accounts.findIndex((account) => account.id === accountId);
     if (index >= 0) this.accounts.splice(index, 1);

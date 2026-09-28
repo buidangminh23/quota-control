@@ -65,8 +65,6 @@ pub(crate) mod elevenlabs;
 pub(crate) mod factory;
 #[cfg(feature = "fireworks")]
 pub(crate) mod fireworks;
-#[cfg(feature = "gemini")]
-pub(crate) mod gemini;
 #[cfg(feature = "gitkraken")]
 pub(crate) mod gitkraken;
 #[cfg(feature = "grok")]
@@ -186,8 +184,6 @@ pub(crate) mod zoommate;
 
 /// Every service compiled in, in the order the Accounts screen lists them.
 pub(crate) static ALL: &[&dyn Service] = &[
-    #[cfg(feature = "gemini")]
-    &gemini::Gemini,
     #[cfg(feature = "antigravity")]
     &antigravity::Antigravity,
     #[cfg(feature = "copilot")]

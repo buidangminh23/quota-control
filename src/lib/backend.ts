@@ -44,6 +44,10 @@ export interface Backend {
   /** Save an API key (and the values its service asks for beside it) and add its card. */
   addApiKey(serviceId: string, key: string, label?: string, fields?: Record<string, string>): Promise<SavedKey>;
   removeApiKey(keyId: string): Promise<void>;
+  /** Remove a card found on this computer (another app's login, an environment key) without touching the login. */
+  dismissDetectedCard(cardId: string): Promise<void>;
+  /** Show again the removed cards a service found on this computer. */
+  restoreDismissedCards(serviceId: string): Promise<void>;
   listChatSessions(): Promise<ChatSession[]>;
   onChatSessionsChanged?(listener: (sessions: ChatSession[]) => void): Unsubscribe;
   createChatSession(provider: AccountProvider, label?: string): Promise<ChatSession>;

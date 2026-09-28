@@ -39,22 +39,34 @@ pub struct ServiceCards {
     pub roots: Roots,
     pub saved: Vec<KeyRecord>,
     pub detected: Vec<Detected>,
+    /// Cards found on this computer that the user removed from Quota Control; they get no runtime.
+    pub dismissed: Vec<Detected>,
 }
 
 impl ServiceCards {
     /// Read the saved keys and look for logins and environment keys under `roots`. It reads other
     /// apps' files and credential entries, so callers on an async runtime run it off the runtime.
     pub fn scan(store: KeyStore, roots: Roots) -> Self {
-        let saved = store.list().unwrap_or_else(|error| {
-            tracing::warn!("Saved API keys could not be read: {error}");
+        let saved = forget_retired(
+            &store,
+            store.list().unwrap_or_else(|error| {
+                tracing::warn!("Saved API keys could not be read: {error}");
+                Vec::new()
+            }),
+        );
+        let hidden = store.dismissed().unwrap_or_else(|error| {
+            tracing::warn!("Removed cards could not be read: {error}");
             Vec::new()
         });
-        let detected = uc_services::detect(&roots, &saved);
+        let (dismissed, detected) = uc_services::detect(&roots, &saved)
+            .into_iter()
+            .partition(|found| hidden.contains(&found.id));
         Self {
             store,
             roots,
             saved,
             detected,
+            dismissed,
         }
     }
 
@@ -86,6 +98,37 @@ impl ServiceCards {
     }
 }
 
+/// `saved` without the sign-ins and keys of services Quota Control no longer reads, which are
+/// removed from the store (with their removed-card marks) the first time they are seen.
+fn forget_retired(store: &KeyStore, saved: Vec<KeyRecord>) -> Vec<KeyRecord> {
+    let retired = |service: &str| uc_services::RETIRED_SERVICES.contains(&service);
+    let (gone, kept): (Vec<KeyRecord>, Vec<KeyRecord>) = saved
+        .into_iter()
+        .partition(|record| retired(&record.service));
+    for record in &gone {
+        match store.remove(&record.id) {
+            Ok(()) => tracing::info!("Forgot a saved {} sign-in or key", record.service),
+            Err(error) => tracing::warn!(
+                "A saved {} card could not be removed: {error}",
+                record.service
+            ),
+        }
+    }
+    if let Ok(dismissed) = store.dismissed() {
+        let stale: Vec<String> = dismissed
+            .into_iter()
+            .filter(|id| {
+                id.split_once('@')
+                    .is_some_and(|(service, _)| retired(service))
+            })
+            .collect();
+        if !stale.is_empty() {
+            let _ = store.restore(&stale);
+        }
+    }
+    kept
+}
+
 /// Whether a card starts hidden the first time it appears: the service reads a login that every
 /// install of its app has, signed in or not (Ollama), so the card waits to be turned on.
 pub fn starts_hidden(id: &str) -> bool {
@@ -115,7 +158,11 @@ pub fn select_providers(
     let known_before = known.unwrap_or(fallback_known);
     let Some(enabled) = enabled else {
         return ProviderSelection {
-            enabled: ids.iter().filter(|id| !starts_hidden(id)).cloned().collect(),
+            enabled: ids
+                .iter()
+                .filter(|id| !starts_hidden(id))
+                .cloned()
+                .collect(),
             known: ids.to_vec(),
         };
     };
@@ -164,6 +211,60 @@ mod tests {
 
     fn ids(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn saved_cards_of_a_retired_service_are_forgotten() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = KeyStore::new(dir.path().join("api-keys"));
+        let gemini = format!("gemini@{}", "a".repeat(64));
+        store
+            .add_login(
+                &gemini,
+                "gemini",
+                "me@example.com",
+                "google",
+                &serde_json::json!({"t": 1}),
+            )
+            .unwrap();
+        store
+            .dismiss(&format!("gemini@{}", "b".repeat(64)))
+            .unwrap();
+        let kept = store.add("zai", "Z.ai", "key-1", &Value::Null).unwrap();
+        let cards = ServiceCards::scan(store.clone(), Roots::under(dir.path()));
+        assert_eq!(cards.saved, vec![kept.clone()]);
+        assert_eq!(store.list().unwrap(), vec![kept]);
+        assert!(store.dismissed().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_removed_found_card_gets_no_runtime_until_restored() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = KeyStore::new(dir.path().join("api-keys"));
+        let roots = Roots::under(dir.path()).with_var("ELEVENLABS_API_KEY", "sk_test_key");
+        let elevenlabs = |cards: &[Detected]| -> Vec<String> {
+            cards
+                .iter()
+                .filter(|found| found.service == "elevenlabs")
+                .map(|found| found.id.clone())
+                .collect()
+        };
+        let cards = ServiceCards::scan(store.clone(), roots.clone());
+        let found = elevenlabs(&cards.detected);
+        assert_eq!(found.len(), 1);
+        assert!(cards.dismissed.is_empty());
+        let before = cards.runtimes().len();
+        store.dismiss(&found[0]).unwrap();
+        let cards = ServiceCards::scan(store.clone(), roots.clone());
+        assert!(elevenlabs(&cards.detected).is_empty());
+        assert_eq!(elevenlabs(&cards.dismissed), found);
+        assert!(!cards.fingerprint().iter().any(|(id, _)| *id == found[0]));
+        assert_eq!(cards.runtimes().len(), before - 1);
+        store.restore(&found).unwrap();
+        assert_eq!(
+            elevenlabs(&ServiceCards::scan(store, roots).detected),
+            found
+        );
     }
 
     #[test]

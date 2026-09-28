@@ -42,7 +42,6 @@ const BRAND_NAMES: Readonly<Record<string, string>> = {
   elevenlabs: "ElevenLabs",
   factory: "Droid",
   fireworks: "Fireworks",
-  gemini: "Gemini",
   gitkraken: "GitKraken AI",
   grok: "Grok",
   groq: "Groq",

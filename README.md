@@ -134,7 +134,7 @@ account card is retained until explicitly removed.
 Other AI services sign in the same way when their own apps have a browser sign-in:
 **Sign In with Google** or **Sign In with GitHub** opens the service's page, and the
 app saves the account encrypted beside API keys once the page is done. Google
-services (Gemini, Antigravity) come back to a loopback listener; Kiro, Kilo, Cline
+services (Antigravity) come back to a loopback listener; Kiro, Kilo, Cline
 and Copilot use a device sign-in, and Copilot's one-time code is copied to the
 clipboard to paste on GitHub's page; Cursor, Codebuff and Ollama finish on their own
 site while the app waits. Each row of the Add Account list has a plus button that
@@ -171,7 +171,6 @@ feature; `all` is the default.
 
 | Service | Connects with |
 | --- | --- |
-| Gemini | the Gemini CLI login on this computer; or a Google sign-in |
 | Antigravity | the Antigravity login on this computer; or a Google sign-in |
 | Copilot | the GitHub Copilot login on this computer; or a GitHub sign-in; or a classic personal access token (the quota, else this month's premium requests from GitHub billing) |
 | Cursor | the Cursor login on this computer; or a sign-in on cursor.com (Google, GitHub or email); or a pasted session cookie (WorkosCursorSessionToken); or an Enterprise team's Admin API key (team spend) |

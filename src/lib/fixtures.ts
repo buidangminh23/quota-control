@@ -313,16 +313,17 @@ export function fixtureServices(): ServiceEntry[] {
     signIn: [],
     detected: [],
     keys: [],
+    dismissed: [],
     ...extra,
   });
   return [
-    service("gemini", "Gemini", {
-      loginFrom: "Gemini CLI",
+    service("antigravity", "Antigravity", {
+      loginFrom: "Antigravity",
       takesApiKey: false,
       keyUrl: null,
       keyEnv: [],
       signIn: ["google"],
-      detected: [{ id: `gemini@${"1".repeat(64)}`, service: "gemini", label: "minh@example.com", origin: "Gemini CLI" }],
+      detected: [{ id: `antigravity@${"1".repeat(64)}`, service: "antigravity", label: "minh@example.com", origin: "Antigravity" }],
     }),
     service("copilot", "Copilot", {
       loginFrom: "GitHub Copilot",
