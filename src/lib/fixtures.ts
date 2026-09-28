@@ -326,8 +326,7 @@ export function fixtureServices(): ServiceEntry[] {
     }),
     service("copilot", "Copilot", {
       loginFrom: "GitHub Copilot",
-      takesApiKey: false,
-      keyUrl: null,
+      keyUrl: "https://github.com/settings/tokens",
       keyEnv: [],
       signIn: ["github"],
       keys: [{ id: `copilot@${"3".repeat(64)}`, service: "copilot", label: "octocat", addedAt: "2026-09-26T08:00:00Z", hint: "", signIn: "github" }],
@@ -340,6 +339,15 @@ export function fixtureServices(): ServiceEntry[] {
     service("longcat", "LongCat", { keyLabel: "Cookie header", keyFormat: "cookieHeader", keyEnv: [] }),
     service("xai", "xAI", { keyFields: [["teamId", "Team ID"]] }),
     service("ollama", "Ollama", { loginFrom: "Ollama", keyEnv: ["OLLAMA_API_KEY"], signIn: ["google", "github"], startsHidden: true }),
-    service("windsurf", "Windsurf", { loginFrom: "Windsurf", takesApiKey: false, keyUrl: null, keyEnv: [] }),
+    service("windsurf", "Windsurf", { loginFrom: "Windsurf", keyUrl: "https://windsurf.com/subscription/usage", keyEnv: ["WINDSURF_API_KEY"] }),
+    service("cursor", "Cursor", {
+      loginFrom: "Cursor",
+      keyLabel: "Admin API key or session cookie (WorkosCursorSessionToken)",
+      keyUrl: "https://cursor.com/dashboard",
+      keyEnv: [],
+      signIn: ["google", "github"],
+    }),
+    service("newapi", "OpenAI-compatible relay", { keyUrl: null, keyEnv: [], keyFields: [["baseUrl", "Relay address"]] }),
+    service("zed", "Zed", { loginFrom: "Zed", takesApiKey: false, keyUrl: null, keyEnv: [] }),
   ];
 }
