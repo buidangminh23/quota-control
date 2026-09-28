@@ -83,7 +83,7 @@ export function useTaskbarStrip(): void {
     const appName = info?.name ?? messages.chrome.appName;
     const dark = taskbar ? taskbar.theme === "dark" : systemDark;
     const color = dark ? "#ffffff" : "#000000";
-    const style: StripStyle = info?.platform === "macos" ? "menuBar" : "taskbar";
+    const style: StripStyle = info?.platform === "macos" ? "menuBar" : info?.platform === "linux" ? "panel" : "taskbar";
     const empty = isStripEmpty(content);
     const tooltip = empty ? messages.strip.tooltipEmpty : `${appName}\n${stripSummary(content)}`;
     let output: Output;

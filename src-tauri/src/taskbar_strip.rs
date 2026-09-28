@@ -189,7 +189,7 @@ pub fn decode_frame(frame: &StripFrame) -> Result<Bitmap, String> {
 
 impl Bitmap {
     /// Back to straight RGBA, for platforms that take the frame as an ordinary image.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(windows, allow(dead_code))]
     pub fn straight_rgba(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.bgra.len());
         for pixel in self.bgra.as_chunks::<4>().0 {
@@ -629,9 +629,10 @@ impl TaskbarStrip {
         self.inner.set(bitmap);
     }
 
-    /// The tray icon glyph (the Bars style), or `None` for the app icon, with its tooltip. Only
-    /// macOS draws both into one menu bar image; elsewhere the caller sets the tray icon directly.
-    #[cfg(target_os = "macos")]
+    /// The tray icon glyph (the Bars style), or `None` for the app icon, with its tooltip. The
+    /// macOS menu bar and the Linux panel show the strip as the tray image itself, so the strip
+    /// decides which of them shows; on Windows the caller sets the tray icon directly.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub fn set_glyph(&self, glyph: Option<tauri::image::Image<'static>>, tooltip: String) {
         self.inner.set_glyph(glyph, tooltip);
     }
@@ -1976,15 +1977,33 @@ mod platform {
 mod platform {
     use std::sync::Arc;
 
+    use parking_lot::Mutex;
+    use tauri::image::Image;
     use tauri::{AppHandle, Runtime};
 
     use super::{Bitmap, StripClick, TaskbarEdge, TaskbarInfo, TaskbarTheme};
 
     const TRAY_ID: &str = "main";
+    /// GNOME's AppIndicator extension draws status icons at the panel's icon size, 16 logical
+    /// pixels, and keeps a wide image's aspect ratio; the strip is drawn at twice that for HiDPI.
+    const PANEL_ICON_POINTS: u32 = 16;
+    const PANEL_SCALE: f64 = 2.0;
 
-    /// Linux has no taskbar band to embed in; the strip's text becomes the tray title instead.
+    #[derive(Default)]
+    struct Images {
+        strip: Option<(Image<'static>, String)>,
+        glyph: Option<Image<'static>>,
+        tooltip: String,
+    }
+
+    type Show = Box<dyn Fn(Option<Image<'static>>, String) + Send + Sync>;
+
+    /// Linux has no taskbar band to embed in, so the strip becomes the panel indicator's image,
+    /// the same picture as the Windows strip: brand marks, window names and readings. The label
+    /// stays empty; the old plain-text title could not show marks and truncated long names.
     pub struct Strip {
-        set_title: Box<dyn Fn(Option<String>) + Send + Sync>,
+        images: Mutex<Images>,
+        show: Show,
     }
 
     impl Strip {
@@ -1994,11 +2013,19 @@ mod platform {
             _on_cover: Arc<dyn Fn(super::TraySlot) + Send + Sync>,
         ) -> Self {
             Self {
-                set_title: Box::new(move |title| {
-                    if let Some(tray) = app.tray_by_id(TRAY_ID)
-                        && tray.set_title(title).is_err()
+                images: Mutex::new(Images::default()),
+                show: Box::new(move |image, tooltip| {
+                    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+                        return;
+                    };
+                    let image = image.or_else(|| app.default_window_icon().cloned());
+                    if tray.set_icon(image).is_err()
+                        || tray.set_title(None::<&str>).is_err()
+                        || tray
+                            .set_tooltip(Some(tooltip).filter(|tip| !tip.is_empty()))
+                            .is_err()
                     {
-                        tracing::warn!("could not set the tray title");
+                        tracing::warn!("could not update the panel indicator");
                     }
                 }),
             }
@@ -2007,22 +2034,42 @@ mod platform {
         pub fn info(&self) -> TaskbarInfo {
             TaskbarInfo {
                 supported: true,
-                height: 24,
-                scale: 1.0,
+                height: (f64::from(PANEL_ICON_POINTS) * PANEL_SCALE).round() as u32,
+                scale: PANEL_SCALE,
                 theme: TaskbarTheme::Dark,
                 edge: TaskbarEdge::Top,
             }
         }
 
         pub fn set(&self, bitmap: Option<Bitmap>) {
-            (self.set_title)(
-                bitmap
-                    .map(|bitmap| bitmap.text)
-                    .filter(|text| !text.is_empty()),
-            );
+            let strip = bitmap.map(|bitmap| {
+                let image = Image::new_owned(bitmap.straight_rgba(), bitmap.width, bitmap.height);
+                (image, bitmap.tooltip)
+            });
+            self.images.lock().strip = strip;
+            self.apply();
         }
 
         pub fn set_popup_visible(&self, _visible: bool) {}
+
+        pub fn set_glyph(&self, glyph: Option<Image<'static>>, tooltip: String) {
+            let mut images = self.images.lock();
+            images.glyph = glyph;
+            images.tooltip = tooltip;
+            drop(images);
+            self.apply();
+        }
+
+        fn apply(&self) {
+            let (image, tooltip) = {
+                let images = self.images.lock();
+                match &images.strip {
+                    Some((image, tooltip)) => (Some(image.clone()), tooltip.clone()),
+                    None => (images.glyph.clone(), images.tooltip.clone()),
+                }
+            };
+            (self.show)(image, tooltip);
+        }
     }
 }
 

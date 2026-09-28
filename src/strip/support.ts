@@ -1,6 +1,6 @@
 /**
  * The native taskbar strip is optional: the core hosts it where it can (a window in the Windows
- * taskbar, the tray title on Linux) and exposes `taskbarInfo`/`setTaskbarStrip` on the backend. Where
+ * taskbar, the panel indicator image on Linux) and exposes `taskbarInfo`/`setTaskbarStrip` on the backend. Where
  * the backend has neither, the strip reports unsupported and the tray-icon glyph covers it.
  */
 import { useSyncExternalStore } from "react";

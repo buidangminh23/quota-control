@@ -148,7 +148,7 @@ impl TrayImage {
         }
     }
 
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    #[cfg_attr(any(target_os = "macos", target_os = "linux"), allow(dead_code))]
     fn request(
         &self,
         app: &AppHandle,
@@ -200,9 +200,9 @@ pub fn set_tray_icon(
     set_tray_glyph(&app, &images, glyph, tooltip)
 }
 
-/// macOS draws the glyph, the strip and the app icon into the one menu bar image, so the strip
-/// decides which of them shows.
-#[cfg(target_os = "macos")]
+/// The macOS menu bar and the Linux panel draw the glyph, the strip and the app icon into the one
+/// tray image, so the strip decides which of them shows.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn set_tray_glyph(
     app: &AppHandle,
     _images: &TrayImage,
@@ -214,7 +214,7 @@ fn set_tray_glyph(
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn set_tray_glyph(
     app: &AppHandle,
     images: &TrayImage,
