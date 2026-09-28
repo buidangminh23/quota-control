@@ -1984,10 +1984,11 @@ mod platform {
     use super::{Bitmap, StripClick, TaskbarEdge, TaskbarInfo, TaskbarTheme};
 
     const TRAY_ID: &str = "main";
-    /// GNOME's AppIndicator extension draws status icons at the panel's icon size, 16 logical
-    /// pixels, and keeps a wide image's aspect ratio; the strip is drawn at twice that for HiDPI.
-    const PANEL_ICON_POINTS: u32 = 16;
-    const PANEL_SCALE: f64 = 2.0;
+    /// GNOME's AppIndicator extension shows an image at least 1.5 times as wide as it is tall at
+    /// its own size, one image pixel per logical pixel (`_loadCustomImage`), not at the panel's
+    /// icon size. The strip is therefore drawn at one pixel per point, 24 tall: two readings
+    /// stacked like the Windows clock, inside Ubuntu's 32-pixel top bar.
+    const PANEL_HEIGHT: u32 = 24;
 
     #[derive(Default)]
     struct Images {
@@ -2034,8 +2035,8 @@ mod platform {
         pub fn info(&self) -> TaskbarInfo {
             TaskbarInfo {
                 supported: true,
-                height: (f64::from(PANEL_ICON_POINTS) * PANEL_SCALE).round() as u32,
-                scale: PANEL_SCALE,
+                height: PANEL_HEIGHT,
+                scale: 1.0,
                 theme: TaskbarTheme::Dark,
                 edge: TaskbarEdge::Top,
             }
