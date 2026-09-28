@@ -234,6 +234,7 @@ struct GlanceWidgetView: View {
     let entry: GlanceEntry
     let style: QuotaWidgetStyle
     let family: WidgetFamily
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         GeometryReader { proxy in
@@ -241,6 +242,17 @@ struct GlanceWidgetView: View {
                 .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
         }
         .containerBackground(.background, for: .widget)
+        .environment(\.colorScheme, resolvedScheme)
+    }
+
+    private var resolvedScheme: ColorScheme {
+        switch style {
+        case .overview, .codexResets, .resetCalendar:
+            let theme = entry.document?.resets?.theme
+            return theme == "light" ? .light : theme == "dark" ? .dark : colorScheme
+        default:
+            return colorScheme
+        }
     }
 
     @ViewBuilder

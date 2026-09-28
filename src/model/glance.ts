@@ -220,6 +220,68 @@ export interface GlanceResets {
   median?: string;
   calendar?: GlanceResetCalendar;
   rhythm?: GlanceResetRhythm;
+  presentation?: GlanceResetPresentation;
+  theme?: "system" | "light" | "dark";
+}
+
+export interface GlanceResetAuthor {
+  handle: string;
+}
+
+export interface GlanceResetStatusCard {
+  id: string;
+  kind: "scheduled" | "watch" | "quiet";
+  level?: "elevated" | "strong";
+  title: string;
+  excerpt?: string;
+  meta: string[];
+  due?: string;
+  author?: GlanceResetAuthor;
+  url?: string;
+  hideAt?: string;
+  announced?: GlanceCountdown;
+  scheduledMeta?: string;
+  dueCountdown?: GlanceCountdown;
+  overdueCountdown?: GlanceCountdown;
+}
+
+export interface GlanceResetForecastPresentation {
+  title: string;
+  chances: { days: 1 | 3 | 7; label: string; percent: string; fraction: number }[];
+  wait?: string;
+  waitFraction?: number;
+  median?: string;
+  sampleNote?: string;
+  disclaimer?: string;
+  unavailable?: string;
+}
+
+export interface GlanceResetHistoryItem {
+  id: string;
+  kind: "regular" | "banked";
+  kindLabel: string;
+  when: string;
+  excerpt: string;
+  author?: GlanceResetAuthor;
+  url?: string;
+  observed?: string;
+}
+
+export interface GlanceResetPresentation {
+  locale: string;
+  authorAvatar: string;
+  latest?: { title: string; ago: string; at: string; meta: string; author?: GlanceResetAuthor };
+  statuses: GlanceResetStatusCard[];
+  quietTitle?: string;
+  forecast: GlanceResetForecastPresentation;
+  statsTitle: string;
+  stats: { label: string; value: string }[];
+  historyTitle: string;
+  history: GlanceResetHistoryItem[];
+  patternNote: string;
+  source: string;
+  methodTitle: string;
+  method: string[];
 }
 
 export interface GlanceUpcomingReset {

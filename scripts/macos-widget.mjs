@@ -96,11 +96,18 @@ function build(options) {
 
   const sdk = capture("xcrun", ["--sdk", "macosx", "--show-sdk-path"]);
   const sources = [...swiftFiles("Shared"), ...swiftFiles("Widget")];
+  const protocolList = join(work, "intent-protocols.json");
+  writeFileSync(protocolList, JSON.stringify(["AppIntent", "AppEntity", "AppEnum", "AppShortcutsProvider"]));
+  const constantFiles = [];
   const slices = architectures(options.arch).map((arch) => {
     const output = join(work, `${NAME}-${arch}`);
+    const constants = join(work, `${NAME}-${arch}.swiftconstvalues`);
+    constantFiles.push(constants);
     run("xcrun", [
       "swiftc", "-parse-as-library", "-application-extension", "-module-name", NAME, "-swift-version", "5",
-      "-target", `${arch}-apple-macos${MINIMUM_MACOS}`, "-sdk", sdk, "-O",
+      "-target", `${arch}-apple-macos${MINIMUM_MACOS}`, "-sdk", sdk, "-O", "-whole-module-optimization",
+      "-emit-const-values-path", constants,
+      "-Xfrontend", "-const-gather-protocols-file", "-Xfrontend", protocolList,
       "-framework", "Foundation", "-Xlinker", "-e", "-Xlinker", "_NSExtensionMain",
       "-o", output, ...sources,
     ]);
@@ -113,6 +120,22 @@ function build(options) {
   const version = appVersion();
   const plist = readFileSync(join(SOURCES, "Widget", "Info.plist"), "utf8").replaceAll("__VERSION__", version);
   writeFileSync(join(contents, "Info.plist"), plist);
+
+  const sourceList = join(work, "intent-sources.txt");
+  const constantsList = join(work, "intent-constants.txt");
+  writeFileSync(sourceList, sources.join("\n") + "\n");
+  writeFileSync(constantsList, constantFiles.join("\n") + "\n");
+  const swiftCompiler = capture("xcrun", ["--find", "swiftc"]);
+  const toolchain = resolve(dirname(swiftCompiler), "..", "..");
+  const xcodeVersion = capture("xcodebuild", ["-version"]).match(/Build version (\S+)/)?.[1];
+  if (!xcodeVersion) fail("could not determine Xcode build version for AppIntent metadata");
+  run("xcrun", [
+    "appintentsmetadataprocessor", "--module-name", NAME, "--output", join(contents, "Resources"),
+    "--toolchain-dir", toolchain, "--sdk-root", sdk, "--xcode-version", xcodeVersion,
+    "--platform-family", "macOS", "--deployment-target", MINIMUM_MACOS,
+    "--target-triple", `${architectures(options.arch)[0]}-apple-macos${MINIMUM_MACOS}`,
+    "--source-file-list", sourceList, "--swift-const-vals-list", constantsList,
+  ]);
 
   const identity = signingIdentity();
   run("codesign", [

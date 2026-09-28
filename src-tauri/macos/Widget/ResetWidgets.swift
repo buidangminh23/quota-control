@@ -1,5 +1,7 @@
 import SwiftUI
 import WidgetKit
+import AppIntents
+import AppKit
 
 // MARK: Reset tracker parts
 
@@ -189,273 +191,6 @@ struct ChanceHero: View {
     }
 }
 
-struct ResetChanceStrip: View {
-    let resets: GlanceResets
-
-    var body: some View {
-        if !resets.forecast.isEmpty {
-            VStack(alignment: .leading, spacing: 5) {
-                SectionLabel(text: resets.forecastTitle)
-                HStack(alignment: .top, spacing: 7) {
-                    ForEach(resets.forecast) { chance in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("\(chance.percent)%")
-                                .font(.system(size: 13, weight: .semibold))
-                                .monospacedDigit()
-                            TintMeter(fraction: chance.fraction, color: resets.tint, height: 4)
-                            Text(chance.label)
-                                .font(.system(size: WidgetScale.footnote))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-            }
-        }
-    }
-}
-
-// MARK: Calendar
-
-/// The weeks and square size a calendar gets in a space: every week up to `most` at the biggest
-/// square that fits, fewer weeks when squares would get too small to read.
-struct CalendarFit {
-    let weeks: Int
-    let pitch: CGFloat
-
-    static let labelWidth: CGFloat = 18
-    static let monthsHeight: CGFloat = 12
-
-    static func fit(_ calendar: GlanceResetCalendar, in size: CGSize, most: Int, largest: CGFloat = 18, smallest: CGFloat = 9) -> CalendarFit {
-        let available = calendar.weekRows().count
-        var weeks = max(1, min(most, available))
-        let tall = (size.height - monthsHeight - 2) / 7
-        var pitch = min(largest, tall, (size.width - labelWidth) / CGFloat(weeks))
-        if pitch < smallest {
-            let side = max(smallest, min(largest, tall))
-            weeks = max(1, min(weeks, Int((size.width - labelWidth) / side)))
-            pitch = min(largest, tall, (size.width - labelWidth) / CGFloat(weeks))
-        }
-        return CalendarFit(weeks: weeks, pitch: (pitch * 2).rounded(.down) / 2)
-    }
-
-    /// The grid's own size at this fit.
-    var size: CGSize {
-        CGSize(width: Self.labelWidth + CGFloat(weeks) * pitch, height: Self.monthsHeight + 2 + 7 * pitch)
-    }
-}
-
-/// The reset calendar as a heat map: one column per week, oldest on the left, Monday on top; a
-/// square per day, in the tracker's color for a regular reset, orange for a banked one, faint for
-/// none and fainter still for days to come, with today outlined. Month names run along the top and
-/// weekday names down the left.
-struct ResetCalendarGrid: View {
-    let calendar: GlanceResetCalendar
-    let tint: Color
-    let fit: CalendarFit
-
-    var body: some View {
-        let rows = calendar.weekRows(last: fit.weeks)
-        let offset = calendar.weekRows().count - rows.count
-        let todayWeek = calendar.today / 7 - offset
-        let todayDay = calendar.today % 7
-        let pitch = fit.pitch
-        let side = pitch - max(2, (pitch * 0.18).rounded())
-        VStack(alignment: .leading, spacing: 2) {
-            ZStack(alignment: .topLeading) {
-                ForEach(Array(monthMarks(offset: offset).enumerated()), id: \.offset) { _, mark in
-                    Text(mark.label)
-                        .font(.system(size: 8, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .fixedSize()
-                        .offset(x: CalendarFit.labelWidth + CGFloat(mark.week) * pitch)
-                }
-            }
-            .frame(width: fit.size.width, height: CalendarFit.monthsHeight, alignment: .topLeading)
-            HStack(alignment: .top, spacing: 0) {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(0..<7, id: \.self) { day in
-                        Text(weekdayLabel(day))
-                            .font(.system(size: 8))
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                            .frame(width: CalendarFit.labelWidth, height: pitch, alignment: .leading)
-                    }
-                }
-                ForEach(rows.indices, id: \.self) { week in
-                    VStack(spacing: 0) {
-                        ForEach(0..<7, id: \.self) { day in
-                            cell(day < rows[week].count ? rows[week][day] : .future, side: side, today: week == todayWeek && day == todayDay)
-                                .frame(width: pitch, height: pitch)
-                        }
-                    }
-                }
-            }
-        }
-        .frame(width: fit.size.width, height: fit.size.height, alignment: .topLeading)
-    }
-
-    private func weekdayLabel(_ day: Int) -> String {
-        guard day < calendar.weekdays.count else { return "" }
-        if fit.pitch >= 13 || day % 2 == 0 { return calendar.weekdays[day] }
-        return ""
-    }
-
-    private func cell(_ kind: GlanceResetCalendar.Cell, side: CGFloat, today: Bool) -> some View {
-        let shape = RoundedRectangle(cornerRadius: max(1.5, side * 0.24), style: .continuous)
-        return shape
-            .fill(color(kind))
-            .overlay(today ? shape.strokeBorder(Color.primary, lineWidth: max(1.2, side * 0.12)) : nil)
-            .frame(width: side, height: side)
-    }
-
-    private func color(_ kind: GlanceResetCalendar.Cell) -> Color {
-        switch kind {
-        case .regular: return tint
-        case .banked: return .orange
-        case .none: return Color.primary.opacity(0.09)
-        case .future: return Color.primary.opacity(0.03)
-        }
-    }
-
-    /// The month names over the visible weeks, dropping any that would overlap the one before; the
-    /// month already running at the first visible week is named over it.
-    private func monthMarks(offset: Int) -> [GlanceResetMonth] {
-        var marks: [GlanceResetMonth] = []
-        let running = calendar.months.last { $0.week <= offset }
-        let visible = calendar.months.filter { $0.week > offset }
-        if let running {
-            marks.append(GlanceResetMonth(week: 0, label: running.label))
-        }
-        marks += visible.map { GlanceResetMonth(week: $0.week - offset, label: $0.label) }
-        var kept: [GlanceResetMonth] = []
-        var end: CGFloat = -.infinity
-        for mark in marks where mark.week < fit.weeks {
-            let start = CGFloat(mark.week) * fit.pitch
-            if start >= end + 3 {
-                kept.append(mark)
-                end = start + CGFloat(mark.label.count) * 5 + 2
-            } else if let last = kept.last, last.week == 0, mark.week * 2 <= fit.weeks {
-                kept[kept.count - 1] = mark
-                end = start + CGFloat(mark.label.count) * 5 + 2
-            }
-        }
-        return kept
-    }
-}
-
-/// What the calendar's colors mean.
-struct CalendarLegend: View {
-    let legend: GlanceResetLegend
-    let tint: Color
-    var axis: Axis = .horizontal
-
-    var body: some View {
-        let items = Group {
-            swatch(tint, legend.regular)
-            swatch(.orange, legend.banked)
-            HStack(spacing: 3) {
-                RoundedRectangle(cornerRadius: 2, style: .continuous)
-                    .strokeBorder(Color.primary, lineWidth: 1.2)
-                    .frame(width: 8, height: 8)
-                Text(legend.today).lineLimit(1)
-            }
-        }
-        Group {
-            if axis == .horizontal {
-                HStack(spacing: 8) { items }
-            } else {
-                VStack(alignment: .leading, spacing: 3) { items }
-            }
-        }
-        .font(.system(size: WidgetScale.footnote))
-        .foregroundStyle(.secondary)
-        .fixedSize()
-    }
-
-    private func swatch(_ color: Color, _ text: String) -> some View {
-        HStack(spacing: 3) {
-            RoundedRectangle(cornerRadius: 2, style: .continuous)
-                .fill(color)
-                .frame(width: 8, height: 8)
-            Text(text).lineLimit(1)
-        }
-    }
-}
-
-/// A small bar chart of how many resets fell in each bucket (weekday or four-hour block), the
-/// busiest bucket in full color.
-struct RhythmBars: View {
-    let title: String
-    let buckets: [GlanceResetBucket]
-    let tint: Color
-    var height: CGFloat = 44
-
-    var body: some View {
-        let top = max(buckets.map(\.count).max() ?? 0, 1)
-        VStack(alignment: .leading, spacing: 3) {
-            SectionLabel(text: title)
-            HStack(alignment: .bottom, spacing: 4) {
-                ForEach(Array(buckets.enumerated()), id: \.offset) { _, bucket in
-                    VStack(spacing: 2) {
-                        Text("\(bucket.count)")
-                            .font(.system(size: 8, weight: .medium))
-                            .monospacedDigit()
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                            .fixedSize()
-                        RoundedRectangle(cornerRadius: 2, style: .continuous)
-                            .fill(bucket.count == top ? tint : tint.opacity(0.4))
-                            .frame(height: max(2, height * CGFloat(bucket.count) / CGFloat(top)))
-                        Text(bucket.label)
-                            .font(.system(size: 8))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .fixedSize()
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-            }
-            .frame(height: height + 24, alignment: .bottom)
-        }
-    }
-}
-
-/// The weekday and hour charts side by side, or stacked in a narrow column.
-struct RhythmView: View {
-    let rhythm: GlanceResetRhythm
-    let tint: Color
-    var height: CGFloat = 44
-    var stacked = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(rhythm.title)
-                    .font(.system(size: WidgetScale.title, weight: .semibold))
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                Text("\(rhythm.total)")
-                    .font(.system(size: WidgetScale.caption, weight: .semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
-            if stacked {
-                VStack(alignment: .leading, spacing: 8) { charts }
-            } else {
-                HStack(alignment: .top, spacing: WidgetScale.columnSpacing) { charts }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var charts: some View {
-        RhythmBars(title: rhythm.weekdayTitle, buckets: rhythm.weekdays, tint: tint, height: height)
-        RhythmBars(title: rhythm.hourTitle, buckets: rhythm.hours, tint: tint, height: height)
-    }
-}
-
 // MARK: Codex Resets widget
 
 /// The Codex free-reset tracker: the announced reset or the chance of one, how long since the last,
@@ -467,207 +202,8 @@ struct CodexResetsLayout: View {
     let now: Date
     let size: CGSize
 
-    private var units: GlanceUnits { document.labels.units }
-
     var body: some View {
-        switch family {
-        case .systemSmall: small
-        case .systemMedium: medium
-        case .systemLarge: large
-        default: extraLarge
-        }
-    }
-
-    private var small: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ResetsHeader(resets: resets)
-            if let stale = resets.stale {
-                ResetsStaleLine(text: stale)
-            }
-            if let upcoming = resets.upcoming(at: now) {
-                AnnouncedResetBlock(upcoming: upcoming, units: units, now: now, valueSize: 14)
-            } else {
-                ChanceHero(resets: resets)
-            }
-            Spacer(minLength: 0)
-            if let latest = resets.latest {
-                latest.since.live(now: now, units: units)
-                    .font(.system(size: WidgetScale.caption))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    private var medium: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            ResetsHeader(resets: resets, showsSource: resets.stale == nil)
-            if let stale = resets.stale {
-                ResetsStaleLine(text: stale)
-            }
-            HStack(alignment: .top, spacing: WidgetScale.columnSpacing + 4) {
-                VStack(alignment: .leading, spacing: 8) {
-                    let upcoming = resets.upcoming(at: now)
-                    if let upcoming {
-                        AnnouncedResetBlock(upcoming: upcoming, units: units, now: now, valueSize: 13.5)
-                    }
-                    if let latest = resets.latest {
-                        LatestResetBlock(
-                            latest: latest,
-                            tint: resets.tint,
-                            units: units,
-                            now: now,
-                            valueSize: upcoming == nil ? 13.5 : WidgetScale.caption,
-                            showsWhen: upcoming == nil
-                        )
-                        .foregroundStyle(upcoming == nil ? Color.primary : Color.secondary)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                ChanceBars(resets: resets, spacing: 5)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    private var large: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 5) {
-                ResetsHeader(resets: resets)
-                HiddenCount(count: largeSecondaryCount)
-            }
-            if let stale = resets.stale {
-                ResetsStaleLine(text: stale)
-            }
-            if let upcoming = resets.upcoming(at: now) {
-                AnnouncedResetBlock(upcoming: upcoming, units: units, now: now, valueSize: 15, captionLines: 2)
-            }
-            if let latest = resets.latest {
-                VStack(alignment: .leading, spacing: 2) {
-                    if resets.upcoming(at: now) == nil {
-                        latest.since.live(now: now, units: units)
-                            .font(.system(size: WidgetScale.value, weight: .semibold))
-                            .lineLimit(2)
-                    }
-                    Text("\(latest.label): \(latest.when) · \(latest.kindLabel)")
-                        .font(.system(size: WidgetScale.caption))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            ResetChanceStrip(resets: resets)
-            if let calendar = resets.calendar {
-                GeometryReader { proxy in
-                    let fit = CalendarFit.fit(
-                        calendar, in: CGSize(width: proxy.size.width, height: max(42, proxy.size.height - 30)),
-                        most: calendar.weeks, largest: 15, smallest: 7
-                    )
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 4) {
-                            SectionLabel(text: calendar.title)
-                            Spacer(minLength: 0)
-                            HiddenCount(count: calendar.weeks - fit.weeks)
-                        }
-                        ResetCalendarGrid(calendar: calendar, tint: resets.tint, fit: fit)
-                        CalendarLegend(legend: calendar.legend, tint: resets.tint)
-                    }
-                }
-            } else if let rhythm = resets.rhythm {
-                RhythmView(rhythm: rhythm, tint: resets.tint, height: 30)
-            } else {
-                Spacer(minLength: 0)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    private var largeSecondaryCount: Int {
-        (resets.wait == nil ? 0 : 1) + (resets.median == nil ? 0 : 1)
-            + (resets.forecastNote.isEmpty ? 0 : 1)
-            + (resets.upcoming(at: now)?.note == nil ? 0 : 1)
-            + (resets.calendar != nil && resets.rhythm != nil ? 1 : 0)
-    }
-
-    private var extraLarge: some View { balanced }
-
-    private var balanced: some View {
-        let hasSummary = resets.upcoming(at: now) != nil || resets.latest != nil || !resets.forecast.isEmpty
-            || !resets.forecastNote.isEmpty || resets.wait != nil || resets.median != nil
-        let hasHistory = resets.calendar != nil || resets.rhythm != nil
-        let left = hasHistory ? (size.width - WidgetScale.columnSpacing) * (family == .systemExtraLarge ? 0.46 : 0.5) : size.width
-        let right = hasSummary ? size.width - left - WidgetScale.columnSpacing : size.width
-        return VStack(alignment: .leading, spacing: 7) {
-            ResetsHeader(resets: resets, showsSource: true)
-            if let stale = resets.stale {
-                ResetsStaleLine(text: stale)
-            }
-            HStack(alignment: .top, spacing: WidgetScale.columnSpacing) {
-                if hasSummary {
-                    summaryColumn(width: left)
-                }
-                if hasHistory {
-                    historyColumn(width: right)
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    private func summaryColumn(width: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            if let upcoming = resets.upcoming(at: now) {
-                AnnouncedResetBlock(upcoming: upcoming, units: units, now: now, valueSize: 13, captionLines: 1, showsNote: true)
-            }
-            if let latest = resets.latest {
-                LatestResetBlock(latest: latest, tint: resets.tint, units: units, now: now, valueSize: WidgetScale.value)
-            }
-            ResetChanceStrip(resets: resets)
-            if !resets.forecastNote.isEmpty {
-                note(resets.forecastNote)
-            }
-            if let wait = resets.wait { note(wait) }
-            if let median = resets.median { note(median) }
-        }
-        .frame(width: width, alignment: .topLeading)
-    }
-
-    private func historyColumn(width: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let calendar = resets.calendar {
-                let fit = CalendarFit.fit(
-                    calendar, in: CGSize(width: width, height: min(120, size.height * 0.3)),
-                    most: calendar.weeks, largest: 14, smallest: 4
-                )
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 4) {
-                        SectionLabel(text: calendar.title)
-                        Spacer(minLength: 0)
-                        HiddenCount(count: calendar.weeks - fit.weeks)
-                    }
-                    ResetCalendarGrid(calendar: calendar, tint: resets.tint, fit: fit)
-                    ViewThatFits(in: .horizontal) {
-                        CalendarLegend(legend: calendar.legend, tint: resets.tint)
-                        CalendarLegend(legend: calendar.legend, tint: resets.tint, axis: .vertical)
-                    }
-                }
-            }
-            if let rhythm = resets.rhythm {
-                RhythmView(rhythm: rhythm, tint: resets.tint, height: width < 220 ? 20 : 38, stacked: width < 220)
-            }
-        }
-        .frame(width: width, alignment: .topLeading)
-    }
-
-    private func note(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: WidgetScale.caption))
-            .foregroundStyle(.secondary)
-            .lineLimit(2)
-            .fixedSize(horizontal: false, vertical: true)
+        ResetWidgetPager(document: document, resets: resets, family: family, now: now, size: size, namespace: "resets")
     }
 
 }
@@ -684,93 +220,300 @@ struct ResetCalendarLayout: View {
     let now: Date
     let size: CGSize
 
-    private var units: GlanceUnits { document.labels.units }
+    var body: some View {
+        ResetWidgetPager(document: document, resets: resets, family: family, now: now, size: size, namespace: "calendar", initialCard: "calendar")
+    }
+
+}
+
+struct ChangeResetWidgetPage: AppIntent {
+    static var title: LocalizedStringResource = "Change reset page"
+    static var openAppWhenRun: Bool = false
+
+    @Parameter(title: "Widget") var key: String
+    @Parameter(title: "Page") var page: Int
+
+    init() {}
+    init(key: String, page: Int) {
+        self.key = key
+        self.page = page
+    }
+
+    func perform() async throws -> some IntentResult {
+        UserDefaults.standard.set(page, forKey: key)
+        WidgetCenter.shared.reloadAllTimelines()
+        return .result()
+    }
+}
+
+struct ResetWidgetPager: View {
+    let document: GlanceDocument
+    let resets: GlanceResets
+    let family: WidgetFamily
+    let now: Date
+    let size: CGSize
+    let namespace: String
+    var initialCard: String?
+    var prefixPages: [AnyView] = []
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        switch family {
-        case .systemMedium, .systemSmall: medium
-        case .systemLarge: large
-        default: extraLarge
-        }
-    }
-
-    private var heading: some View {
-        ResetsHeader(resets: resets, title: "\(resets.title) · \(calendar.title)")
-    }
-
-    private var medium: some View {
-        let fit = CalendarFit.fit(calendar, in: CGSize(width: size.width, height: size.height - 34), most: calendar.weeks)
-        return VStack(alignment: .leading, spacing: 5) {
-            ResetsHeader(resets: resets)
-            ResetCalendarGrid(calendar: calendar, tint: resets.tint, fit: fit)
-            Spacer(minLength: 0)
-            CalendarLegend(legend: calendar.legend, tint: resets.tint)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    private var large: some View {
-        let fit = CalendarFit.fit(calendar, in: CGSize(width: size.width, height: 150), most: calendar.weeks)
-        return VStack(alignment: .leading, spacing: WidgetScale.blockSpacing) {
-            heading
-            VStack(alignment: .leading, spacing: 5) {
-                ResetCalendarGrid(calendar: calendar, tint: resets.tint, fit: fit)
-                CalendarLegend(legend: calendar.legend, tint: resets.tint)
-            }
-            Spacer(minLength: 0)
-            if let rhythm = resets.rhythm {
-                RhythmView(rhythm: rhythm, tint: resets.tint, height: 58)
-            }
-            if let latest = resets.latest {
-                LatestResetBlock(latest: latest, tint: resets.tint, units: units, now: now, valueSize: WidgetScale.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    private var extraLarge: some View {
-        let side = min(250, size.width * 0.33)
-        let fit = CalendarFit.fit(calendar, in: CGSize(width: size.width - side - WidgetScale.columnSpacing * 2 - 1, height: size.height - 120), most: calendar.weeks, largest: 22)
-        return HStack(alignment: .top, spacing: WidgetScale.columnSpacing) {
-            VStack(alignment: .leading, spacing: WidgetScale.blockSpacing) {
-                heading
-                VStack(alignment: .leading, spacing: 5) {
-                    ResetCalendarGrid(calendar: calendar, tint: resets.tint, fit: fit)
-                    CalendarLegend(legend: calendar.legend, tint: resets.tint)
+        let height = max(40, size.height - 46)
+        let cards = GlanceResetCards.make(resets: resets, units: document.labels.units, now: now)
+        let fragments = ResetWidgetPagination.pages(cards, width: size.width, height: height)
+        let pages = ResetWidgetPagination.spreads(fragments, width: size.width, height: height)
+        let key = "reset-page.\(namespace).\(family.rawValue)"
+        let initial = initialCard.flatMap { id in pages.firstIndex(where: { $0.contains(where: { $0.id.hasPrefix(id + "|") || $0.id == id }) }) }.map { prefixPages.count + $0 } ?? 0
+        let stored = UserDefaults.standard.object(forKey: key) == nil ? initial : UserDefaults.standard.integer(forKey: key)
+        let count = prefixPages.count + pages.count
+        let index = min(max(0, stored), max(0, count - 1))
+        let sections = ResetWidgetSections(pageIDs: prefixPages.indices.map { ["overview-\($0)"] } + pages.map { $0.map(\.id) }, index: index)
+        VStack(alignment: .leading, spacing: 4) {
+            Group {
+                if index < prefixPages.count {
+                    prefixPages[index]
+                } else if index - prefixPages.count < pages.count {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(pages[index - prefixPages.count]) { card in
+                            GlanceResetCardView(card: card, availableWidth: size.width)
+                        }
+                    }
                 }
+            }
+            .frame(width: size.width, height: height, alignment: .topLeading)
+            HStack(spacing: 2) {
+                Button(intent: ChangeResetWidgetPage(key: key, page: sections.previous)) {
+                    Image(systemName: "chevron.left.2").frame(width: 20, height: 22)
+                }
+                .disabled(!sections.hasPrevious)
+                .accessibilityLabel(document.isVietnamese ? "Phần trước" : "Previous section")
+                .help(document.isVietnamese ? "Phần trước" : "Previous section")
+                Button(intent: ChangeResetWidgetPage(key: key, page: max(0, index - 1))) {
+                    Image(systemName: "chevron.left").frame(width: 20, height: 22)
+                }
+                .disabled(index == 0)
+                .accessibilityLabel(document.isVietnamese ? "Trang trước" : "Previous page")
                 Spacer(minLength: 0)
-                if let latest = resets.latest {
-                    LatestResetBlock(latest: latest, tint: resets.tint, units: units, now: now)
-                }
-                if let wait = resets.wait {
-                    Text(wait)
-                        .font(.system(size: WidgetScale.caption))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            Divider()
-            VStack(alignment: .leading, spacing: WidgetScale.blockSpacing) {
-                if let rhythm = resets.rhythm {
-                    RhythmView(rhythm: rhythm, tint: resets.tint, height: 52, stacked: true)
-                }
+                Text("\(sections.page) / \(sections.count)")
+                    .font(.system(size: 10, weight: .medium)).monospacedDigit()
+                    .accessibilityLabel("\(sections.page) / \(sections.count)")
                 Spacer(minLength: 0)
-                if let median = resets.median {
-                    Text(median)
-                        .font(.system(size: WidgetScale.caption))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                Button(intent: ChangeResetWidgetPage(key: key, page: min(max(0, count - 1), index + 1))) {
+                    Image(systemName: "chevron.right").frame(width: 20, height: 22)
                 }
-                Text(resets.source)
-                    .font(.system(size: WidgetScale.footnote))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
+                .disabled(index + 1 >= count)
+                .accessibilityLabel(document.isVietnamese ? "Trang sau" : "Next page")
+                Button(intent: ChangeResetWidgetPage(key: key, page: sections.next)) {
+                    Image(systemName: "chevron.right.2").frame(width: 20, height: 22)
+                }
+                .disabled(!sections.hasNext)
+                .accessibilityLabel(document.isVietnamese ? "Phần sau" : "Next section")
+                .help(document.isVietnamese ? "Phần sau" : "Next section")
             }
-            .frame(width: side, alignment: .topLeading)
-            .frame(maxHeight: .infinity, alignment: .topLeading)
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .frame(height: 22)
+            UpdatedFooter(document: document, now: now)
         }
+        .environment(\.colorScheme, resets.theme == "dark" ? .dark : resets.theme == "light" ? .light : colorScheme)
+    }
+}
+
+struct ResetWidgetSections {
+    let previous: Int
+    let next: Int
+    let hasPrevious: Bool
+    let hasNext: Bool
+    let page: Int
+    let count: Int
+
+    init(ids: [String], index: Int) {
+        self.init(pageIDs: ids.map { [$0] }, index: index)
+    }
+
+    init(pageIDs: [[String]], index: Int) {
+        var starts: [Int] = []
+        var previousGroup: String?
+        for (page, ids) in pageIDs.enumerated() {
+            for id in ids {
+                let group = id.hasPrefix("history-") ? "history" : String(id.split(separator: "|")[0])
+                if group != previousGroup && starts.last != page { starts.append(page) }
+                previousGroup = group
+            }
+        }
+        let section = starts.lastIndex(where: { $0 <= index }) ?? 0
+        let start = starts.isEmpty ? 0 : starts[section]
+        let end = section + 1 < starts.count ? starts[section + 1] : pageIDs.count
+        previous = starts.isEmpty ? 0 : starts[max(0, section - 1)]
+        next = starts.isEmpty ? 0 : starts[min(starts.count - 1, section + 1)]
+        hasPrevious = section > 0
+        hasNext = section + 1 < starts.count
+        page = pageIDs.isEmpty ? 0 : index - start + 1
+        count = end - start
+    }
+}
+
+@MainActor
+enum ResetWidgetPagination {
+    private static var cache: [String: [GlanceResetCardData]] = [:]
+    private static var keys: [String] = []
+    private static var spreadCache: [String: [[GlanceResetCardData]]] = [:]
+
+    static func pages(_ cards: [GlanceResetCardData], width: CGFloat, height: CGFloat) -> [GlanceResetCardData] {
+        let key = "\(width)|\(height)|\(String(reflecting: cards).hashValue)"
+        if let saved = cache[key] { return saved }
+        var result: [GlanceResetCardData] = []
+        for card in cards {
+            let needsPartition = card.elements.contains { element in
+                switch element {
+                case let .chances(chances): return width < 250 && chances.count > 1
+                case let .calendar(_, weeks, _): return CGFloat(weeks.count) * 9 > width - 46
+                default: return false
+                }
+            }
+            if !needsPartition && fits(card, width: width, height: height) { result.append(card); continue }
+            var current = GlanceResetCardData(id: card.id + "|0", title: card.title, accent: card.accent, elements: [])
+            var part = 0
+            var continuation = card
+            continuation.title = ""
+            for element in card.elements {
+                for piece in pieces(element, card: continuation, width: width, height: height) {
+                    var candidate = current
+                    candidate.elements.append(piece)
+                    if !fits(candidate, width: width, height: height) && (!current.elements.isEmpty || !current.title.isEmpty) {
+                        result.append(current)
+                        part += 1
+                        current = GlanceResetCardData(id: card.id + "|\(part)", title: "", accent: card.accent, elements: [piece])
+                    } else {
+                        current = candidate
+                    }
+                }
+            }
+            if !current.elements.isEmpty { result.append(current) }
+        }
+        cache[key] = result
+        keys.append(key)
+        if keys.count > 12 { cache.removeValue(forKey: keys.removeFirst()) }
+        return result
+    }
+
+    static func spreads(_ fragments: [GlanceResetCardData], width: CGFloat, height: CGFloat) -> [[GlanceResetCardData]] {
+        let key = "\(width)|\(height)|\(String(reflecting: fragments).hashValue)"
+        if let saved = spreadCache[key] { return saved }
+        var result: [[GlanceResetCardData]] = []
+        var current: [GlanceResetCardData] = []
+        var used: CGFloat = 0
+        for fragment in fragments {
+            let measured = measuredHeight(fragment, width: width)
+            let required = measured + (current.isEmpty ? 0 : 8)
+            if !current.isEmpty && used + required > height - 4 {
+                result.append(current)
+                current = [fragment]
+                used = measured
+            } else {
+                current.append(fragment)
+                used += required
+            }
+        }
+        if !current.isEmpty { result.append(current) }
+        if spreadCache.count >= 12 { spreadCache.removeAll(keepingCapacity: true) }
+        spreadCache[key] = result
+        return result
+    }
+
+    private static func measuredHeight(_ card: GlanceResetCardData, width: CGFloat) -> CGFloat {
+        let view = GlanceResetCardView(card: card, availableWidth: width)
+            .frame(width: width).fixedSize(horizontal: false, vertical: true)
+        let controller = NSHostingController(rootView: view)
+        return controller.sizeThatFits(in: CGSize(width: width, height: 10_000)).height
+    }
+
+    private static func fits(_ card: GlanceResetCardData, width: CGFloat, height: CGFloat) -> Bool {
+        measuredHeight(card, width: width) <= height - 4
+    }
+
+    private static func pieces(_ element: GlanceResetElement, card: GlanceResetCardData, width: CGFloat, height: CGFloat) -> [GlanceResetElement] {
+        var single = card
+        single.elements = [element]
+        if fits(single, width: width, height: height) {
+            if case let .calendar(calendar, weeks, days) = element, CGFloat(weeks.count) * 9 > width - 46 {
+                return calendarPieces(calendar, weeks: weeks, days: days, card: card, width: width, height: height)
+            }
+            if case let .chances(chances) = element, chances.count > 1 && width < 250 {
+                return chances.flatMap { pieces(.chances([$0]), card: card, width: width, height: height) }
+            }
+            return [element]
+        }
+        switch element {
+        case let .text(text, style):
+            return split(text, card: card, width: width, height: height) { .text($0, style) }
+        case let .badge(text):
+            return split(text, card: card, width: width, height: height) { .badge($0) }
+        case let .chances(chances):
+            if chances.count > 1 {
+                return chances.flatMap { pieces(.chances([$0]), card: card, width: width, height: height) }
+            }
+            return chances.flatMap { chance in
+                pieces(.text(chance.percent, .value), card: card, width: width, height: height)
+                    + [.meter(chance.fraction)]
+                    + pieces(.text(chance.label, .secondary), card: card, width: width, height: height)
+            }
+        case let .calendar(calendar, weeks, days):
+            return calendarPieces(calendar, weeks: weeks, days: days, card: card, width: width, height: height)
+        case let .legend(legend):
+            return [legend.regular, legend.banked, legend.today].map { .text($0, .secondary) }
+        case let .rhythm(title, buckets):
+            return [.text(title, .secondary)] + buckets.flatMap { pieces(.stat($0.label, String($0.count)), card: card, width: width, height: height) }
+        case let .stat(label, value):
+            return pieces(.text(label, .secondary), card: card, width: width, height: height)
+                + pieces(.text(value, .heading), card: card, width: width, height: height)
+        default:
+            return [element]
+        }
+    }
+
+    private static func split(_ text: String, card: GlanceResetCardData, width: CGFloat, height: CGFloat, make: (String) -> GlanceResetElement) -> [GlanceResetElement] {
+        var remaining = text
+        var result: [GlanceResetElement] = []
+        while !remaining.isEmpty {
+            let characters = Array(remaining)
+            var low = 1
+            var high = characters.count
+            var best = 1
+            while low <= high {
+                let middle = (low + high) / 2
+                var candidate = card
+                candidate.elements = [make(String(characters.prefix(middle)))]
+                if fits(candidate, width: width, height: height) { best = middle; low = middle + 1 }
+                else { high = middle - 1 }
+            }
+            if best < characters.count, let space = characters.prefix(best).lastIndex(where: { $0.isWhitespace }), space > 0 {
+                best = space + 1
+            }
+            result.append(make(String(characters.prefix(best))))
+            remaining = String(characters.dropFirst(best))
+        }
+        return result
+    }
+
+    private static func calendarPieces(_ calendar: GlanceResetCalendar, weeks: Range<Int>, days: Range<Int>, card: GlanceResetCardData, width: CGFloat, height: CGFloat) -> [GlanceResetElement] {
+        let count = max(1, Int((width - 46) / 10))
+        var result: [GlanceResetElement] = []
+        for first in stride(from: weeks.lowerBound, to: weeks.upperBound, by: count) {
+            let range = first..<min(first + count, weeks.upperBound)
+            var firstDay = days.lowerBound
+            while firstDay < days.upperBound {
+                var endDay = firstDay + 1
+                while endDay < days.upperBound {
+                    var candidate = card
+                    candidate.elements = [.calendar(calendar, range, firstDay..<(endDay + 1))]
+                    if !fits(candidate, width: width, height: height) { break }
+                    endDay += 1
+                }
+                result.append(.calendar(calendar, range, firstDay..<endDay))
+                firstDay = endDay
+            }
+        }
+        return result
     }
 }

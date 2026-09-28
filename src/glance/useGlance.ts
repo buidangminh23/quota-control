@@ -35,6 +35,7 @@ export function useGlance(): void {
   const island = useApp((state) => state.settings.island);
   const widget = useApp((state) => state.settings.widget);
   const timeFormat = useApp((state) => state.settings.timeFormat);
+  const theme = useApp((state) => state.settings.theme);
   const showResetsTab = useApp((state) => state.settings.showResetsTab);
   const notifyCodexResets = useApp((state) => state.settings.notifyCodexResets);
   const tracking = showResetsTab || notifyCodexResets;
@@ -62,8 +63,8 @@ export function useGlance(): void {
   const feeds = useMemo(() => parseResetFeeds(statusBody, historyBody), [statusBody, historyBody]);
   const stale = tracking && Boolean(statusFeed?.error || statusError || (showResetsTab && (historyFeed?.error || historyError)));
   const resets = useMemo(
-    () => (tracking ? buildGlanceResets({ feeds, stale, now, language: display.language, timeFormat }) : null),
-    [tracking, feeds, stale, now, display.language, timeFormat],
+    () => (tracking ? buildGlanceResets({ feeds, stale, now, language: display.language, timeFormat, theme }) : null),
+    [tracking, feeds, stale, now, display.language, timeFormat, theme],
   );
 
   const document = useMemo(() => {

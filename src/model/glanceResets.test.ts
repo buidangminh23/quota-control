@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setSystemTimeZone } from "@/model/timeZone";
-import { buildGlanceResets, parseResetFeeds, type GlanceResetsInput, type ResetFeeds } from "./glanceResets";
+import { insightsFor } from "@/i18n/insights";
+import { buildGlanceResets, buildResetPresentation, parseResetFeeds, resetAgoText, type GlanceResetsInput, type ResetFeeds } from "./glanceResets";
 
 /** Friday 25/09/2026 10:00 in Vietnam. */
 const NOW = new Date("2026-09-25T03:00:00Z");
@@ -108,11 +109,11 @@ describe("buildGlanceResets", () => {
     expect(calendar.cells).toBe(`${empty.repeat(15)}......r${empty}.r...r.${empty}..b.r--`);
     expect(calendar.weekdays).toEqual(["T2", "T3", "T4", "T5", "T6", "T7", "CN"]);
     expect(calendar.months).toEqual([
-      { week: 0, label: "Th5" },
-      { week: 3, label: "Th6" },
-      { week: 8, label: "Th7" },
-      { week: 12, label: "Th8" },
-      { week: 17, label: "Th9" },
+      { week: 0, label: "T5" },
+      { week: 3, label: "T6" },
+      { week: 8, label: "T7" },
+      { week: 12, label: "T8" },
+      { week: 17, label: "T9" },
     ]);
     expect(calendar.legend).toEqual({ regular: "Reset", banked: "Lượt để dành", today: "Hôm nay" });
   });
@@ -131,15 +132,94 @@ describe("buildGlanceResets", () => {
     ]);
   });
 
-  it("stays byte-identical minute to minute while the tracker's numbers do not change", () => {
+  it("keeps legacy countdown data stable while app presentation may refresh its exact text", () => {
     const feeds = parseResetFeeds(status(scheduled("Resets coming tomorrow!")), HISTORY);
-    const first = JSON.stringify(build(feeds, { now: LATER }));
-    expect(JSON.stringify(build(feeds, { now: new Date(LATER.getTime() + 60_000) }))).toBe(first);
-    expect(JSON.stringify(build(parseResetFeeds(status(), HISTORY)))).toBe(JSON.stringify(build(parseResetFeeds(status(), HISTORY), { now: new Date(NOW.getTime() + 60_000) })));
+    const legacy = (now: Date) => {
+      const { presentation: _presentation, ...data } = build(feeds, { now })!;
+      return JSON.stringify(data);
+    };
+    expect(legacy(new Date(LATER.getTime() + 60_000))).toBe(legacy(LATER));
   });
 
   it("marks a tracker whose feed could not be refreshed", () => {
     expect(build(parseResetFeeds(status(), HISTORY), { stale: true })!.stale).toBe("Lần tải gần nhất bị lỗi, đang hiện bản đã lưu.");
+  });
+});
+
+describe("shared Reset tab presentation", () => {
+  const present = (feeds: ResetFeeds, now = LATER) => buildResetPresentation({ feeds, now, language: "vi", timeFormat: "24h" });
+
+  it("keeps the latest card first and both scheduled and watch posts with exact excerpts", () => {
+    const feeds = parseResetFeeds(status(scheduled("Scheduled post body", "2026-09-28T01:00:00Z"), WATCH), HISTORY);
+    const result = present(feeds);
+    expect(result.latest?.author).toEqual({ handle: "@thsottiaux" });
+    expect(result.latest?.ago).toBe(resetAgoText(feeds.resets[0]!.announcedAt, LATER, "vi"));
+    expect(result.statuses.map((item) => item.kind)).toEqual(["scheduled", "watch"]);
+    expect(result.statuses.map((item) => item.excerpt)).toEqual(["Scheduled post body", WATCH.text]);
+    expect(result.statuses[1]?.hideAt).toBe("2026-09-27T20:00:00.000Z");
+    expect(result.statuses[1]?.meta[0]).toContain("65%");
+    expect(result.authorAvatar).toMatch(/^data:image\/webp;base64,/);
+  });
+
+  it("expires a watch exactly at its deadline but retains an overdue scheduled post like the app", () => {
+    const feeds = parseResetFeeds(status(scheduled("Still awaiting confirmation", "2026-09-27T01:00:00Z"), WATCH), HISTORY);
+    const result = present(feeds, new Date(WATCH.expires_at));
+    expect(result.statuses.map((item) => item.kind)).toEqual(["scheduled"]);
+    expect(result.statuses[0]?.due).toBeTruthy();
+    const quiet = present(parseResetFeeds(status(null, WATCH), HISTORY), new Date(WATCH.expires_at));
+    expect(quiet.statuses.map((item) => item.kind)).toEqual(["quiet"]);
+  });
+
+  it("retains sample notes, disclaimer, wait meter, complete history and statistics", () => {
+    const result = present(parseResetFeeds(status(), HISTORY));
+    const text = insightsFor("vi");
+    expect(result.forecast.sampleNote).toBe(text.forecastNote("5"));
+    expect(result.forecast.disclaimer).toBe(text.forecastDisclaimer);
+    expect(result.forecast.waitFraction).toBeGreaterThanOrEqual(0);
+    expect(result.forecast.waitFraction).toBeLessThanOrEqual(1);
+    expect(result.stats).toHaveLength(6);
+    expect(result.history).toHaveLength(5);
+    expect(result.method).toEqual(text.resetsMethod);
+  });
+
+  it("keeps observed resets anonymous and handles no-history state without fabricated cards", () => {
+    const observed = { ...post("observed", "regular", POSTED), source: { type: "observed", url: null } };
+    const result = present(parseResetFeeds(null, JSON.stringify({ data: [observed] })));
+    expect(result.latest?.author).toBeUndefined();
+    expect(result.history[0]?.observed).toBe(insightsFor("vi").observed);
+    expect(result.forecast.unavailable).toBe(insightsFor("vi").forecastUnavailable);
+    const empty = present(parseResetFeeds(null, null));
+    expect(empty.latest).toBeUndefined();
+    expect(empty.statuses).toEqual([]);
+    expect(empty.history).toEqual([]);
+    expect(empty.forecast.unavailable).toBeUndefined();
+    expect(empty.stats).toEqual([]);
+    const statusOnly = present(parseResetFeeds(status(null, WATCH), null));
+    expect(statusOnly.statuses.map((item) => item.kind)).toEqual(["watch"]);
+    expect(statusOnly.forecast.chances).toEqual([]);
+    expect(statusOnly.forecast.unavailable).toBeUndefined();
+    expect(statusOnly.stats).toEqual([]);
+    expect(statusOnly.history).toEqual([]);
+  });
+
+  it("updates localized ago across minute, hour and day boundaries and forwards explicit theme", () => {
+    const at = new Date("2026-09-25T00:00:00Z");
+    expect(resetAgoText(at, new Date("2026-09-25T00:01:00Z"), "en")).toBe("1 minute ago");
+    expect(resetAgoText(at, new Date("2026-09-25T01:00:00Z"), "en")).toBe("1 hour ago");
+    expect(resetAgoText(at, new Date("2026-09-27T00:00:00Z"), "en")).toBe("2 days ago");
+    expect(build(parseResetFeeds(status(), HISTORY), { theme: "light" })?.theme).toBe("light");
+  });
+
+  it("stores the offline avatar once for a substantial full history under the native byte limit", () => {
+    const history = Array.from({ length: 200 }, (_, index) => ({
+      ...post(String(index), "regular", new Date(LATER.getTime() - index * 86400000).toISOString()),
+      text: "A reset announcement with historical context. ".repeat(8),
+    }));
+    const result = build(parseResetFeeds(status(), JSON.stringify({ data: history })), { now: LATER })!;
+    const serialized = JSON.stringify(result);
+    expect(result.presentation?.history).toHaveLength(200);
+    expect(serialized.split("data:image/webp;base64,")).toHaveLength(2);
+    expect(new TextEncoder().encode(serialized).byteLength).toBeLessThan(180 * 1024);
   });
 });
 

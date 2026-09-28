@@ -112,13 +112,23 @@ struct OverviewLayout: View {
     private var parts: [GlanceView] { document.widget.tabs }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            switch family {
-            case .systemMedium, .systemSmall: medium
-            case .systemLarge: large
-            default: extraLarge
+        if parts.contains(.resets), let resets = document.resets {
+            ResetWidgetPager(
+                document: document, resets: resets, family: family, now: now, size: size,
+                namespace: "overview", prefixPages: parts.filter { $0 != .resets }.map { part in
+                    AnyView(pane(part, width: size.width, style: .band, showsAccounts: true)
+                        .frame(width: size.width, height: max(40, size.height - 46), alignment: .topLeading))
+                }
+            )
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                switch family {
+                case .systemMedium, .systemSmall: medium
+                case .systemLarge: large
+                default: extraLarge
+                }
+                UpdatedFooter(document: document, now: now)
             }
-            UpdatedFooter(document: document, now: now)
         }
     }
 

@@ -309,7 +309,7 @@ struct IslandGeometry: Equatable {
 
     static func expandedWidth(for document: GlanceDocument, plan: IslandPlan, budget: IslandBudget) -> CGFloat {
         let accounts = min(document.visibleProviders.count, budget.maxAccounts ?? .max)
-        return plan.sections.contains(.resets) || (plan.sections.contains(.quota) && accounts > 1) ? wideExpandedWidth : expandedWidth
+        return !plan.sections.contains(.resets) && plan.sections.contains(.quota) && accounts > 1 ? wideExpandedWidth : expandedWidth
     }
     static let pillHeight: CGFloat = 22
     /// Room around the open island for its shadow.
@@ -576,15 +576,18 @@ final class IslandHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) {
         clickOrigin = event.locationInWindow
+        super.mouseDown(with: event)
     }
     override func mouseDragged(with event: NSEvent) {
         clickOrigin = nil
+        super.mouseDragged(with: event)
     }
     override func scrollWheel(with event: NSEvent) {
         clickOrigin = nil
         super.scrollWheel(with: event)
     }
     override func mouseUp(with event: NSEvent) {
+        super.mouseUp(with: event)
         guard let origin = clickOrigin else { return }
         clickOrigin = nil
         guard hypot(event.locationInWindow.x - origin.x, event.locationInWindow.y - origin.y) < 5 else { return }

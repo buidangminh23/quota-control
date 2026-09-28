@@ -79,7 +79,7 @@ After that the app updates itself like the Windows and Linux versions (see [Upda
   the last one) and the tabs of the open island: **Limits**, **Codex Resets** and **Coming Back**,
   any of them. With several tabs the open island has a tab bar, and a click on a tab shows that tab
   in full (every account and reading, or the whole reset tracker with its calendar and rhythm),
-  using balanced columns for the reset tracker and scrolling when the screen is too short.
+  using the same vertical reset cards as the app and scrolling when the screen is too short.
   Tabs and the footer remain visible while scrolling; **Stacked** shows the tabs together instead.
   Each tab has its own options: the accounts and metrics of Limits (quick picks follow the Limits
   tab or the stars, any metric can be switched on or off by hand) and what each account shows, the
@@ -90,9 +90,10 @@ After that the app updates itself like the Windows and Linux versions (see [Upda
   metric, the most accounts at once); each fits as many accounts as its size holds and says how many
   it left out. **Overview** combines the limits with the Codex reset tracker, while the separate
   widgets keep them apart: **Coming Back** lists the next limits to reset with live countdowns,
-  **Codex Resets** shows the announced reset,
-  the chance of a reset within 24 hours, 3 and 7 days and the time since the last one, and **Codex
-  Reset Calendar** shows the 20-week calendar and when resets tend to come (from
+  **Codex Resets** starts with the latest reset and follows the app's cards for announcements,
+  forecast, calendar, rhythm, statistics and history. Page and section controls keep the full
+  tracker accessible in each widget size. **Codex Reset Calendar** starts at the 20-week calendar
+  and keeps the other tracker sections available too (from
   [codex-resets.com](https://codex-resets.com), shown while the Reset tab or reset notifications are
   on). **Settings → Desktop Widget** picks the parts the Overview combines and, like the island, has
   options per part: the accounts and metrics of the quota widgets, the parts of the reset tracker
@@ -295,6 +296,15 @@ into the connected-account registry or renewing them. `USAGE_CONTROL_HOME`
 redirects app settings/cache/account storage; `CODEX_HOME` and `CLAUDE_CONFIG_DIR`
 select source credentials and logs. Browser `pnpm dev` uses fixtures; native
 Tauri uses the real backend.
+
+The app Reset tab, Island and reset widgets share their presentation data in
+`src/model/glanceResets.ts`. The two native surfaces also share reset cards in
+`src-tauri/macos/Shared/GlanceViews.swift`: the latest reset and its author,
+announcements, forecast and explanations, calendar, rhythm, statistics and history.
+Changes to Reset content must update this shared contract and its parity tests.
+Native reset cards follow the app's light/dark preference and blue/yellow/orange
+visual hierarchy. The Island scrolls the full content; fixed-size reset widgets
+use previous/next pages to keep every enabled section accessible at readable sizes.
 
 ### Frontend contract
 

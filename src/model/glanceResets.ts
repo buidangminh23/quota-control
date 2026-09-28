@@ -6,23 +6,27 @@
  * percent, so the document only changes when the tracker's numbers do.
  */
 import { PROVIDER_MARKS } from "@/assets/providerMarks";
-import { messagesFor, type Language } from "@/i18n";
+import resetAvatar from "@/assets/thsottiaux.webp?inline";
+import type { Language } from "@/i18n";
 import { insightsFor, type InsightsMessages } from "@/i18n/insights";
-import { shortTime, timeOnDayLabel, type TimeFormat } from "./format";
-import type { GlanceCountdown, GlanceResetCalendar, GlanceResetRhythm, GlanceResets, GlanceUpcomingReset } from "./glance";
+import { compactDuration, shortTime, timeOnDayLabel, type TimeFormat } from "./format";
+import type { GlanceCountdown, GlanceResetAuthor, GlanceResetCalendar, GlanceResetPresentation, GlanceResetRhythm, GlanceResets, GlanceResetStatusCard, GlanceUpcomingReset } from "./glance";
 import {
   announcementPattern,
+  activeWatch,
   currentWait,
+  excerpt,
   FORECAST_HORIZONS,
   forecastResets,
   HOUR_BLOCKS,
   parseResets,
   parseResetStatus,
   resetCalendar,
+  resetStats,
   type CodexReset,
   type ResetStatus,
 } from "./insights/resets";
-import { numberText, percentText, shortDate } from "./insights/text";
+import { dateText, numberText, percentText, shortDate } from "./insights/text";
 import { AWAITING_MS, timingMoment, UNTIMED_LIFETIME_MS, upcomingReset, type UpcomingReset } from "./insights/upcomingReset";
 import { SOURCE_COLORS } from "./palette";
 import { deviceTimeZone, offsetLabel, zonedParts } from "./timeZone";
@@ -30,6 +34,7 @@ import { deviceTimeZone, offsetLabel, zonedParts } from "./timeZone";
 /** The placeholder Swift fills with the moving span of time. */
 export const COUNTDOWN_SPAN = "{d}";
 const BRAND = "codex";
+export const RESET_PRESENTATION_AUTHOR: GlanceResetAuthor = { handle: "@thsottiaux" };
 
 /** The two tracker feeds read once, the way the Reset tab reads them. */
 export interface ResetFeeds {
@@ -44,12 +49,97 @@ export function parseResetFeeds(statusBody: string | null | undefined, historyBo
 }
 
 export interface GlanceResetsInput {
+  theme?: "system" | "light" | "dark";
   feeds: ResetFeeds;
   /** A feed could not be refreshed and its last good copy is shown. */
   stale: boolean;
   now: Date;
   language: Language;
   timeFormat: TimeFormat;
+}
+
+export function resetAgoText(date: Date, now: Date, language: Language): string {
+  const minutes = Math.max(1, Math.floor((now.getTime() - date.getTime()) / 60_000));
+  const hours = Math.floor(minutes / 60);
+  const formatter = new Intl.RelativeTimeFormat(language === "vi" ? "vi-VN" : "en-US", { numeric: "always" });
+  if (hours < 1) return formatter.format(-minutes, "minute");
+  if (hours < 24) return formatter.format(-hours, "hour");
+  return formatter.format(-Math.floor(hours / 24), "day");
+}
+
+export function buildResetPresentation(input: Omit<GlanceResetsInput, "stale">): GlanceResetPresentation {
+  const { feeds, now, language, timeFormat } = input;
+  const text = insightsFor(language);
+  const when = (date: Date) => `${shortTime(date, timeFormat, language)} ${dateText(date, language)}`;
+  const ago = (date: Date) => compactDuration(Math.max(60, (now.getTime() - date.getTime()) / 1000), language);
+  const author = (source: CodexReset["source"]) => source.kind === "x_post" ? RESET_PRESENTATION_AUTHOR : undefined;
+  const statuses: GlanceResetStatusCard[] = [];
+  const scheduled = feeds.status?.scheduled;
+  if (scheduled) {
+    const due = scheduled.scheduledFor;
+    const duration = due && (due > now ? compactDuration((due.getTime() - now.getTime()) / 1000, language) : ago(due));
+    statuses.push({
+      id: `scheduled:${scheduled.id}`, kind: "scheduled", title: text.scheduledTitle,
+      excerpt: excerpt(scheduled.text, 280), author: author(scheduled.source), url: scheduled.source.url ?? undefined,
+      meta: [[text.announcedAgo(ago(scheduled.announcedAt) ?? "—"), due ? text.scheduledFor(when(due)) : text.scheduledNoTime].join(" · ")],
+      due: due && duration ? (due > now ? text.scheduledIn(duration) : text.scheduledOverdue(duration)) : undefined,
+      announced: { at: scheduled.announcedAt.toISOString(), text: text.announcedAgo(COUNTDOWN_SPAN), since: true },
+      scheduledMeta: due ? text.scheduledFor(when(due)) : text.scheduledNoTime,
+      dueCountdown: due ? { at: due.toISOString(), text: text.scheduledIn(COUNTDOWN_SPAN) } : undefined,
+      overdueCountdown: due ? { at: due.toISOString(), text: text.scheduledOverdue(COUNTDOWN_SPAN), since: true } : undefined,
+    });
+  }
+  const watch = activeWatch(feeds.status, now);
+  if (watch) {
+    statuses.push({
+      id: `watch:${watch.observedAt.toISOString()}`, kind: "watch", level: watch.level, title: text.watchTitle(watch.level),
+      excerpt: excerpt(watch.text, 280), author: author(watch.source), url: watch.source.url ?? undefined,
+      meta: [...(watch.chancePercent === null ? [] : [text.watchChance(`${watch.chancePercent}%`, watch.forecastWindow)]), text.watchUntil(when(watch.expiresAt))],
+      hideAt: watch.expiresAt.toISOString(),
+    });
+  }
+  if (!scheduled && !watch && (feeds.status || feeds.resets.length)) {
+    statuses.push({ id: "quiet", kind: "quiet", title: text.quietTitle, meta: [] });
+  }
+  const latest = feeds.resets[0];
+  const forecast = forecastResets(feeds.resets, now);
+  const wait = forecast ? currentWait(feeds.resets, now) : null;
+  const stats = resetStats(feeds.resets, now);
+  const days = (value: number | null) => value === null ? "—" : text.days(numberText(language, value, 1));
+  const statsRows: [string, string][] = [
+    [text.statTotal, `${numberText(language, stats.total)} (${text.statKinds(numberText(language, stats.regular), numberText(language, stats.banked))})`],
+    [text.statSinceLast, days(stats.daysSinceLast)],
+    [text.statLast30, numberText(language, stats.last30Days)],
+    [text.statAverage, days(stats.averageGapDays)],
+    [text.statMedian, days(stats.medianGapDays)],
+    [text.statLongest, stats.longestGap ? `${days(stats.longestGap.days)} · ${text.gapRange(shortDate(stats.longestGap.from, now, language), shortDate(stats.longestGap.to, now, language))}` : "—"],
+  ];
+  const moment = latest ? timeOnDayLabel(latest.announcedAt, now, timeFormat, language, false) : "";
+  return {
+    locale: language === "vi" ? "vi-VN" : "en-US",
+    authorAvatar: resetAvatar,
+    latest: latest ? { title: text.latestTitle, ago: resetAgoText(latest.announcedAt, now, language), at: latest.announcedAt.toISOString(), meta: latest.kind === "banked" ? `${moment} · ${text.kind("banked")}` : moment, author: author(latest.source) } : undefined,
+    statuses,
+    quietTitle: feeds.status || feeds.resets.length ? text.quietTitle : undefined,
+    forecast: {
+      title: text.forecastTitle,
+      chances: forecast ? FORECAST_HORIZONS.map((days) => ({ days, label: text.horizon(days), percent: percentText(language, forecast.chance[days], 0), fraction: forecast.chance[days] })) : [],
+      wait: wait ? text.waitLine(text.days(numberText(language, wait.waitedDays, 1)), percentText(language, wait.shorterShare, 0)) : undefined,
+      waitFraction: wait?.shorterShare,
+      median: wait ? (wait.medianMark > now ? text.medianMark : text.medianMarkPassed)(text.days(numberText(language, wait.medianGapDays, 1)), `${shortTime(wait.medianMark, timeFormat, language)} ${shortDate(wait.medianMark, now, language)}`) : undefined,
+      sampleNote: forecast ? text.forecastNote(numberText(language, forecast.resets)) : undefined,
+      disclaimer: forecast ? text.forecastDisclaimer : undefined,
+      unavailable: forecast || feeds.resets.length === 0 ? undefined : text.forecastUnavailable,
+    },
+    statsTitle: text.statsTitle,
+    stats: feeds.resets.length ? statsRows.map(([label, value]) => ({ label, value })) : [],
+    historyTitle: text.historyTitle,
+    history: feeds.resets.map((reset) => ({ id: reset.id, kind: reset.kind, kindLabel: text.kind(reset.kind), when: when(reset.announcedAt), excerpt: excerpt(reset.text, 220), author: author(reset.source), url: reset.source.url ?? undefined, observed: reset.source.kind === "observed" ? text.observed : undefined })),
+    patternNote: text.patternNote(numberText(language, announcementPattern(feeds.resets).total)),
+    source: text.resetsSource,
+    methodTitle: text.methodTitle,
+    method: [...text.resetsMethod],
+  };
 }
 
 /** The tracker for the glance document; `null` while there is neither a status nor any history. */
@@ -65,6 +155,8 @@ export function buildGlanceResets(input: GlanceResetsInput): GlanceResets | null
     forecastTitle: text.glanceChanceTitle,
     forecast: [],
     forecastNote: text.forecastUnavailable,
+    presentation: buildResetPresentation(input),
+    theme: input.theme,
   };
   const mark = PROVIDER_MARKS[BRAND];
   if (mark) resets.mark = mark;
@@ -100,7 +192,7 @@ export function buildGlanceResets(input: GlanceResetsInput): GlanceResets | null
   }
 
   if (feeds.resets.length > 0) {
-    resets.calendar = calendarOf(feeds.resets, now, text, language);
+    resets.calendar = calendarOf(feeds.resets, now, text);
     resets.rhythm = rhythmOf(feeds.resets, text);
   }
   return resets;
@@ -167,7 +259,7 @@ function upcomingOf(next: UpcomingReset, now: Date, timeFormat: TimeFormat, lang
 const CELL = { regular: "r", banked: "b" } as const;
 
 /** The Reset tab's calendar as one character per day, oldest week first, Monday to Sunday. */
-function calendarOf(resets: readonly CodexReset[], now: Date, text: InsightsMessages, language: Language): GlanceResetCalendar {
+function calendarOf(resets: readonly CodexReset[], now: Date, text: InsightsMessages): GlanceResetCalendar {
   const weeks = resetCalendar(resets, now);
   let today = -1;
   const cells = weeks
@@ -183,7 +275,7 @@ function calendarOf(resets: readonly CodexReset[], now: Date, text: InsightsMess
   const months = weeks.flatMap((week, index) => {
     const month = zonedParts(week[0]!.date).month - 1;
     const starts = index === 0 || month !== zonedParts(weeks[index - 1]![0]!.date).month - 1;
-    return starts ? [{ week: index, label: messagesFor(language).glance.calendarMonth(month) }] : [];
+    return starts ? [{ week: index, label: text.monthShort(month) }] : [];
   });
   return {
     title: text.calendarTitle(weeks.length),

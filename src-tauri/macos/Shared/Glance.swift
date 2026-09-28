@@ -113,8 +113,20 @@ struct GlanceDocument: Decodable, Equatable {
     /// The moments after `now` when something drawn from the reset tracker changes on its own: the
     /// announced reset's countdown ends or its row goes away.
     func resetMoments(after now: Date) -> [Date] {
-        guard let upcoming = resets?.upcoming else { return [] }
-        return [upcoming.countdown?.at, upcoming.hideAt].compactMap { $0 }.filter { $0 > now }
+        guard let resets else { return [] }
+        var moments: [Date] = []
+        if let upcoming = resets.upcoming {
+            moments += [upcoming.countdown?.at, upcoming.hideAt].compactMap { $0 }
+        }
+        if let presentation = resets.presentation {
+            moments += presentation.statuses.flatMap { [$0.hideAt, $0.dueCountdown?.at].compactMap { $0 } }
+            if let latest = presentation.latest {
+                let elapsed = max(0, now.timeIntervalSince(latest.at))
+                let unit: TimeInterval = elapsed < 3600 ? 60 : (elapsed < 86400 ? 3600 : 86400)
+                moments.append(latest.at.addingTimeInterval((floor(elapsed / unit) + 1) * unit))
+            }
+        }
+        return Array(Set(moments.filter { $0 > now })).sorted()
     }
 }
 
@@ -579,6 +591,8 @@ struct GlanceResets: Decodable, Equatable {
     var median: String?
     var calendar: GlanceResetCalendar?
     var rhythm: GlanceResetRhythm?
+    var presentation: GlanceResetPresentation? = nil
+    var theme: String? = nil
 
     var tint: Color { Color(glanceHex: color) ?? .white }
 
@@ -596,19 +610,146 @@ struct GlanceResets: Decodable, Equatable {
     /// with its median, the calendar and the rhythm each go when switched off.
     func showing(_ parts: GlanceResetParts) -> GlanceResets {
         var copy = self
-        if !parts.next { copy.upcoming = nil }
-        if !parts.latest { copy.latest = nil }
+        if !parts.next {
+            copy.upcoming = nil
+            copy.presentation?.statuses = []
+            copy.presentation?.quietTitle = nil
+        }
+        if !parts.latest {
+            copy.latest = nil
+            copy.presentation?.latest = nil
+        }
         if !parts.chances {
             copy.forecast = []
             copy.forecastNote = ""
+            copy.presentation?.forecast.chances = []
+            copy.presentation?.forecast.sampleNote = nil
+            copy.presentation?.forecast.disclaimer = nil
+            copy.presentation?.forecast.unavailable = nil
         }
         if !parts.wait {
             copy.wait = nil
             copy.median = nil
+            copy.presentation?.forecast.wait = nil
+            copy.presentation?.forecast.waitFraction = nil
+            copy.presentation?.forecast.median = nil
         }
         if !parts.calendar { copy.calendar = nil }
         if !parts.rhythm { copy.rhythm = nil }
         return copy
+    }
+}
+
+struct GlanceResetAuthor: Decodable, Equatable {
+    var handle: String
+}
+
+struct GlanceResetLatestPresentation: Decodable, Equatable {
+    var title: String
+    var ago: String
+    var at: Date
+    var meta: String
+    var author: GlanceResetAuthor?
+
+    func ago(now: Date, locale: String) -> String {
+        let minutes = max(1, Int(floor(now.timeIntervalSince(at) / 60)))
+        let hours = minutes / 60
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = Locale(identifier: locale)
+        formatter.dateTimeStyle = .numeric
+        formatter.unitsStyle = .full
+        let components = hours < 1 ? DateComponents(minute: -minutes) : (hours < 24 ? DateComponents(hour: -hours) : DateComponents(day: -(hours / 24)))
+        return formatter.localizedString(from: components)
+    }
+}
+
+struct GlanceResetStatusCard: Decodable, Equatable, Identifiable {
+    var id: String
+    var kind: String
+    var level: String?
+    var title: String
+    var excerpt: String?
+    var meta: [String]
+    var due: String?
+    var author: GlanceResetAuthor?
+    var url: String?
+    var hideAt: Date?
+    var announced: GlanceCountdown? = nil
+    var scheduledMeta: String? = nil
+    var dueCountdown: GlanceCountdown? = nil
+    var overdueCountdown: GlanceCountdown? = nil
+
+    func metadata(now: Date, units: GlanceUnits) -> [String] {
+        guard kind == "scheduled", let announced, let scheduledMeta else { return meta }
+        return [announced.text(now: now, units: units) + " · " + scheduledMeta]
+    }
+
+    func due(now: Date, units: GlanceUnits) -> String? {
+        guard let dueCountdown else { return due }
+        if dueCountdown.at <= now, let overdueCountdown {
+            return overdueCountdown.text(now: now, units: units)
+        }
+        return dueCountdown.text(now: now, units: units)
+    }
+}
+
+struct GlanceResetForecastChance: Decodable, Equatable, Identifiable {
+    var days: Int
+    var label: String
+    var percent: String
+    var fraction: Double
+    var id: Int { days }
+}
+
+struct GlanceResetForecastPresentation: Decodable, Equatable {
+    var title: String
+    var chances: [GlanceResetForecastChance]
+    var wait: String?
+    var waitFraction: Double?
+    var median: String?
+    var sampleNote: String?
+    var disclaimer: String?
+    var unavailable: String?
+}
+
+struct GlanceResetStat: Decodable, Equatable {
+    var label: String
+    var value: String
+}
+
+struct GlanceResetHistoryItem: Decodable, Equatable, Identifiable {
+    var id: String
+    var kind: String
+    var kindLabel: String
+    var when: String
+    var excerpt: String
+    var author: GlanceResetAuthor?
+    var url: String?
+    var observed: String?
+}
+
+struct GlanceResetPresentation: Decodable, Equatable {
+    var locale: String
+    var authorAvatar: String
+    var latest: GlanceResetLatestPresentation?
+    var statuses: [GlanceResetStatusCard]
+    var quietTitle: String? = nil
+    var forecast: GlanceResetForecastPresentation
+    var statsTitle: String
+    var stats: [GlanceResetStat]
+    var historyTitle: String
+    var history: [GlanceResetHistoryItem]
+    var patternNote: String
+    var source: String
+    var methodTitle: String
+    var method: [String]
+
+    func statuses(at now: Date) -> [GlanceResetStatusCard] {
+        let current = statuses.filter { card in card.hideAt.map { $0 > now } ?? true }
+        if current.isEmpty, let quietTitle {
+            return [GlanceResetStatusCard(id: "quiet", kind: "quiet", title: quietTitle, meta: [])]
+        }
+        return current
     }
 }
 
