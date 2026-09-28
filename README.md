@@ -1,6 +1,25 @@
+<p align="center"><img src="src-tauri/icons/128x128@2x.png" width="96" height="96" alt="Quota Control app icon"></p>
+
 # Quota Control
 
 AI usage limits, reset countdowns and token history in your Windows/Linux system tray or macOS menu bar.
+
+## Preview
+
+[![Watch the Quota Control demo](assets/readme/video-preview.jpg)](https://github.com/buidangminh23/quota-control/releases/download/v0.3.9/Quota-Control-PR-16x9-4K60.mp4)
+
+[Watch or download the demo — 4K, 60 fps, 62 seconds](https://github.com/buidangminh23/quota-control/releases/download/v0.3.9/Quota-Control-PR-16x9-4K60.mp4).
+
+**Usage at a glance in the system tray**
+
+![AI account usage in the Quota Control system tray](assets/readme/tray-usage.png)
+
+<details>
+<summary>Reset dashboard</summary>
+
+<p><img src="assets/readme/reset-dashboard.png" width="308" alt="Quota Control reset dashboard with the latest reset, forecast and history"></p>
+
+</details>
 
 ## Installation
 
