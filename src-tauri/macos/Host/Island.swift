@@ -3,10 +3,11 @@ import SwiftUI
 
 /// The Dynamic Island: a black shape around the MacBook notch whose two wings carry the readings
 /// picked in Settings, as a percentage, a ring or a bar. Hovering it (or, when Settings say so, a
-/// click) opens a detail view with the accounts its Settings list, a new alert (a limit close to
-/// running out, or one that came back) opens it for a few seconds, and a click on the open island
-/// opens the popup right below it. A screen without a notch gets the same island as a pill in the middle of the menu
-/// bar. It lives in a non-activating panel, so it never takes focus from the app in front.
+/// click) opens a detail view with the sections its Settings list (quota limits, the Codex reset
+/// forecast, the next limits to come back), a new alert (a limit close to running out, or one that
+/// came back) opens it for a few seconds, and a click on the open island opens the popup right
+/// below it. A screen without a notch gets the same island as a pill in the middle of the menu bar.
+/// It lives in a non-activating panel, so it never takes focus from the app in front.
 @MainActor
 final class IslandController {
     static let shared = IslandController()
@@ -16,6 +17,7 @@ final class IslandController {
     private var hosting: IslandHostingView<IslandRootView>?
     private var handler: QCIslandHandler?
     private var observers: [NSObjectProtocol] = []
+    private var clock: Timer?
     private var pendingExpand: DispatchWorkItem?
     private var pendingCollapse: DispatchWorkItem?
     private var pendingShrink: DispatchWorkItem?
@@ -29,6 +31,9 @@ final class IslandController {
     private static let leaveDelay: TimeInterval = 0.25
     private static let alertDuration: TimeInterval = 5
     private static let settleDelay: TimeInterval = 0.45
+    /// How often the countdowns in the wings and the open island are measured again, so a wing
+    /// grows with its words and a limit that came back leaves the list.
+    private static let tickInterval: TimeInterval = 30
 
     func start(handler: QCIslandHandler?) {
         self.handler = handler
@@ -40,18 +45,18 @@ final class IslandController {
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
         ) { _ in MainActor.assumeIsolated { IslandController.shared.relayout() } })
+        clock = Timer.scheduledTimer(withTimeInterval: Self.tickInterval, repeats: true) { _ in
+            MainActor.assumeIsolated { IslandController.shared.relayout(animated: true) }
+        }
     }
 
     func update(_ data: Data) {
         guard let document = GlanceDocument.decode(data) else { return }
         model.document = document
-        if model.mode == .expanded {
-            model.measureExpanded()
-        }
+        relayout(animated: true)
         if let alert = document.alert, seenAlerts.insert(alert.id).inserted, document.island.enabled, document.island.alerts {
             showAlert(alert)
         }
-        relayout()
     }
 
     func collapse() {
@@ -73,25 +78,41 @@ final class IslandController {
         alertTimer?.cancel()
     }
 
+    private func cancelShrink() {
+        pendingShrink?.cancel()
+        pendingShrink = nil
+    }
+
     // MARK: Layout
 
     private var shouldShow: Bool {
-        guard let document = model.document else { return false }
-        return document.island.enabled && !model.slots.isEmpty
+        guard let document = model.document, document.island.enabled else { return false }
+        return !model.slots.isEmpty || !IslandSection.visible(in: document, now: Date()).isEmpty
     }
 
-    private func relayout() {
+    /// Places the panel for the current screen and content. Every measurement follows the geometry,
+    /// so an update, a screen change and the clock all measure again here. While the island is
+    /// closing the panel keeps its large frame until the shrink settles, so the animation is never
+    /// cut short.
+    private func relayout(animated: Bool = false) {
         guard shouldShow, let geometry = IslandGeometry.current() else {
             cancelPending()
-            pendingShrink?.cancel()
+            cancelShrink()
             hovering = false
             model.mode = .compact
             panel?.orderOut(nil)
             return
         }
         model.geometry = geometry
+        let now = Date()
+        if animated && model.mode.isOpen {
+            withAnimation(Self.spring) { model.measure(now: now) }
+        } else {
+            model.measure(now: now)
+        }
         let panel = ensurePanel()
-        panel.setFrame(frame(for: model.mode == .compact ? .compact : .canvas, geometry: geometry), display: true)
+        let kind: FrameKind = model.mode == .compact && pendingShrink == nil ? .compact : .canvas
+        panel.setFrame(frame(for: kind, geometry: geometry), display: true)
         panel.orderFrontRegardless()
     }
 
@@ -100,15 +121,18 @@ final class IslandController {
         case canvas
     }
 
+    private static let spring = Animation.spring(response: 0.38, dampingFraction: 0.82)
+
     private func frame(for kind: FrameKind, geometry: IslandGeometry) -> NSRect {
+        let compact = model.compactSize(for: geometry)
         let size: CGSize
         switch kind {
         case .compact:
-            size = geometry.compactSize
+            size = compact
         case .canvas:
             size = CGSize(
-                width: max(geometry.compactSize.width, model.expandedSize.width) + IslandGeometry.shadowMargin * 2,
-                height: max(geometry.compactSize.height, model.expandedSize.height) + IslandGeometry.shadowMargin
+                width: max(compact.width, model.expandedSize.width) + IslandGeometry.shadowMargin * 2,
+                height: max(compact.height, model.expandedSize.height) + IslandGeometry.shadowMargin
             )
         }
         let screen = geometry.screenFrame
@@ -132,6 +156,8 @@ final class IslandController {
 
     private var expandsOnHover: Bool { model.document?.island.expandOnHover ?? true }
 
+    /// Hovering opens the details; leaving closes whatever is open, the details or an alert (an
+    /// alert whose time ran out while the pointer rested on it closes here too).
     private func hover(_ inside: Bool) {
         hovering = inside
         pendingExpand?.cancel()
@@ -143,9 +169,13 @@ final class IslandController {
             }
             pendingExpand = work
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.hoverDelay, execute: work)
-        } else if model.mode == .expanded {
+        } else if model.mode.isOpen {
             let work = DispatchWorkItem { [weak self] in
-                MainActor.assumeIsolated { self?.setMode(.compact) }
+                MainActor.assumeIsolated {
+                    guard let self, !self.hovering else { return }
+                    self.alertTimer?.cancel()
+                    self.setMode(.compact)
+                }
             }
             pendingCollapse = work
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.leaveDelay, execute: work)
@@ -162,15 +192,17 @@ final class IslandController {
     }
 
     private func expand() {
-        guard !popupVisible else { return }
+        guard !popupVisible, let geometry = currentGeometry() else { return }
         alertTimer?.cancel()
-        model.measureExpanded()
+        model.geometry = geometry
+        model.measureExpanded(now: Date())
         setMode(.expanded)
     }
 
     private func showAlert(_ alert: GlanceAlert) {
-        guard !hovering, !popupVisible else { return }
+        guard !hovering, !popupVisible, let geometry = currentGeometry() else { return }
         alertTimer?.cancel()
+        model.geometry = geometry
         model.measureAlert(alert)
         setMode(.alert(alert))
         let work = DispatchWorkItem { [weak self] in
@@ -183,25 +215,30 @@ final class IslandController {
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.alertDuration, execute: work)
     }
 
+    private func currentGeometry() -> IslandGeometry? {
+        model.geometry ?? IslandGeometry.current()
+    }
+
     private func setMode(_ mode: IslandMode) {
-        guard let geometry = model.geometry ?? IslandGeometry.current(), shouldShow else { return }
-        pendingShrink?.cancel()
+        guard let geometry = currentGeometry(), shouldShow else { return }
+        cancelShrink()
         if mode != .compact {
             panel?.setFrame(frame(for: .canvas, geometry: geometry), display: true)
         }
-        withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+        withAnimation(Self.spring) {
             model.mode = mode
         }
-        if mode == .compact {
-            let work = DispatchWorkItem { [weak self] in
-                MainActor.assumeIsolated {
-                    guard let self, self.model.mode == .compact, let panel = self.panel else { return }
-                    panel.setFrame(self.frame(for: .compact, geometry: geometry), display: true)
-                }
+        guard mode == .compact else { return }
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.pendingShrink = nil
+                guard self.model.mode == .compact, let panel = self.panel, let geometry = self.model.geometry else { return }
+                panel.setFrame(self.frame(for: .compact, geometry: geometry), display: true)
             }
-            pendingShrink = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.settleDelay, execute: work)
         }
+        pendingShrink = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.settleDelay, execute: work)
     }
 
     private func open() {
@@ -236,29 +273,57 @@ struct IslandGeometry: Equatable {
     var notchWidth: CGFloat
     var barHeight: CGFloat
     var scale: CGFloat
+    /// The tallest the open island may grow: from the top of the screen down to just above the Dock.
+    var maxOpenHeight: CGFloat = 800
 
-    static let wing: CGFloat = 64
+    /// A wing beside the notch is never narrower than this, nor wider than `maxWing`.
+    static let minWing: CGFloat = 64
+    static let maxWing: CGFloat = 124
+    /// A notch with no reading beside it keeps only a sliver either side to hover.
+    static let emptyWing: CGFloat = 12
+    /// Room between a wing's reading and the island's outer edge (its shoulder included), and
+    /// between the reading and the notch.
+    static let wingOuterPadding: CGFloat = 14
+    static let wingInnerGap: CGFloat = 8
+    static let pillPadding: CGFloat = 11
+    static let pillGap: CGFloat = 14
     static let expandedWidth: CGFloat = 380
     /// Wide enough for two columns of accounts.
     static let wideExpandedWidth: CGFloat = 460
 
-    static func expandedWidth(for document: GlanceDocument) -> CGFloat {
-        document.visibleProviders.count > 3 ? wideExpandedWidth : expandedWidth
+    /// Two columns of accounts need the wide island; so does nothing else.
+    static func expandedWidth(for document: GlanceDocument, budget: IslandBudget) -> CGFloat {
+        let accounts = min(document.visibleProviders.count, budget.maxAccounts ?? .max)
+        return document.island.sections.quota && accounts > 3 ? wideExpandedWidth : expandedWidth
     }
     static let pillHeight: CGFloat = 22
     /// Room around the open island for its shadow.
     static let shadowMargin: CGFloat = 16
+    /// Space kept free below the open island, above the Dock or the screen's edge.
+    static let bottomMargin: CGFloat = 24
 
     var pillInset: CGFloat { max(0, (barHeight - Self.pillHeight) / 2) }
 
     /// Space above the details: the notch itself, or a little air under the top of the pill.
     var detailsInset: CGFloat { hasNotch ? barHeight : 8 }
 
-    var compactSize: CGSize {
+    /// The width of each wing beside the notch for readings `content` points wide.
+    func wing(content: CGFloat, empty: Bool) -> CGFloat {
+        if empty { return Self.emptyWing }
+        let needed = ceil(content) + Self.wingOuterPadding + Self.wingInnerGap
+        return min(max(needed, Self.minWing), Self.maxWing)
+    }
+
+    /// The closed island: the notch with a wing either side, or a pill holding `pieces` readings
+    /// of `content` points each.
+    func compactSize(content: CGFloat, pieces: Int) -> CGSize {
         if hasNotch {
-            return CGSize(width: notchWidth + Self.wing * 2, height: barHeight)
+            let wing = wing(content: content, empty: pieces == 0)
+            return CGSize(width: notchWidth + wing * 2, height: barHeight)
         }
-        return CGSize(width: Self.wing * 2 + 14, height: Self.pillHeight)
+        let reading = min(ceil(content), Self.maxWing)
+        let inner = pieces == 0 ? Self.pillHeight : reading * CGFloat(pieces) + Self.pillGap * CGFloat(max(pieces - 1, 0))
+        return CGSize(width: max(inner + Self.pillPadding * 2, Self.pillHeight * 2), height: Self.pillHeight)
     }
 
     /// The notched screen when there is one, else the screen with the menu bar.
@@ -273,7 +338,8 @@ struct IslandGeometry: Equatable {
                 hasNotch: true,
                 notchWidth: max(width, 120),
                 barHeight: notched.safeAreaInsets.top,
-                scale: notched.backingScaleFactor
+                scale: notched.backingScaleFactor,
+                maxOpenHeight: openHeight(on: notched)
             )
         }
         guard let screen = screens.first else { return nil }
@@ -283,8 +349,14 @@ struct IslandGeometry: Equatable {
             hasNotch: false,
             notchWidth: 0,
             barHeight: menuBar > 0 ? menuBar : 24,
-            scale: screen.backingScaleFactor
+            scale: screen.backingScaleFactor,
+            maxOpenHeight: openHeight(on: screen)
         )
+    }
+
+    private static func openHeight(on screen: NSScreen) -> CGFloat {
+        let available = screen.frame.maxY - screen.visibleFrame.minY
+        return max(available - bottomMargin - shadowMargin, 200)
     }
 }
 
@@ -295,12 +367,50 @@ struct IslandSlot: Equatable, Identifiable {
     var metric: GlanceMetric
 }
 
+/// How the closed island spreads its readings: none (the notch alone), one reading (its mark on
+/// the left of the notch and its value on the right, or whole inside the pill), or two readings,
+/// one per wing.
+enum IslandWingLayout: Equatable {
+    case empty
+    case single(IslandSlot)
+    case pair(IslandSlot, IslandSlot)
+
+    init(_ slots: [IslandSlot]) {
+        switch slots.count {
+        case 0: self = .empty
+        case 1: self = .single(slots[0])
+        default: self = .pair(slots[0], slots[1])
+        }
+    }
+
+    /// The pieces drawn side by side, left to right: split across the notch, or whole in a pill.
+    func pieces(hasNotch: Bool) -> [IslandWingPiece.Part] {
+        switch self {
+        case .empty: return []
+        case .single: return hasNotch ? [.lead, .trail] : [.whole]
+        case .pair: return [.whole, .whole]
+        }
+    }
+
+    func slot(at index: Int) -> IslandSlot? {
+        switch self {
+        case .empty: return nil
+        case let .single(slot): return slot
+        case let .pair(first, second): return index == 0 ? first : second
+        }
+    }
+}
+
 @MainActor
 final class IslandModel: ObservableObject {
     @Published var document: GlanceDocument?
     @Published var mode: IslandMode = .compact
     @Published var geometry: IslandGeometry?
     @Published var expandedSize = CGSize(width: IslandGeometry.expandedWidth, height: 120)
+    /// How much of each section the open island shows, chosen so it fits on the screen.
+    @Published var budget = IslandBudget.full
+    /// The widest reading beside the notch, which both wings take so the notch stays centered.
+    @Published var wingContent: CGFloat = 0
 
     /// The left and right wings, as the popup chose them: a picked metric, or the next reading of
     /// the island's accounts.
@@ -311,30 +421,90 @@ final class IslandModel: ObservableObject {
         }
     }
 
-    func measureExpanded() {
+    var wingLayout: IslandWingLayout { IslandWingLayout(slots) }
+
+    func compactSize(for geometry: IslandGeometry) -> CGSize {
+        let pieces = wingLayout.pieces(hasNotch: geometry.hasNotch).count
+        return geometry.compactSize(content: wingContent, pieces: pieces)
+    }
+
+    /// Measures the wings and whatever is open, for the current geometry.
+    func measure(now: Date) {
+        measureWings(now: now)
+        switch mode {
+        case .compact:
+            break
+        case .expanded:
+            measureExpanded(now: now)
+        case let .alert(alert):
+            measureAlert(alert)
+        }
+    }
+
+    func measureWings(now: Date) {
         guard let document, let geometry else { return }
-        let width = IslandGeometry.expandedWidth(for: document)
-        let view = IslandDetails(document: document, now: Date(), topInset: geometry.detailsInset)
-            .frame(width: width)
-        expandedSize = fitted(view, width: width)
+        let layout = wingLayout
+        let widths = layout.pieces(hasNotch: geometry.hasNotch).enumerated().compactMap { index, part -> CGFloat? in
+            guard let slot = layout.slot(at: index) else { return nil }
+            let view = IslandWingPiece(slot: slot, part: part, style: document.island.style, units: document.labels.units, now: now)
+            return Self.size(of: view.fixedSize(), proposing: CGSize(width: 1000, height: 100)).width
+        }
+        let widest = ceil(widths.max() ?? 0)
+        if widest != wingContent {
+            wingContent = widest
+        }
+    }
+
+    /// Measures the open island at the most generous budget that fits on the screen, dropping
+    /// detail step by step (fewer readings per account, then accounts, then the smaller extras);
+    /// the tightest budget is clipped at the screen's limit.
+    func measureExpanded(now: Date) {
+        guard let document, let geometry else { return }
+        let compact = compactSize(for: geometry).width
+        let limit = geometry.maxOpenHeight
+        var chosen = IslandBudget.full
+        var width = IslandGeometry.expandedWidth
+        var height: CGFloat = 0
+        for candidate in IslandBudget.ladder(accounts: document.visibleProviders.count) {
+            chosen = candidate
+            width = max(IslandGeometry.expandedWidth(for: document, budget: candidate), compact)
+            let view = IslandDetails(document: document, now: now, topInset: geometry.detailsInset, budget: candidate)
+                .frame(width: width)
+            height = Self.size(of: view, proposing: CGSize(width: width, height: 4000)).height
+            if height <= limit { break }
+        }
+        if chosen != budget {
+            budget = chosen
+        }
+        expandedSize = CGSize(width: width, height: min(ceil(height), limit))
     }
 
     func measureAlert(_ alert: GlanceAlert) {
         guard let geometry else { return }
-        let view = IslandAlertView(alert: alert, provider: provider(for: alert), topInset: geometry.detailsInset)
-            .frame(width: IslandGeometry.expandedWidth)
-        expandedSize = fitted(view, width: IslandGeometry.expandedWidth)
+        let width = max(IslandGeometry.expandedWidth, compactSize(for: geometry).width)
+        let look = look(for: alert)
+        let view = IslandAlertView(alert: alert, mark: look.mark, tint: look.tint, topInset: geometry.detailsInset)
+            .frame(width: width)
+        let height = Self.size(of: view, proposing: CGSize(width: width, height: 2000)).height
+        expandedSize = CGSize(width: width, height: min(ceil(height), geometry.maxOpenHeight))
     }
 
-    func provider(for alert: GlanceAlert) -> GlanceProvider? {
-        guard let brand = alert.brand else { return nil }
-        return document?.providers.first { $0.brand == brand }
+    /// The mark beside an alert: an island account of the alert's brand, else the Codex reset
+    /// tracker's mark for a Codex alert, else a plain dot.
+    func look(for alert: GlanceAlert) -> (mark: GlanceMark?, tint: Color) {
+        guard let brand = alert.brand, let document else { return (nil, .white) }
+        if let provider = document.providers.first(where: { $0.brand == brand }) {
+            return (provider.mark, provider.tint)
+        }
+        if let resets = document.resets, resets.brand == brand || brand == "codex" {
+            return (resets.mark, resets.tint)
+        }
+        return (nil, .white)
     }
 
-    private func fitted<V: View>(_ view: V, width: CGFloat) -> CGSize {
+    static func size<V: View>(of view: V, proposing proposal: CGSize) -> CGSize {
         let controller = NSHostingController(rootView: view)
-        let size = controller.sizeThatFits(in: CGSize(width: width, height: 2000))
-        return CGSize(width: width, height: ceil(size.height))
+        return controller.sizeThatFits(in: proposal)
     }
 }
 
@@ -445,7 +615,7 @@ struct IslandRootView: View {
     }
 
     private func shapeSize(_ geometry: IslandGeometry) -> CGSize {
-        model.mode.isOpen ? model.expandedSize : geometry.compactSize
+        model.mode.isOpen ? model.expandedSize : model.compactSize(for: geometry)
     }
 
     @ViewBuilder
@@ -466,187 +636,172 @@ struct IslandRootView: View {
     private func content(_ document: GlanceDocument, geometry: IslandGeometry) -> some View {
         switch model.mode {
         case .compact:
-            IslandWings(slots: model.slots, geometry: geometry, style: document.island.style)
-                .transition(.opacity)
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                IslandWings(
+                    layout: model.wingLayout,
+                    geometry: geometry,
+                    size: model.compactSize(for: geometry),
+                    content: model.wingContent,
+                    style: document.island.style,
+                    units: document.labels.units,
+                    now: context.date
+                )
+            }
+            .transition(.opacity)
         case .expanded:
             TimelineView(.periodic(from: .now, by: 30)) { context in
-                IslandDetails(document: document, now: context.date, topInset: geometry.detailsInset)
+                IslandDetails(document: document, now: context.date, topInset: geometry.detailsInset, budget: model.budget)
             }
             .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
         case let .alert(alert):
-            IslandAlertView(alert: alert, provider: model.provider(for: alert), topInset: geometry.detailsInset)
+            let look = model.look(for: alert)
+            IslandAlertView(alert: alert, mark: look.mark, tint: look.tint, topInset: geometry.detailsInset)
                 .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
         }
     }
 }
 
-/// The two readings either side of the notch (or inside the pill).
+/// The readings either side of the notch (or inside the pill). Both wings share one width so the
+/// notch stays centered, and each reading sits against the island's outer edge, clear of the notch.
 struct IslandWings: View {
-    let slots: [IslandSlot]
+    let layout: IslandWingLayout
     let geometry: IslandGeometry
+    let size: CGSize
+    let content: CGFloat
     let style: IslandStyle
+    let units: GlanceUnits
+    let now: Date
 
     var body: some View {
-        HStack(spacing: 0) {
-            if let first = slots.first {
-                IslandSlotView(slot: first, style: style)
-                    .frame(width: IslandGeometry.wing, alignment: geometry.hasNotch ? .leading : .center)
-                    .padding(.leading, geometry.hasNotch ? 12 : 0)
-            }
-            Spacer(minLength: 0)
-            if slots.count > 1 {
-                IslandSlotView(slot: slots[1], style: style)
-                    .frame(width: IslandGeometry.wing, alignment: geometry.hasNotch ? .trailing : .center)
-                    .padding(.trailing, geometry.hasNotch ? 12 : 0)
+        let parts = layout.pieces(hasNotch: geometry.hasNotch)
+        Group {
+            if geometry.hasNotch {
+                notched(parts)
+            } else {
+                pill(parts)
             }
         }
-        .frame(width: geometry.compactSize.width, height: geometry.compactSize.height)
+        .frame(width: size.width, height: size.height)
+    }
+
+    private func notched(_ parts: [IslandWingPiece.Part]) -> some View {
+        let wing = max((size.width - geometry.notchWidth) / 2, 0)
+        let room = max(wing - IslandGeometry.wingOuterPadding - IslandGeometry.wingInnerGap, 0)
+        return HStack(spacing: 0) {
+            piece(parts, at: 0)
+                .frame(maxWidth: room, alignment: .leading)
+                .padding(.leading, IslandGeometry.wingOuterPadding)
+                .padding(.trailing, IslandGeometry.wingInnerGap)
+                .frame(width: wing, alignment: .leading)
+            Color.clear.frame(width: geometry.notchWidth)
+            piece(parts, at: 1)
+                .frame(maxWidth: room, alignment: .trailing)
+                .padding(.leading, IslandGeometry.wingInnerGap)
+                .padding(.trailing, IslandGeometry.wingOuterPadding)
+                .frame(width: wing, alignment: .trailing)
+        }
+    }
+
+    private func pill(_ parts: [IslandWingPiece.Part]) -> some View {
+        let room = min(ceil(content), IslandGeometry.maxWing)
+        return HStack(spacing: IslandGeometry.pillGap) {
+            if parts.isEmpty {
+                Image(systemName: "gauge.with.dots.needle.33percent")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.8))
+            }
+            ForEach(parts.indices, id: \.self) { index in
+                piece(parts, at: index)
+                    .frame(width: room, alignment: parts.count == 1 ? .center : (index == 0 ? .leading : .trailing))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func piece(_ parts: [IslandWingPiece.Part], at index: Int) -> some View {
+        if index < parts.count, let slot = layout.slot(at: index) {
+            IslandWingPiece(slot: slot, part: parts[index], style: style, units: units, now: now)
+        } else {
+            Color.clear.frame(width: 0, height: 0)
+        }
     }
 }
 
-/// One wing: the account's mark with the reading as a percentage, a ring or a bar. A reading
-/// without a limit has no ring or bar to fill, so it always shows its value.
-struct IslandSlotView: View {
+/// One reading beside the notch: the account's mark with the value as a percentage, a ring or a
+/// bar with the value beside it. A lone reading is split across the notch: `lead` draws the mark
+/// (or the ring around it) on the left, `trail` the value (and the bar) on the right. A reading
+/// without a limit has no ring or bar to fill, so it always shows its value; a countdown reading
+/// shows its words at `now`.
+struct IslandWingPiece: View {
+    enum Part {
+        case whole
+        case lead
+        case trail
+    }
+
     let slot: IslandSlot
+    let part: Part
     let style: IslandStyle
+    let units: GlanceUnits
+    let now: Date
+
+    static let markSize: CGFloat = 14
+    static let ringSize: CGFloat = 22
+    static let barWidth: CGFloat = 26
 
     var body: some View {
-        switch style {
-        case .ring where slot.metric.fraction != nil:
-            HStack(spacing: 4) {
-                GlanceRing(fraction: slot.metric.fraction, severity: slot.metric.severity, onDark: true, lineWidth: 2.2) {
-                    ProviderMark(mark: slot.provider.mark)
-                        .foregroundStyle(slot.provider.tint)
-                        .padding(3.2)
-                }
-                .frame(width: 18, height: 18)
-                value(size: 11.5)
-            }
-        case .bar where slot.metric.fraction != nil:
+        switch part {
+        case .whole:
             HStack(spacing: 5) {
-                mark(size: 12)
-                GlanceMeter(fraction: slot.metric.fraction ?? 0, severity: slot.metric.severity, onDark: true, height: 5)
-                    .frame(width: 34)
+                lead
+                trail
             }
-        default:
-            HStack(spacing: 4) {
-                mark(size: 13)
-                value(size: 12)
-            }
+        case .lead:
+            lead
+        case .trail:
+            trail
         }
     }
 
-    private func mark(size: CGFloat) -> some View {
-        ProviderMark(mark: slot.provider.mark)
-            .foregroundStyle(slot.provider.tint)
-            .frame(width: size, height: size)
+    private var fraction: Double? { style == .percent ? nil : slot.metric.fraction }
+
+    @ViewBuilder
+    private var lead: some View {
+        if style == .ring, let fraction {
+            GlanceRing(fraction: fraction, severity: slot.metric.severity, onDark: true, lineWidth: 2.4) {
+                mark.padding(4)
+            }
+            .frame(width: Self.ringSize, height: Self.ringSize)
+        } else {
+            mark.frame(width: Self.markSize, height: Self.markSize)
+        }
     }
 
-    private func value(size: CGFloat) -> some View {
-        Text(slot.metric.value)
-            .font(.system(size: size, weight: .semibold))
+    @ViewBuilder
+    private var trail: some View {
+        if style == .bar, let fraction {
+            HStack(spacing: 5) {
+                GlanceMeter(fraction: fraction, severity: slot.metric.severity, onDark: true, height: 5)
+                    .frame(width: Self.barWidth)
+                value
+            }
+        } else {
+            value
+        }
+    }
+
+    private var mark: some View {
+        ProviderMark(mark: slot.provider.mark)
+            .foregroundStyle(slot.provider.tint)
+    }
+
+    private var value: some View {
+        Text(slot.metric.liveValue(now: now, units: units))
+            .font(.system(size: 12.5, weight: .semibold))
             .monospacedDigit()
             .foregroundStyle(GlancePalette.text(slot.metric.severity, onDark: true))
             .lineLimit(1)
-            .minimumScaleFactor(0.75)
+            .minimumScaleFactor(0.7)
             .contentTransition(.numericText())
-    }
-}
-
-/// The island's accounts with their meters and countdowns, under the notch: one column for up to
-/// three accounts, two beyond that, fewer rows per account as the list grows.
-struct IslandDetails: View {
-    let document: GlanceDocument
-    let now: Date
-    let topInset: CGFloat
-
-    var body: some View {
-        let providers = document.visibleProviders
-        let perAccount = providers.count <= 2 ? 4 : (providers.count <= 4 ? 2 : 1)
-        VStack(alignment: .leading, spacing: 0) {
-            Color.clear.frame(height: topInset)
-            Group {
-                if providers.isEmpty {
-                    Text(document.island.empty ?? document.labels.empty)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(Color.white.opacity(0.7))
-                        .fixedSize(horizontal: false, vertical: true)
-                } else if providers.count > 3 {
-                    HStack(alignment: .top, spacing: 16) {
-                        column(stride(from: 0, to: providers.count, by: 2).map { providers[$0] }, perAccount: perAccount)
-                        column(stride(from: 1, to: providers.count, by: 2).map { providers[$0] }, perAccount: perAccount)
-                    }
-                } else {
-                    column(providers, perAccount: perAccount)
-                }
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 10)
-            HStack {
-                Text("\(document.labels.updated) \(GlanceFormat.time(document.generatedAt, locale: document.resolvedLocale, hour12: document.hour12))")
-                Spacer()
-                Text(document.labels.open)
-            }
-            .font(.system(size: 10))
-            .foregroundStyle(Color.white.opacity(0.45))
-            .padding(.horizontal, 20)
-            .padding(.top, 12)
-            .padding(.bottom, 14)
-        }
-    }
-
-    private func column(_ providers: [GlanceProvider], perAccount: Int) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ForEach(providers) { provider in
-                VStack(alignment: .leading, spacing: 7) {
-                    GlanceProviderHeader(provider: provider, shows: document.island.shows, onDark: true, size: 13)
-                    if provider.metrics.isEmpty {
-                        GlanceNoticeRow(text: provider.notice ?? document.labels.noData, onDark: true)
-                    }
-                    ForEach(provider.metrics.prefix(perAccount)) { metric in
-                        GlanceMetricRow(
-                            metric: metric,
-                            labels: document.labels,
-                            now: now,
-                            onDark: true,
-                            compact: true,
-                            showsReset: document.island.shows.resets
-                        )
-                    }
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-    }
-}
-
-/// A short notice: a limit about to run out, or one that came back.
-struct IslandAlertView: View {
-    let alert: GlanceAlert
-    let provider: GlanceProvider?
-    let topInset: CGFloat
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Color.clear.frame(height: topInset)
-            HStack(alignment: .top, spacing: 12) {
-                ProviderMark(mark: provider?.mark)
-                    .foregroundStyle(provider?.tint ?? .white)
-                    .frame(width: 22, height: 22)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(alert.title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(GlancePalette.text(alert.severity, onDark: true))
-                    Text(alert.body)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(Color.white.opacity(0.75))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 10)
-            .padding(.bottom, 16)
-        }
     }
 }

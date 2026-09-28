@@ -1,20 +1,23 @@
 /**
  * What the menu bar strip, the Dynamic Island and the desktop widgets show: the Hạn mức cards, the
  * starred metrics or a hand-picked set, plus how each account reads there (email, plan, reset time,
- * accounts that need attention) and, for the island, its closed style and the readings beside the
- * notch.
+ * accounts that need attention) and, for the island, its closed style, the readings beside the
+ * notch (a metric, the soonest limit reset or a Codex reset reading) and what the open island lists.
  */
 import { useMemo } from "react";
 import { messagesFor, type Language } from "@/i18n";
 import type { SettingsMessages } from "@/i18n/messages";
 import type { WidgetDescriptor } from "@/lib/types";
+import { SPECIAL_WINGS, type SpecialWing } from "@/model/glance";
 import { displayGroups, glanceCandidates, type ProviderMetrics } from "@/model/layout";
 import { cardIdentity, providerBrand } from "@/model/providerText";
 import {
   GLANCE_CONTENTS,
+  ISLAND_SECTIONS,
   ISLAND_STYLES,
   type GlanceContent,
   type GlanceSurfaceSettings,
+  type IslandSectionKey,
   type IslandSettings,
   type StripSettings,
   type TaskbarDisplay,
@@ -195,18 +198,26 @@ export function IslandSection() {
     for (const group of candidates) for (const descriptor of group.always) byId.set(descriptor.id, { group, descriptor });
     return byId;
   }, [candidates]);
-  const wingOptions = [AUTO_WING, ...metricsById.keys()];
+  const special = new Set<string>(SPECIAL_WINGS);
+  const wingOptions = [AUTO_WING, ...SPECIAL_WINGS, ...metricsById.keys()];
   const wingLabel = (id: string) => {
+    if (special.has(id)) return text.islandWingSpecial(id as SpecialWing);
     const entry = metricsById.get(id);
     if (!entry) return text.islandWingAuto;
     const snapshot = engine?.providers[entry.group.provider.id]?.snapshot;
     return `${cardIdentity(entry.group.provider, undefined, language).name} · ${descriptorTitle(entry.descriptor, snapshot, language)}`;
   };
-  const wingValue = (id: string) => (metricsById.has(id) ? id : AUTO_WING);
+  const wingValue = (id: string) => (special.has(id) || metricsById.has(id) ? id : AUTO_WING);
   const setWing = (index: 0 | 1, id: string) => {
     const wings: [string, string] = [...island.wings];
     wings[index] = id === AUTO_WING ? "" : id;
     patchIsland({ wings });
+  };
+  const trackerOff = !settings.showResetsTab && !settings.notifyCodexResets;
+  const setSection = (section: IslandSectionKey, on: boolean) => {
+    const sections = { ...island.sections, [section]: on };
+    if (!sections.quota && !sections.resets && !sections.upcoming) return;
+    patchIsland({ sections });
   };
 
   return (
@@ -225,6 +236,18 @@ export function IslandSection() {
           <Row label={text.islandWing("right")}>
             <Picker value={wingValue(island.wings[1])} options={wingOptions} label={wingLabel} onChange={(id) => setWing(1, id)} ariaLabel={text.islandWing("right")} />
           </Row>
+          <div className="uc-settings-row-group" role="group" aria-label={text.islandSections}>
+            <p className="uc-settings-note is-lead">{text.islandSections}</p>
+            {ISLAND_SECTIONS.map((section) => {
+              const label = text.islandSectionOption(section);
+              const lastOn = island.sections[section] && ISLAND_SECTIONS.filter((key) => island.sections[key]).length === 1;
+              return (
+                <Row key={section} label={label} note={text.islandSectionNote(section, trackerOff)} nested>
+                  <Switch checked={island.sections[section]} label={label} disabled={lastOn} onChange={(on) => setSection(section, on)} />
+                </Row>
+              );
+            })}
+          </div>
           <ContentRows content={island.content} metrics={island.metrics} onChange={patchIsland} text={text} language={language} />
           <ShowRows value={island} onChange={patchIsland} text={text} />
           <Row label={text.islandExpandOnHover} note={text.islandExpandOnHoverNote}>
@@ -248,6 +271,7 @@ export function WidgetSection() {
       <Row label={text.desktopWidget} note={text.desktopWidgetNote}>
         <span />
       </Row>
+      <p className="uc-settings-note">{text.desktopWidgetKindsNote}</p>
       <ContentRows content={widget.content} metrics={widget.metrics} onChange={patchWidget} text={text} language={settings.language} />
       <ShowRows value={widget} onChange={patchWidget} text={text} />
     </Section>

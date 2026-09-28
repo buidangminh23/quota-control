@@ -2,13 +2,20 @@ import SwiftUI
 
 /// A provider's logo from the same SVG path data the popup draws (`src/assets/providerMarks.ts`),
 /// scaled into its box with a small inset so every mark fills the same space (upstream
-/// `ProviderIconShape`). Paths keep their own fill rule; a missing mark draws a dot.
+/// `ProviderIconShape`). Paths keep their own fill rule; a missing mark draws a dot. A brand with an
+/// official color logo draws that picture in its own colors instead, ignoring the foreground tint,
+/// as the popup and the taskbar strip do.
 struct ProviderMark: View {
     let mark: GlanceMark?
     var inset: CGFloat = 0.04
 
     var body: some View {
-        if let mark, mark.box.count == 4, !mark.paths.isEmpty {
+        if let image = mark?.artImage {
+            Image(nsImage: image)
+                .resizable()
+                .interpolation(.high)
+                .aspectRatio(contentMode: .fit)
+        } else if let mark, mark.box.count == 4, !mark.paths.isEmpty {
             ZStack {
                 ForEach(Array(mark.paths.enumerated()), id: \.offset) { _, component in
                     MarkPathShape(box: mark.box, data: component.d, inset: inset)

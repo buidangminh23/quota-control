@@ -234,4 +234,10 @@ export const insightsVi: InsightsMessages = {
     `Bài đăng chỉ nói ${VI_WINDOWS[window].toLocaleLowerCase("vi-VN")} (giờ San Francisco), chưa có giờ để đếm ngược.`,
   freeResetHowUntimed: "Bài đăng chưa nói khi nào; dòng này tự ẩn sau 7 ngày nếu chưa có giờ.",
   freeResetOpenTab: "Bấm để mở tab Reset Codex.",
+
+  glanceTitle: "Reset Codex",
+  glanceSource: "Theo codex-resets.com",
+  glanceChanceTitle: "Khả năng có reset",
+  glanceForecastNote: "Ước tính từ lịch sử, không phải tin chính thức.",
+  glanceSinceLast: (duration) => `Đã ${duration} chưa có reset`,
 };

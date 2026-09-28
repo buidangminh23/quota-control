@@ -186,6 +186,15 @@ export interface InsightsMessages {
   freeResetHowWindow(window: ResetWindow): string;
   freeResetHowUntimed: string;
   freeResetOpenTab: string;
+
+  /** The Codex reset tracker on the macOS island and desktop widgets. */
+  glanceTitle: string;
+  glanceSource: string;
+  glanceChanceTitle: string;
+  /** One short line under the chances saying they are an estimate. */
+  glanceForecastNote: string;
+  /** The time since the last reset, e.g. `Đã 1 ngày 7 giờ chưa có reset`. */
+  glanceSinceLast(duration: string): string;
 }
 
 const CATALOGS: Record<Language, InsightsMessages> = { vi: insightsVi, en: insightsEn };

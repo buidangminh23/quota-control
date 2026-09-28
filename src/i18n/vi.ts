@@ -321,6 +321,8 @@ export const vi: Messages = {
     desktopWidget: "Thêm widget",
     desktopWidgetNote:
       "Bấm chuột phải lên màn hình nền, chọn Sửa tiện ích rồi tìm Quota Control. Có ba kiểu: Chi tiết (thanh mức dùng và giờ đặt lại), Vòng tròn (đồng hồ phần trăm) và Gọn (mỗi chỉ số một dòng), mỗi kiểu có bốn cỡ.",
+    desktopWidgetKindsNote:
+      "Bộ widget còn có Reset Codex, Lịch reset Codex, Sắp đặt lại và Tổng quan. Nội dung bên dưới áp dụng cho các widget hạn mức, Sắp đặt lại và Tổng quan.",
     glanceContent: "Nội dung",
     glanceContentOption: (content) => ({ dashboard: "Như tab Hạn mức", starred: "Chỉ số gắn sao", custom: "Tự chọn" })[content],
     glanceContentNote: (content) =>
@@ -343,6 +345,25 @@ export const vi: Messages = {
     islandStyleOption: (style) => ({ percent: "Phần trăm", ring: "Vòng tròn", bar: "Thanh" })[style],
     islandWing: (side) => (side === "left" ? "Bên trái tai thỏ" : "Bên phải tai thỏ"),
     islandWingAuto: "Tự động",
+    islandWingSpecial: (wing) =>
+      ({
+        "quota:next": "Hạn mức đặt lại sớm nhất",
+        "codex-resets:next": "Reset Codex · Reset free sắp tới",
+        "codex-resets:chance-1": "Reset Codex · Khả năng 24 giờ tới",
+        "codex-resets:chance-3": "Reset Codex · Khả năng 3 ngày tới",
+        "codex-resets:chance-7": "Reset Codex · Khả năng 7 ngày tới",
+        "codex-resets:since": "Reset Codex · Thời gian chưa reset",
+      })[wing],
+    islandSections: "Khi mở island hiện",
+    islandSectionOption: (section) => ({ quota: "Hạn mức", resets: "Reset Codex (dự báo, đếm ngược)", upcoming: "Sắp đặt lại" })[section],
+    islandSectionNote: (section, trackerOff) =>
+      ({
+        quota: "Các tài khoản và chỉ số theo mục Nội dung bên dưới.",
+        resets: trackerOff
+          ? "Reset free sắp tới, khả năng có reset và thời gian từ lần gần nhất. Cần bật tab Reset hoặc thông báo khi Codex reset."
+          : "Reset free sắp tới, khả năng có reset và thời gian từ lần gần nhất.",
+        upcoming: "Các hạn mức sắp được đặt lại, sớm nhất lên đầu.",
+      })[section],
     islandExpandOnHover: "Mở rộng khi rê chuột",
     islandExpandOnHoverNote: "Tắt đi thì bấm một lần để mở rộng, bấm lần nữa để mở Quota Control.",
     islandAlerts: "Tự mở khi có cảnh báo",
@@ -457,6 +478,13 @@ export const vi: Messages = {
     open: "Bấm để mở Quota Control",
     notRunning: "Mở Quota Control để hiện hạn mức ở đây.",
     units: { day: " ngày", hour: " giờ", minute: " phút" },
+    resetsOff: "Bật tab Reset hoặc thông báo reset trong Quota Control để xem dự báo.",
+    upcoming: "Sắp đặt lại",
+    upcomingEmpty: "Chưa có hạn mức nào có giờ đặt lại.",
+    wingIn: (span) => `sau ${span}`,
+    wingSince: (span) => `đã ${span}`,
+    calendarMonth: (month) => `Th${month + 1}`,
+    sinceReset: "Chưa reset",
   },
   update: {
     availableTitle: "Có phiên bản mới",

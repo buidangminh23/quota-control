@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -17,12 +18,14 @@ struct GlanceDocument: Decodable, Equatable {
     var providers: [GlanceProvider]
     var island: GlanceIsland
     var widget: GlanceWidgetContent
+    /// The Codex free-reset tracker; absent while the Reset tab and reset notifications are both off.
+    var resets: GlanceResets?
     var alert: GlanceAlert?
 
     static let supportedVersion = 1
 
     private enum CodingKeys: String, CodingKey {
-        case version, generatedAt, locale, hour12, labels, providers, island, widget, alert
+        case version, generatedAt, locale, hour12, labels, providers, island, widget, resets, alert
     }
 
     init(
@@ -34,6 +37,7 @@ struct GlanceDocument: Decodable, Equatable {
         providers: [GlanceProvider],
         island: GlanceIsland,
         widget: GlanceWidgetContent,
+        resets: GlanceResets? = nil,
         alert: GlanceAlert?
     ) {
         self.version = version
@@ -44,6 +48,7 @@ struct GlanceDocument: Decodable, Equatable {
         self.providers = providers
         self.island = island
         self.widget = widget
+        self.resets = resets
         self.alert = alert
     }
 
@@ -58,6 +63,7 @@ struct GlanceDocument: Decodable, Equatable {
         island = try container.decode(GlanceIsland.self, forKey: .island)
         widget = try container.decodeIfPresent(GlanceWidgetContent.self, forKey: .widget)
             ?? GlanceWidgetContent(providers: providers, shows: .all, empty: labels.empty)
+        resets = try? container.decodeIfPresent(GlanceResets.self, forKey: .resets)
         alert = try container.decodeIfPresent(GlanceAlert.self, forKey: .alert)
     }
 
@@ -89,6 +95,37 @@ struct GlanceDocument: Decodable, Equatable {
     func nextReset(after now: Date) -> Date? {
         (providers + widget.providers).flatMap(\.metrics).compactMap(\.resetsAt).filter { $0 > now }.min()
     }
+
+    /// The moments after `now` when something drawn from the reset tracker changes on its own: the
+    /// announced reset's countdown ends or its row goes away.
+    func resetMoments(after now: Date) -> [Date] {
+        guard let upcoming = resets?.upcoming else { return [] }
+        return [upcoming.countdown?.at, upcoming.hideAt].compactMap { $0 }.filter { $0 > now }
+    }
+}
+
+/// A limit coming back: one metric of one account and its reset time.
+struct GlanceUpcomingLimit: Identifiable, Equatable {
+    var provider: GlanceProvider
+    var metric: GlanceMetric
+    var at: Date
+
+    var id: String { "\(provider.id)|\(metric.id)" }
+
+    /// Every metric of `providers` with a reset still ahead of `now`, soonest first.
+    static func list(_ providers: [GlanceProvider], now: Date) -> [GlanceUpcomingLimit] {
+        var limits: [GlanceUpcomingLimit] = []
+        for provider in providers {
+            for metric in provider.metrics {
+                if let at = metric.resetsAt, at > now {
+                    limits.append(GlanceUpcomingLimit(provider: provider, metric: metric, at: at))
+                }
+            }
+        }
+        return limits.sorted { left, right in
+            left.at == right.at ? left.id < right.id : left.at < right.at
+        }
+    }
 }
 
 struct GlanceLabels: Decodable, Equatable {
@@ -102,9 +139,14 @@ struct GlanceLabels: Decodable, Equatable {
     var noData: String
     var more: String
     var units: GlanceUnits
+    /// What a reset surface says while the tracker is off.
+    var resetsOff: String
+    /// The heading of the next limits to come back, and what it says when none has a reset time.
+    var upcoming: String
+    var upcomingEmpty: String
 
     private enum CodingKeys: String, CodingKey {
-        case title, empty, updated, resetsIn, resetting, open, notRunning, noData, more, units
+        case title, empty, updated, resetsIn, resetting, open, notRunning, noData, more, units, resetsOff, upcoming, upcomingEmpty
     }
 
     init(
@@ -117,7 +159,10 @@ struct GlanceLabels: Decodable, Equatable {
         notRunning: String,
         noData: String,
         more: String,
-        units: GlanceUnits
+        units: GlanceUnits,
+        resetsOff: String = "",
+        upcoming: String = "",
+        upcomingEmpty: String = ""
     ) {
         self.title = title
         self.empty = empty
@@ -129,6 +174,9 @@ struct GlanceLabels: Decodable, Equatable {
         self.noData = noData
         self.more = more
         self.units = units
+        self.resetsOff = resetsOff
+        self.upcoming = upcoming
+        self.upcomingEmpty = upcomingEmpty
     }
 
     init(from decoder: Decoder) throws {
@@ -143,6 +191,9 @@ struct GlanceLabels: Decodable, Equatable {
         noData = try container.decodeIfPresent(String.self, forKey: .noData) ?? "—"
         more = try container.decodeIfPresent(String.self, forKey: .more) ?? ""
         units = try container.decode(GlanceUnits.self, forKey: .units)
+        resetsOff = try container.decodeIfPresent(String.self, forKey: .resetsOff) ?? ""
+        upcoming = try container.decodeIfPresent(String.self, forKey: .upcoming) ?? ""
+        upcomingEmpty = try container.decodeIfPresent(String.self, forKey: .upcomingEmpty) ?? ""
     }
 }
 
@@ -179,9 +230,11 @@ struct GlanceIsland: Decodable, Equatable {
     var expandOnHover: Bool
     var shows: GlanceShows
     var empty: String?
+    /// What the open island lists, top to bottom.
+    var sections: GlanceIslandSections
 
     private enum CodingKeys: String, CodingKey {
-        case enabled, alerts, style, wings, expandOnHover, shows, empty
+        case enabled, alerts, style, wings, expandOnHover, shows, empty, sections
     }
 
     init(
@@ -191,7 +244,8 @@ struct GlanceIsland: Decodable, Equatable {
         wings: [GlanceProvider] = [],
         expandOnHover: Bool = true,
         shows: GlanceShows = .all,
-        empty: String? = nil
+        empty: String? = nil,
+        sections: GlanceIslandSections = .quotaOnly
     ) {
         self.enabled = enabled
         self.alerts = alerts
@@ -200,6 +254,7 @@ struct GlanceIsland: Decodable, Equatable {
         self.expandOnHover = expandOnHover
         self.shows = shows
         self.empty = empty
+        self.sections = sections
     }
 
     init(from decoder: Decoder) throws {
@@ -211,7 +266,17 @@ struct GlanceIsland: Decodable, Equatable {
         expandOnHover = try container.decodeIfPresent(Bool.self, forKey: .expandOnHover) ?? true
         shows = try container.decodeIfPresent(GlanceShows.self, forKey: .shows) ?? .all
         empty = try container.decodeIfPresent(String.self, forKey: .empty)
+        sections = (try? container.decodeIfPresent(GlanceIslandSections.self, forKey: .sections)) ?? .quotaOnly
     }
+}
+
+/// The parts of the open island, each switched in Settings.
+struct GlanceIslandSections: Decodable, Equatable {
+    var quota: Bool
+    var resets: Bool
+    var upcoming: Bool
+
+    static let quotaOnly = GlanceIslandSections(quota: true, resets: false, upcoming: false)
 }
 
 /// What the desktop widgets list.
@@ -242,9 +307,48 @@ struct GlanceProvider: Decodable, Equatable, Identifiable {
     var tint: Color { Color(glanceHex: color) ?? .white }
 }
 
+/// A provider's logo: single-color path data drawn in the provider's tint, and for a brand whose
+/// official logo is several colors (Antigravity, Gemini…) that logo as a base64 PNG, drawn instead.
 struct GlanceMark: Decodable, Equatable {
     var box: [Double]
     var paths: [GlancePath]
+    var art: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case box, paths, art
+    }
+
+    init(box: [Double], paths: [GlancePath], art: String? = nil) {
+        self.box = box
+        self.paths = paths
+        self.art = art
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        box = try container.decodeIfPresent([Double].self, forKey: .box) ?? []
+        paths = try container.decodeIfPresent([GlancePath].self, forKey: .paths) ?? []
+        art = try container.decodeIfPresent(String.self, forKey: .art)
+    }
+
+    /// The color logo, decoded once per distinct picture.
+    var artImage: NSImage? {
+        guard let art else { return nil }
+        return GlanceMarkArt.image(for: art)
+    }
+}
+
+/// Decoded color logos, shared by every view that draws the same picture.
+enum GlanceMarkArt {
+    private static let cache = NSCache<NSString, NSImage>()
+
+    static func image(for base64: String) -> NSImage? {
+        let key = base64 as NSString
+        if let image = cache.object(forKey: key) { return image }
+        guard let data = Data(base64Encoded: base64), let image = NSImage(data: data) else { return nil }
+        cache.setObject(image, forKey: key)
+        return image
+    }
 }
 
 struct GlancePath: Decodable, Equatable {
@@ -272,6 +376,175 @@ struct GlanceMetric: Decodable, Equatable, Identifiable {
     var resetsAt: Date?
     /// Text shown where no reset countdown applies (`Not started`, a plan badge, `No data`).
     var detail: String?
+    /// A value that moves with the clock, drawn in place of `value` (island wings).
+    var countdown: GlanceCountdown?
+
+    /// `value`, or the countdown's words at `now`, its span as short as `GlanceFormat.shortSpan`.
+    func liveValue(now: Date, units: GlanceUnits) -> String {
+        countdown?.text(now: now, units: units, short: true) ?? value
+    }
+}
+
+/// Words around a moving span of time (see `GlanceCountdown` in `src/model/glance.ts`): `text` with
+/// `{d}` replaced by the time left until `at`, or gone by since it when `since`; once a countdown
+/// has passed, `after`.
+struct GlanceCountdown: Decodable, Equatable {
+    var at: Date
+    var text: String
+    var since: Bool?
+    var after: String?
+
+    static let placeholder = "{d}"
+
+    func passed(_ now: Date) -> Bool { since != true && at <= now }
+
+    func text(now: Date, units: GlanceUnits, short: Bool = false) -> String {
+        if passed(now), let after { return after }
+        let from = since == true ? at : now
+        let to = since == true ? now : at
+        let span = short
+            ? GlanceFormat.shortSpan(from: from, to: to, units: units)
+            : GlanceFormat.span(from: from, to: to, units: units)
+        return text.replacingOccurrences(of: Self.placeholder, with: span)
+    }
+
+    /// `text` split around `{d}`, for a widget that draws the span as a live `Text(date, style:)`.
+    var parts: (before: String, after: String) {
+        guard let range = text.range(of: Self.placeholder) else { return (text, "") }
+        return (String(text[..<range.lowerBound]), String(text[range.upperBound...]))
+    }
+}
+
+/// The Codex free-reset tracker (see `GlanceResets` in `src/model/glance.ts`).
+struct GlanceResets: Decodable, Equatable {
+    var title: String
+    var source: String
+    var brand: String
+    var color: String
+    var mark: GlanceMark?
+    var stale: String?
+    var upcoming: GlanceUpcomingReset?
+    var latest: GlanceLatestReset?
+    var forecastTitle: String
+    var forecast: [GlanceResetChance]
+    var forecastNote: String
+    var wait: String?
+    var median: String?
+    var calendar: GlanceResetCalendar?
+    var rhythm: GlanceResetRhythm?
+
+    var tint: Color { Color(glanceHex: color) ?? .white }
+
+    /// The announced reset while it is still to be shown at `now`.
+    func upcoming(at now: Date) -> GlanceUpcomingReset? {
+        guard let upcoming, upcoming.hideAt > now else { return nil }
+        return upcoming
+    }
+
+    func chance(days: Int) -> GlanceResetChance? {
+        forecast.first { $0.days == days }
+    }
+}
+
+struct GlanceUpcomingReset: Decodable, Equatable {
+    var title: String
+    var tone: GlanceResetTone
+    var countdown: GlanceCountdown?
+    var value: String?
+    var caption: String
+    var captionAfter: String?
+    var note: String?
+    var hideAt: Date
+    var chancePercent: Int?
+
+    /// The countdown's words (or the fixed value) and the caption under them, at `now`.
+    func lines(now: Date, units: GlanceUnits) -> (value: String, caption: String, awaiting: Bool) {
+        if let countdown {
+            let awaiting = countdown.passed(now)
+            return (countdown.text(now: now, units: units), awaiting ? (captionAfter ?? caption) : caption, awaiting)
+        }
+        return (value ?? "", caption, false)
+    }
+}
+
+enum GlanceResetTone: String, Decodable, Equatable {
+    case positive
+    case notice
+}
+
+struct GlanceLatestReset: Decodable, Equatable {
+    var at: Date
+    var kind: String
+    var label: String
+    var kindLabel: String
+    var since: GlanceCountdown
+    var when: String
+}
+
+struct GlanceResetChance: Decodable, Equatable, Identifiable {
+    var days: Int
+    var percent: Int
+    var label: String
+
+    var id: Int { days }
+    var fraction: Double { min(max(Double(percent) / 100, 0), 1) }
+}
+
+struct GlanceResetCalendar: Decodable, Equatable {
+    var title: String
+    var weeks: Int
+    var cells: String
+    var today: Int
+    var weekdays: [String]
+    var months: [GlanceResetMonth]
+    var legend: GlanceResetLegend
+
+    enum Cell: Equatable {
+        case none
+        case regular
+        case banked
+        case future
+    }
+
+    /// The cells as rows of seven, oldest week first, keeping only the newest `last` weeks.
+    func weekRows(last: Int? = nil) -> [[Cell]] {
+        let all = Array(cells).map { character -> Cell in
+            switch character {
+            case "r": return .regular
+            case "b": return .banked
+            case "-": return .future
+            default: return .none
+            }
+        }
+        let rows = stride(from: 0, to: all.count, by: 7).map { Array(all[$0..<min($0 + 7, all.count)]) }
+        guard let last, last < rows.count else { return rows }
+        return Array(rows.suffix(last))
+    }
+}
+
+struct GlanceResetMonth: Decodable, Equatable {
+    var week: Int
+    var label: String
+}
+
+struct GlanceResetLegend: Decodable, Equatable {
+    var regular: String
+    var banked: String
+    var today: String
+}
+
+struct GlanceResetRhythm: Decodable, Equatable {
+    var title: String
+    var total: Int
+    var weekdayTitle: String
+    var weekdays: [GlanceResetBucket]
+    var hourTitle: String
+    var hours: [GlanceResetBucket]
+}
+
+struct GlanceResetBucket: Decodable, Equatable {
+    var label: String
+    var count: Int
 }
 
 struct GlanceAlert: Decodable, Equatable, Identifiable {
@@ -325,6 +598,19 @@ enum GlancePalette {
 }
 
 enum GlanceFormat {
+    /// A span in the popup's words, as `countdown` words the time left: `4 ngày 3 giờ`, `2h 5m`.
+    static func span(from start: Date, to end: Date, units: GlanceUnits) -> String {
+        countdown(to: max(end, start.addingTimeInterval(1)), from: start, units: units)
+    }
+
+    /// The span in its largest unit only (`3 ngày`, `5h`, `12m`), for a reading beside the notch.
+    static func shortSpan(from start: Date, to end: Date, units: GlanceUnits) -> String {
+        let minutes = max(1, Int((end.timeIntervalSince(start) / 60).rounded(.up)))
+        if minutes >= 24 * 60 { return "\(minutes / (24 * 60))\(units.day)" }
+        if minutes >= 60 { return "\(minutes / 60)\(units.hour)" }
+        return "\(minutes)\(units.minute)"
+    }
+
     /// The popup's countdown (`format.duration`): days and hours, hours and minutes, or minutes,
     /// rounding up to the next whole minute.
     static func countdown(to date: Date, from now: Date, units: GlanceUnits) -> String {

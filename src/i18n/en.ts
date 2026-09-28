@@ -283,6 +283,8 @@ export const en: Messages = {
     desktopWidget: "Add a Widget",
     desktopWidgetNote:
       "Right-click the desktop, choose Edit Widgets and search for Quota Control. There are three styles: Details (usage bars and reset times), Rings (percentage gauges) and Compact (one line per metric), each in four sizes.",
+    desktopWidgetKindsNote:
+      "The widget gallery also offers Codex Resets, Codex Reset Calendar, Coming Back and Overview. The content settings below shape the limit widgets, Coming Back and Overview.",
     glanceContent: "Content",
     glanceContentOption: (content) => ({ dashboard: "Like the Limits tab", starred: "Starred metrics", custom: "Custom" })[content],
     glanceContentNote: (content) =>
@@ -305,6 +307,25 @@ export const en: Messages = {
     islandStyleOption: (style) => ({ percent: "Percentage", ring: "Ring", bar: "Bar" })[style],
     islandWing: (side) => (side === "left" ? "Left of the Notch" : "Right of the Notch"),
     islandWingAuto: "Automatic",
+    islandWingSpecial: (wing) =>
+      ({
+        "quota:next": "Soonest Limit Reset",
+        "codex-resets:next": "Codex Resets · Next Free Reset",
+        "codex-resets:chance-1": "Codex Resets · Chance in 24 Hours",
+        "codex-resets:chance-3": "Codex Resets · Chance in 3 Days",
+        "codex-resets:chance-7": "Codex Resets · Chance in 7 Days",
+        "codex-resets:since": "Codex Resets · Time Since the Last Reset",
+      })[wing],
+    islandSections: "When the Island Opens, Show",
+    islandSectionOption: (section) => ({ quota: "Limits", resets: "Codex Resets (Forecast, Countdown)", upcoming: "Coming Back" })[section],
+    islandSectionNote: (section, trackerOff) =>
+      ({
+        quota: "The accounts and metrics chosen under Content below.",
+        resets: trackerOff
+          ? "The next free reset, the chance of a reset and the time since the last one. Needs the Resets tab or Codex reset notifications."
+          : "The next free reset, the chance of a reset and the time since the last one.",
+        upcoming: "The limits coming back next, soonest first.",
+      })[section],
     islandExpandOnHover: "Expand on Hover",
     islandExpandOnHoverNote: "When off, click once to expand and again to open Quota Control.",
     islandAlerts: "Open for Alerts",
@@ -419,6 +440,13 @@ export const en: Messages = {
     open: "Click to open Quota Control",
     notRunning: "Open Quota Control to show your limits here.",
     units: { day: "d", hour: "h", minute: "m" },
+    resetsOff: "Turn on the Resets tab or reset notifications in Quota Control to see the forecast.",
+    upcoming: "Coming back",
+    upcomingEmpty: "No limit has a reset time yet.",
+    wingIn: (span) => `in ${span}`,
+    wingSince: (span) => `${span} ago`,
+    calendarMonth: (month) => ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][month] ?? "",
+    sinceReset: "Since reset",
   },
   update: {
     availableTitle: "Update Available",

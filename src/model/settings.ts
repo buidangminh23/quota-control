@@ -50,6 +50,9 @@ export const GLANCE_CONTENTS: readonly GlanceContent[] = ["dashboard", "starred"
 /** How the closed Dynamic Island shows a reading beside the notch. */
 export type IslandStyle = "percent" | "ring" | "bar";
 export const ISLAND_STYLES: readonly IslandStyle[] = ["percent", "ring", "bar"];
+/** The parts of the open Dynamic Island, top to bottom. */
+export type IslandSectionKey = "quota" | "resets" | "upcoming";
+export const ISLAND_SECTIONS: readonly IslandSectionKey[] = ["quota", "resets", "upcoming"];
 /** At most this many metrics can be picked by hand; more would not fit any surface. */
 export const MAX_GLANCE_METRICS = 64;
 
@@ -74,6 +77,12 @@ export interface StripSettings {
   values: 1 | 2;
 }
 
+/**
+ * What the open Dynamic Island lists: the accounts and their limits, the Codex free-reset tracker
+ * and the next limits to come back. At least one is always on.
+ */
+export type IslandSections = Record<IslandSectionKey, boolean>;
+
 export interface IslandSettings extends GlanceSurfaceSettings {
   style: IslandStyle;
   /** The metrics beside the notch, left then right; an empty slot takes the content's next reading. */
@@ -82,6 +91,7 @@ export interface IslandSettings extends GlanceSurfaceSettings {
   expandOnHover: boolean;
   /** Open the island for a few seconds when a limit runs low or comes back. */
   alerts: boolean;
+  sections: IslandSections;
 }
 
 export interface NotificationSettings {
@@ -162,6 +172,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     wings: ["", ""],
     expandOnHover: true,
     alerts: true,
+    sections: { quota: true, resets: true, upcoming: false },
   },
   widget: {
     content: "dashboard",
@@ -238,6 +249,16 @@ function parseStrip(value: unknown, defaults: StripSettings): StripSettings {
   };
 }
 
+function parseSections(value: unknown, defaults: IslandSections): IslandSections {
+  const stored = asRecord(value);
+  const sections: IslandSections = {
+    quota: flag(stored.quota, defaults.quota),
+    resets: flag(stored.resets, defaults.resets),
+    upcoming: flag(stored.upcoming, defaults.upcoming),
+  };
+  return sections.quota || sections.resets || sections.upcoming ? sections : { ...sections, quota: true };
+}
+
 function parseIsland(value: unknown, defaults: IslandSettings): IslandSettings {
   const stored = asRecord(value);
   const wings = Array.isArray(stored.wings) ? stored.wings : [];
@@ -248,6 +269,7 @@ function parseIsland(value: unknown, defaults: IslandSettings): IslandSettings {
     wings: [wing(0), wing(1)],
     expandOnHover: flag(stored.expandOnHover, defaults.expandOnHover),
     alerts: flag(stored.alerts, defaults.alerts),
+    sections: parseSections(stored.sections, defaults.sections),
   };
 }
 
@@ -319,7 +341,7 @@ export function mergeSettingsDocument(
     ...settings,
     notifications: { ...settings.notifications },
     strip: { ...settings.strip, metrics: [...settings.strip.metrics] },
-    island: { ...settings.island, metrics: [...settings.island.metrics], wings: [...settings.island.wings] },
+    island: { ...settings.island, metrics: [...settings.island.metrics], wings: [...settings.island.wings], sections: { ...settings.island.sections } },
     widget: { ...settings.widget, metrics: [...settings.widget.metrics] },
   };
 }

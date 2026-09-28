@@ -1,6 +1,6 @@
 import { fixtureCatalog, fixtureSnapshots } from "@/lib/fixtures";
-import type { ProviderSnapshot, WidgetDescriptor } from "@/lib/types";
-import { buildGlance, glanceMetric, GLANCE_VERSION, type GlanceAlert } from "./glance";
+import type { ProviderSnapshot } from "@/lib/types";
+import { buildGlance, CODEX_RESETS_PROVIDER_ID, glanceMetric, GLANCE_VERSION, type GlanceAlert, type GlanceResets, type GlanceWingChoice } from "./glance";
 import { glanceGroups, reconcileLayout } from "./layout";
 import { barKind, platformKey } from "./platform";
 import { cardIdentity } from "./providerText";
@@ -9,6 +9,7 @@ import { makeWidget, NOW, resetsAt, WEEK_SECONDS } from "./testHelpers";
 import { DEFAULT_DISPLAY, widgetDataFor, type DisplayOptions } from "./widgetData";
 
 const FETCHED = Date.UTC(2026, 8, 26, 3);
+const NOW_GLANCE = new Date(FETCHED + 60_000);
 const catalog = fixtureCatalog();
 const snapshots = fixtureSnapshots(FETCHED);
 const layout = reconcileLayout(null, catalog);
@@ -21,11 +22,13 @@ interface Options {
   alert?: GlanceAlert | null;
   island?: Partial<IslandSettings>;
   widget?: Partial<typeof DEFAULT_SETTINGS.widget>;
-  wings?: [WidgetDescriptor | null, WidgetDescriptor | null];
+  wings?: [GlanceWingChoice, GlanceWingChoice];
   hour12?: boolean | null;
+  resets?: GlanceResets | null;
+  markArt?: Readonly<Record<string, string>>;
 }
 
-function glance({ display = DEFAULT_DISPLAY, data = snapshots, alert = null, island = {}, widget = {}, wings = [null, null], hour12 = null }: Options = {}) {
+function glance({ display = DEFAULT_DISPLAY, data = snapshots, alert = null, island = {}, widget = {}, wings = [null, null], hour12 = null, resets = null, markArt }: Options = {}) {
   const islandSettings = { ...DEFAULT_SETTINGS.island, ...island };
   const widgetSettings = { ...DEFAULT_SETTINGS.widget, ...widget };
   const groups = (content: GlanceContent, metrics: readonly string[]) => glanceGroups(content, metrics, layout, catalog, () => true);
@@ -43,13 +46,25 @@ function glance({ display = DEFAULT_DISPLAY, data = snapshots, alert = null, isl
     hour12,
     appName: "Quota Control",
     alert,
-    now: new Date(FETCHED + 60_000),
+    resets,
+    markArt,
+    now: NOW_GLANCE,
   });
 }
 
 const ids = (list: readonly { id: string }[]) => list.map((entry) => entry.id);
 
 describe("glance document", () => {
+  it("carries a brand's official color logo beside its path mark, and nothing for other brands", () => {
+    const document = glance({ markArt: { claude: "cGljdHVyZQ==" } });
+    const claude = document.widget.providers[0]!;
+    expect(claude.mark?.art).toBe("cGljdHVyZQ==");
+    expect(claude.mark?.paths.length).toBeGreaterThan(0);
+    const codex = document.widget.providers.find((entry) => entry.brand === "codex")!;
+    expect(codex.mark?.art).toBeUndefined();
+    expect(glance().widget.providers[0]!.mark?.art).toBeUndefined();
+  });
+
   it("lists every Hạn mức card by default, with its heading, plan and readings", () => {
     const document = glance();
     expect(document.version).toBe(GLANCE_VERSION);
@@ -138,6 +153,129 @@ describe("island wings", () => {
     expect(island.style).toBe("ring");
     expect(island.expandOnHover).toBe(false);
     expect(island.shows.plan).toBe(true);
+  });
+});
+
+const TRACKER: GlanceResets = {
+  title: "Reset Codex",
+  source: "Theo codex-resets.com",
+  brand: "codex",
+  color: "#10A37F",
+  upcoming: {
+    title: "Reset free",
+    tone: "positive",
+    countdown: { at: new Date(FETCHED + 3 * 3_600_000).toISOString(), text: "sau {d}", after: "chờ xác nhận" },
+    caption: "Lúc 13:00 · CN 27/09 · GMT+7",
+    captionAfter: "Hẹn 13:00 · CN 27/09 · GMT+7",
+    hideAt: new Date(FETCHED + 27 * 3_600_000).toISOString(),
+  },
+  latest: {
+    at: "2026-09-24T18:17:54.000Z",
+    kind: "regular",
+    label: "Lần reset gần nhất",
+    kindLabel: "Reset",
+    since: { at: "2026-09-24T18:17:54.000Z", text: "Đã {d} chưa có reset", since: true },
+    when: "1:17 · T6 25/09",
+  },
+  forecastTitle: "Khả năng có reset",
+  forecast: [
+    { days: 1, percent: 22, label: "24 giờ tới" },
+    { days: 3, percent: 52, label: "3 ngày tới" },
+    { days: 7, percent: 82, label: "7 ngày tới" },
+  ],
+  forecastNote: "Ước tính từ lịch sử, không phải tin chính thức.",
+};
+
+describe("island sections and labels", () => {
+  it("carries the island sections and the reset and coming-back labels", () => {
+    const document = glance({ island: { sections: { quota: false, resets: true, upcoming: true } } });
+    expect(document.island.sections).toEqual({ quota: false, resets: true, upcoming: true });
+    expect(document.labels).toMatchObject({
+      resetsOff: "Bật tab Reset hoặc thông báo reset trong Quota Control để xem dự báo.",
+      upcoming: "Sắp đặt lại",
+      upcomingEmpty: "Chưa có hạn mức nào có giờ đặt lại.",
+    });
+    expect(glance({ display: { ...DEFAULT_DISPLAY, language: "en" } }).labels.upcoming).toBe("Coming back");
+  });
+
+  it("attaches the tracker only when there is one", () => {
+    expect(glance().resets).toBeUndefined();
+    expect(glance({ resets: TRACKER }).resets).toBe(TRACKER);
+  });
+
+  it("copies the sections, so the settings object is never shared with the document", () => {
+    const sections = { quota: true, resets: true, upcoming: false };
+    const document = glance({ island: { sections } });
+    sections.upcoming = true;
+    expect(document.island.sections.upcoming).toBe(false);
+  });
+});
+
+describe("special wings", () => {
+  const wingIds = (wings: { id: string; metrics: { id: string }[] }[]) => wings.map((wing) => `${wing.id}|${wing.metrics[0]!.id}`);
+
+  it("counts down to the island's soonest limit reset", () => {
+    const document = glance({ wings: ["quota:next", null] });
+    const now = NOW_GLANCE.getTime();
+    const soonest = document.providers
+      .flatMap((provider) => provider.metrics.map((metric) => ({ provider, metric })))
+      .filter(({ metric }) => metric.resetsAt && Date.parse(metric.resetsAt) > now)
+      .sort((a, b) => Date.parse(a.metric.resetsAt!) - Date.parse(b.metric.resetsAt!))[0]!;
+    const wing = document.island.wings[0]!;
+    expect(wing.id).toBe(soonest.provider.id);
+    expect(wing.metrics[0]).toEqual({ ...soonest.metric, countdown: { at: soonest.metric.resetsAt, text: "sau {d}" } });
+    expect(document.island.wings[1]!.metrics[0]!.countdown).toBeUndefined();
+  });
+
+  it("falls back to the automatic reading when no limit has a reset ahead", () => {
+    const island = { content: "custom" as const, metrics: ["claude@7c1e.extra", "codex@52d0.credits"] };
+    const automatic = wingIds(glance({ island }).island.wings);
+    expect(automatic).toEqual(["claude@7c1e|claude@7c1e.extra", "codex@52d0|codex@52d0.credits"]);
+    expect(wingIds(glance({ island, wings: ["quota:next", null] }).island.wings)).toEqual(automatic);
+    expect(wingIds(glance({ wings: ["quota:next", null] }).island.wings)).toEqual(["codex@52d0|codex@52d0.session", "claude@7c1e|claude@7c1e.session"]);
+  });
+
+  it("shows the announced free reset's countdown, then the 24-hour chance once it has passed", () => {
+    const wing = glance({ resets: TRACKER, wings: ["codex-resets:next", null] }).island.wings[0]!;
+    expect(wing).toMatchObject({ id: CODEX_RESETS_PROVIDER_ID, name: "Reset Codex", brand: "codex", color: "#10A37F" });
+    expect(wing.metrics[0]).toEqual({
+      id: "codex-resets:next",
+      label: "Reset free",
+      value: "Reset free",
+      headline: "Lúc 13:00 · CN 27/09 · GMT+7",
+      fraction: null,
+      severity: "normal",
+      countdown: { at: TRACKER.upcoming!.countdown!.at, text: "sau {d}", after: "chờ xác nhận" },
+    });
+    const passed = { ...TRACKER, upcoming: { ...TRACKER.upcoming!, countdown: { at: new Date(FETCHED - 60_000).toISOString(), text: "sau {d}" } } };
+    const fallback = glance({ resets: passed, wings: ["codex-resets:next", null] }).island.wings[0]!.metrics[0]!;
+    expect(fallback).toMatchObject({ id: "codex-resets:next", label: "24 giờ tới", value: "22%", fraction: 0.22, severity: "normal" });
+    expect(fallback.countdown).toBeUndefined();
+    const untimed = { ...TRACKER, upcoming: { title: "Reset free", tone: "positive" as const, value: "chưa rõ giờ", caption: "Tuần sau giờ Mỹ", hideAt: TRACKER.upcoming!.hideAt } };
+    expect(glance({ resets: untimed, wings: ["codex-resets:next", null] }).island.wings[0]!.metrics[0]!.value).toBe("22%");
+  });
+
+  it("reads each forecast horizon as a whole-percent meter", () => {
+    const wings = glance({ resets: TRACKER, wings: ["codex-resets:chance-3", "codex-resets:chance-7"] }).island.wings;
+    expect(wings.map((wing) => wing.metrics[0])).toEqual([
+      { id: "codex-resets:chance-3", label: "3 ngày tới", value: "52%", headline: "52% · 3 ngày tới", fraction: 0.52, severity: "normal" },
+      { id: "codex-resets:chance-7", label: "7 ngày tới", value: "82%", headline: "82% · 7 ngày tới", fraction: 0.82, severity: "normal" },
+    ]);
+    expect(glance({ resets: TRACKER, wings: ["codex-resets:chance-1", null] }).island.wings[0]!.metrics[0]!.value).toBe("22%");
+  });
+
+  it("counts the time since the last reset", () => {
+    const metric = glance({ resets: TRACKER, wings: [null, "codex-resets:since"] }).island.wings[1]!.metrics[0]!;
+    expect(metric).toMatchObject({ id: "codex-resets:since", label: "Chưa reset", value: "1:17 · T6 25/09", fraction: null, severity: "normal" });
+    expect(metric.countdown).toEqual({ at: TRACKER.latest!.at, text: "đã {d}", since: true });
+  });
+
+  it("behaves like an automatic slot when the tracker has nothing for it", () => {
+    const automatic = wingIds(glance().island.wings);
+    expect(wingIds(glance({ wings: ["codex-resets:next", "codex-resets:since"] }).island.wings)).toEqual(automatic);
+    const bare = { ...TRACKER, forecast: [], latest: undefined, upcoming: undefined };
+    expect(wingIds(glance({ resets: bare, wings: ["codex-resets:chance-1", "codex-resets:since"] }).island.wings)).toEqual(automatic);
+    expect(wingIds(glance({ resets: bare, wings: ["codex-resets:next", null] }).island.wings)).toEqual(automatic);
   });
 });
 

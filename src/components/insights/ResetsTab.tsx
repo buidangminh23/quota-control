@@ -24,6 +24,7 @@ import {
   type ResetSource,
   type ResetStatus,
 } from "@/model/insights/resets";
+import { shortDate } from "@/model/insights/text";
 import { zonedParts } from "@/model/timeZone";
 import { useNow, useSettings } from "@/state/hooks";
 import { useInsights } from "@/state/insights";
@@ -48,15 +49,6 @@ function PostLink({ source, text, compact = false }: { source: ResetSource; text
       <span>{text.openPost}</span>
     </LinkButton>
   );
-}
-
-/** `12/09` in the device's zone, with the year only when it is not the current one. */
-function shortDate(date: Date, now: Date, language: Language): string {
-  const parts = zonedParts(date);
-  if (parts.year !== zonedParts(now).year) return dateText(date, language);
-  const day = String(parts.day).padStart(2, "0");
-  const month = String(parts.month).padStart(2, "0");
-  return language === "vi" ? `${day}/${month}` : `${month}/${day}`;
 }
 
 /** How far an announced time is: a countdown while ahead, an overdue note once it has passed. */

@@ -60,9 +60,10 @@ After that the app updates itself like the Windows and Linux versions (see [Upda
 
 ### macOS specifics
 
-- **Menu bar.** The app has no Dock icon. Each account shows its mark with its readings, as upstream
-  draws them (marks at 16 points, one value at 12 points or two stacked at 9), or the Bars glyph,
-  always as template images that turn white on a dark menu bar and black on a light one.
+- **Menu bar.** The app has no Dock icon. Each account shows its colored mark with its readings
+  (marks at 16 points, one value at 12 points or two stacked, each with its window name such as
+  `5h` or `week`), drawn in white on a dark menu bar and in black on a light one, or the Bars glyph
+  as a template image.
   **Settings → Menu Bar** picks what it lists (the Limits tab's accounts, the starred metrics, or a
   hand-picked set) and whether each account shows one reading or two stacked.
 - **Dynamic Island.** On a MacBook with a notch, a black island hugs the notch and its two wings
@@ -71,14 +72,23 @@ After that the app updates itself like the Windows and Linux versions (see [Upda
   and reset countdowns, and a line for an account that is signed out. A click on the open island
   opens the popup right below it. It also opens by itself for a few seconds when a limit is about to
   run out or a Codex reset is announced. Screens without a notch get the same island as a pill in
-  the middle of the menu bar. **Settings → Dynamic Island** chooses the style, the metric beside
-  each side of the notch, what the details list and which parts of an account they show.
+  the middle of the menu bar. **Settings → Dynamic Island** chooses the style, what sits beside
+  each side of the notch (a metric, the soonest limit to come back, or the Codex reset tracker: the
+  announced reset's countdown, the chance of a reset within 24 hours, 3 or 7 days, or the time since
+  the last one), which sections the open island shows (the limits, the Codex reset tracker, the
+  limits coming back next) and which parts of an account they show.
 - **Desktop widgets.** Right-click the desktop, choose **Edit Widgets** and search for Quota Control.
-  There are three styles, each in small, medium, large and extra large: **Details** (meters,
-  headlines and live reset countdowns), **Rings** (a percentage ring per metric) and **Compact**
-  (one line per metric, the most accounts at once). Each fits as many accounts as its size holds and
-  says how many it left out. **Settings → Desktop Widget** picks what they list and which parts of an
-  account they show. The app writes the readings to
+  Three quota styles come in small, medium, large and extra large: **Details** (meters, headlines
+  and live reset countdowns), **Rings** (a percentage ring per metric) and **Compact** (one line per
+  metric, the most accounts at once); each fits as many accounts as its size holds and says how many
+  it left out. **Overview** puts the limits and the Codex reset tracker side by side, **Coming Back**
+  lists the next limits to reset with live countdowns, **Codex Resets** shows the announced reset,
+  the chance of a reset within 24 hours, 3 and 7 days and the time since the last one, and **Codex
+  Reset Calendar** shows the 20-week calendar and when resets tend to come (from
+  [codex-resets.com](https://codex-resets.com), shown while the Reset tab or reset notifications are
+  on). **Settings → Desktop Widget** picks what the quota widgets list and which parts of an account
+  they show. At every launch the app also stops a widget process left over from an earlier version,
+  so the widgets always run the installed version's code. The app writes the readings to
   `~/Library/Application Support/usage-control/widget/glance.json` and asks WidgetKit to reload
   when a reading changes; the sandboxed widgets may read only that folder, not the accounts beside it. While the app is closed the
   widgets keep their last readings and mark them once they are over 20 minutes old.

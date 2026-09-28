@@ -4,7 +4,8 @@
  */
 import type { ErrorCategory, LimitResetResult, UpdateFailureReason, UpdateFailureStage } from "@/lib/types";
 import type { PlanTermLeft } from "@/model/planTerm";
-import type { GlanceContent, IslandStyle, TaskbarDisplay } from "@/model/settings";
+import type { SpecialWing } from "@/model/glance";
+import type { GlanceContent, IslandSectionKey, IslandStyle, TaskbarDisplay } from "@/model/settings";
 import type { PriceMessages, UsageMessages } from "./usageMessages";
 
 export type DisplayModeKey = "used" | "remaining";
@@ -225,6 +226,8 @@ export interface SettingsMessages {
   dynamicIslandNote: string;
   desktopWidget: string;
   desktopWidgetNote: string;
+  /** The widgets beyond the limit ones and which of them the content settings shape. */
+  desktopWidgetKindsNote: string;
   glanceContent: string;
   glanceContentOption(content: GlanceContent): string;
   glanceContentNote(content: GlanceContent): string;
@@ -242,6 +245,12 @@ export interface SettingsMessages {
   islandStyleOption(style: IslandStyle): string;
   islandWing(side: "left" | "right"): string;
   islandWingAuto: string;
+  /** A wing choice that is not one metric: the soonest limit reset or a Codex reset reading. */
+  islandWingSpecial(wing: SpecialWing): string;
+  islandSections: string;
+  islandSectionOption(section: IslandSectionKey): string;
+  /** `trackerOff`: neither the Reset tab nor reset notifications is on, so the tracker has no data. */
+  islandSectionNote(section: IslandSectionKey, trackerOff: boolean): string;
   islandExpandOnHover: string;
   islandExpandOnHoverNote: string;
   islandAlerts: string;
@@ -348,6 +357,20 @@ export interface GlanceMessages {
   notRunning: string;
   /** Unit suffixes the island's countdowns use, written like `format.duration` (`4 ngày 3 giờ`, `4d 3h`). */
   units: { day: string; hour: string; minute: string };
+  /** What a reset widget or island section says while the Reset tab and reset notifications are off. */
+  resetsOff: string;
+  /** The heading of the next limits to come back, and what it says when none has a reset time. */
+  upcoming: string;
+  upcomingEmpty: string;
+  /** The label of the wing counting the time since the last Codex reset. */
+  sinceReset: string;
+  /** A wing counting down to a moment, `span` being the time left: `sau 2 giờ`, `in 2h`. */
+  wingIn(span: string): string;
+  /** A wing counting the time since a moment: `đã 2 ngày`, `2d ago`. */
+  wingSince(span: string): string;
+  /** A month on the reset calendar of the island and widgets, 0 for January: `Th9`, `Sep`; worded
+   * apart from the weekday names beside it (`T2`…`CN`). */
+  calendarMonth(month: number): string;
 }
 
 /** The update dialog and the Settings "App Updates" section. */

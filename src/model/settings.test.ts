@@ -44,9 +44,28 @@ describe("glance surfaces", () => {
 
   it("saves copies, so later edits to the in-memory settings do not leak into the document", () => {
     const settings = parseSettings({ widget: { content: "custom", metrics: ["a"] } });
-    const merged = mergeSettingsDocument({}, settings, new Set()) as { widget: { metrics: string[] } };
+    const merged = mergeSettingsDocument({}, settings, new Set()) as { widget: { metrics: string[] }; island: { sections: { upcoming: boolean } } };
     settings.widget.metrics.push("b");
+    settings.island.sections.upcoming = true;
     expect(merged.widget.metrics).toEqual(["a"]);
+    expect(merged.island.sections.upcoming).toBe(false);
+  });
+
+  it("opens the island on the limits and the reset tracker by default", () => {
+    expect(DEFAULT_SETTINGS.island.sections).toEqual({ quota: true, resets: true, upcoming: false });
+    expect(parseSettings({ island: {} }).island.sections).toEqual({ quota: true, resets: true, upcoming: false });
+  });
+
+  it("reads each island section on its own and never turns them all off", () => {
+    expect(parseSettings({ island: { sections: { quota: false, upcoming: true } } }).island.sections).toEqual({ quota: false, resets: true, upcoming: true });
+    expect(parseSettings({ island: { sections: { quota: "no", resets: 0, upcoming: true } } }).island.sections).toEqual({ quota: true, resets: true, upcoming: true });
+    expect(parseSettings({ island: { sections: "all" } }).island.sections).toEqual(DEFAULT_SETTINGS.island.sections);
+    expect(parseSettings({ island: { sections: { quota: false, resets: false, upcoming: false } } }).island.sections).toEqual({ quota: true, resets: false, upcoming: false });
+  });
+
+  it("keeps any wing id up to 512 characters, special ones included", () => {
+    expect(parseSettings({ island: { wings: ["codex-resets:chance-7", "quota:next"] } }).island.wings).toEqual(["codex-resets:chance-7", "quota:next"]);
+    expect(parseSettings({ island: { wings: ["x".repeat(513), "codex-resets:since"] } }).island.wings).toEqual(["", "codex-resets:since"]);
   });
 });
 

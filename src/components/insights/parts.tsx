@@ -6,16 +6,18 @@
 import { useState, type ReactNode } from "react";
 import type { Language } from "@/i18n";
 import type { InsightsMessages } from "@/i18n/insights";
-import { decimal, localeOf } from "@/i18n/numbers";
+import { localeOf } from "@/i18n/numbers";
 import { backend } from "@/lib/backend";
 import type { PublicFeedName, PublicFeedSnapshot } from "@/lib/insightsTypes";
 import { compactDuration } from "@/model/format";
-import { deviceTimeZone } from "@/model/timeZone";
+import { dateText } from "@/model/insights/text";
 import { useNow } from "@/state/hooks";
 import { refreshFeeds, useInsights } from "@/state/insights";
 import { Button } from "../ui/controls";
 import { ChevronDown, ChevronUp, ExternalIcon } from "../ui/icons";
 import { tooltipProps } from "../ui/tooltip";
+
+export { dateText, numberText, percentText } from "@/model/insights/text";
 
 const MINUTE_MS = 60_000;
 
@@ -136,14 +138,6 @@ export function Disclosure({ title, children }: { title: string; children: React
   );
 }
 
-export function percentText(language: Language, rate: number, digits = 1): string {
-  return `${decimal(language, rate * 100, digits, digits)}%`;
-}
-
-export function numberText(language: Language, value: number, digits = 0): string {
-  return decimal(language, value, digits, digits);
-}
-
 /** How long ago `iso` was, as a bare duration (`5 phút`), or `null` for a missing or future time. */
 export function agoText(iso: string | Date | null | undefined, now: Date, language: Language): string | null {
   if (!iso) return null;
@@ -160,11 +154,6 @@ export function sinceText(date: Date, now: Date, language: Language): string {
   if (hours < 1) return format.format(-minutes, "minute");
   if (hours < 24) return format.format(-hours, "hour");
   return format.format(-Math.floor(hours / 24), "day");
-}
-
-/** A calendar date in the device's zone (or `timeZone`): `26/09/2026` or `9/26/2026`. */
-export function dateText(date: Date, language: Language, timeZone: string = deviceTimeZone()): string {
-  return date.toLocaleDateString(language === "vi" ? "vi-VN" : "en-US", { day: "2-digit", month: "2-digit", year: "numeric", timeZone });
 }
 
 /** A `YYYY-MM-DD` day as written, whatever the zone. */

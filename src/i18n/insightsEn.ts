@@ -232,4 +232,10 @@ export const insightsEn: InsightsMessages = {
   freeResetHowWindow: (window) => `The post only says ${EN_WINDOWS[window].toLowerCase()} (San Francisco time), with no time to count down to.`,
   freeResetHowUntimed: "The post does not say when; this line hides after 7 days without a time.",
   freeResetOpenTab: "Click to open the Codex Reset tab.",
+
+  glanceTitle: "Codex Resets",
+  glanceSource: "From codex-resets.com",
+  glanceChanceTitle: "Chance of a reset",
+  glanceForecastNote: "An estimate from past resets, not official word.",
+  glanceSinceLast: (duration) => `${duration} since the last reset`,
 };
