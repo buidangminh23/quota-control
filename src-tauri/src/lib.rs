@@ -557,6 +557,10 @@ fn position_popup(app: &AppHandle) -> Result<(), String> {
 /// macOS works in global points throughout: displays may mix backing scales, tao reads a monitor
 /// lookup point as points, and a logical position is placed exactly. Each monitor's physical
 /// frame is turned back into points with its own scale, and so is the tray icon's rectangle.
+/// A display in points: its bounds, its work area and its backing scale.
+#[cfg(target_os = "macos")]
+type DisplayPoints = (PhysicalRect<i32, u32>, PhysicalRect<i32, u32>, f64);
+
 #[cfg(target_os = "macos")]
 fn position_popup(app: &AppHandle) -> Result<(), String> {
     let window = app
@@ -568,7 +572,7 @@ fn position_popup(app: &AppHandle) -> Result<(), String> {
         (f64::from(outer.width) / window_scale).round() as u32,
         (f64::from(outer.height) / window_scale).round() as u32,
     );
-    let monitors: Vec<(PhysicalRect<i32, u32>, PhysicalRect<i32, u32>, f64)> = window
+    let monitors: Vec<DisplayPoints> = window
         .available_monitors()
         .map_err(safe_error)?
         .iter()
