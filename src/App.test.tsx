@@ -452,7 +452,7 @@ describe("popup", () => {
     expect(screen.queryByText(/F12/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Đổi nhà cung cấp" }));
     pick("Windsurf");
-    expect(screen.getByText("Quota Control đọc Windsurf từ đăng nhập Windsurf trên máy này. Đăng nhập Windsurf là tài khoản tự hiện ở mục Nhà cung cấp AI khác, không cần thêm.")).toBeInTheDocument();
+    expect(screen.getByText("Quota Control đọc Windsurf từ đăng nhập Windsurf trên máy này. Đăng nhập Windsurf là tài khoản tự hiện ở mục Tài khoản đã kết nối, không cần thêm.")).toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
 

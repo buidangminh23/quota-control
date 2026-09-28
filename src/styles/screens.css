@@ -364,9 +364,11 @@
 }
 
 .uc-service-results {
-  display: flex;
-  flex-direction: column;
-  max-height: 176px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+  gap: 2px 4px;
+  align-content: start;
+  max-height: 212px;
   margin: 0 -4px;
   padding: 0;
   overflow-y: auto;
@@ -393,10 +395,17 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding: 5px 6px;
+  padding: 5px 4px 5px 6px;
   border-radius: 6px;
   font-size: var(--uc-label-size);
   text-align: left;
+}
+
+.uc-service-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
 }
 
 .uc-key-change {
@@ -404,8 +413,6 @@
 }
 
 .uc-service-kind {
-  flex: none;
-  margin-left: auto;
   font-size: var(--uc-caption-size);
   color: var(--uc-secondary);
 }
