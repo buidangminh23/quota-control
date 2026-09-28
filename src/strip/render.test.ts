@@ -33,3 +33,39 @@ describe("strip parity across systems", () => {
     for (const metrics of Object.values(STRIP_METRICS)) expect(metrics.labelSize).not.toBeNull();
   });
 });
+
+describe("strip sizes per system", () => {
+  it("keeps the Windows taskbar and Linux panel styles as they were (Rules.md §0.56)", () => {
+    expect(STRIP_METRICS.taskbar).toEqual({
+      font: '"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif',
+      singleSize: 14,
+      stackedSize: 12,
+      stackedLineHeight: 14,
+      markSide: 18,
+      markGap: 5,
+      groupGap: 14,
+      sidePadding: 6,
+      labelSize: 10,
+      labelGap: 3,
+    });
+    expect(STRIP_METRICS.panel).toEqual({
+      font: 'Ubuntu, Cantarell, "Noto Sans", system-ui, sans-serif',
+      singleSize: 12,
+      stackedSize: 11,
+      stackedLineHeight: 12,
+      markSide: 18,
+      markGap: 4,
+      groupGap: 10,
+      sidePadding: 1,
+      labelSize: 9,
+      labelGap: 2,
+    });
+  });
+
+  it("places the macOS menu bar readings on measured baselines with a stable value column", () => {
+    expect(STRIP_METRICS.menuBar.baselines?.minValue).toBe("00%");
+    expect(STRIP_METRICS.menuBar.markSide).toBe(16);
+    expect(STRIP_METRICS.taskbar.baselines).toBeUndefined();
+    expect(STRIP_METRICS.panel.baselines).toBeUndefined();
+  });
+});

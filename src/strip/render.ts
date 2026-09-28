@@ -4,12 +4,16 @@
  * marks with their values stacked two high (upstream `MenuBarTextStrip`). The taskbar style is
  * scaled to the Windows taskbar the way the system clock stacks time over date; the menu bar and
  * panel styles keep the same picture (colored marks, window names, stacked readings) at the macOS
- * menu bar's and the GNOME top bar's own sizes, so the three systems look alike.
+ * menu bar's and the GNOME top bar's own sizes, so the three systems look alike. Only the menu bar
+ * style places its rows on baselines measured from the font, in aligned columns (`layout.ts`), so
+ * both rows fit its 18-point image with their descenders and the item keeps its width; the taskbar
+ * and panel placements are unchanged.
  */
 import { colorArtUrl, PROVIDER_COLOR_ART } from "@/assets/providerColorArt";
 import { PROVIDER_MARKS } from "@/assets/providerMarks";
 import { barFill, type StripContent, type StripMetric } from "@/model/menuBar";
 import { knownBrandColor } from "@/model/totalSpend";
+import { groupTextWidth, stackBaselines, type RowFontMetrics } from "./layout";
 
 export type StripStyle = "taskbar" | "menuBar" | "panel";
 
@@ -30,6 +34,23 @@ interface StripMetrics {
   /** Size of the window names (`5h`, `week`) before the readings; `null` leaves them out. */
   labelSize: number | null;
   labelGap: number;
+  /** Weight of the window names; 500 when absent. */
+  labelWeight?: number;
+  /** Opacity of the window names; 0.8 when absent. */
+  labelAlpha?: number;
+  /**
+   * Places the readings on alphabetic baselines measured from the font (`layout.ts`) instead of on
+   * the middle line with a nudge, the window names and the values in aligned columns, and the value
+   * column at least as wide as `minValue`. Absent keeps the middle-line placement.
+   */
+  baselines?: {
+    /** Space from one row's baseline to the top of the next row's tallest glyph. */
+    rowGap: number;
+    /** Space kept clear at the band's top and bottom edges. */
+    edge: number;
+    /** The widest reading the value column always has room for. */
+    minValue: string;
+  };
 }
 
 export const STRIP_METRICS: Readonly<Record<StripStyle, StripMetrics>> = {
@@ -54,8 +75,11 @@ export const STRIP_METRICS: Readonly<Record<StripStyle, StripMetrics>> = {
     markGap: 4,
     groupGap: 11,
     sidePadding: 2,
-    labelSize: 7,
-    labelGap: 2,
+    labelSize: 8,
+    labelGap: 3.5,
+    labelWeight: 600,
+    labelAlpha: 0.85,
+    baselines: { rowGap: 1.5, edge: 0, minValue: "00%" },
   },
   panel: {
     font: 'Ubuntu, Cantarell, "Noto Sans", system-ui, sans-serif',
@@ -199,52 +223,138 @@ export async function renderTextStrip(
   const metrics = STRIP_METRICS[style];
   const [, measure] = canvas(1, 1);
   const font = (size: number, weight: number) => `${weight} ${size * scale}px ${metrics.font}`;
-  const labelFont = metrics.labelSize === null ? null : font(metrics.labelSize, 500);
+  const labelFont = metrics.labelSize === null ? null : font(metrics.labelSize, metrics.labelWeight ?? 500);
   const valueFont = (rows: number) => (rows > 1 ? font(metrics.stackedSize, 600) : font(metrics.singleSize, 700));
+  const textWidth = (text: string, fontSpec: string) => {
+    measure.font = fontSpec;
+    return measure.measureText(text).width;
+  };
   const groups: MeasuredGroup[] = content.groups.map((group) => {
     const rows = group.metrics.slice(0, 2).map((metric) => ({ label: labelFont ? metric.period : null, value: metric.value }));
-    const rowWidths = rows.map((row) => {
-      measure.font = valueFont(rows.length);
-      const value = measure.measureText(row.value).width;
-      if (!row.label || !labelFont) return value;
-      measure.font = labelFont;
-      return measure.measureText(row.label).width + metrics.labelGap * scale + value;
-    });
-    return { brand: group.brand, rows, width: (metrics.markSide + metrics.markGap) * scale + Math.ceil(Math.max(...rowWidths)) };
+    const text = metrics.baselines
+      ? groupTextWidth(
+          rows.map((row) => ({
+            labelWidth: row.label && labelFont ? textWidth(row.label, labelFont) : null,
+            valueWidth: textWidth(row.value, valueFont(rows.length)),
+          })),
+          metrics.labelGap * scale,
+          textWidth(metrics.baselines.minValue, valueFont(rows.length)),
+        )
+      : Math.max(
+          ...rows.map((row) => {
+            const value = textWidth(row.value, valueFont(rows.length));
+            if (!row.label || !labelFont) return value;
+            return textWidth(row.label, labelFont) + metrics.labelGap * scale + value;
+          }),
+        );
+    return { brand: group.brand, rows, width: (metrics.markSide + metrics.markGap) * scale + Math.ceil(text) };
   });
   const width = Math.ceil(
     metrics.sidePadding * 2 * scale + groups.reduce((sum, group) => sum + group.width, 0) + metrics.groupGap * scale * (groups.length - 1),
   );
   const art = new Map(await Promise.all(groups.map(async (group) => [group.brand, await colorArtImage(group.brand)] as const)));
   const [element, context] = canvas(width, height);
-  context.textBaseline = "middle";
-  context.textAlign = "right";
-  let x = metrics.sidePadding * scale;
   const middle = height / 2;
-  const offset = (metrics.stackedLineHeight * scale) / 2;
+  const baselines = metrics.baselines;
+  const placement = baselines
+    ? (rows: number) =>
+        stackBaselines(rows, height, rowFontMetrics(measure, valueFont(rows), labelFont), {
+          rowGap: baselines.rowGap * scale,
+          edge: baselines.edge * scale,
+        })
+    : null;
+  let x = metrics.sidePadding * scale;
   for (const group of groups) {
     drawMark(context, group.brand, x, middle - (metrics.markSide * scale) / 2, metrics.markSide * scale, stripMarkColor(group.brand, color, style), art.get(group.brand) ?? null);
     const left = x + (metrics.markSide + metrics.markGap) * scale;
     const right = x + group.width;
-    const lines = group.rows.length > 1 ? [middle - offset + scale, middle + offset] : [middle + scale];
-    group.rows.forEach((row, index) => {
-      const y = lines[index]!;
-      context.font = valueFont(group.rows.length);
-      context.textAlign = "right";
-      context.fillStyle = color;
-      context.fillText(row.value, right, y);
-      if (!row.label || !labelFont) return;
-      const baseline = y + alphabeticDrop(context);
-      context.font = labelFont;
-      context.textAlign = "left";
-      context.textBaseline = "alphabetic";
-      context.fillStyle = withAlpha(color, 0.8);
-      context.fillText(row.label, left, baseline);
-      context.textBaseline = "middle";
-    });
+    if (placement) drawBaselineRows(context, group.rows, placement(group.rows.length), left, right, valueFont(group.rows.length), labelFont, color, metrics.labelAlpha ?? 0.8);
+    else drawMiddleRows(context, group.rows, middle, (metrics.stackedLineHeight * scale) / 2, scale, left, right, valueFont(group.rows.length), labelFont, color);
     x = right + metrics.groupGap * scale;
   }
   return { png: await toPng(element), width, height };
+}
+
+/** The Windows taskbar and Linux panel placement: rows on the middle line, labels dropped onto the value's baseline. */
+function drawMiddleRows(
+  context: CanvasRenderingContext2D,
+  rows: readonly MeasuredRow[],
+  middle: number,
+  offset: number,
+  scale: number,
+  left: number,
+  right: number,
+  valueFont: string,
+  labelFont: string | null,
+  color: "#000000" | "#ffffff",
+): void {
+  context.textBaseline = "middle";
+  context.textAlign = "right";
+  const lines = rows.length > 1 ? [middle - offset + scale, middle + offset] : [middle + scale];
+  rows.forEach((row, index) => {
+    const y = lines[index]!;
+    context.font = valueFont;
+    context.textAlign = "right";
+    context.fillStyle = color;
+    context.fillText(row.value, right, y);
+    if (!row.label || !labelFont) return;
+    const baseline = y + alphabeticDrop(context);
+    context.font = labelFont;
+    context.textAlign = "left";
+    context.textBaseline = "alphabetic";
+    context.fillStyle = withAlpha(color, 0.8);
+    context.fillText(row.label, left, baseline);
+    context.textBaseline = "middle";
+  });
+}
+
+/** The macOS menu bar placement: every row on its measured alphabetic baseline, names left, values right. */
+function drawBaselineRows(
+  context: CanvasRenderingContext2D,
+  rows: readonly MeasuredRow[],
+  baselines: readonly number[],
+  left: number,
+  right: number,
+  valueFont: string,
+  labelFont: string | null,
+  color: "#000000" | "#ffffff",
+  labelAlpha: number,
+): void {
+  context.textBaseline = "alphabetic";
+  rows.forEach((row, index) => {
+    const y = baselines[index]!;
+    context.font = valueFont;
+    context.textAlign = "right";
+    context.fillStyle = color;
+    context.fillText(row.value, right, y);
+    if (!row.label || !labelFont) return;
+    context.font = labelFont;
+    context.textAlign = "left";
+    context.fillStyle = withAlpha(color, labelAlpha);
+    context.fillText(row.label, left, y);
+  });
+}
+
+/**
+ * The glyph extents the stacked rows are placed by: the digits' height in the value font, and the
+ * tallest ascender and deepest descender either font can draw in a reading or a window name
+ * (`lượt` reaches both).
+ */
+function rowFontMetrics(context: CanvasRenderingContext2D, valueFont: string, labelFont: string | null): RowFontMetrics {
+  const extent = (text: string, fontSpec: string) => {
+    context.font = fontSpec;
+    const metrics = context.measureText(text);
+    return { ascent: metrics.actualBoundingBoxAscent, descent: metrics.actualBoundingBoxDescent };
+  };
+  const digits = extent("0123456789%", valueFont);
+  const tall = extent("hklđ", valueFont);
+  const deep = extent("gjpyợ", valueFont);
+  const label = labelFont ? extent("hklgpy", labelFont) : { ascent: 0, descent: 0 };
+  return {
+    capAscent: digits.ascent,
+    ascent: Math.max(digits.ascent, tall.ascent, label.ascent),
+    descent: Math.max(0, deep.descent, label.descent),
+  };
 }
 
 /** How far the current font's alphabetic baseline sits below a `middle` baseline, so smaller text can share it. */

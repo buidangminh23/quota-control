@@ -16,9 +16,10 @@
 //! restarts (`TaskbarCreated`) and reports taskbar size, scale and theme changes to the popup as
 //! `taskbar-info`.
 //! Linux: the frame's text becomes the tray title.
-//! macOS: the frame becomes the menu bar item's image itself, drawn as a template so the system
-//! tints it for the menu bar, exactly like upstream's status item. The Bars glyph and the plain icon
-//! share that one image, so the strip wins over the glyph and the glyph over the icon.
+//! macOS: the frame becomes the menu bar item's image itself, drawn in color like the Windows taskbar
+//! and the Linux panel, its text in the menu bar's own light or dark color (reported by the Swift
+//! side); the Bars glyph and the plain icon stay templates the system tints. The three share that one
+//! image, so the strip wins over the glyph and the glyph over the icon.
 //! Other platforms report the strip unsupported.
 
 use serde::{Deserialize, Serialize};
