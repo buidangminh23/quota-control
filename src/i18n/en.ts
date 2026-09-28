@@ -284,7 +284,7 @@ export const en: Messages = {
     desktopWidgetNote:
       "Right-click the desktop, choose Edit Widgets and search for Quota Control. There are three styles: Details (usage bars and reset times), Rings (percentage gauges) and Compact (one line per metric), each in four sizes.",
     desktopWidgetKindsNote:
-      "The widget gallery also offers Codex Resets, Codex Reset Calendar, Coming Back and Overview. The content settings below shape the limit widgets, Coming Back and Overview.",
+      "To keep them separate, add the Codex Resets, Codex Reset Calendar or Coming Back widget; to combine them, add Overview (your limits with Codex resets, plus Coming Back at the largest size). The content settings below shape the limit widgets, Coming Back and Overview.",
     glanceContent: "Content",
     glanceContentOption: (content) => ({ dashboard: "Like the Limits tab", starred: "Starred metrics", custom: "Custom" })[content],
     glanceContentNote: (content) =>
@@ -316,16 +316,24 @@ export const en: Messages = {
         "codex-resets:chance-7": "Codex Resets · Chance in 7 Days",
         "codex-resets:since": "Codex Resets · Time Since the Last Reset",
       })[wing],
-    islandSections: "When the Island Opens, Show",
-    islandSectionOption: (section) => ({ quota: "Limits", resets: "Codex Resets (Forecast, Countdown)", upcoming: "Coming Back" })[section],
-    islandSectionNote: (section, trackerOff) =>
+    islandLayout: "When Open",
+    islandLayoutOption: (layout) => ({ separate: "Separate", combined: "Combined" })[layout],
+    islandLayoutNote: (layout) =>
+      ({
+        separate: "One view at a time: your limits, Codex resets or what comes back next.",
+        combined: "Several views together, top to bottom, as switched on below.",
+      })[layout],
+    islandSections: "Combine",
+    islandView: "When the Island Opens, Show",
+    islandViewOption: (view) => ({ quota: "Limits", resets: "Codex Resets", upcoming: "Coming Back" })[view],
+    islandViewNote: (view, trackerOff) =>
       ({
         quota: "The accounts and metrics chosen under Content below.",
         resets: trackerOff
           ? "The next free reset, the chance of a reset and the time since the last one. Needs the Resets tab or Codex reset notifications."
           : "The next free reset, the chance of a reset and the time since the last one.",
         upcoming: "The limits coming back next, soonest first.",
-      })[section],
+      })[view],
     islandExpandOnHover: "Expand on Hover",
     islandExpandOnHoverNote: "When off, click once to expand and again to open Quota Control.",
     islandAlerts: "Open for Alerts",

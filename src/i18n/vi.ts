@@ -322,7 +322,7 @@ export const vi: Messages = {
     desktopWidgetNote:
       "Bấm chuột phải lên màn hình nền, chọn Sửa tiện ích rồi tìm Quota Control. Có ba kiểu: Chi tiết (thanh mức dùng và giờ đặt lại), Vòng tròn (đồng hồ phần trăm) và Gọn (mỗi chỉ số một dòng), mỗi kiểu có bốn cỡ.",
     desktopWidgetKindsNote:
-      "Bộ widget còn có Reset Codex, Lịch reset Codex, Sắp đặt lại và Tổng quan. Nội dung bên dưới áp dụng cho các widget hạn mức, Sắp đặt lại và Tổng quan.",
+      "Muốn tách riêng thì thêm widget Reset Codex, Lịch reset Codex hoặc Sắp đặt lại; muốn gộp chung thì thêm widget Tổng quan (hạn mức cùng Reset Codex, cỡ lớn nhất có thêm Sắp đặt lại). Nội dung bên dưới áp dụng cho các widget hạn mức, Sắp đặt lại và Tổng quan.",
     glanceContent: "Nội dung",
     glanceContentOption: (content) => ({ dashboard: "Như tab Hạn mức", starred: "Chỉ số gắn sao", custom: "Tự chọn" })[content],
     glanceContentNote: (content) =>
@@ -354,16 +354,24 @@ export const vi: Messages = {
         "codex-resets:chance-7": "Reset Codex · Khả năng 7 ngày tới",
         "codex-resets:since": "Reset Codex · Thời gian chưa reset",
       })[wing],
-    islandSections: "Khi mở island hiện",
-    islandSectionOption: (section) => ({ quota: "Hạn mức", resets: "Reset Codex (dự báo, đếm ngược)", upcoming: "Sắp đặt lại" })[section],
-    islandSectionNote: (section, trackerOff) =>
+    islandLayout: "Cách hiển thị khi mở",
+    islandLayoutOption: (layout) => ({ separate: "Tách riêng", combined: "Gộp chung" })[layout],
+    islandLayoutNote: (layout) =>
+      ({
+        separate: "Mỗi lần chỉ hiện một nội dung: hạn mức, Reset Codex hoặc sắp đặt lại.",
+        combined: "Hiện nhiều nội dung cùng lúc, từ trên xuống, theo các công tắc bên dưới.",
+      })[layout],
+    islandSections: "Gộp những phần",
+    islandView: "Khi mở island hiện",
+    islandViewOption: (view) => ({ quota: "Hạn mức", resets: "Reset Codex", upcoming: "Sắp đặt lại" })[view],
+    islandViewNote: (view, trackerOff) =>
       ({
         quota: "Các tài khoản và chỉ số theo mục Nội dung bên dưới.",
         resets: trackerOff
           ? "Reset free sắp tới, khả năng có reset và thời gian từ lần gần nhất. Cần bật tab Reset hoặc thông báo khi Codex reset."
           : "Reset free sắp tới, khả năng có reset và thời gian từ lần gần nhất.",
         upcoming: "Các hạn mức sắp được đặt lại, sớm nhất lên đầu.",
-      })[section],
+      })[view],
     islandExpandOnHover: "Mở rộng khi rê chuột",
     islandExpandOnHoverNote: "Tắt đi thì bấm một lần để mở rộng, bấm lần nữa để mở Quota Control.",
     islandAlerts: "Tự mở khi có cảnh báo",

@@ -5,7 +5,7 @@
 import type { ErrorCategory, LimitResetResult, UpdateFailureReason, UpdateFailureStage } from "@/lib/types";
 import type { PlanTermLeft } from "@/model/planTerm";
 import type { SpecialWing } from "@/model/glance";
-import type { GlanceContent, IslandSectionKey, IslandStyle, TaskbarDisplay } from "@/model/settings";
+import type { GlanceContent, IslandLayout, IslandStyle, IslandView, TaskbarDisplay } from "@/model/settings";
 import type { PriceMessages, UsageMessages } from "./usageMessages";
 
 export type DisplayModeKey = "used" | "remaining";
@@ -247,10 +247,15 @@ export interface SettingsMessages {
   islandWingAuto: string;
   /** A wing choice that is not one metric: the soonest limit reset or a Codex reset reading. */
   islandWingSpecial(wing: SpecialWing): string;
+  islandLayout: string;
+  islandLayoutOption(layout: IslandLayout): string;
+  islandLayoutNote(layout: IslandLayout): string;
+  /** The heading of the switches that pick what a combined island shows. */
   islandSections: string;
-  islandSectionOption(section: IslandSectionKey): string;
+  islandView: string;
+  islandViewOption(view: IslandView): string;
   /** `trackerOff`: neither the Reset tab nor reset notifications is on, so the tracker has no data. */
-  islandSectionNote(section: IslandSectionKey, trackerOff: boolean): string;
+  islandViewNote(view: IslandView, trackerOff: boolean): string;
   islandExpandOnHover: string;
   islandExpandOnHoverNote: string;
   islandAlerts: string;

@@ -75,14 +75,16 @@ After that the app updates itself like the Windows and Linux versions (see [Upda
   the middle of the menu bar. **Settings → Dynamic Island** chooses the style, what sits beside
   each side of the notch (a metric, the soonest limit to come back, or the Codex reset tracker: the
   announced reset's countdown, the chance of a reset within 24 hours, 3 or 7 days, or the time since
-  the last one), which sections the open island shows (the limits, the Codex reset tracker, the
-  limits coming back next) and which parts of an account they show.
+  the last one), what the open island shows (separate: one of the limits, the Codex reset tracker
+  or the limits coming back next; combined: any of them together) and which parts of an account it
+  shows.
 - **Desktop widgets.** Right-click the desktop, choose **Edit Widgets** and search for Quota Control.
   Three quota styles come in small, medium, large and extra large: **Details** (meters, headlines
   and live reset countdowns), **Rings** (a percentage ring per metric) and **Compact** (one line per
   metric, the most accounts at once); each fits as many accounts as its size holds and says how many
-  it left out. **Overview** puts the limits and the Codex reset tracker side by side, **Coming Back**
-  lists the next limits to reset with live countdowns, **Codex Resets** shows the announced reset,
+  it left out. **Overview** combines the limits with the Codex reset tracker, while the separate
+  widgets keep them apart: **Coming Back** lists the next limits to reset with live countdowns,
+  **Codex Resets** shows the announced reset,
   the chance of a reset within 24 hours, 3 and 7 days and the time since the last one, and **Codex
   Reset Calendar** shows the 20-week calendar and when resets tend to come (from
   [codex-resets.com](https://codex-resets.com), shown while the Reset tab or reset notifications are

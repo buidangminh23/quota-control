@@ -187,9 +187,23 @@ const TRACKER: GlanceResets = {
 };
 
 describe("island sections and labels", () => {
-  it("carries the island sections and the reset and coming-back labels", () => {
-    const document = glance({ island: { sections: { quota: false, resets: true, upcoming: true } } });
-    expect(document.island.sections).toEqual({ quota: false, resets: true, upcoming: true });
+  it("opens the island on exactly the chosen view, never the reset tracker mixed into the limits", () => {
+    expect(glance().island.sections).toEqual({ quota: true, resets: false, upcoming: false });
+    expect(glance({ island: { view: "resets" } }).island.sections).toEqual({ quota: false, resets: true, upcoming: false });
+    expect(glance({ island: { view: "upcoming" } }).island.sections).toEqual({ quota: false, resets: false, upcoming: true });
+    expect(glance({ island: { view: "resets", sections: { quota: true, resets: true, upcoming: true } } }).island.sections).toEqual({ quota: false, resets: true, upcoming: false });
+  });
+
+  it("shows every switched-on view together when combined, as a copy of the settings", () => {
+    const sections = { quota: true, resets: true, upcoming: false };
+    const document = glance({ island: { layout: "combined", view: "upcoming", sections } });
+    expect(document.island.sections).toEqual({ quota: true, resets: true, upcoming: false });
+    sections.upcoming = true;
+    expect(document.island.sections.upcoming).toBe(false);
+  });
+
+  it("carries the reset and coming-back labels", () => {
+    const document = glance();
     expect(document.labels).toMatchObject({
       resetsOff: "Bật tab Reset hoặc thông báo reset trong Quota Control để xem dự báo.",
       upcoming: "Sắp đặt lại",
@@ -203,12 +217,6 @@ describe("island sections and labels", () => {
     expect(glance({ resets: TRACKER }).resets).toBe(TRACKER);
   });
 
-  it("copies the sections, so the settings object is never shared with the document", () => {
-    const sections = { quota: true, resets: true, upcoming: false };
-    const document = glance({ island: { sections } });
-    sections.upcoming = true;
-    expect(document.island.sections.upcoming).toBe(false);
-  });
 });
 
 describe("special wings", () => {

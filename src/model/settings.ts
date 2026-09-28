@@ -50,9 +50,15 @@ export const GLANCE_CONTENTS: readonly GlanceContent[] = ["dashboard", "starred"
 /** How the closed Dynamic Island shows a reading beside the notch. */
 export type IslandStyle = "percent" | "ring" | "bar";
 export const ISLAND_STYLES: readonly IslandStyle[] = ["percent", "ring", "bar"];
-/** The parts of the open Dynamic Island, top to bottom. */
-export type IslandSectionKey = "quota" | "resets" | "upcoming";
-export const ISLAND_SECTIONS: readonly IslandSectionKey[] = ["quota", "resets", "upcoming"];
+/** What the open Dynamic Island shows, one at a time: the limits, the Codex free-reset tracker, or
+ * the next limits to come back. */
+export type IslandView = "quota" | "resets" | "upcoming";
+export const ISLAND_VIEWS: readonly IslandView[] = ["quota", "resets", "upcoming"];
+/** Whether the open island shows one view at a time or several of them together, top to bottom. */
+export type IslandLayout = "separate" | "combined";
+export const ISLAND_LAYOUTS: readonly IslandLayout[] = ["separate", "combined"];
+/** The views the island shows together when combined; at least one is always on. */
+export type IslandSections = Record<IslandView, boolean>;
 /** At most this many metrics can be picked by hand; more would not fit any surface. */
 export const MAX_GLANCE_METRICS = 64;
 
@@ -77,12 +83,6 @@ export interface StripSettings {
   values: 1 | 2;
 }
 
-/**
- * What the open Dynamic Island lists: the accounts and their limits, the Codex free-reset tracker
- * and the next limits to come back. At least one is always on.
- */
-export type IslandSections = Record<IslandSectionKey, boolean>;
-
 export interface IslandSettings extends GlanceSurfaceSettings {
   style: IslandStyle;
   /** The metrics beside the notch, left then right; an empty slot takes the content's next reading. */
@@ -91,6 +91,10 @@ export interface IslandSettings extends GlanceSurfaceSettings {
   expandOnHover: boolean;
   /** Open the island for a few seconds when a limit runs low or comes back. */
   alerts: boolean;
+  /** Separate: the island opens on `view` alone, so the reset tracker is never mixed into the
+   * limits. Combined: it shows every view `sections` turns on, top to bottom. */
+  layout: IslandLayout;
+  view: IslandView;
   sections: IslandSections;
 }
 
@@ -172,6 +176,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     wings: ["", ""],
     expandOnHover: true,
     alerts: true,
+    layout: "separate",
+    view: "quota",
     sections: { quota: true, resets: true, upcoming: false },
   },
   widget: {
@@ -269,6 +275,8 @@ function parseIsland(value: unknown, defaults: IslandSettings): IslandSettings {
     wings: [wing(0), wing(1)],
     expandOnHover: flag(stored.expandOnHover, defaults.expandOnHover),
     alerts: flag(stored.alerts, defaults.alerts),
+    layout: oneOf(stored.layout, ISLAND_LAYOUTS, defaults.layout),
+    view: oneOf(stored.view, ISLAND_VIEWS, defaults.view),
     sections: parseSections(stored.sections, defaults.sections),
   };
 }

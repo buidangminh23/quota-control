@@ -13,12 +13,13 @@ import { displayGroups, glanceCandidates, type ProviderMetrics } from "@/model/l
 import { cardIdentity, providerBrand } from "@/model/providerText";
 import {
   GLANCE_CONTENTS,
-  ISLAND_SECTIONS,
+  ISLAND_LAYOUTS,
+  ISLAND_VIEWS,
   ISLAND_STYLES,
   type GlanceContent,
   type GlanceSurfaceSettings,
-  type IslandSectionKey,
   type IslandSettings,
+  type IslandView,
   type StripSettings,
   type TaskbarDisplay,
 } from "@/model/settings";
@@ -214,8 +215,10 @@ export function IslandSection() {
     patchIsland({ wings });
   };
   const trackerOff = !settings.showResetsTab && !settings.notifyCodexResets;
-  const setSection = (section: IslandSectionKey, on: boolean) => {
-    const sections = { ...island.sections, [section]: on };
+  const combined = island.layout === "combined";
+  const shown = combined ? island.sections : { quota: island.view === "quota", resets: island.view === "resets", upcoming: island.view === "upcoming" };
+  const setSection = (view: IslandView, on: boolean) => {
+    const sections = { ...island.sections, [view]: on };
     if (!sections.quota && !sections.resets && !sections.upcoming) return;
     patchIsland({ sections });
   };
@@ -236,20 +239,29 @@ export function IslandSection() {
           <Row label={text.islandWing("right")}>
             <Picker value={wingValue(island.wings[1])} options={wingOptions} label={wingLabel} onChange={(id) => setWing(1, id)} ariaLabel={text.islandWing("right")} />
           </Row>
-          <div className="uc-settings-row-group" role="group" aria-label={text.islandSections}>
-            <p className="uc-settings-note is-lead">{text.islandSections}</p>
-            {ISLAND_SECTIONS.map((section) => {
-              const label = text.islandSectionOption(section);
-              const lastOn = island.sections[section] && ISLAND_SECTIONS.filter((key) => island.sections[key]).length === 1;
-              return (
-                <Row key={section} label={label} note={text.islandSectionNote(section, trackerOff)} nested>
-                  <Switch checked={island.sections[section]} label={label} disabled={lastOn} onChange={(on) => setSection(section, on)} />
-                </Row>
-              );
-            })}
-          </div>
-          <ContentRows content={island.content} metrics={island.metrics} onChange={patchIsland} text={text} language={language} />
-          <ShowRows value={island} onChange={patchIsland} text={text} />
+          <Row label={text.islandLayout} note={text.islandLayoutNote(island.layout)}>
+            <Picker value={island.layout} options={ISLAND_LAYOUTS} label={text.islandLayoutOption} onChange={(layout) => patchIsland({ layout })} ariaLabel={text.islandLayout} />
+          </Row>
+          {combined ? (
+            <div className="uc-settings-row-group" role="group" aria-label={text.islandSections}>
+              <p className="uc-settings-note is-lead">{text.islandSections}</p>
+              {ISLAND_VIEWS.map((view) => {
+                const label = text.islandViewOption(view);
+                const lastOn = island.sections[view] && ISLAND_VIEWS.filter((key) => island.sections[key]).length === 1;
+                return (
+                  <Row key={view} label={label} note={text.islandViewNote(view, trackerOff)} nested>
+                    <Switch checked={island.sections[view]} label={label} disabled={lastOn} onChange={(on) => setSection(view, on)} />
+                  </Row>
+                );
+              })}
+            </div>
+          ) : (
+            <Row label={text.islandView} note={text.islandViewNote(island.view, trackerOff)}>
+              <Picker value={island.view} options={ISLAND_VIEWS} label={text.islandViewOption} onChange={(view) => patchIsland({ view })} ariaLabel={text.islandView} />
+            </Row>
+          )}
+          {shown.quota || shown.upcoming ? <ContentRows content={island.content} metrics={island.metrics} onChange={patchIsland} text={text} language={language} /> : null}
+          {shown.quota ? <ShowRows value={island} onChange={patchIsland} text={text} /> : null}
           <Row label={text.islandExpandOnHover} note={text.islandExpandOnHoverNote}>
             <Switch checked={island.expandOnHover} label={text.islandExpandOnHover} onChange={(on) => patchIsland({ expandOnHover: on })} />
           </Row>

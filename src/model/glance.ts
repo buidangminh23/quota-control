@@ -412,7 +412,7 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
       expandOnHover: input.island.settings.expandOnHover,
       shows: shows(input.island.settings),
       empty: text.empty[input.island.settings.content],
-      sections: { ...input.island.settings.sections },
+      sections: islandSections(input.island.settings),
     },
     widget: {
       providers: widgetProviders,
@@ -515,6 +515,12 @@ function specialWing(wing: SpecialWing, providers: readonly GlanceProvider[], in
       });
     }
   }
+}
+
+/** What the open island shows: the one chosen view when separate, the switched-on views when combined. */
+function islandSections(settings: IslandSettings): GlanceIslandSections {
+  if (settings.layout === "combined") return { ...settings.sections };
+  return { quota: settings.view === "quota", resets: settings.view === "resets", upcoming: settings.view === "upcoming" };
 }
 
 /** The island's metric whose limit comes back first after `now`, counting down to it. */

@@ -44,23 +44,30 @@ describe("glance surfaces", () => {
 
   it("saves copies, so later edits to the in-memory settings do not leak into the document", () => {
     const settings = parseSettings({ widget: { content: "custom", metrics: ["a"] } });
-    const merged = mergeSettingsDocument({}, settings, new Set()) as { widget: { metrics: string[] }; island: { sections: { upcoming: boolean } } };
+    const merged = mergeSettingsDocument({}, settings, new Set()) as { widget: { metrics: string[] }; island: { wings: string[]; sections: { upcoming: boolean } } };
     settings.widget.metrics.push("b");
+    settings.island.wings[0] = "x";
     settings.island.sections.upcoming = true;
     expect(merged.widget.metrics).toEqual(["a"]);
+    expect(merged.island.wings[0]).toBe("");
     expect(merged.island.sections.upcoming).toBe(false);
   });
 
-  it("opens the island on the limits and the reset tracker by default", () => {
-    expect(DEFAULT_SETTINGS.island.sections).toEqual({ quota: true, resets: true, upcoming: false });
+  it("keeps the island's views separate by default, and reads the combined choice and its parts", () => {
+    expect(DEFAULT_SETTINGS.island.layout).toBe("separate");
+    expect(parseSettings({ island: { layout: "combined" } }).island.layout).toBe("combined");
+    expect(parseSettings({ island: { layout: "both" } }).island.layout).toBe("separate");
     expect(parseSettings({ island: {} }).island.sections).toEqual({ quota: true, resets: true, upcoming: false });
+    expect(parseSettings({ island: { sections: { quota: false, upcoming: true } } }).island.sections).toEqual({ quota: false, resets: true, upcoming: true });
+    expect(parseSettings({ island: { sections: { quota: false, resets: false, upcoming: false } } }).island.sections).toEqual({ quota: true, resets: false, upcoming: false });
   });
 
-  it("reads each island section on its own and never turns them all off", () => {
-    expect(parseSettings({ island: { sections: { quota: false, upcoming: true } } }).island.sections).toEqual({ quota: false, resets: true, upcoming: true });
-    expect(parseSettings({ island: { sections: { quota: "no", resets: 0, upcoming: true } } }).island.sections).toEqual({ quota: true, resets: true, upcoming: true });
-    expect(parseSettings({ island: { sections: "all" } }).island.sections).toEqual(DEFAULT_SETTINGS.island.sections);
-    expect(parseSettings({ island: { sections: { quota: false, resets: false, upcoming: false } } }).island.sections).toEqual({ quota: true, resets: false, upcoming: false });
+  it("opens the island on the limits by default and reads one view at a time", () => {
+    expect(DEFAULT_SETTINGS.island.view).toBe("quota");
+    expect(parseSettings({ island: {} }).island.view).toBe("quota");
+    expect(parseSettings({ island: { view: "resets" } }).island.view).toBe("resets");
+    expect(parseSettings({ island: { view: "upcoming" } }).island.view).toBe("upcoming");
+    expect(parseSettings({ island: { view: "all" } }).island.view).toBe("quota");
   });
 
   it("keeps any wing id up to 512 characters, special ones included", () => {
