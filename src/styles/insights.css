@@ -605,11 +605,11 @@
 }
 
 .uc-reset-status.is-scheduled {
-  box-shadow: inset 3px 0 0 var(--uc-green);
+  box-shadow: inset 0 0 0 2px var(--uc-green);
 }
 
 .uc-reset-status.is-watch {
-  box-shadow: inset 3px 0 0 var(--uc-orange);
+  box-shadow: inset 0 0 0 2px var(--uc-orange);
 }
 
 .uc-reset-status-title {
@@ -868,4 +868,13 @@
 .uc-reset-bar.is-peak .uc-reset-bar-count {
   font-weight: 700;
   color: var(--uc-label);
+}
+
+.uc-reset-author {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--uc-caption-size);
+  font-weight: 600;
+  color: var(--uc-secondary);
 }

@@ -310,7 +310,15 @@ button.uc-row-warning:hover {
   color: var(--uc-label);
 }
 
-.uc-free-reset-title svg,
+.uc-reset-avatar {
+  flex: none;
+  display: block;
+  border-radius: 50%;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px var(--uc-quaternary);
+  user-select: none;
+}
+
 .uc-free-reset-value {
   color: var(--uc-free-reset-tone);
 }

@@ -12,7 +12,7 @@ import { upcomingReset } from "@/model/insights/upcomingReset";
 import { useSettings } from "@/state/hooks";
 import { ensureFeed, useInsights } from "@/state/insights";
 import { selectDashboardTab } from "@/state/store";
-import { ResetIcon } from "../ui/icons";
+import { ResetAuthorAvatar } from "../ui/ResetAuthorAvatar";
 import { tooltipProps } from "../ui/tooltip";
 
 export function FreeResetRow({ now }: { now: Date }) {
@@ -35,7 +35,7 @@ export function FreeResetRow({ now }: { now: Date }) {
     <>
       <span className="uc-row-primary">
         <span className="uc-free-reset-title">
-          <ResetIcon size={11} />
+          <ResetAuthorAvatar size={14} />
           <span>{lines.title}</span>
         </span>
         <span className="uc-row-trailing uc-free-reset-value uc-num">{lines.value}</span>

@@ -28,6 +28,7 @@ import { shortDate } from "@/model/insights/text";
 import { zonedParts } from "@/model/timeZone";
 import { useNow, useSettings } from "@/state/hooks";
 import { useInsights } from "@/state/insights";
+import { RESET_AUTHOR_HANDLE, ResetAuthorAvatar } from "../ui/ResetAuthorAvatar";
 import { tooltipProps } from "../ui/tooltip";
 import { useFeeds } from "./data";
 import { agoText, dateText, Disclosure, FeedStatus, LinkButton, numberText, percentText, RateBar, sinceText, SourceLine } from "./parts";
@@ -51,6 +52,17 @@ function PostLink({ source, text, compact = false }: { source: ResetSource; text
   );
 }
 
+/** Who posted it, the way X shows a post's author: the round picture and the handle. */
+function PostAuthor({ source }: { source: ResetSource }) {
+  if (source.kind !== "x_post") return null;
+  return (
+    <span className="uc-reset-author">
+      <ResetAuthorAvatar size={22} />
+      <span>{RESET_AUTHOR_HANDLE}</span>
+    </span>
+  );
+}
+
 /** How far an announced time is: a countdown while ahead, an overdue note once it has passed. */
 function dueLine(due: Date, now: Date, language: Language, text: InsightsMessages): string | null {
   if (due.getTime() > now.getTime()) {
@@ -68,6 +80,7 @@ function LatestReset({ reset, language, timeFormat, text }: { reset: CodexReset;
   return (
     <article className="uc-card uc-reset-latest">
       <span className="uc-reset-latest-title">{text.latestTitle}</span>
+      <PostAuthor source={reset.source} />
       <span className="uc-reset-latest-ago">{sinceText(reset.announcedAt, now, language)}</span>
       <span className="uc-reset-meta uc-num">{reset.kind === "banked" ? `${moment} · ${text.kind("banked")}` : moment}</span>
     </article>
@@ -86,6 +99,7 @@ function StatusCards({ status, resets, language, timeFormat, text }: { status: R
       {scheduled ? (
         <article className="uc-card uc-reset-status is-scheduled">
           <span className="uc-reset-status-title">{text.scheduledTitle}</span>
+          <PostAuthor source={scheduled.source} />
           <p className="uc-reset-post">{excerpt(scheduled.text, 280)}</p>
           <span className="uc-reset-meta">
             {[
@@ -101,6 +115,7 @@ function StatusCards({ status, resets, language, timeFormat, text }: { status: R
         <article className={`uc-card uc-reset-status is-watch is-${watch.level}`}>
           <span className="uc-reset-status-title">{text.watchTitle(watch.level)}</span>
           {watch.chancePercent !== null ? <span className="uc-reset-meta">{text.watchChance(`${watch.chancePercent}%`, watch.forecastWindow)}</span> : null}
+          <PostAuthor source={watch.source} />
           <p className="uc-reset-post">{excerpt(watch.text, 280)}</p>
           <span className="uc-reset-meta">{text.watchUntil(when(watch.expiresAt, timeFormat, language))}</span>
           <PostLink source={watch.source} text={text} />
@@ -287,6 +302,7 @@ function History({ resets, language, timeFormat, text }: { resets: CodexReset[];
         {shown.map((reset) => (
           <article key={reset.id} className="uc-reset-item">
             <div className="uc-reset-item-head">
+              {reset.source.kind === "x_post" ? <ResetAuthorAvatar size={18} /> : null}
               <span className={`uc-insight-badge${reset.kind === "banked" ? " is-accent" : ""}`}>{text.kind(reset.kind)}</span>
               <span className="uc-reset-item-time uc-num">{when(reset.announcedAt, timeFormat, language)}</span>
               <PostLink source={reset.source} text={text} compact />
