@@ -26,6 +26,55 @@ afterEach(async () => {
   act(() => useApp.setState({ screen: "dashboard", previousScreen: "dashboard", customizeProviderId: null, notice: null }));
 });
 
+describe("bug reports", () => {
+  it("opens an encoded draft with only allowlisted app information", async () => {
+    const api = await openSettings();
+    const open = vi.spyOn(api, "openUrl").mockResolvedValue();
+    act(() => useApp.setState({ info: { name: "Quota Control", version: "0.3.9", platform: "windows", logFile: "C:/private/log.txt" } }));
+    fireEvent.click(screen.getByRole("button", { name: "Viết báo cáo lỗi" }));
+    const submit = screen.getByRole("button", { name: "Mở bản nháp trên GitHub" });
+    expect(submit).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Tiêu đề lỗi"), { target: { value: "Lỗi & # dấu" } });
+    fireEvent.change(screen.getByLabelText("Lỗi gặp phải và kết quả mong đợi"), { target: { value: "Không hiển thị" } });
+    await act(async () => fireEvent.click(submit));
+    const url = new URL(open.mock.calls[0]![0]);
+    expect(url.origin + url.pathname).toBe("https://github.com/buidangminh23/quota-control/issues/new");
+    expect(url.searchParams.get("title")).toBe("Lỗi & # dấu");
+    expect(url.searchParams.get("body")).toContain("Version: 0.3.9");
+    expect(url.searchParams.get("body")).not.toMatch(/private|log.txt|Công ty/);
+    expect(screen.getByRole("status")).toHaveTextContent("Kiểm tra nội dung và bấm gửi trên GitHub");
+  });
+
+  it("retains the report on browser failure and permits copying", async () => {
+    const api = await openSettings();
+    vi.spyOn(api, "openUrl").mockRejectedValue(new Error("private backend details"));
+    const copy = vi.spyOn(api, "copyText").mockResolvedValue();
+    fireEvent.click(screen.getByRole("button", { name: "Viết báo cáo lỗi" }));
+    fireEvent.change(screen.getByLabelText("Tiêu đề lỗi"), { target: { value: "Bug" } });
+    fireEvent.change(screen.getByLabelText("Lỗi gặp phải và kết quả mong đợi"), { target: { value: "Details" } });
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Mở bản nháp trên GitHub" })));
+    expect(screen.getByRole("status")).toHaveTextContent("Không thực hiện được");
+    expect(screen.queryByText("private backend details")).not.toBeInTheDocument();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Sao chép báo cáo" })));
+    expect(copy).toHaveBeenCalledWith(expect.stringContaining("Details"));
+  });
+
+  it("keeps long reports intact for copying instead of truncating them in the URL", async () => {
+    const api = await openSettings();
+    const open = vi.spyOn(api, "openUrl").mockResolvedValue();
+    const copy = vi.spyOn(api, "copyText").mockResolvedValue();
+    fireEvent.click(screen.getByRole("button", { name: "Viết báo cáo lỗi" }));
+    fireEvent.change(screen.getByLabelText("Tiêu đề lỗi"), { target: { value: "Long" } });
+    const details = "ỗ".repeat(3000);
+    fireEvent.change(screen.getByLabelText("Lỗi gặp phải và kết quả mong đợi"), { target: { value: details } });
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Sao chép báo cáo" })));
+    expect(copy).toHaveBeenCalledWith(expect.stringContaining(details));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Mở bản nháp trên GitHub" })));
+    expect(new URL(open.mock.calls[0]![0]).searchParams.has("body")).toBe(false);
+    expect(screen.getByRole("status")).toHaveTextContent("dán vào bản nháp");
+  });
+});
+
 describe("global shortcut", () => {
   it("records a combo, keeps Escape inside the recorder and clears with the ✕", async () => {
     const api = await openSettings();

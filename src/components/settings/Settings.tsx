@@ -22,6 +22,7 @@ import { IslandSection, StripRows, WidgetSection } from "./GlanceSettings";
 import { InlineNotice, Row, Section } from "./parts";
 import { ShortcutRecorder } from "./ShortcutRecorder";
 import { UpdateRows } from "./UpdateRows";
+import { BugReport } from "./BugReport";
 import { Button, Picker, Switch } from "../ui/controls";
 import { confirmAction } from "../ui/dialog";
 import { SlidersIcon } from "../ui/icons";
@@ -235,6 +236,8 @@ export function Settings() {
           <UpdateRows />
         </Section>
       ) : null}
+
+      <BugReport />
 
       <Section title={section("advanced")}>
         <div className="uc-settings-actions">

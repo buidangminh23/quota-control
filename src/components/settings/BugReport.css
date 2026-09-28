@@ -1,0 +1,7 @@
+.uc-bug-report { display: grid; gap: 12px; padding: 12px; min-width: 0; }
+.uc-bug-report p { margin: 0; font-size: 12px; line-height: 1.5; }
+.uc-bug-report label { display: grid; gap: 6px; font-size: 12px; }
+.uc-bug-report input, .uc-bug-report textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--uc-separator, #888); border-radius: 6px; background: transparent; color: inherit; font: inherit; }
+.uc-bug-report textarea { resize: vertical; }
+.uc-bug-report pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
+.uc-bug-report summary, .uc-bug-report a { cursor: pointer; font-size: 12px; }
