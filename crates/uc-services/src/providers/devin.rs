@@ -12,7 +12,8 @@
 //!
 //! Endpoint: the Connect RPC `exa.seat_management_pb.SeatManagementService/GetUserStatus` on the
 //! login's server (`https://server.codeium.com` unless the CLI names another), with the key in the
-//! JSON body. It answers the daily and weekly quota left and the extra usage balance. Keys are
+//! JSON body. It answers the daily and weekly quota left and the extra usage balance, with the
+//! account's `email` and the plan period's end (`planStatus.planEnd`). Keys are
 //! never renewed here: a refused key means signing in to Devin again.
 //!
 //! A key pasted in Quota Control (or found in `DEVIN_API_KEY`) is read the same way when it is the
@@ -29,7 +30,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use uc_core::{
     ErrorCategory, HttpRequest, LimitResourceKind, LimitResourceSource, MetricKind, MetricLine,
-    Provider, ProviderLink, SimpleProviderError, WidgetDescriptor,
+    PlanTerm, Provider, ProviderLink, SimpleProviderError, WidgetDescriptor,
 };
 
 use crate::service::{
@@ -486,7 +487,13 @@ fn usage(body: &Value, card: &StatusCard) -> Result<Reading, SimpleProviderError
     if meters.is_empty() {
         return Err(http::not_available(card.unavailable));
     }
-    Ok(Reading::new(plan, meters))
+    let ends_at = field("planEnd").and_then(value::as_time);
+    Ok(Reading::new(plan, meters)
+        .with_account(value::text(status, "/email"))
+        .with_plan_term(ends_at.map(|ends_at| PlanTerm::Stated {
+            ends_at,
+            checked_at: None,
+        })))
 }
 
 /// An Enterprise admin's personal key, which reads the organization's consumption instead of an
@@ -650,6 +657,33 @@ mod tests {
 
     fn body(request: &uc_core::HttpRequest) -> Value {
         serde_json::from_slice(request.body.as_ref().unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn names_the_account_and_the_end_of_the_plan_period() {
+        let body = json!({ "userStatus": {
+            "name": "Minh",
+            "email": "me@example.com",
+            "planStatus": {
+                "planInfo": {"planName": "Pro"},
+                "planStart": "2026-09-01T00:00:00Z",
+                "planEnd": "2026-10-01T00:00:00Z",
+                "weeklyQuotaRemainingPercent": 40
+            }
+        }})
+        .to_string();
+        let http = Scripted::new().on("POST", &url(CUSTOM), 200, &body);
+        let scope = context_at(&http, cli_secret(), now());
+        let reading = Devin.fetch(&scope.context()).await.unwrap();
+        assert_eq!(reading.plan.as_deref(), Some("Pro"));
+        assert_eq!(reading.account.as_deref(), Some("me@example.com"));
+        assert_eq!(
+            reading.plan_term,
+            at(10, 1).map(|ends_at| PlanTerm::Stated {
+                ends_at,
+                checked_at: None,
+            })
+        );
     }
 
     #[tokio::test]

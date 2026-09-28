@@ -8,12 +8,13 @@
 //! read-only `POST https://www.codebuff.com/api/v1/usage` with the JSON body
 //! `{"fingerprintId":"codexbar-usage"}`, and then
 //! `GET https://www.codebuff.com/api/user/subscription`. When the subscription request fails, the
-//! card still shows the credits, without the plan and the Weekly row.
+//! card still shows the credits, without the plan and the Weekly row. The subscription answer also
+//! names the account's email and, under `subscription`, the end of the billing period.
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use uc_core::{HttpRequest, MetricKind, Provider, SimpleProviderError, WidgetDescriptor};
+use uc_core::{HttpRequest, MetricKind, PlanTerm, Provider, SimpleProviderError, WidgetDescriptor};
 
 use crate::service::{
     ApiKeyHelp, Connection, FetchContext, Login, Reading, Roots, Secret, Service,
@@ -68,12 +69,8 @@ impl Service for Codebuff {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
-        vec![Login::new(
-            identity,
-            "Codebuff",
-            &path,
-            Secret::api_key(key),
-        )]
+        let email = value::text(&document, "/default/email").map(str::to_string);
+        vec![Login::new(identity, "Codebuff", &path, Secret::api_key(key)).with_label(email)]
     }
 
     fn descriptors(&self, provider: &Provider) -> Vec<WidgetDescriptor> {
@@ -136,6 +133,19 @@ impl Service for Codebuff {
                 .or_else(|| value::text(&subscription, "/subscription/tier"))
                 .or_else(|| value::text(&subscription, "/tier"))
                 .and_then(lines::plan_name);
+            reading = reading
+                .with_account(
+                    value::text(&subscription, "/email")
+                        .or_else(|| value::text(&subscription, "/user/email")),
+                )
+                .with_plan_term(
+                    value::time(&subscription, "/subscription/billingPeriodEnd")
+                        .or_else(|| value::time(&subscription, "/subscription/currentPeriodEnd"))
+                        .map(|ends_at| PlanTerm::Stated {
+                            ends_at,
+                            checked_at: None,
+                        }),
+                );
             if let (Some(used), Some(limit)) = (
                 value::number(&subscription, "/rateLimit/weeklyUsed")
                     .or_else(|| value::number(&subscription, "/rateLimit/used")),
@@ -386,6 +396,40 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].identity.len(), 64);
         assert_eq!(found[0].secret.key(), Some("fake"));
+        assert_eq!(found[0].label, None);
+        std::fs::write(
+            path.join("credentials.json"),
+            r#"{"default":{"id":"u-1","email":"me@example.com","name":null,"authToken":"fake"}}"#,
+        )
+        .unwrap();
+        let found = Codebuff.discover(&roots);
+        assert_eq!(found[0].label.as_deref(), Some("me@example.com"));
+    }
+
+    #[tokio::test]
+    async fn the_subscription_names_the_plan_the_account_and_the_billing_period_end() {
+        let body = r#"{"usage":200,"quota":1000}"#;
+        let subscription = r#"{"subscription":{"displayName":"Pro","status":"active",
+            "billingPeriodEnd":"2026-10-15T00:00:00Z"},"email":"me@example.com",
+            "rateLimit":{"weeklyUsed":5,"weeklyLimit":50}}"#;
+        let http = Scripted::new().on("POST", URL, 200, body).on(
+            "GET",
+            "https://www.codebuff.com/api/user/subscription",
+            200,
+            subscription,
+        );
+        let scope = context_at(&http, json!({"apiKey":"test"}), Utc::now());
+        let reading = Codebuff.fetch(&scope.context()).await.unwrap();
+        assert_eq!(reading.plan.as_deref(), Some("Pro"));
+        assert_eq!(reading.account.as_deref(), Some("me@example.com"));
+        assert_eq!(
+            reading.plan_term,
+            Some(PlanTerm::Stated {
+                ends_at: Utc.with_ymd_and_hms(2026, 10, 15, 0, 0, 0).unwrap(),
+                checked_at: None,
+            })
+        );
+        assert_eq!(reading.lines.len(), 2);
     }
 
     #[tokio::test]

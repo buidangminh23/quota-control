@@ -9,7 +9,8 @@
 //!   is asked in the same refresh. Z.ai refuses a key with HTTP 401/403 or with an HTTP 200
 //!   `{"code":1000,"msg":"Authentication Failed","success":false}` envelope.
 //! - `GET https://api.z.ai/api/biz/subscription/list` for the plan's product name ("GLM Coding
-//!   Pro"), looked up twice a day and never required; BigModel keys show the quota's `level`.
+//!   Pro") and the day it next renews (`nextRenewTime`), looked up twice a day and never required;
+//!   BigModel keys show the quota's `level`.
 //!
 //! The quota's `limits` carry the Session (5-hour) and Weekly windows as `CREDIT_LIMIT` percentages
 //! (`TOKENS_LIMIT` on older plans) and the monthly web-search, web-reader and Zread calls as a
@@ -19,7 +20,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 use uc_core::{
-    HttpRequest, HttpResponse, MetricLine, Provider, ProviderLink, SessionStartSignal,
+    HttpRequest, HttpResponse, MetricLine, PlanTerm, Provider, ProviderLink, SessionStartSignal,
     SimpleProviderError, WidgetDescriptor,
 };
 
@@ -112,12 +113,16 @@ impl Service for Zai {
         let data = container(&body)?;
         let meters = read_limits(data, context.now)?;
         let level = value::text(data, "/level").and_then(lines::plan_name);
-        let plan = if host == HOSTS[0] {
-            product_name(context, key).await.or(level)
+        let subscription = if host == HOSTS[0] {
+            subscription(context, key).await
         } else {
-            level
+            Subscription::default()
         };
-        Ok(Reading::new(plan, meters))
+        let term = subscription.renews_at.map(|ends_at| PlanTerm::Stated {
+            ends_at,
+            checked_at: None,
+        });
+        Ok(Reading::new(subscription.name.or(level), meters).with_plan_term(term))
     }
 }
 
@@ -410,9 +415,18 @@ fn web_searches(entry: &Value) -> Result<MetricLine, SimpleProviderError> {
 
 /// The subscription's product name ("GLM Coding Pro"), best effort: an answer stands for 12 hours,
 /// a failed lookup is retried after an hour, and neither fails the card.
-async fn product_name(context: &FetchContext<'_>, key: &str) -> Option<String> {
-    if let Some(remembered) = context.memo.get(PLAN_MEMO, context.now).await {
-        return remembered.as_str().map(str::to_string);
+async fn subscription(context: &FetchContext<'_>, key: &str) -> Subscription {
+    // An older memo held only the name as a string; it is looked up again.
+    if let Some(remembered) = context
+        .memo
+        .get(PLAN_MEMO, context.now)
+        .await
+        .filter(Value::is_object)
+    {
+        return Subscription {
+            name: value::text(&remembered, "/name").map(str::to_string),
+            renews_at: value::time(&remembered, "/renewsAt"),
+        };
     }
     let list = match http::send(context.http, get(SUBSCRIPTIONS, key), NAME).await {
         Ok(response) if response.is_success() => http::parse(&response, NAME)
@@ -420,7 +434,13 @@ async fn product_name(context: &FetchContext<'_>, key: &str) -> Option<String> {
             .and_then(|body| body.get("data").and_then(Value::as_array).cloned()),
         _ => None,
     };
-    let name = list.as_deref().and_then(subscription_name);
+    let entry = list.as_deref().and_then(current_subscription);
+    let found = Subscription {
+        name: entry
+            .and_then(|entry| value::text(entry, "/productName"))
+            .map(str::to_string),
+        renews_at: entry.and_then(|entry| value::time(entry, "/nextRenewTime")),
+    };
     let recheck = if list.is_some() {
         Duration::hours(12)
     } else {
@@ -430,27 +450,34 @@ async fn product_name(context: &FetchContext<'_>, key: &str) -> Option<String> {
         .memo
         .put(
             PLAN_MEMO,
-            name.clone().map_or(Value::Null, Value::String),
+            serde_json::json!({
+                "name": found.name,
+                "renewsAt": found.renews_at.map(|time| time.to_rfc3339()),
+            }),
             Some(context.now + recheck),
         )
         .await;
-    name
+    found
 }
 
-/// The product name of the subscription in its current period, else of the first one listed.
-fn subscription_name(list: &[Value]) -> Option<String> {
+/// The product name of a Z.ai subscription and the day it next renews (`nextRenewTime`, a date).
+#[derive(Default)]
+struct Subscription {
+    name: Option<String>,
+    renews_at: Option<DateTime<Utc>>,
+}
+
+/// The named subscription in its current period, else the first named one listed.
+fn current_subscription(list: &[Value]) -> Option<&Value> {
     let named = || {
         list.iter()
-            .filter_map(|entry| Some((entry, value::text(entry, "/productName")?)))
+            .filter(|entry| value::text(entry, "/productName").is_some())
     };
-    let current = |entry: &Value| {
+    let current = |entry: &&Value| {
         value::text(entry, "/status").is_some_and(|status| status.eq_ignore_ascii_case("VALID"))
             || value::flag(entry, "/inCurrentPeriod") == Some(true)
     };
-    named()
-        .find(|(entry, _)| current(entry))
-        .or_else(|| named().next())
-        .map(|(_, name)| name.to_string())
+    named().find(current).or_else(|| named().next())
 }
 
 fn get(url: &str, key: &str) -> HttpRequest {
@@ -557,6 +584,13 @@ mod tests {
         let scope = context_at(&http, secret(), june());
         let reading = Zai.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan.as_deref(), Some("GLM Coding Pro"));
+        assert_eq!(
+            reading.plan_term,
+            Some(PlanTerm::Stated {
+                ends_at: Utc.with_ymd_and_hms(2026, 7, 29, 0, 0, 0).unwrap(),
+                checked_at: None,
+            })
+        );
         assert_eq!(
             reading.lines,
             vec![
@@ -875,6 +909,10 @@ mod tests {
         }
     }
 
+    fn subscription_name(list: &[Value]) -> Option<&str> {
+        current_subscription(list).and_then(|entry| value::text(entry, "/productName"))
+    }
+
     #[test]
     fn the_current_subscription_names_the_plan() {
         let list = json!([
@@ -882,11 +920,11 @@ mod tests {
             {"productName": "GLM Coding Max", "status": "VALID"}
         ]);
         assert_eq!(
-            subscription_name(list.as_array().unwrap()).as_deref(),
+            subscription_name(list.as_array().unwrap()),
             Some("GLM Coding Max")
         );
         assert_eq!(
-            subscription_name(&[json!({"productName": "GLM Coding Pro"})]).as_deref(),
+            subscription_name(&[json!({"productName": "GLM Coding Pro"})]),
             Some("GLM Coding Pro")
         );
         assert_eq!(subscription_name(&[json!({"status": "VALID"})]), None);

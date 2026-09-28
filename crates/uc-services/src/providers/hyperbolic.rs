@@ -6,7 +6,10 @@
 //! with the key as a bearer token, and shows `balanceCents` as the dollars left and, when the
 //! answer has one, `maxOverdraftCents` as the overdraft limit. Hyperbolic describes the endpoint in
 //! https://hyperbolic.ai/docs/api-reference/openapi.json, and
-//! https://hyperbolic.ai/docs/general/billing-payments.md says its credits equal dollars.
+//! https://hyperbolic.ai/docs/general/billing-payments.md says its credits equal dollars. Then, at
+//! most once every 12 hours, `GET https://api.hyperbolic.ai/v2/users/me` (in the same OpenAPI
+//! document) names the account's `email` and its `role`, shown as the plan when it is `pro` or
+//! `elite`; when that request fails the balance is shown alone.
 
 use async_trait::async_trait;
 use uc_core::{HttpRequest, Provider, SimpleProviderError, WidgetDescriptor};
@@ -17,6 +20,8 @@ use crate::support::{http, lines, value};
 pub(crate) struct Hyperbolic;
 
 const URL: &str = "https://api.hyperbolic.ai/v2/customer/balance";
+const PROFILE: &str = "https://api.hyperbolic.ai/v2/users/me";
+const PROFILE_MEMO: &str = "hyperbolic.profile";
 
 #[async_trait]
 impl Service for Hyperbolic {
@@ -63,8 +68,42 @@ impl Service for Hyperbolic {
         if let Some(overdraft) = value::number(&body, "/maxOverdraftCents") {
             rows.push(lines::dollar_value("Overdraft limit", overdraft / 100.0));
         }
-        Ok(Reading::new(None, rows))
+        let profile = profile(context, key).await;
+        let plan = profile
+            .as_ref()
+            .and_then(|profile| value::text(profile, "/role"))
+            .filter(|role| !role.eq_ignore_ascii_case("user"))
+            .and_then(lines::plan_name);
+        let email = profile
+            .as_ref()
+            .and_then(|profile| value::text(profile, "/email"));
+        Ok(Reading::new(plan, rows).with_account(email))
     }
+}
+
+/// The key's user from `GET /v2/users/me`, kept for 12 hours; `None` when that request fails, which
+/// leaves the balance as it is.
+async fn profile(context: &FetchContext<'_>, key: &str) -> Option<serde_json::Value> {
+    if let Some(profile) = context.memo.get(PROFILE_MEMO, context.now).await {
+        return Some(profile);
+    }
+    let profile = http::json(
+        context.http,
+        HttpRequest::get(PROFILE).bearer(key),
+        "Hyperbolic",
+    )
+    .await
+    .ok()
+    .filter(serde_json::Value::is_object)?;
+    context
+        .memo
+        .put(
+            PROFILE_MEMO,
+            profile.clone(),
+            Some(context.now + chrono::Duration::hours(12)),
+        )
+        .await;
+    Some(profile)
 }
 
 #[cfg(test)]
@@ -89,12 +128,54 @@ mod tests {
                     lines::dollar_value("Overdraft limit", 25.0)
                 ]
             );
-            assert_eq!(http.requests().len(), 1);
+            assert_eq!(http.requests().len(), 2);
+            assert_eq!(reading.plan, None);
+            assert_eq!(reading.account, None);
             assert_eq!(
                 header(&http.requests()[0], "Authorization"),
                 Some("Bearer test")
             );
         }
+    }
+
+    #[tokio::test]
+    async fn the_profile_names_the_account_and_a_paid_tier_and_is_kept_for_12_hours() {
+        let http = Scripted::new()
+            .on("GET", URL, 200, r#"{"balanceCents":500}"#)
+            .on(
+                "GET",
+                PROFILE,
+                200,
+                r#"{"id":"u-1","email":"me@example.com","name":null,"role":"pro","roles":[]}"#,
+            );
+        let scope = context_at(&http, json!({"apiKey":"test"}), Utc::now());
+        let reading = Hyperbolic.fetch(&scope.context()).await.unwrap();
+        assert_eq!(reading.plan.as_deref(), Some("Pro"));
+        assert_eq!(reading.account.as_deref(), Some("me@example.com"));
+        assert_eq!(reading.lines, vec![lines::dollar_value("Balance", 5.0)]);
+        let again = Hyperbolic.fetch(&scope.context()).await.unwrap();
+        assert_eq!(again, reading);
+        assert_eq!(http.requests().len(), 3);
+        assert_eq!(
+            header(&http.requests()[1], "Authorization"),
+            Some("Bearer test")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_basic_tier_names_no_plan() {
+        let http = Scripted::new()
+            .on("GET", URL, 200, r#"{"balanceCents":500}"#)
+            .on(
+                "GET",
+                PROFILE,
+                200,
+                r#"{"email":"me@example.com","role":"user"}"#,
+            );
+        let scope = context_at(&http, json!({"apiKey":"test"}), Utc::now());
+        let reading = Hyperbolic.fetch(&scope.context()).await.unwrap();
+        assert_eq!(reading.plan, None);
+        assert_eq!(reading.account.as_deref(), Some("me@example.com"));
     }
 
     #[tokio::test]

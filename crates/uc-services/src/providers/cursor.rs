@@ -12,6 +12,7 @@
 //! Enterprise and team fallback) with the `WorkosCursorSessionToken` cookie the web dashboard builds
 //! from the same token. A refresh sends at most four requests; the plan and the credit balance are
 //! remembered between refreshes.
+//! The usage answer's `billingCycleEnd` is also shown as the end of a paid plan's current period.
 //!
 //! A key pasted in Quota Control is either the `WorkosCursorSessionToken` cookie of a signed-in
 //! cursor.com tab (`<user id>%3A%3A<token>`, or the token alone), read exactly as the app's login,
@@ -34,8 +35,8 @@ use chrono::{DateTime, Duration, Utc};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use uc_core::{
-    HttpRequest, LimitResourceKind, LimitResourceSource, MetricKind, MetricLine, Provider,
-    ProviderLink, SimpleProviderError, WidgetDescriptor,
+    HttpRequest, LimitResourceKind, LimitResourceSource, MetricKind, MetricLine, PlanTerm,
+    Provider, ProviderLink, SimpleProviderError, WidgetDescriptor,
 };
 
 use crate::service::{
@@ -320,10 +321,12 @@ impl Service for Cursor {
                         .and_then(membership_label)
                 })
                 .or(membership);
-            return Ok(Reading::new(label, found));
+            let term = plan_term(&usage, label.as_deref());
+            return Ok(Reading::new(label, found).with_plan_term(term));
         }
 
         let label = plan_label(plan.as_deref()).or(membership);
+        let term = plan_term(&usage, label.as_deref());
         if facts.counts_requests() {
             let requests = request_usage(context, session.as_ref(), &mut budget).await;
             let mut found =
@@ -336,13 +339,13 @@ impl Service for Cursor {
                 requests.as_ref(),
                 &Cycle::of_requests(requests.as_ref()),
             ));
-            return Ok(Reading::new(label, found));
+            return Ok(Reading::new(label, found).with_plan_term(term));
         }
 
         let mut found = plan_lines(&usage, &facts, plan.as_deref())?;
         found.extend(grok_bot_line(context, token, &mut budget).await);
         found.extend(credits_line(context, token, session.as_ref(), &mut budget).await);
-        Ok(Reading::new(label, found))
+        Ok(Reading::new(label, found).with_plan_term(term))
     }
 }
 
@@ -1225,6 +1228,18 @@ fn cents(amount: f64) -> f64 {
 }
 
 /// A plan name as `GetPlanInfo` gives it, each word capitalized: `pro plan` → `Pro Plan`.
+/// The paid plan's current billing period ends when the usage answer's `billingCycleEnd` says; a
+/// free plan has no subscription to renew, so it shows no term.
+fn plan_term(usage: &Value, label: Option<&str>) -> Option<PlanTerm> {
+    if label.is_some_and(|label| label.eq_ignore_ascii_case("free")) {
+        return None;
+    }
+    value::time(usage, "/billingCycleEnd").map(|ends_at| PlanTerm::Stated {
+        ends_at,
+        checked_at: None,
+    })
+}
+
 fn plan_label(name: Option<&str>) -> Option<String> {
     let words: Vec<String> = name?
         .split_whitespace()
@@ -1592,12 +1607,31 @@ mod tests {
         ]
     }
 
+    /// The paid plan's billing period, from the usage answer's `billingCycleEnd` (1 October 2026).
+    fn cycle_term() -> Option<PlanTerm> {
+        at(2026, 10, 1, 0).map(|ends_at| PlanTerm::Stated {
+            ends_at,
+            checked_at: None,
+        })
+    }
+
+    #[test]
+    fn a_free_plan_has_no_term_and_a_paid_one_ends_with_its_billing_cycle() {
+        let usage = json!({"billingCycleEnd": "1790812800000"});
+        assert_eq!(plan_term(&usage, Some("Free")), None);
+        assert_eq!(plan_term(&usage, Some("Pro")), cycle_term());
+        assert_eq!(plan_term(&json!({}), Some("Pro")), None);
+    }
+
     #[tokio::test]
     async fn reads_the_billing_cycle_meters_grok_bot_and_the_plan() {
         let http = pro_account();
         let scope = context_at(&http, secret(&live_token()), now());
         let reading = Cursor.fetch(&scope.context()).await.unwrap();
-        assert_eq!(reading, Reading::new(Some("Pro".into()), pro_meters()));
+        assert_eq!(
+            reading,
+            Reading::new(Some("Pro".into()), pro_meters()).with_plan_term(cycle_term())
+        );
         assert_eq!(
             urls(&http.requests()),
             [
@@ -1616,9 +1650,15 @@ mod tests {
         let second = Cursor.fetch(&scope.context()).await.unwrap();
         let mut expected = pro_meters();
         expected.push(lines::dollar_value(CREDITS, 7852.71));
-        assert_eq!(second, Reading::new(Some("Pro".into()), expected.clone()));
+        assert_eq!(
+            second,
+            Reading::new(Some("Pro".into()), expected.clone()).with_plan_term(cycle_term())
+        );
         let third = Cursor.fetch(&scope.context()).await.unwrap();
-        assert_eq!(third, Reading::new(Some("Pro".into()), expected));
+        assert_eq!(
+            third,
+            Reading::new(Some("Pro".into()), expected).with_plan_term(cycle_term())
+        );
         assert_eq!(
             urls(&http.requests())[3..],
             [
@@ -1758,6 +1798,7 @@ mod tests {
                     lines::dollars(ON_DEMAND, 25.0, 1000.0, None, None),
                 ]
             )
+            .with_plan_term(cycle_term())
         );
     }
 
@@ -1814,7 +1855,7 @@ mod tests {
         ));
         assert_eq!(
             first,
-            Reading::new(Some("Enterprise".into()), expected.clone())
+            Reading::new(Some("Enterprise".into()), expected.clone()).with_plan_term(cycle_term())
         );
         assert_eq!(
             urls(&http.requests()),
@@ -1830,7 +1871,10 @@ mod tests {
             expected.len() - 1,
             lines::percent(GROK_BOT, 37.5, cycle_end, Some(lines::WEEK_MS)),
         );
-        assert_eq!(second, Reading::new(Some("Enterprise".into()), expected));
+        assert_eq!(
+            second,
+            Reading::new(Some("Enterprise".into()), expected).with_plan_term(cycle_term())
+        );
         let requests = http.requests();
         assert_eq!(requests.len(), 8);
         assert!(
