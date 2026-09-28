@@ -1,11 +1,11 @@
 /**
- * The Accounts screen: every connected Claude and Codex account (always all of them, each with its
- * own live status and a button that opens its product's official site in the app), adding an
+ * The Accounts screen: one list of every connected account (Claude and Codex first, each with a
+ * button that opens its product's official site in the app, then every other AI provider connected
+ * here or read from an app's login on this computer, each with its own live status), and adding an
  * account of any provider from one list (Claude and Codex through a Google sign-in in the browser;
  * the other services every way they connect: a Google or GitHub sign-in in the browser, an API key
- * or a session cookie, or signing in to the app whose login they read), and the other AI providers
- * already connected. Claude Code and the Codex CLI signed in on this computer are listed
- * automatically.
+ * or a session cookie, or signing in to the app whose login they read). Claude Code and the Codex
+ * CLI signed in on this computer are listed automatically.
  */
 import { useEffect, useMemo, useState } from "react";
 import { messagesFor, type Language, type Messages } from "@/i18n";
@@ -19,7 +19,7 @@ import { confirmAction } from "../ui/dialog";
 import { ChatIcon, CloseIcon, PlusIcon, Spinner } from "../ui/icons";
 import { ProviderMark } from "../ui/ProviderMark";
 import { tooltipProps, truncatedTooltipProps } from "../ui/tooltip";
-import { addKind, connectsHere, detectedApps, isAddable, matchesProvider, ServiceAppNote, ServiceCards, ServicePanel } from "./Services";
+import { addKind, connectsHere, isAddable, matchesProvider, ServiceAppNote, ServicePanel, serviceCardRows, ServiceRow } from "./Services";
 import { errorText, statusOf } from "./status";
 
 const PROVIDERS: readonly AccountProvider[] = ["claude", "codex"];
@@ -248,8 +248,14 @@ function AddAccount({ messages, language }: { messages: Messages; language: Lang
             <li key={option.id} className="uc-service-result">
               <button type="button" aria-label={option.name} className="uc-service-pick" onClick={() => setChoice(option.id)}>
                 <ProviderMark brand={option.id} size={14} />
-                <span className="uc-truncate">{option.name}</span>
-                <span className="uc-service-kind">{option.kind}</span>
+                <span className="uc-service-text">
+                  <span className="uc-service-name uc-truncate" {...truncatedTooltipProps(option.name)}>
+                    {option.name}
+                  </span>
+                  <span className="uc-service-kind uc-truncate" {...truncatedTooltipProps(option.kind)}>
+                    {option.kind}
+                  </span>
+                </span>
               </button>
               <button type="button" className="uc-icon-button" aria-label={option.quickLabel} onClick={option.quick} {...tooltipProps(option.quickLabel)}>
                 <PlusIcon size={14} />
@@ -268,7 +274,7 @@ export function Accounts() {
   const accounts = useApp((state) => state.accounts);
   const engine = useApp((state) => state.engine);
   const services = useApp((state) => state.services);
-  const apps = detectedApps(services);
+  const serviceRows = useMemo(() => serviceCardRows(services), [services]);
 
   useEffect(() => {
     void reloadAccounts();
@@ -280,9 +286,12 @@ export function Accounts() {
       <section className="uc-group">
         <h2 className="uc-group-title">{messages.accounts.connected}</h2>
         <div className="uc-card uc-list-card">
-          {accounts.length === 0 ? <p className="uc-card-empty">{messages.accounts.none}</p> : null}
+          {accounts.length === 0 && serviceRows.length === 0 ? <p className="uc-card-empty">{messages.accounts.none}</p> : null}
           {accounts.map((account) => (
             <AccountRow key={account.id} account={account} runtime={engine?.providers[account.id]} messages={messages} language={language} />
+          ))}
+          {serviceRows.map((row) => (
+            <ServiceRow key={row.id} row={row} runtime={engine?.providers[row.id]} messages={messages} language={language} />
           ))}
         </div>
       </section>
@@ -291,12 +300,6 @@ export function Accounts() {
         <h2 className="uc-group-title">{messages.accounts.add}</h2>
         <AddAccount messages={messages} language={language} />
         <p className="uc-group-note">{messages.accounts.cliNote}</p>
-      </section>
-
-      <section className="uc-group">
-        <h2 className="uc-group-title">{messages.accounts.otherServices}</h2>
-        <ServiceCards messages={messages} language={language} />
-        {apps.length > 0 ? <p className="uc-group-note">{messages.accounts.detectedNote(apps.join(", "))}</p> : null}
       </section>
     </div>
   );

@@ -1,12 +1,12 @@
 /**
- * The Accounts screen's other AI providers: the cards of services beyond Claude and Codex (logins
+ * The Accounts screen's other AI providers: the rows of services beyond Claude and Codex (logins
  * other apps keep on this computer, keys in environment variables, keys saved here, accounts signed
- * in to here), and the panel the Add Account picker opens for a service: every way it connects (a
+ * in to here) that the connected list shows after Claude and Codex, and the panel the Add Account picker opens for a service: every way it connects (a
  * Google or GitHub sign-in in the browser, a key or cookie), or a note for a service that only reads
  * another app's login. The core reads every login, key and token; the popup only sees a saved key's
  * last four characters.
  */
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { translate, type Language, type Messages } from "@/i18n";
 import { backend } from "@/lib/backend";
 import type { ProviderRuntimeState, ServiceEntry, SignInMethod } from "@/lib/types";
@@ -19,7 +19,7 @@ import { ProviderMark } from "../ui/ProviderMark";
 import { tooltipProps, truncatedTooltipProps } from "../ui/tooltip";
 import { errorText, statusOf } from "./status";
 
-interface ServiceCardRow {
+export interface ServiceCardRow {
   id: string;
   service: ServiceEntry;
   title: string;
@@ -50,7 +50,7 @@ export function serviceCardRows(services: readonly ServiceEntry[]): ServiceCardR
   return rows.sort((a, b) => a.title.localeCompare(b.title));
 }
 
-function ServiceRow({ row, runtime, messages, language }: { row: ServiceCardRow; runtime: ProviderRuntimeState | undefined; messages: Messages; language: Language }) {
+export function ServiceRow({ row, runtime, messages, language }: { row: ServiceCardRow; runtime: ProviderRuntimeState | undefined; messages: Messages; language: Language }) {
   const status = statusOf(runtime);
   const notice = status === "error" ? headerNotice(runtime, language) : null;
   const signedIn = row.source === "google" || row.source === "github";
@@ -100,26 +100,6 @@ function ServiceRow({ row, runtime, messages, language }: { row: ServiceCardRow;
       ) : null}
     </div>
   );
-}
-
-/** The services' cards, or a line saying there are none yet. */
-export function ServiceCards({ messages, language }: { messages: Messages; language: Language }) {
-  const services = useApp((state) => state.services);
-  const engine = useApp((state) => state.engine);
-  const rows = useMemo(() => serviceCardRows(services), [services]);
-  return (
-    <div className="uc-card uc-list-card">
-      {rows.length === 0 ? <p className="uc-card-empty">{messages.accounts.otherServicesNone}</p> : null}
-      {rows.map((row) => (
-        <ServiceRow key={row.id} row={row} runtime={engine?.providers[row.id]} messages={messages} language={language} />
-      ))}
-    </div>
-  );
-}
-
-/** The apps whose logins on this computer become cards by themselves, for the note under the list. */
-export function detectedApps(services: readonly ServiceEntry[]): string[] {
-  return [...new Set(services.flatMap((service) => (service.loginFrom ? [service.loginFrom] : [])))].sort((a, b) => a.localeCompare(b));
 }
 
 /** Whether `query` finds a provider by its name or id. */

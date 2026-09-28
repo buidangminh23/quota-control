@@ -296,10 +296,6 @@ export interface AccountsMessages {
   chatOpenFailed: string;
   /** Where a service card reads its credentials: an app's login, an environment variable, a saved key, or a sign-in made here. */
   serviceSource(kind: "login" | "env" | "key" | "google" | "github", detail: string): string;
-  otherServices: string;
-  otherServicesNone: string;
-  /** `apps`: the apps whose logins on this computer are picked up automatically. */
-  detectedNote(apps: string): string;
   /** How the Add Account list says a provider is added: a Google or GitHub sign-in, an API key or a cookie. */
   kindGoogle: string;
   kindGitHub: string;
