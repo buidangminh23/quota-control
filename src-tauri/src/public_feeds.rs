@@ -259,7 +259,7 @@ impl PublicFeeds {
         if let Some(etag) = etag {
             request = request.header("If-None-Match", etag);
         }
-        let response = self.get(request).await?;
+        let response = self.get(request, name.max_bytes()).await?;
         if response.status == 304 && etag.is_some() {
             return Ok(Fetched::Unchanged);
         }
@@ -297,7 +297,9 @@ impl PublicFeeds {
                 break;
             }
             let url = format!("{}&cursor={cursor}", FeedName::CodexResets.url());
-            let response = self.get(HttpRequest::get(url).timeout(TIMEOUT)).await?;
+            let response = self
+                .get(HttpRequest::get(url), FeedName::CodexResets.max_bytes())
+                .await?;
             let text = successful_text(&response, FeedName::CodexResets.max_bytes())?;
             page = serde_json::from_str(&text).map_err(|_| invalid())?;
             rows.extend(page["data"].as_array().cloned().unwrap_or_default());
@@ -316,7 +318,7 @@ impl PublicFeeds {
 
     async fn fetch_arena(&self) -> Result<String, String> {
         let index = self
-            .get(HttpRequest::get(FeedName::Arena.url()).timeout(TIMEOUT))
+            .get(HttpRequest::get(FeedName::Arena.url()), 4096)
             .await?;
         let index: Value = serde_json::from_str(&successful_text(&index, 4096)?)
             .map_err(|_| "The Arena index is not valid JSON".to_string())?;
@@ -327,7 +329,7 @@ impl PublicFeeds {
         let mut boards = serde_json::Map::new();
         for board in ARENA_BOARDS {
             let url = format!("{ARENA_ROOT}/{path}/{board}.json");
-            let Ok(response) = self.get(HttpRequest::get(url).timeout(TIMEOUT)).await else {
+            let Ok(response) = self.get(HttpRequest::get(url), 256 * 1024).await else {
                 continue;
             };
             let Ok(text) = successful_text(&response, 256 * 1024) else {
@@ -346,7 +348,12 @@ impl PublicFeeds {
         Ok(body.to_string())
     }
 
-    async fn get(&self, request: HttpRequest) -> Result<uc_core::HttpResponse, String> {
+    async fn get(
+        &self,
+        request: HttpRequest,
+        max_bytes: usize,
+    ) -> Result<uc_core::HttpResponse, String> {
+        let request = request.timeout(TIMEOUT).max_response_bytes(max_bytes);
         match tokio::time::timeout(TIMEOUT, self.http.send(request)).await {
             Ok(Ok(response)) => Ok(response),
             Ok(Err(error)) => Err(error.to_string()),
@@ -508,6 +515,18 @@ mod tests {
                 .pop_front()
                 .expect("an expected request");
             assert_eq!(request.url, url);
+            let max_bytes = if url == FeedName::Arena.url() {
+                4096
+            } else if url.starts_with(ARENA_ROOT) {
+                256 * 1024
+            } else {
+                FeedName::ALL
+                    .into_iter()
+                    .find(|name| url.starts_with(name.url()))
+                    .expect("a known feed")
+                    .max_bytes()
+            };
+            assert_eq!(request.max_response_bytes, Some(max_bytes));
             self.seen.lock().unwrap().push(request);
             response
         }
@@ -565,6 +584,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn every_direct_feed_sends_its_transport_budget() {
+        for name in FeedName::ALL
+            .into_iter()
+            .filter(|name| *name != FeedName::Arena)
+        {
+            let root = tempfile::tempdir().unwrap();
+            let http = Script::new(vec![(name.url(), status(503))]);
+            let store = feeds(root.path(), http.clone(), Arc::new(AtomicI64::new(0)));
+            let (snapshot, changed) = store.refresh(name, false).await;
+            assert!(!changed);
+            assert_eq!(snapshot.error.as_deref(), Some("HTTP 503"));
+            assert_eq!(http.seen.lock().unwrap().len(), 1);
+        }
+    }
+
+    #[tokio::test]
     async fn caches_bodies_revalidates_with_etag_and_survives_restart() {
         let root = tempfile::tempdir().unwrap();
         let seconds = Arc::new(AtomicI64::new(0));
@@ -594,6 +629,41 @@ mod tests {
                 .body
                 .as_deref(),
             Some(STATUS)
+        );
+    }
+
+    #[tokio::test]
+    async fn transport_size_failure_preserves_cached_body_and_etag() {
+        let root = tempfile::tempdir().unwrap();
+        let seconds = Arc::new(AtomicI64::new(0));
+        let url = FeedName::CodexResetStatus.url();
+        let http = Script::new(vec![
+            (url, ok(STATUS, Some("cached"))),
+            (
+                url,
+                Err(HttpError::Transport(
+                    "The response exceeded its size limit.".into(),
+                )),
+            ),
+            (url, status(304)),
+        ]);
+        let store = feeds(root.path(), http.clone(), seconds.clone());
+        let (first, _) = store.refresh(FeedName::CodexResetStatus, false).await;
+        seconds.store(300, Ordering::SeqCst);
+        let (failed, changed) = store.refresh(FeedName::CodexResetStatus, false).await;
+        assert!(!changed && failed.stale && failed.error.is_some());
+        assert_eq!(failed.body, first.body);
+        assert_eq!(failed.fetched_at, first.fetched_at);
+        assert!(!store.due(FeedName::CodexResetStatus).await);
+        let reopened = feeds(root.path(), http.clone(), seconds.clone());
+        assert_eq!(reopened.snapshot(FeedName::CodexResetStatus).await, failed);
+        seconds.store(600, Ordering::SeqCst);
+        let (recovered, changed) = reopened.refresh(FeedName::CodexResetStatus, false).await;
+        assert!(!changed && !recovered.stale && recovered.error.is_none());
+        assert_eq!(recovered.body, first.body);
+        assert_eq!(
+            http.seen.lock().unwrap()[2].headers,
+            vec![("If-None-Match".into(), "cached".into())]
         );
     }
 

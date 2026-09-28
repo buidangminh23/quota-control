@@ -87,7 +87,9 @@ impl ExchangeRateStore {
             return cached_rate(&state, now);
         }
         let timeout = Duration::from_secs(20);
-        let request = HttpRequest::get(ENDPOINT).timeout(timeout);
+        let request = HttpRequest::get(ENDPOINT)
+            .timeout(timeout)
+            .max_response_bytes(MAX_XML_BYTES);
         if let Ok(Ok(response)) = tokio::time::timeout(timeout, self.http.send(request)).await
             && response.is_success()
             && let Some((usd_to_vnd, published_at)) = parse_rate(&response.body)
@@ -255,6 +257,7 @@ mod tests {
         async fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
             assert_eq!(request.method, "GET");
             assert_eq!(request.url, ENDPOINT);
+            assert_eq!(request.max_response_bytes, Some(MAX_XML_BYTES));
             assert!(request.headers.is_empty());
             self.calls.fetch_add(1, Ordering::SeqCst);
             tokio::task::yield_now().await;

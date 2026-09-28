@@ -21,6 +21,7 @@ pub struct HttpRequest {
     pub headers: Vec<(String, String)>,
     pub body: Option<Vec<u8>>,
     pub timeout: Duration,
+    pub max_response_bytes: Option<usize>,
 }
 
 impl HttpRequest {
@@ -33,6 +34,7 @@ impl HttpRequest {
             headers: Vec::new(),
             body: None,
             timeout: Self::DEFAULT_TIMEOUT,
+            max_response_bytes: None,
         }
     }
 
@@ -74,6 +76,11 @@ impl HttpRequest {
 
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    pub fn max_response_bytes(mut self, max_response_bytes: usize) -> Self {
+        self.max_response_bytes = Some(max_response_bytes);
         self
     }
 }
@@ -330,13 +337,21 @@ impl HttpClient for ReqwestHttpClient {
         if let Some(body) = request.body.clone() {
             builder = builder.body(body);
         }
-        let response = builder.send().await.map_err(|error| {
+        let mut response = builder.send().await.map_err(|error| {
             if error.is_timeout() {
                 HttpError::Timeout
             } else {
                 HttpError::Transport(error.to_string())
             }
         })?;
+        let too_large = || HttpError::Transport("The response exceeded its size limit.".into());
+        if let Some(limit) = request.max_response_bytes
+            && response
+                .content_length()
+                .is_some_and(|length| length > limit as u64)
+        {
+            return Err(too_large());
+        }
         let status = response.status().as_u16();
         let headers = response
             .headers()
@@ -348,11 +363,21 @@ impl HttpClient for ReqwestHttpClient {
                 )
             })
             .collect();
-        let body = response
-            .bytes()
-            .await
-            .map_err(|e| HttpError::Transport(e.to_string()))?
-            .to_vec();
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|error| {
+            if error.is_timeout() {
+                HttpError::Timeout
+            } else {
+                HttpError::Transport(error.to_string())
+            }
+        })? {
+            if let Some(limit) = request.max_response_bytes
+                && chunk.len() > limit.saturating_sub(body.len())
+            {
+                return Err(too_large());
+            }
+            body.extend_from_slice(&chunk);
+        }
         let line = format!(
             "{} {} -> {status}",
             request.method,
@@ -374,6 +399,117 @@ impl HttpClient for ReqwestHttpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn serve(response: Vec<u8>, limit: Option<usize>) -> Result<HttpResponse, HttpError> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(stream.read_u8().await.unwrap());
+                assert!(request.len() < 8192);
+            }
+            stream.write_all(&response).await.unwrap();
+        });
+        let mut request =
+            HttpRequest::get(format!("http://{address}/")).timeout(Duration::from_secs(2));
+        if let Some(limit) = limit {
+            request = request.max_response_bytes(limit);
+        }
+        let result = ReqwestHttpClient::new(None).unwrap().send(request).await;
+        server.await.unwrap();
+        result
+    }
+
+    fn assert_size_error(result: Result<HttpResponse, HttpError>) {
+        assert!(matches!(
+            result,
+            Err(HttpError::Transport(message)) if message == "The response exceeded its size limit."
+        ));
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_content_length_before_reading_the_body() {
+        assert_size_error(
+            serve(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\nConnection: close\r\n\r\n".to_vec(),
+                Some(8),
+            )
+            .await,
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_chunked_body_before_accepting_an_oversized_chunk() {
+        assert_size_error(serve(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n4\r\n1234\r\n5\r\n56789\r\n".to_vec(),
+            Some(8),
+        ).await);
+    }
+
+    #[tokio::test]
+    async fn accepts_fixed_and_chunked_bodies_exactly_at_the_budget() {
+        for response in [
+            b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\n12345678".to_vec(),
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n4\r\n1234\r\n4\r\n5678\r\n0\r\n\r\n".to_vec(),
+        ] {
+            let response = serve(response, Some(8)).await.unwrap();
+            assert_eq!(response.status, 200);
+            assert_eq!(response.body, b"12345678");
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_error_bodies() {
+        assert_size_error(
+            serve(
+                b"HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\n123456789"
+                    .to_vec(),
+                Some(8),
+            )
+            .await,
+        );
+    }
+
+    #[tokio::test]
+    async fn limits_decoded_gzip_bytes_and_preserves_exact_budget_content() {
+        let compressed = [
+            31, 139, 8, 0, 0, 0, 0, 0, 0, 10, 75, 76, 28, 5, 163, 96, 20, 36, 142, 80, 0, 0, 185,
+            151, 85, 124, 0, 4, 0, 0,
+        ];
+        let mut response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            compressed.len()
+        ).into_bytes();
+        response.extend_from_slice(&compressed);
+        assert_size_error(serve(response.clone(), Some(64)).await);
+        assert_eq!(
+            serve(response, Some(1024)).await.unwrap().body,
+            vec![b'a'; 1024]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unset_budget_preserves_existing_requests_and_zero_accepts_empty_bodies() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\n12345678";
+        assert_eq!(
+            serve(response.to_vec(), None).await.unwrap().body,
+            b"12345678"
+        );
+        assert_size_error(serve(response.to_vec(), Some(0)).await);
+        assert!(
+            serve(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+                Some(0),
+            )
+            .await
+            .unwrap()
+            .body
+            .is_empty()
+        );
+    }
 
     #[test]
     fn parses_enabled_socks_proxy_with_default_port() {
