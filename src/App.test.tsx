@@ -409,12 +409,13 @@ describe("popup", () => {
       .getAllByRole("listitem")
       .map((row) => within(row).getAllByRole("button")[0]?.getAttribute("aria-label"));
     expect(offered.slice(0, 2)).toEqual(["Claude", "Codex"]);
-    expect(offered).toEqual(expect.arrayContaining(["Copilot", "DeepSeek", "Gemini", "Ollama", "OpenRouter", "Perplexity", "Windsurf"]));
+    expect(offered).toEqual(expect.arrayContaining(["Copilot", "DeepSeek", "Gemini", "Ollama", "OpenRouter", "Perplexity", "Windsurf", "Zed"]));
     expect(within(add).getByRole("button", { name: "Claude" })).toHaveTextContent("Google");
     expect(within(add).getByRole("button", { name: "Gemini" })).toHaveTextContent("Google");
     expect(within(add).getByRole("button", { name: "Copilot" })).toHaveTextContent("GitHub");
     expect(within(add).getByRole("button", { name: "Ollama" })).toHaveTextContent("Google · GitHub · API key");
-    expect(within(add).getByRole("button", { name: "Windsurf" })).toHaveTextContent("Windsurf");
+    expect(within(add).getByRole("button", { name: "Windsurf" })).toHaveTextContent("API key");
+    expect(within(add).getByRole("button", { name: "Zed" })).toHaveTextContent("Zed");
     expect(within(add).getByRole("button", { name: "Đăng nhập Claude bằng Google" })).toBeInTheDocument();
     expect(within(add).getByRole("button", { name: "Đăng nhập Copilot bằng GitHub" })).toBeInTheDocument();
     expect(within(add).getByRole("button", { name: "Thêm DeepSeek" })).toBeInTheDocument();
@@ -451,8 +452,8 @@ describe("popup", () => {
     expect(screen.getByRole("button", { name: "Lấy API key" })).toBeInTheDocument();
     expect(screen.queryByText(/F12/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Đổi nhà cung cấp" }));
-    pick("Windsurf");
-    expect(screen.getByText("Quota Control đọc Windsurf từ đăng nhập Windsurf trên máy này. Đăng nhập Windsurf là tài khoản tự hiện ở mục Tài khoản đã kết nối, không cần thêm.")).toBeInTheDocument();
+    pick("Zed");
+    expect(screen.getByText("Quota Control đọc Zed từ đăng nhập Zed trên máy này. Đăng nhập Zed là tài khoản tự hiện ở mục Tài khoản đã kết nối, không cần thêm.")).toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
 
