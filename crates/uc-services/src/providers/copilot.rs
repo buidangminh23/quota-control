@@ -30,12 +30,19 @@
 //! on), chat and completions as unlimited. Free plans report chat and completion allowances, in
 //! `quota_snapshots` or, on older answers, as `limited_user_quotas` against `monthly_quotas`.
 //! Organization billing is not read.
+//!
+//! A personal access token pasted in Quota Control is tried on that endpoint first. When GitHub
+//! refuses it there, the card reads GitHub's documented billing API instead: `GET /user` for the
+//! login, then `GET /users/{login}/settings/billing/premium_request/usage?year=&month=` for this
+//! month, whose `usageItems` add up to the premium requests used (`grossQuantity`) and what they
+//! cost (`netAmount`, US dollars). That API takes classic tokens only and covers plans the user pays
+//! for; a seat an organization pays for is billed to the organization.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Datelike, Duration, Utc};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use uc_core::{
@@ -43,7 +50,9 @@ use uc_core::{
     MetricValue, Provider, ProviderLink, SimpleProviderError, WidgetDescriptor,
 };
 
-use crate::service::{Connection, FetchContext, Login, Reading, Roots, Secret, Service};
+use crate::service::{
+    ApiKeyHelp, Connection, FetchContext, Login, Reading, Roots, Secret, Service,
+};
 use crate::signin::{
     self, Converted, DeviceClient, Method, Pending, SignIn, SignedIn, StartContext,
 };
@@ -86,6 +95,12 @@ const EXTRA_USAGE: &str = "Extra Usage";
 const CHAT: &str = "Chat";
 const COMPLETIONS: &str = "Completions";
 const UNLIMITED: &str = "Unlimited";
+const PREMIUM_REQUESTS: &str = "Premium Requests";
+const SPEND: &str = "Spend";
+const BILLING_URL: &str = "https://api.github.com/users";
+const KEY_REFUSED: &str =
+    "GitHub refused the token. Paste a classic personal access token with the user scope.";
+const NO_PERSONAL_BILLING: &str = "GitHub reports no personal Copilot billing for this token: the Copilot plan is paid by an organization, or the classic token lacks the user scope.";
 
 const UNAVAILABLE: &str = "Copilot usage data is unavailable for this account.";
 const FORBIDDEN: &str = "GitHub refused Copilot usage for this login. Check that the account has Copilot, or sign in again.";
@@ -109,7 +124,11 @@ impl Service for Copilot {
     }
 
     fn connection(&self) -> Connection {
-        Connection::login(APP)
+        Connection::login(APP).or_api_key(ApiKeyHelp {
+            env: &[],
+            url: "https://github.com/settings/tokens",
+            fields: &[],
+        })
     }
 
     fn sign_in(&self) -> Option<&'static dyn SignIn> {
@@ -159,10 +178,55 @@ impl Service for Copilot {
                 .exporting_progress("chat", "percent"),
             WidgetDescriptor::percent(id("completions"), provider, COMPLETIONS, None, None)
                 .exporting_progress("completions", "percent"),
+            WidgetDescriptor::values(
+                id("premiumRequests"),
+                provider,
+                PREMIUM_REQUESTS,
+                None,
+                Some(MetricKind::Count),
+                None,
+                true,
+                None,
+                false,
+            )
+            .exporting_limit(
+                "premiumRequests",
+                LimitResourceKind::Consumption,
+                "count",
+                LimitResourceSource::Value {
+                    kind: MetricKind::Count,
+                    label: None,
+                },
+                false,
+            ),
+            WidgetDescriptor::values(
+                id("spend"),
+                provider,
+                SPEND,
+                None,
+                Some(MetricKind::Dollars),
+                None,
+                true,
+                None,
+                false,
+            )
+            .exporting_limit(
+                "spend",
+                LimitResourceKind::Consumption,
+                "usd",
+                LimitResourceSource::Value {
+                    kind: MetricKind::Dollars,
+                    label: None,
+                },
+                false,
+            ),
         ]
     }
 
     async fn fetch(&self, context: &FetchContext<'_>) -> Result<Reading, SimpleProviderError> {
+        if let Some(key) = context.secret.key() {
+            return keyed(context, key).await;
+        }
         let mut tokens = saved_tokens(context.secret);
         if tokens.is_empty() {
             return Err(http::invalid(
@@ -208,6 +272,86 @@ impl Service for Copilot {
             expired(refused_by.unwrap_or(APP))
         })
     }
+}
+
+/// A pasted token: the Copilot quota when GitHub answers it there, else this month's premium
+/// requests from the billing API.
+async fn keyed(context: &FetchContext<'_>, key: &str) -> Result<Reading, SimpleProviderError> {
+    let response = http::send(context.http, usage_request(key), GITHUB).await?;
+    if let Some(error) = rate_limit_error(&response) {
+        return Err(error);
+    }
+    if response.is_success() {
+        return reading(&http::parse(&response, GITHUB)?);
+    }
+    if !matches!(response.status, 401 | 403 | 404) {
+        return Err(http::status_error(&response, GITHUB));
+    }
+    premium_request_usage(context, key).await
+}
+
+fn api_request(url: &str, key: &str) -> HttpRequest {
+    HttpRequest::get(url)
+        .bearer(key)
+        .header("Accept", "application/vnd.github+json")
+}
+
+/// This month's premium requests and what they cost, from GitHub's billing API.
+async fn premium_request_usage(
+    context: &FetchContext<'_>,
+    key: &str,
+) -> Result<Reading, SimpleProviderError> {
+    let response = http::send(context.http, api_request(USER_URL, key), GITHUB).await?;
+    if let Some(error) = rate_limit_error(&response) {
+        return Err(error);
+    }
+    if matches!(response.status, 401 | 403) {
+        return Err(http::invalid(KEY_REFUSED));
+    }
+    if !response.is_success() {
+        return Err(http::status_error(&response, GITHUB));
+    }
+    let user = http::parse(&response, GITHUB)?;
+    let login = value::text(&user, "/login")
+        .filter(|login| {
+            login
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+        .ok_or_else(|| http::decoding(GITHUB))?;
+    let url = format!(
+        "{BILLING_URL}/{login}/settings/billing/premium_request/usage?year={}&month={}",
+        context.now.year(),
+        context.now.month()
+    );
+    let response = http::send(context.http, api_request(&url, key), GITHUB).await?;
+    if let Some(error) = rate_limit_error(&response) {
+        return Err(error);
+    }
+    if matches!(response.status, 401 | 403 | 404) {
+        return Err(http::invalid(NO_PERSONAL_BILLING));
+    }
+    if !response.is_success() {
+        return Err(http::status_error(&response, GITHUB));
+    }
+    let body = http::parse(&response, GITHUB)?;
+    let items = body
+        .get("usageItems")
+        .and_then(Value::as_array)
+        .ok_or_else(|| http::decoding(GITHUB))?;
+    let sum = |field: &str| -> f64 {
+        items
+            .iter()
+            .filter_map(|item| value::number(item, &format!("/{field}")))
+            .sum()
+    };
+    Ok(Reading::new(
+        Some("Copilot".to_string()),
+        vec![
+            lines::count_value(PREMIUM_REQUESTS, sum("grossQuantity").max(0.0), "requests"),
+            lines::dollar_value(SPEND, sum("netAmount").max(0.0)),
+        ],
+    ))
 }
 
 /// The tokens a login holds, as `(token, origin)` in the order they were found.
@@ -1038,6 +1182,73 @@ mod tests {
         Copilot.fetch(&scope.context()).await
     }
 
+    const BILLING: &str = "https://api.github.com/users/octocat/settings/billing/premium_request/usage?year=2026&month=9";
+
+    #[tokio::test]
+    async fn a_pasted_token_github_answers_on_the_quota_endpoint_reads_the_quota() {
+        let http = Scripted::new().on("GET", USAGE_URL, 200, PAID);
+        let scope = context_at(&http, json!({"apiKey": "ghp_token"}), now());
+        let reading = Copilot.fetch(&scope.context()).await.unwrap();
+        assert!(reading.lines.iter().any(|line| line.label() == CREDITS));
+        assert_eq!(http.requests().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_refused_pasted_token_reads_this_months_premium_requests_from_billing() {
+        let http = Scripted::new()
+            .on("GET", USAGE_URL, 404, "{}")
+            .on("GET", USER_URL, 200, r#"{"login":"octocat"}"#)
+            .on(
+                "GET",
+                BILLING,
+                200,
+                r#"{"timePeriod":{"year":2026,"month":9},"user":"octocat","usageItems":[
+                    {"product":"Copilot","sku":"Copilot Premium Request","model":"Claude",
+                     "unitType":"requests","pricePerUnit":0.04,"grossQuantity":120,
+                     "grossAmount":4.8,"discountQuantity":100,"discountAmount":4.0,
+                     "netQuantity":20,"netAmount":0.8},
+                    {"product":"Copilot","sku":"Copilot Premium Request","model":"GPT",
+                     "unitType":"requests","pricePerUnit":0.04,"grossQuantity":30,
+                     "grossAmount":1.2,"discountQuantity":30,"discountAmount":1.2,
+                     "netQuantity":0,"netAmount":0}]}"#,
+            );
+        let scope = context_at(&http, json!({"apiKey": "ghp_token"}), now());
+        let reading = Copilot.fetch(&scope.context()).await.unwrap();
+        assert_eq!(
+            reading.lines,
+            vec![
+                lines::count_value(PREMIUM_REQUESTS, 150.0, "requests"),
+                lines::dollar_value(SPEND, 0.8),
+            ]
+        );
+        let requests = http.requests();
+        assert_eq!(
+            header(&requests[2], "Authorization"),
+            Some("Bearer ghp_token")
+        );
+    }
+
+    #[tokio::test]
+    async fn an_organization_paid_seat_explains_why_the_token_shows_nothing() {
+        let http = Scripted::new()
+            .on("GET", USAGE_URL, 403, "{}")
+            .on("GET", USER_URL, 200, r#"{"login":"octocat"}"#)
+            .on("GET", BILLING, 404, "{}");
+        let scope = context_at(&http, json!({"apiKey": "ghp_token"}), now());
+        let error = Copilot.fetch(&scope.context()).await.unwrap_err();
+        assert_eq!(error.message, NO_PERSONAL_BILLING);
+    }
+
+    #[tokio::test]
+    async fn a_token_github_does_not_accept_at_all_asks_for_a_classic_token() {
+        let http = Scripted::new()
+            .on("GET", USAGE_URL, 401, "{}")
+            .on("GET", USER_URL, 401, "{}");
+        let scope = context_at(&http, json!({"apiKey": "bad"}), now());
+        let error = Copilot.fetch(&scope.context()).await.unwrap_err();
+        assert_eq!(error.message, KEY_REFUSED);
+    }
+
     #[tokio::test]
     async fn reads_the_credit_pool_of_a_paid_plan() {
         let http = Scripted::new().on("GET", USAGE_URL, 200, PAID);
@@ -1306,21 +1517,40 @@ mod tests {
                 "copilot@abc.premium",
                 "copilot@abc.extra",
                 "copilot@abc.chat",
-                "copilot@abc.completions"
+                "copilot@abc.completions",
+                "copilot@abc.premiumRequests",
+                "copilot@abc.spend"
             ]
         );
         let labels: Vec<&str> = descriptors
             .iter()
             .map(|d| d.metric_label.as_str())
             .collect();
-        assert_eq!(labels, [CREDITS, EXTRA_USAGE, CHAT, COMPLETIONS]);
+        assert_eq!(
+            labels,
+            [
+                CREDITS,
+                EXTRA_USAGE,
+                CHAT,
+                COMPLETIONS,
+                PREMIUM_REQUESTS,
+                SPEND
+            ]
+        );
         let keys: Vec<&str> = descriptors
             .iter()
             .map(|d| d.limit_resources[0].key.as_str())
             .collect();
         assert_eq!(
             keys,
-            ["premiumCredits", "extraUsage", "chat", "completions"]
+            [
+                "premiumCredits",
+                "extraUsage",
+                "chat",
+                "completions",
+                "premiumRequests",
+                "spend"
+            ]
         );
         assert_eq!(
             descriptors[1].template.selection_kind,

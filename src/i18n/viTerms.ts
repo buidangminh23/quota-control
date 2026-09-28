@@ -536,8 +536,6 @@ const EXACT: Readonly<Record<string, string>> = {
   "This Kimi account has no Kimi Code subscription, so there is no quota to show.":
     "Tài khoản Kimi này không có gói Kimi Code nên không có hạn mức để hiện.",
   "This Notion workspace has no tracked AI allowance.": "Không gian làm việc Notion này không có hạn mức AI được theo dõi.",
-  "This relay's billing endpoints do not identify whether amounts are USD, CNY or tokens. Balance cannot be displayed safely.":
-    "Các địa chỉ thanh toán của relay này không cho biết số tiền tính bằng USD, CNY hay token. Không thể hiện số dư một cách an toàn.",
   "This Zed account has overdue invoices. Zed may block usage until they are paid.":
     "Tài khoản Zed này có hóa đơn quá hạn. Zed có thể chặn sử dụng cho tới khi thanh toán.",
   "TypeSafe billing requires a browser session and a dynamically discovered page action that this reader cannot safely obtain.":
@@ -562,6 +560,44 @@ const EXACT: Readonly<Record<string, string>> = {
   "Z.ai refused this API key. Check the key or create a new one.": "Z.ai từ chối API key này. Hãy kiểm tra key hoặc tạo key mới.",
   "Zed refused the saved login. Sign in to Zed again.": "Zed từ chối thông tin đăng nhập đã lưu. Hãy đăng nhập lại Zed.",
   "~/.ollama/id_ed25519 isn't a usable Ollama signing key.": "~/.ollama/id_ed25519 không phải khóa ký Ollama dùng được.",
+  "Spend":
+    "Chi tiêu",
+  "Add-on Credits":
+    "Credit mua thêm",
+  "Team Premium Requests":
+    "Yêu cầu cao cấp của nhóm",
+  "Enterprise ACUs":
+    "ACU doanh nghiệp",
+  "Relay address":
+    "Địa chỉ relay",
+  "Admin API key or session cookie (WorkosCursorSessionToken)":
+    "Admin API key hoặc cookie phiên (WorkosCursorSessionToken)",
+  "Grok CLI access token (key in ~/.grok/auth.json)":
+    "Access token của Grok CLI (key trong ~/.grok/auth.json)",
+  "Devin refused the key. Enterprise usage needs an enterprise admin's personal key (apk_user_…).":
+    "Devin từ chối key này. Mức dùng doanh nghiệp cần personal key của quản trị viên doanh nghiệp (apk_user_…).",
+  "Windsurf refused the key. Paste your account's API key, or an Enterprise service key with Billing Read.":
+    "Windsurf từ chối key này. Hãy dán API key của tài khoản, hoặc service key Enterprise có quyền Billing Read.",
+  "Windsurf quota data unavailable. Try again later.":
+    "Chưa có dữ liệu hạn mức Windsurf. Hãy thử lại sau.",
+  "Kiro refused the API key. Create one at app.kiro.dev (Pro plans and above), or ask your administrator to allow API keys.":
+    "Kiro từ chối API key này. Hãy tạo key tại app.kiro.dev (gói Pro trở lên), hoặc nhờ quản trị viên cho phép dùng API key.",
+  "GitHub refused the token. Paste a classic personal access token with the user scope.":
+    "GitHub từ chối token này. Hãy dán personal access token loại classic có quyền user.",
+  "GitHub reports no personal Copilot billing for this token: the Copilot plan is paid by an organization, or the classic token lacks the user scope.":
+    "GitHub không có dữ liệu thanh toán Copilot cá nhân cho token này: gói Copilot do tổ chức trả tiền, hoặc token classic thiếu quyền user.",
+  "The pasted Cursor session expired. Copy WorkosCursorSessionToken from cursor.com again.":
+    "Phiên Cursor đã dán đã hết hạn. Hãy chép lại WorkosCursorSessionToken từ cursor.com.",
+  "Cursor refused the key. Paste an Enterprise team's Admin API key, or the WorkosCursorSessionToken cookie of cursor.com.":
+    "Cursor từ chối key này. Hãy dán Admin API key của team Enterprise, hoặc cookie WorkosCursorSessionToken của cursor.com.",
+  "The pasted Grok token expired. Run grok once, then copy key from ~/.grok/auth.json again.":
+    "Token Grok đã dán đã hết hạn. Hãy chạy grok một lần rồi chép lại key trong ~/.grok/auth.json.",
+  "The relay refused the key. Paste one of its sk- keys.":
+    "Relay từ chối key này. Hãy dán một key sk- của relay.",
+  "The relay does not say how many quota units make a dollar (/api/status), so amounts cannot be shown safely.":
+    "Relay không cho biết bao nhiêu đơn vị quota bằng một đô la (/api/status), nên không hiện số tiền để tránh sai đơn vị.",
+  "Enter the relay's API key.":
+    "Hãy nhập API key của relay.",
 };
 
 const CHUTES_PARTS: Readonly<Record<string, string>> = {
