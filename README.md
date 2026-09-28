@@ -70,7 +70,7 @@ After that the app updates itself like the Windows and Linux versions (see [Upda
 - **Dynamic Island.** On a MacBook with a notch, a black island hugs the notch and its two wings
   carry a reading each, as a percentage, a ring or a bar. Hovering opens the details (or a click,
   when **Expand on Hover** is off): the accounts the island lists, with their meters, plans, emails
-  and reset countdowns, and a line for an account that is signed out. A click on the open island
+  and reset countdowns, and a line for an account that is signed out. A click on the island's footer
   opens the popup right below it. It also opens by itself for a few seconds when a limit is about to
   run out or a Codex reset is announced. Screens without a notch get the same island as a pill in
   the middle of the menu bar. **Settings → Dynamic Island** chooses the style, what sits beside
@@ -79,7 +79,8 @@ After that the app updates itself like the Windows and Linux versions (see [Upda
   the last one) and the tabs of the open island: **Limits**, **Codex Resets** and **Coming Back**,
   any of them. With several tabs the open island has a tab bar, and a click on a tab shows that tab
   in full (every account and reading, or the whole reset tracker with its calendar and rhythm),
-  trimming detail only when the screen is too short; **Stacked** shows the tabs together instead.
+  using balanced columns for the reset tracker and scrolling when the screen is too short.
+  Tabs and the footer remain visible while scrolling; **Stacked** shows the tabs together instead.
   Each tab has its own options: the accounts and metrics of Limits (quick picks follow the Limits
   tab or the stars, any metric can be switched on or off by hand) and what each account shows, the
   parts of the reset tracker, and how many limits coming back are listed.

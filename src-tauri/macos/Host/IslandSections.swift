@@ -47,8 +47,6 @@ enum IslandCalendarSize: Equatable {
     case none
 }
 
-/// How much of each section the open island draws. The island measures the budgets of
-/// `ladder(accounts:)` in turn and keeps the first that fits on the screen.
 struct IslandBudget: Equatable {
     /// Readings per account; `nil` shows every reading.
     var metricsPerAccount: Int?
@@ -59,28 +57,7 @@ struct IslandBudget: Equatable {
     var rhythm: Bool
     var notes: Bool
 
-    static let full = IslandBudget(metricsPerAccount: nil, maxAccounts: nil, upcoming: 12, calendar: .grid, rhythm: true, notes: true)
-
-    /// Budgets from the roomiest to the tightest: everything; then fewer readings per account (all
-    /// four for one or two accounts, two for up to four, one beyond) and no rhythm; then the
-    /// calendar as a strip; then no calendar; then one reading per account without notes; then
-    /// fewer accounts.
-    static func ladder(accounts: Int) -> [IslandBudget] {
-        let automatic = accounts <= 2 ? 4 : (accounts <= 4 ? 2 : 1)
-        var steps: [IslandBudget] = [
-            .full,
-            IslandBudget(metricsPerAccount: automatic, maxAccounts: nil, upcoming: 8, calendar: .grid, rhythm: false, notes: true),
-            IslandBudget(metricsPerAccount: automatic, maxAccounts: nil, upcoming: 5, calendar: .strip, rhythm: false, notes: true),
-            IslandBudget(metricsPerAccount: min(automatic, 2), maxAccounts: nil, upcoming: 4, calendar: .none, rhythm: false, notes: true),
-            IslandBudget(metricsPerAccount: 1, maxAccounts: nil, upcoming: 3, calendar: .none, rhythm: false, notes: false),
-        ]
-        var shown = accounts - 1
-        while shown >= 1 {
-            steps.append(IslandBudget(metricsPerAccount: 1, maxAccounts: shown, upcoming: 2, calendar: .none, rhythm: false, notes: false))
-            shown -= shown > 6 ? 2 : 1
-        }
-        return steps
-    }
+    static let full = IslandBudget(metricsPerAccount: nil, maxAccounts: nil, upcoming: .max, calendar: .grid, rhythm: true, notes: true)
 
     var perAccount: Int { metricsPerAccount ?? Int.max }
 
@@ -97,6 +74,14 @@ struct IslandTabFrames: PreferenceKey {
 
     static func reduce(value: inout [GlanceView: CGRect], nextValue: () -> [GlanceView: CGRect]) {
         value.merge(nextValue()) { $1 }
+    }
+}
+
+struct IslandFooterFrame: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        value = nextValue()
     }
 }
 
@@ -119,6 +104,8 @@ struct IslandDetails: View {
     let topInset: CGFloat
     var budget: IslandBudget = .full
     var selected: GlanceView?
+    var availableWidth: CGFloat = IslandGeometry.expandedWidth
+    var viewportHeight: CGFloat?
 
     var body: some View {
         let plan = IslandPlan.make(document, now: now, selected: selected)
@@ -130,6 +117,25 @@ struct IslandDetails: View {
                     .padding(.top, 8)
                     .padding(.bottom, 4)
             }
+            if viewportHeight != nil {
+                ScrollView(.vertical) {
+                    sections(plan)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(maxHeight: .infinity)
+            } else {
+                sections(plan)
+            }
+            footer
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(height: viewportHeight, alignment: .top)
+    }
+
+    private func sections(_ plan: IslandPlan) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
             if plan.sections.isEmpty {
                 emptyLine(emptyText(nil))
             }
@@ -149,18 +155,18 @@ struct IslandDetails: View {
                     emptyLine(emptyText(section))
                 }
             }
-            footer
         }
+        .padding(.bottom, 2)
     }
 
     @ViewBuilder
     private func content(_ section: GlanceView) -> some View {
         switch section {
         case .quota:
-            IslandQuotaSection(document: document, now: now, budget: budget)
+            IslandQuotaSection(document: document, now: now, budget: budget, availableWidth: max(1, availableWidth - 40))
         case .resets:
             if let resets = document.resets {
-                IslandResetsSection(resets: resets, labels: document.labels, now: now, budget: budget)
+                IslandResetsSection(resets: resets, labels: document.labels, now: now, budget: budget, availableWidth: max(1, availableWidth - 40))
             }
         case .upcoming:
             IslandUpcomingSection(document: document, now: now, count: budget.upcoming(limit: document.island.upcomingLimit))
@@ -203,6 +209,15 @@ struct IslandDetails: View {
         .padding(.horizontal, 20)
         .padding(.top, 14)
         .padding(.bottom, 14)
+        .contentShape(Rectangle())
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: IslandFooterFrame.self,
+                    value: proxy.frame(in: .named(IslandTabFrames.space))
+                )
+            }
+        )
     }
 }
 
@@ -250,20 +265,18 @@ struct IslandTabBar: View {
 
 // MARK: Quota
 
-/// The island's accounts with their meters and countdowns: one column for up to three accounts,
-/// two balanced columns beyond that, fewer readings per account as the list grows. Readings and
-/// accounts left out are counted, never dropped silently.
 struct IslandQuotaSection: View {
     let document: GlanceDocument
     let now: Date
     let budget: IslandBudget
+    var availableWidth: CGFloat = 340
 
     var body: some View {
         let all = document.visibleProviders
         let shown = Array(all.prefix(budget.maxAccounts ?? all.count))
         let perAccount = budget.perAccount
         VStack(alignment: .leading, spacing: 10) {
-            if shown.count > 3 {
+            if shown.count > 1 && availableWidth >= 620 {
                 let split = Self.balancedSplit(shown, perAccount: perAccount, shows: document.island.shows)
                 HStack(alignment: .top, spacing: 18) {
                     column(Array(shown[..<split]), perAccount: perAccount)
@@ -437,36 +450,80 @@ struct IslandResetsSection: View {
     let now: Date
     let budget: IslandBudget
 
+    var availableWidth: CGFloat = 340
+
+    private var hasSummary: Bool {
+        resets.upcoming(at: now) != nil || resets.latest != nil || !resets.forecast.isEmpty
+            || resets.wait != nil || (budget.notes && resets.median != nil)
+    }
+
+    private var hasHistory: Bool {
+        (budget.calendar != .none && (resets.calendar?.weeks ?? 0) > 0)
+            || (budget.rhythm && (resets.rhythm?.total ?? 0) > 0)
+    }
+
     var body: some View {
-        let upcoming = resets.upcoming(at: now)
-        VStack(alignment: .leading, spacing: 11) {
+        let columns = availableWidth >= 620 && hasSummary && hasHistory
+        let columnWidth = columns ? (availableWidth - 14) / 2 : availableWidth
+        VStack(alignment: .leading, spacing: 12) {
             header
+            if columns {
+                HStack(alignment: .top, spacing: 14) {
+                    summary
+                        .frame(width: columnWidth, alignment: .topLeading)
+                    history(width: columnWidth)
+                        .frame(width: columnWidth, alignment: .topLeading)
+                }
+            } else {
+                if hasSummary { summary }
+                if hasHistory { history(width: columnWidth) }
+            }
+        }
+    }
+
+    private var summary: some View {
+        let upcoming = resets.upcoming(at: now)
+        return VStack(alignment: .leading, spacing: 10) {
             if let upcoming {
                 announced(upcoming)
             }
             if let latest = resets.latest {
-                last(latest, prominent: upcoming == nil)
+                card { last(latest, prominent: upcoming == nil) }
             }
             if !resets.forecast.isEmpty {
-                chances
+                card { chances }
             }
             if resets.wait != nil || (budget.notes && resets.median != nil) {
-                waiting
+                card { waiting }
             }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func history(width: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
             if let calendar = resets.calendar, calendar.weeks > 0 {
                 switch budget.calendar {
                 case .grid:
-                    IslandResetCalendar(calendar: calendar, tint: resets.tint)
+                    card { IslandResetCalendar(calendar: calendar, tint: resets.tint, availableWidth: max(1, width - 24)) }
                 case .strip:
-                    IslandResetStrip(calendar: calendar, tint: resets.tint)
+                    card { IslandResetStrip(calendar: calendar, tint: resets.tint) }
                 case .none:
                     EmptyView()
                 }
             }
             if budget.rhythm, let rhythm = resets.rhythm, rhythm.total > 0 {
-                IslandRhythm(rhythm: rhythm, tint: resets.tint)
+                card { IslandRhythm(rhythm: rhythm, tint: resets.tint) }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func card<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.055)))
     }
 
     private var waiting: some View {
@@ -688,14 +745,13 @@ struct IslandResetCalendar: View {
     let calendar: GlanceResetCalendar
     let tint: Color
 
-    /// The width the grid may take inside the open island, after the weekday column.
-    private static let room: CGFloat = 300
+    var availableWidth: CGFloat = 320
     private static let gap: CGFloat = 2
     private static let labelWidth: CGFloat = 20
 
     var body: some View {
         let rows = calendar.weekRows()
-        let pitch = min(14, max(8, floor(Self.room / CGFloat(max(rows.count, 1)))))
+        let pitch = min(14, max(4, floor((availableWidth - Self.labelWidth) / CGFloat(max(rows.count, 1)))))
         let cell = pitch - Self.gap
         VStack(alignment: .leading, spacing: 5) {
             Text(calendar.title)

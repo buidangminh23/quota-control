@@ -86,7 +86,7 @@ struct UpcomingList: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
             let count = max(1, columns)
-            let wide = columnWidth(width, count: count) >= 230
+            let wide = columnWidth(width, count: count) >= 340
             ViewThatFits(in: .vertical) {
                 if groups.count < limits.count {
                     planned(UpcomingGroup.single(limits), shown: limits.count, columns: count, wide: wide, beyond: beyond)
@@ -196,7 +196,7 @@ private struct UpcomingRow: View {
             .font(.system(size: WidgetScale.caption, weight: .medium))
             .monospacedDigit()
             .lineLimit(1)
-            .fixedSize()
+            .minimumScaleFactor(0.85)
     }
 
     private var clock: some View {
@@ -205,7 +205,7 @@ private struct UpcomingRow: View {
             .monospacedDigit()
             .foregroundStyle(.secondary)
             .lineLimit(1)
-            .fixedSize()
+            .minimumScaleFactor(0.85)
     }
 }
 
@@ -218,7 +218,7 @@ struct UpcomingLayout: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             UpcomingHeading(document: document)
-            UpcomingList(document: document, now: now, width: size.width, columns: family == .systemExtraLarge ? 2 : 1)
+            UpcomingList(document: document, now: now, width: size.width, columns: family == .systemExtraLarge || (family == .systemMedium && size.width >= 300) ? 2 : 1)
             if family != .systemSmall {
                 UpdatedFooter(document: document, now: now)
                     .padding(.top, -7)

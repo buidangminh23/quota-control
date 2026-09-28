@@ -189,6 +189,33 @@ struct ChanceHero: View {
     }
 }
 
+struct ResetChanceStrip: View {
+    let resets: GlanceResets
+
+    var body: some View {
+        if !resets.forecast.isEmpty {
+            VStack(alignment: .leading, spacing: 5) {
+                SectionLabel(text: resets.forecastTitle)
+                HStack(alignment: .top, spacing: 7) {
+                    ForEach(resets.forecast) { chance in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("\(chance.percent)%")
+                                .font(.system(size: 13, weight: .semibold))
+                                .monospacedDigit()
+                            TintMeter(fraction: chance.fraction, color: resets.tint, height: 4)
+                            Text(chance.label)
+                                .font(.system(size: WidgetScale.footnote))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+        }
+    }
+}
+
 // MARK: Calendar
 
 /// The weeks and square size a calendar gets in a space: every week up to `most` at the biggest
@@ -506,157 +533,143 @@ struct CodexResetsLayout: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    /// The tracker's blocks over the calendar, the calendar as big as the space left allows.
     private var large: some View {
-        ViewThatFits(in: .vertical) {
-            large(calendarHeight: 0, weeks: calendarWeeks, share: 1)
-            large(calendarHeight: 158, weeks: 12, share: 0.6)
-            large(calendarHeight: 128, weeks: 10, share: 0.56)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                ResetsHeader(resets: resets)
+                HiddenCount(count: largeSecondaryCount)
+            }
+            if let stale = resets.stale {
+                ResetsStaleLine(text: stale)
+            }
+            if let upcoming = resets.upcoming(at: now) {
+                AnnouncedResetBlock(upcoming: upcoming, units: units, now: now, valueSize: 15, captionLines: 2)
+            }
+            if let latest = resets.latest {
+                VStack(alignment: .leading, spacing: 2) {
+                    if resets.upcoming(at: now) == nil {
+                        latest.since.live(now: now, units: units)
+                            .font(.system(size: WidgetScale.value, weight: .semibold))
+                            .lineLimit(2)
+                    }
+                    Text("\(latest.label): \(latest.when) · \(latest.kindLabel)")
+                        .font(.system(size: WidgetScale.caption))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            ResetChanceStrip(resets: resets)
+            if let calendar = resets.calendar {
+                GeometryReader { proxy in
+                    let fit = CalendarFit.fit(
+                        calendar, in: CGSize(width: proxy.size.width, height: max(42, proxy.size.height - 30)),
+                        most: calendar.weeks, largest: 15, smallest: 7
+                    )
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 4) {
+                            SectionLabel(text: calendar.title)
+                            Spacer(minLength: 0)
+                            HiddenCount(count: calendar.weeks - fit.weeks)
+                        }
+                        ResetCalendarGrid(calendar: calendar, tint: resets.tint, fit: fit)
+                        CalendarLegend(legend: calendar.legend, tint: resets.tint)
+                    }
+                }
+            } else if let rhythm = resets.rhythm {
+                RhythmView(rhythm: rhythm, tint: resets.tint, height: 30)
+            } else {
+                Spacer(minLength: 0)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private func large(calendarHeight: CGFloat, weeks: Int, share: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: WidgetScale.blockSpacing) {
+    private var largeSecondaryCount: Int {
+        (resets.wait == nil ? 0 : 1) + (resets.median == nil ? 0 : 1)
+            + (resets.forecastNote.isEmpty ? 0 : 1)
+            + (resets.upcoming(at: now)?.note == nil ? 0 : 1)
+            + (resets.calendar != nil && resets.rhythm != nil ? 1 : 0)
+    }
+
+    private var extraLarge: some View { balanced }
+
+    private var balanced: some View {
+        let hasSummary = resets.upcoming(at: now) != nil || resets.latest != nil || !resets.forecast.isEmpty
+            || !resets.forecastNote.isEmpty || resets.wait != nil || resets.median != nil
+        let hasHistory = resets.calendar != nil || resets.rhythm != nil
+        let left = hasHistory ? (size.width - WidgetScale.columnSpacing) * (family == .systemExtraLarge ? 0.46 : 0.5) : size.width
+        let right = hasSummary ? size.width - left - WidgetScale.columnSpacing : size.width
+        return VStack(alignment: .leading, spacing: 7) {
             ResetsHeader(resets: resets, showsSource: true)
             if let stale = resets.stale {
                 ResetsStaleLine(text: stale)
             }
-            HStack(alignment: .top, spacing: WidgetScale.columnSpacing + 4) {
-                VStack(alignment: .leading, spacing: 8) {
-                    let upcoming = resets.upcoming(at: now)
-                    if let upcoming {
-                        AnnouncedResetBlock(upcoming: upcoming, units: units, now: now, valueSize: 13.5, showsNote: true)
-                    }
-                    if let latest = resets.latest {
-                        LatestResetBlock(latest: latest, tint: resets.tint, units: units, now: now, valueSize: upcoming == nil ? 13.5 : WidgetScale.value, showsWhen: false)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                ChanceBars(resets: resets, spacing: 5)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            if let wait = resets.wait {
-                Text(wait)
-                    .font(.system(size: WidgetScale.caption))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if let calendar = resets.calendar {
-                if share >= 1 {
-                    calendarBand(calendar)
-                } else {
-                    calendarRow(calendar, height: calendarHeight, weeks: weeks, share: share)
-                }
-            }
-        }
-        .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private var calendarWeeks: Int { resets.calendar?.weeks ?? 20 }
-
-    /// Every week across the widget, with the legend and the median (or else the last reset) under it.
-    private func calendarBand(_ calendar: GlanceResetCalendar) -> some View {
-        let fit = CalendarFit.fit(calendar, in: CGSize(width: size.width, height: 150), most: calendar.weeks)
-        return VStack(alignment: .leading, spacing: 4) {
-            SectionLabel(text: calendar.title)
-            ResetCalendarGrid(calendar: calendar, tint: resets.tint, fit: fit)
-            CalendarLegend(legend: calendar.legend, tint: resets.tint)
-            if let note = resets.median ?? resets.latest.map({ "\($0.label): \($0.when) · \($0.kindLabel)" }) {
-                Text(note)
-                    .font(.system(size: WidgetScale.footnote))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    /// The last `weeks` weeks, with the legend, the last reset and the median beside them.
-    private func calendarRow(_ calendar: GlanceResetCalendar, height: CGFloat, weeks: Int, share: CGFloat) -> some View {
-        let fit = CalendarFit.fit(calendar, in: CGSize(width: size.width * share, height: height), most: weeks, largest: 18)
-        return VStack(alignment: .leading, spacing: 4) {
-            SectionLabel(text: calendar.title)
             HStack(alignment: .top, spacing: WidgetScale.columnSpacing) {
-                ResetCalendarGrid(calendar: calendar, tint: resets.tint, fit: fit)
-                VStack(alignment: .leading, spacing: 6) {
-                    CalendarLegend(legend: calendar.legend, tint: resets.tint, axis: .vertical)
-                        .padding(.top, CalendarFit.monthsHeight + 2)
-                    if let latest = resets.latest {
-                        Text("\(latest.label): \(latest.when)")
-                            .font(.system(size: WidgetScale.footnote))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if let median = resets.median {
-                        Text(median)
-                            .font(.system(size: WidgetScale.footnote))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(4)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                if hasSummary {
+                    summaryColumn(width: left)
+                }
+                if hasHistory {
+                    historyColumn(width: right)
                 }
             }
+            Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private var extraLarge: some View {
-        let left = min(270, size.width * 0.38)
-        let right = size.width - left - WidgetScale.columnSpacing * 2 - 1
-        return HStack(alignment: .top, spacing: WidgetScale.columnSpacing) {
-            VStack(alignment: .leading, spacing: WidgetScale.blockSpacing) {
-                ResetsHeader(resets: resets)
-                if let stale = resets.stale {
-                    ResetsStaleLine(text: stale)
-                }
-                if let upcoming = resets.upcoming(at: now) {
-                    AnnouncedResetBlock(upcoming: upcoming, units: units, now: now, valueSize: 15, showsNote: true)
-                }
-                if let latest = resets.latest {
-                    LatestResetBlock(latest: latest, tint: resets.tint, units: units, now: now)
-                }
-                ChanceBars(resets: resets, spacing: 5)
-                if let wait = resets.wait {
-                    Text(wait)
-                        .font(.system(size: WidgetScale.caption))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-                Text(resets.source)
-                    .font(.system(size: WidgetScale.footnote))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
+    private func summaryColumn(width: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            if let upcoming = resets.upcoming(at: now) {
+                AnnouncedResetBlock(upcoming: upcoming, units: units, now: now, valueSize: 13, captionLines: 1, showsNote: true)
             }
-            .frame(width: left, alignment: .topLeading)
-            .frame(maxHeight: .infinity, alignment: .topLeading)
-            Divider()
-            VStack(alignment: .leading, spacing: WidgetScale.blockSpacing) {
-                if let calendar = resets.calendar {
-                    let fit = CalendarFit.fit(calendar, in: CGSize(width: right, height: 160), most: 20, largest: 19)
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(calendar.title)
-                                .font(.system(size: WidgetScale.title, weight: .semibold))
-                                .lineLimit(1)
-                            Spacer(minLength: 6)
-                            CalendarLegend(legend: calendar.legend, tint: resets.tint)
-                        }
-                        .frame(width: fit.size.width)
-                        ResetCalendarGrid(calendar: calendar, tint: resets.tint, fit: fit)
+            if let latest = resets.latest {
+                LatestResetBlock(latest: latest, tint: resets.tint, units: units, now: now, valueSize: WidgetScale.value)
+            }
+            ResetChanceStrip(resets: resets)
+            if !resets.forecastNote.isEmpty {
+                note(resets.forecastNote)
+            }
+            if let wait = resets.wait { note(wait) }
+            if let median = resets.median { note(median) }
+        }
+        .frame(width: width, alignment: .topLeading)
+    }
+
+    private func historyColumn(width: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let calendar = resets.calendar {
+                let fit = CalendarFit.fit(
+                    calendar, in: CGSize(width: width, height: min(120, size.height * 0.3)),
+                    most: calendar.weeks, largest: 14, smallest: 4
+                )
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 4) {
+                        SectionLabel(text: calendar.title)
+                        Spacer(minLength: 0)
+                        HiddenCount(count: calendar.weeks - fit.weeks)
+                    }
+                    ResetCalendarGrid(calendar: calendar, tint: resets.tint, fit: fit)
+                    ViewThatFits(in: .horizontal) {
+                        CalendarLegend(legend: calendar.legend, tint: resets.tint)
+                        CalendarLegend(legend: calendar.legend, tint: resets.tint, axis: .vertical)
                     }
                 }
-                Spacer(minLength: 0)
-                if let rhythm = resets.rhythm {
-                    RhythmView(rhythm: rhythm, tint: resets.tint, height: 40)
-                }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            if let rhythm = resets.rhythm {
+                RhythmView(rhythm: rhythm, tint: resets.tint, height: width < 220 ? 20 : 38, stacked: width < 220)
+            }
         }
+        .frame(width: width, alignment: .topLeading)
     }
+
+    private func note(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: WidgetScale.caption))
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
 }
 
 // MARK: Reset calendar widget

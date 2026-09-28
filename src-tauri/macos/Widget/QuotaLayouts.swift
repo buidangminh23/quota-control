@@ -70,6 +70,7 @@ func quotaColumns(_ family: WidgetFamily, style: QuotaWidgetStyle, accounts: Int
     let most: Int
     switch family {
     case .systemMedium: most = 2
+    case .systemLarge: most = accounts > 3 ? 2 : 1
     case .systemExtraLarge: most = style == .compact ? 3 : 2
     default: most = 1
     }

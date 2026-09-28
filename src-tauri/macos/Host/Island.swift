@@ -5,8 +5,8 @@ import SwiftUI
 /// picked in Settings, as a percentage, a ring or a bar. Hovering it (or, when Settings say so, a
 /// click) opens a detail view with the sections its Settings list (quota limits, the Codex reset
 /// forecast, the next limits to come back), a new alert (a limit close to running out, or one that
-/// came back) opens it for a few seconds, and a click on the open island opens the popup right
-/// below it. A screen without a notch gets the same island as a pill in the middle of the menu bar.
+/// came back) opens it for a few seconds. A screen without a notch gets the same island as a pill
+/// in the middle of the menu bar.
 /// It lives in a non-activating panel, so it never takes focus from the app in front.
 @MainActor
 final class IslandController {
@@ -182,11 +182,13 @@ final class IslandController {
         }
     }
 
-    /// A click on a tab of the open island shows that tab; any other click on the open island
-    /// opens the popup, and one on the closed island opens it when hovering does not.
     private func click(at point: CGPoint) {
-        if model.mode == .expanded, let tab = model.tab(at: point) {
-            select(tab)
+        if model.mode == .expanded {
+            if let tab = model.tab(at: point) {
+                select(tab)
+            } else if model.footerFrame.contains(point) {
+                open()
+            }
             return
         }
         if model.mode == .compact && !expandsOnHover {
@@ -303,13 +305,11 @@ struct IslandGeometry: Equatable {
     static let pillPadding: CGFloat = 11
     static let pillGap: CGFloat = 14
     static let expandedWidth: CGFloat = 380
-    /// Wide enough for two columns of accounts.
-    static let wideExpandedWidth: CGFloat = 460
+    static let wideExpandedWidth: CGFloat = 720
 
-    /// Two columns of accounts need the wide island; so does nothing else.
     static func expandedWidth(for document: GlanceDocument, plan: IslandPlan, budget: IslandBudget) -> CGFloat {
         let accounts = min(document.visibleProviders.count, budget.maxAccounts ?? .max)
-        return plan.sections.contains(.quota) && accounts > 3 ? wideExpandedWidth : expandedWidth
+        return plan.sections.contains(.resets) || (plan.sections.contains(.quota) && accounts > 1) ? wideExpandedWidth : expandedWidth
     }
     static let pillHeight: CGFloat = 22
     /// Room around the open island for its shadow.
@@ -422,7 +422,6 @@ final class IslandModel: ObservableObject {
     @Published var mode: IslandMode = .compact
     @Published var geometry: IslandGeometry?
     @Published var expandedSize = CGSize(width: IslandGeometry.expandedWidth, height: 120)
-    /// How much of each section the open island shows, chosen so it fits on the screen.
     @Published var budget = IslandBudget.full
     /// The widest reading beside the notch, which both wings take so the notch stays centered.
     @Published var wingContent: CGFloat = 0
@@ -430,6 +429,7 @@ final class IslandModel: ObservableObject {
     @Published var selectedTab: GlanceView?
     /// Where the open island's tabs sit, in the panel's top-left coordinates.
     var tabFrames: [GlanceView: CGRect] = [:]
+    var footerFrame: CGRect = .zero
 
     func plan(now: Date) -> IslandPlan? {
         guard let document else { return nil }
@@ -485,29 +485,21 @@ final class IslandModel: ObservableObject {
         }
     }
 
-    /// Measures the open island at the most generous budget that fits on the screen, dropping
-    /// detail step by step (fewer readings per account, then accounts, then the smaller extras);
-    /// the tightest budget is clipped at the screen's limit.
     func measureExpanded(now: Date) {
         guard let document, let geometry else { return }
         let compact = compactSize(for: geometry).width
-        let limit = geometry.maxOpenHeight
         let plan = IslandPlan.make(document, now: now, selected: selectedTab)
-        var chosen = IslandBudget.full
-        var width = IslandGeometry.expandedWidth
-        var height: CGFloat = 0
-        for candidate in IslandBudget.ladder(accounts: document.visibleProviders.count) {
-            chosen = candidate
-            width = max(IslandGeometry.expandedWidth(for: document, plan: plan, budget: candidate), compact)
-            let view = IslandDetails(document: document, now: now, topInset: geometry.detailsInset, budget: candidate, selected: selectedTab)
-                .frame(width: width)
-            height = Self.size(of: view, proposing: CGSize(width: width, height: 4000)).height
-            if height <= limit { break }
-        }
-        if chosen != budget {
-            budget = chosen
-        }
-        expandedSize = CGSize(width: width, height: min(ceil(height), limit))
+        let preferred = max(IslandGeometry.expandedWidth(for: document, plan: plan, budget: .full), compact)
+        let width = min(preferred, max(1, geometry.screenFrame.width - IslandGeometry.shadowMargin * 2))
+        let view = IslandDetails(
+            document: document, now: now, topInset: geometry.detailsInset,
+            budget: .full, selected: selectedTab, availableWidth: width
+        )
+        .frame(width: width)
+        .fixedSize(horizontal: false, vertical: true)
+        let height = Self.size(of: view, proposing: CGSize(width: width, height: 100_000)).height
+        if budget != .full { budget = .full }
+        expandedSize = CGSize(width: width, height: min(ceil(height), geometry.maxOpenHeight))
     }
 
     func measureAlert(_ alert: GlanceAlert) {
@@ -564,6 +556,7 @@ final class IslandHostingView<Content: View>: NSHostingView<Content> {
     /// The click's point in the view's top-left coordinates, as SwiftUI lays the island out.
     var onClick: ((CGPoint) -> Void)?
     private var area: NSTrackingArea?
+    private var clickOrigin: CGPoint?
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -581,8 +574,20 @@ final class IslandHostingView<Content: View>: NSHostingView<Content> {
     override func mouseEntered(with event: NSEvent) { onHover?(true) }
     override func mouseExited(with event: NSEvent) { onHover?(false) }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func mouseDown(with event: NSEvent) {}
+    override func mouseDown(with event: NSEvent) {
+        clickOrigin = event.locationInWindow
+    }
+    override func mouseDragged(with event: NSEvent) {
+        clickOrigin = nil
+    }
+    override func scrollWheel(with event: NSEvent) {
+        clickOrigin = nil
+        super.scrollWheel(with: event)
+    }
     override func mouseUp(with event: NSEvent) {
+        guard let origin = clickOrigin else { return }
+        clickOrigin = nil
+        guard hypot(event.locationInWindow.x - origin.x, event.locationInWindow.y - origin.y) < 5 else { return }
         var point = convert(event.locationInWindow, from: nil)
         if !isFlipped {
             point.y = bounds.height - point.y
@@ -652,6 +657,9 @@ struct IslandRootView: View {
             .onPreferenceChange(IslandTabFrames.self) { frames in
                 model.tabFrames = frames
             }
+            .onPreferenceChange(IslandFooterFrame.self) { frame in
+                model.footerFrame = frame
+            }
             .environment(\.locale, document.resolvedLocale)
         }
     }
@@ -692,7 +700,11 @@ struct IslandRootView: View {
             .transition(.opacity)
         case .expanded:
             TimelineView(.periodic(from: .now, by: 30)) { context in
-                IslandDetails(document: document, now: context.date, topInset: geometry.detailsInset, budget: model.budget, selected: model.selectedTab)
+                IslandDetails(
+                    document: document, now: context.date, topInset: geometry.detailsInset,
+                    budget: model.budget, selected: model.selectedTab,
+                    availableWidth: model.expandedSize.width, viewportHeight: model.expandedSize.height
+                )
             }
             .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
         case let .alert(alert):

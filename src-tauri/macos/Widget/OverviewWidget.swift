@@ -155,29 +155,99 @@ struct OverviewLayout: View {
         }
     }
 
-    /// The limits beside one more part (the reset summary, else the limits coming back); without
-    /// the limits, the other two share the widget.
+    @ViewBuilder
     private var medium: some View {
-        let shown = parts.contains(.quota) ? [GlanceView.quota] + parts.filter { $0 != .quota }.prefix(1) : Array(parts.prefix(2))
-        return columns(shown, style: .narrow)
+        if parts.count > 2 {
+            let width = max(1, (size.width - WidgetScale.columnSpacing * 2 - 1) / 2)
+            HStack(alignment: .top, spacing: WidgetScale.columnSpacing) {
+                pane(parts[0], width: width, style: .narrow)
+                    .frame(width: width)
+                Divider()
+                VStack(alignment: .leading, spacing: 7) {
+                    ForEach(Array(parts.dropFirst().enumerated()), id: \.element) { index, part in
+                        if index > 0 { Divider() }
+                        brief(part)
+                            .frame(maxHeight: .infinity, alignment: .topLeading)
+                    }
+                }
+                .frame(width: width)
+            }
+            .frame(maxHeight: .infinity, alignment: .topLeading)
+        } else {
+            columns(parts, style: .narrow)
+        }
     }
 
     private var large: some View {
-        VStack(alignment: .leading, spacing: WidgetScale.blockSpacing) {
-            ForEach(Array(parts.enumerated()), id: \.element) { index, part in
-                if index > 0 {
-                    Divider()
-                }
-                if part == .resets {
-                    ResetsSummary(document: document, now: now, style: parts.count == 1 ? .column : .band)
-                        .fixedSize(horizontal: false, vertical: parts.count > 1)
-                } else {
-                    pane(part, width: size.width, style: .band, showsAccounts: parts.count == 1)
-                        .frame(maxHeight: .infinity, alignment: .top)
+        GeometryReader { proxy in
+            let gap = WidgetScale.blockSpacing
+            let height = max(1, (proxy.size.height - CGFloat(max(parts.count - 1, 0)) * (gap * 2 + 1)) / CGFloat(max(parts.count, 1)))
+            VStack(alignment: .leading, spacing: gap) {
+                ForEach(Array(parts.enumerated()), id: \.element) { index, part in
+                    if index > 0 { Divider() }
+                    Group {
+                        if part == .resets && parts.count > 1 {
+                            brief(part)
+                        } else {
+                            pane(part, width: proxy.size.width, style: parts.count == 1 ? .column : .band, showsAccounts: parts.count == 1)
+                        }
+                    }
+                    .frame(height: height, alignment: .topLeading)
                 }
             }
         }
-        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    @ViewBuilder
+    private func brief(_ part: GlanceView) -> some View {
+        switch part {
+        case .quota:
+            quota(width: size.width / 2, height: max(1, (size.height - WidgetScale.footerHeight) / 2))
+        case .resets:
+            if let resets = document.resets {
+                VStack(alignment: .leading, spacing: 3) {
+                    ResetsHeader(resets: resets)
+                    if let upcoming = resets.upcoming(at: now) {
+                        upcoming.liveValue(now: now, units: document.labels.units)
+                            .font(.system(size: WidgetScale.value, weight: .semibold))
+                            .monospacedDigit()
+                            .lineLimit(2)
+                    } else if let chance = resets.chance(days: 1) ?? resets.forecast.first {
+                        Text("\(chance.label) · \(chance.percent)%")
+                            .font(.system(size: WidgetScale.value, weight: .semibold))
+                            .lineLimit(2)
+                    } else if let latest = resets.latest {
+                        latest.since.live(now: now, units: document.labels.units)
+                            .font(.system(size: WidgetScale.caption))
+                            .lineLimit(2)
+                    }
+                }
+            } else {
+                Text(WidgetText.resetsOff(document))
+                    .font(.system(size: WidgetScale.caption))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            }
+        case .upcoming:
+            let all = GlanceUpcomingLimit.list(document.widget.providers, now: now)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 3) {
+                    UpcomingHeading(document: document)
+                    Spacer(minLength: 0)
+                    HiddenCount(count: all.count - 1)
+                }
+                if let next = all.first {
+                    Text("\(next.provider.name) · \(Text(next.at, style: .relative))")
+                        .font(.system(size: WidgetScale.caption, weight: .medium))
+                        .lineLimit(2)
+                } else {
+                    Text(UpcomingText.empty(document))
+                        .font(.system(size: WidgetScale.caption))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+        }
     }
 
     private var extraLarge: some View {
@@ -189,7 +259,7 @@ struct OverviewLayout: View {
     private func columns(_ shown: [GlanceView], style: ResetsSummaryStyle, showsAccounts: Bool = false) -> some View {
         let dividers = CGFloat(max(shown.count - 1, 0))
         let available = size.width - dividers * (WidgetScale.columnSpacing * 2 + 1)
-        let resetWidth: CGFloat = shown.count == 1 ? available : (style == .narrow ? min(150, available * 0.42) : 200)
+        let resetWidth: CGFloat = shown.count == 1 ? available : (style == .narrow ? min(150, available * 0.5) : min(220, available / CGFloat(shown.count)))
         let rest = shown.contains(.resets) ? available - resetWidth : available
         let flexible = shown.filter { $0 != .resets }
         let width: (GlanceView) -> CGFloat = { part in
