@@ -83,6 +83,7 @@ export interface AppState {
   /** How the dashboard content enters after a tab switch; cleared by any navigation. */
   tabMotion: Motion | null;
   customizeProviderId: string | null;
+  bugReportRequested: boolean;
   popupVisible: boolean;
   notice: Notice | null;
   /** The core's self-update state; `null` where there is no updater. */
@@ -121,6 +122,7 @@ export const useApp = create<AppState>(() => ({
   previousScreen: "dashboard",
   tabMotion: null,
   customizeProviderId: null,
+  bugReportRequested: false,
   popupVisible: true,
   notice: null,
   update: null,
@@ -310,6 +312,11 @@ export function navigate(screen: Screen, customizeProviderId: string | null = nu
 
 export function openCustomizeDetail(providerId: string | null): void {
   set({ customizeProviderId: providerId });
+}
+
+export function openBugReport(): void {
+  navigate("settings");
+  set({ bugReportRequested: true });
 }
 
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;

@@ -7,7 +7,7 @@ import { messagesFor, type Messages } from "@/i18n";
 import { backend } from "@/lib/backend";
 import type { EngineState, UpdateStatus } from "@/lib/types";
 import { useLanguage, useNow } from "@/state/hooks";
-import { checkForUpdates, installUpdate, navigate, refresh, useApp, type Screen } from "@/state/store";
+import { checkForUpdates, installUpdate, navigate, openBugReport, refresh, useApp, type Screen } from "@/state/store";
 import { Pill } from "../ui/controls";
 import { openAboutDialog } from "./about";
 import { ChevronDown, Spinner } from "../ui/icons";
@@ -67,6 +67,7 @@ export function optionsEntries(messages: Messages, appName: string): MenuEntry[]
     { kind: "item", label: messages.chrome.accounts, onSelect: () => toggle("accounts") },
     { kind: "separator" },
     ...(update ? [update, { kind: "separator" as const }] : []),
+    { kind: "item", label: messages.chrome.reportBug, onSelect: openBugReport },
     { kind: "item", label: messages.chrome.about(appName), onSelect: () => openAboutDialog() },
     { kind: "item", label: messages.chrome.quit(appName), shortcut: "Ctrl+Q", destructive: true, onSelect: () => void backend().quit() },
   ];

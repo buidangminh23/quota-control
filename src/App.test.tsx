@@ -323,6 +323,14 @@ describe("popup", () => {
     expect(stored?.enabledProviders).toEqual(expect.arrayContaining(["claude-local", "codex-local"]));
   });
 
+  it("opens and focuses the bug report form from Options", async () => {
+    await renderApp();
+    fireEvent.click(screen.getByRole("button", { name: "Tùy chọn" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Báo cáo lỗi…" }));
+    expect(await screen.findByLabelText("Tiêu đề lỗi")).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Mở bản nháp trên GitHub" })).toBeDisabled();
+  });
+
   it("checks for a new version from the Options menu, where screenshot sharing used to be", async () => {
     const api = await renderApp();
     expect(screen.queryByRole("button", { name: /ảnh chụp/ })).not.toBeInTheDocument();

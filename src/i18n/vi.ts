@@ -235,6 +235,7 @@ export const vi: Messages = {
     cancel: "Hủy",
     accounts: "Tài khoản",
     checkForUpdates: "Kiểm tra phiên bản mới…",
+    reportBug: "Báo cáo lỗi…",
     installUpdate: (version) => `Cài bản mới ${version}…`,
     aboutDescription:
       "Bản chuyển thể không chính thức của OpenUsage (tác giả Robin Ebers) cho Windows và Linux, phát hành theo giấy phép MIT.",

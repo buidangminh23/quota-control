@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { backend } from "@/lib/backend";
 import { useSettings } from "@/state/hooks";
 import { useApp } from "@/state/store";
@@ -31,6 +31,18 @@ export function BugReport() {
   const [steps, setSteps] = useState("");
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
+  const requested = useApp((state) => state.bugReportRequested);
+  const titleRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!requested) return;
+    setExpanded(true);
+  }, [requested]);
+  useEffect(() => {
+    if (!requested || !expanded) return;
+    titleRef.current?.scrollIntoView?.({ block: "center" });
+    titleRef.current?.focus({ preventScroll: true });
+    useApp.setState({ bugReportRequested: false });
+  }, [requested, expanded]);
   const body = `## Description / Expected behavior\n${description.trim()}\n\n## Steps to reproduce\n${steps.trim()}\n\n## App information\n- Version: ${info?.version ?? "unknown"}\n- Platform: ${info?.platform ?? "unknown"}\n- Language: ${language}`;
   const url = new URL("https://github.com/buidangminh23/quota-control/issues/new");
   url.searchParams.set("title", title.trim());
@@ -50,7 +62,7 @@ export function BugReport() {
         <Button onClick={() => setExpanded(!expanded)}>{expanded ? text.cancel : text.open}</Button>
         {expanded ? <>
           <p>{text.privacy}</p>
-          <label>{text.title}<input maxLength={120} value={title} onChange={(event) => setTitle(event.target.value)} /></label>
+          <label>{text.title}<input ref={titleRef} maxLength={120} value={title} onChange={(event) => setTitle(event.target.value)} /></label>
           <label>{text.description}<textarea rows={4} maxLength={4000} value={description} onChange={(event) => setDescription(event.target.value)} /></label>
           <label>{text.steps}<textarea rows={3} maxLength={4000} value={steps} onChange={(event) => setSteps(event.target.value)} /></label>
           <details><summary>{text.preview}</summary><pre>{body}</pre></details>

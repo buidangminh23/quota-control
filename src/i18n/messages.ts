@@ -148,6 +148,7 @@ export interface ChromeMessages {
   accounts: string;
   /** The Options menu's update entry, worded like the tray menu's. */
   checkForUpdates: string;
+  reportBug: string;
   installUpdate(version: string): string;
   aboutDescription: string;
   openRepository: string;

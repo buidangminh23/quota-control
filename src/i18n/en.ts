@@ -199,6 +199,7 @@ export const en: Messages = {
     cancel: "Cancel",
     accounts: "Accounts",
     checkForUpdates: "Check for Updates…",
+    reportBug: "Report a Bug…",
     installUpdate: (version) => `Install Update ${version}…`,
     aboutDescription: "An unofficial Windows and Linux port of OpenUsage by Robin Ebers, released under the MIT license.",
     openRepository: "Open Source Repository",

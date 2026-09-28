@@ -31,6 +31,9 @@ use tauri_plugin_updater::{Update, Updater, UpdaterExt};
 
 use crate::service::{BackendService, safe_error};
 
+#[path = "update_release.rs"]
+mod release;
+
 /// The first background check waits for startup to settle.
 const FIRST_CHECK_DELAY: Duration = Duration::from_secs(20);
 /// How often the background task looks at the clock. A check is due by wall-clock time, so a
@@ -189,7 +192,7 @@ impl UpdateStatus {
 
 pub struct Updates {
     status: Mutex<UpdateStatus>,
-    /// The update the last check found, kept so installing does not fetch the manifest again.
+    /// The verified offer, refreshed before installation to exclude withdrawn or incomplete releases.
     pending: Mutex<Option<Update>>,
     /// Checks and installs run one at a time.
     operation: tokio::sync::Mutex<()>,
@@ -308,9 +311,11 @@ impl Updates {
     }
 
     async fn check_locked(&self, app: &AppHandle, manual: bool) {
-        let previous = self.status();
+        *self.pending.lock() = None;
         self.publish(app, |status| {
             status.phase = UpdatePhase::Checking;
+            status.available = None;
+            status.failure = None;
             status.manual = manual;
         });
         let result = match updater(app) {
@@ -319,6 +324,27 @@ impl Updates {
         };
         *self.last_check.lock() = Some(SystemTime::now());
         let checked_at = Some(Utc::now().to_rfc3339());
+        let result = match result {
+            Ok(Some(update)) => {
+                let http = uc_core::http::ReqwestHttpClient::shared();
+                match tokio::time::timeout(
+                    CHECK_TIMEOUT,
+                    release::verify(http.as_ref(), &update.raw_json, &update.version),
+                )
+                .await
+                {
+                    Ok(Ok(())) => Ok(Some(update)),
+                    Ok(Err(release::ReadinessError::Incomplete)) => {
+                        tracing::info!(target: "updates", "withholding incomplete release {}", update.version);
+                        Ok(None)
+                    }
+                    _ => Err(tauri_plugin_updater::Error::Network(
+                        "Release readiness could not be checked".into(),
+                    )),
+                }
+            }
+            other => other,
+        };
         match result {
             Ok(Some(update)) => {
                 tracing::info!(target: "updates", "{} is available", update.version);
@@ -374,15 +400,15 @@ impl Updates {
                         status.phase = UpdatePhase::Failed;
                         status.failure = Some(failure);
                     } else {
-                        status.phase = previous.phase;
-                        status.manual = previous.manual;
+                        status.phase = UpdatePhase::Idle;
+                        status.manual = false;
                     }
                 });
             }
         }
     }
 
-    /// Bring this installation to the newest release: check first when nothing is pending, then
+    /// Bring this installation to the newest release: recheck release readiness, then
     /// download, verify and hand over to the installer. On success Windows exits here (the
     /// installer relaunches the app) and Linux restarts; `Err` leaves the app running with the
     /// failure in the status.
@@ -391,9 +417,7 @@ impl Updates {
             return Err("This build of Quota Control cannot update itself".into());
         }
         let _operation = self.operation.lock().await;
-        if self.pending.lock().is_none() {
-            self.check_locked(app, true).await;
-        }
+        self.check_locked(app, true).await;
         let Some(update) = self.pending.lock().clone() else {
             return match self.status().phase {
                 UpdatePhase::Failed => Err("Checking for updates failed".into()),
