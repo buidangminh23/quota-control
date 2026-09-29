@@ -63,6 +63,65 @@ fn total(ledger: &UsageLedger) -> i64 {
 }
 
 #[test]
+fn parser_upgrade_reimports_unchanged_forks_without_losing_missing_log_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let logs = dir.path().join("codex");
+    fs::create_dir(&logs).unwrap();
+    let count = |at: &str, input: i64, output: i64| {
+        json!({
+            "type":"event_msg","timestamp":at,"payload":{"type":"token_count","info":{
+                "total_token_usage":{"input_tokens":input,"output_tokens":output,"total_tokens":input+output}
+            }}
+        })
+    };
+    append(
+        &logs.join("child.jsonl"),
+        &[
+            json!({"type":"session_meta","timestamp":"2026-09-25T18:00:00Z","payload":{"id":"child","forked_from_id":"parent"}}),
+            json!({"type":"turn_context","payload":{"model":"gpt-5"}}),
+            count("2026-09-25T17:00:00Z", 100, 20),
+            json!({"type":"event_msg","timestamp":"2026-09-25T18:00:01Z","payload":{"type":"task_started","turn_id":"own"}}),
+            count("2026-09-25T18:00:02Z", 600, 120),
+        ],
+    );
+    let claude_logs = dir.path().join("claude");
+    fs::create_dir(&claude_logs).unwrap();
+    let old_path = claude_logs.join("old.jsonl");
+    append(&old_path, &[claude("historic", "2024-01-01", 1, None)]);
+    let scans = [
+        scanner(LogSource::Codex, &logs),
+        scanner(LogSource::Claude, &claude_logs),
+    ];
+    let db = dir.path().join("ledger.sqlite3");
+    let ledger = UsageLedger::open(&db).unwrap();
+    ledger.import(&scans, |_| {}).unwrap();
+    assert_eq!(total(&ledger), 610);
+    drop(ledger);
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute_batch("DELETE FROM ledger_metadata WHERE key='codexParserVersion'; DELETE FROM usage_events WHERE source='codex';").unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM file_checkpoints WHERE source='codex'",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    drop(conn);
+    fs::remove_file(old_path).unwrap();
+    let upgraded = UsageLedger::open(&db).unwrap();
+    let report = upgraded.import(&scans, |_| {}).unwrap();
+    assert_eq!(report.files_read, 1);
+    assert_eq!(report.events_written, 1);
+    assert_eq!(total(&upgraded), 610);
+    drop(upgraded);
+    let reopened = UsageLedger::open(db).unwrap();
+    assert_eq!(reopened.import(&scans, |_| {}).unwrap().files_read, 0);
+    assert_eq!(total(&reopened), 610);
+}
+
+#[test]
 fn legacy_migration_reimports_equal_events_and_unifies_repository_names() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("bot tele");

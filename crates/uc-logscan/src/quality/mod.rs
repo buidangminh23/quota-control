@@ -23,7 +23,8 @@ use serde_json::Value;
 use crate::{LogScanner, LogSource, linked};
 use transcript::{ClaudeTranscript, CodexTranscript, Tally};
 
-const CACHE_VERSION: u32 = 2;
+const CACHE_VERSION: u32 = 3;
+const PARSER_VERSION: u32 = 1;
 const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_FILES: usize = 50_000;
 const MAX_DEPTH: usize = 32;
@@ -142,6 +143,8 @@ struct CachedRow {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 struct CachedFile {
     source: LogSource,
+    #[serde(default)]
+    parser_version: u32,
     length: u64,
     modified: i64,
     rows: Vec<CachedRow>,
@@ -184,7 +187,7 @@ impl QualityStore {
         let cache = fs::read(&path)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<CacheDocument>(&bytes).ok())
-            .filter(|document| document.version == CACHE_VERSION)
+            .filter(|document| (2..=CACHE_VERSION).contains(&document.version))
             .unwrap_or_default();
         Self {
             path,
@@ -290,7 +293,8 @@ impl QualityStore {
             let key = candidate.path.to_string_lossy().into_owned();
             match previous.get(&key) {
                 Some(cached)
-                    if cached.length == candidate.length
+                    if cached.parser_version == PARSER_VERSION
+                        && cached.length == candidate.length
                         && cached.modified == candidate.modified
                         && cached.source == candidate.source =>
                 {
@@ -310,6 +314,7 @@ impl QualityStore {
                         key,
                         CachedFile {
                             source: candidate.source,
+                            parser_version: PARSER_VERSION,
                             length: candidate.length,
                             modified: candidate.modified,
                             rows: parsed.rows,

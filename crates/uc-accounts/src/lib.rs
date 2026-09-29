@@ -2,7 +2,7 @@ mod keys;
 mod protection;
 mod storage;
 
-pub use keys::{KeyRecord, KeyStore};
+pub use keys::{KeyRecord, KeyStore, LoginSnapshot};
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

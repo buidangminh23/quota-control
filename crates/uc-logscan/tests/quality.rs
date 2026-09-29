@@ -244,6 +244,77 @@ fn codex_legacy() -> Vec<Value> {
     ]
 }
 
+#[test]
+fn fork_replays_are_excluded_and_legacy_cache_is_rebuilt_without_log_changes() {
+    let temp = tempfile::tempdir().unwrap();
+    let logs = temp.path().join("codex");
+    let parent = codex_legacy();
+    write_lines(&logs.join("parent.jsonl"), &parent);
+    let mut child = vec![json!({
+        "timestamp":"2026-07-01T09:00:00Z","type":"session_meta",
+        "payload":{"id":"child","forked_from_id":"s","cwd":"Z:/missing/codex-project"}
+    })];
+    child.extend(parent.iter().skip(1).cloned());
+    child.extend(parent.iter().skip(1).cloned().map(|mut value| {
+        value["timestamp"] = value["timestamp"]
+            .as_str()
+            .unwrap()
+            .replace("T08:", "T09:")
+            .into();
+        value
+    }));
+    write_lines(&logs.join("child.jsonl"), &child);
+    let scanners = [scanner(LogSource::Codex, vec![logs])];
+    let path = temp.path().join("quality.json");
+    let store = QualityStore::open(&path);
+    store.scan(&scanners).unwrap();
+    let summary = store.summary(&QualityQuery::default()).unwrap();
+    assert_eq!(
+        summary.rows.iter().map(|row| row.counts.turns).sum::<u64>(),
+        2
+    );
+    assert_eq!(
+        summary
+            .rows
+            .iter()
+            .map(|row| row.counts.output_tokens)
+            .sum::<u64>(),
+        60
+    );
+    assert_eq!(
+        summary
+            .rows
+            .iter()
+            .map(|row| row.counts.check_runs)
+            .sum::<u64>(),
+        4
+    );
+    assert_eq!(store.scan(&scanners).unwrap().files_parsed, 0);
+    drop(store);
+    let mut legacy: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    legacy["version"] = json!(2);
+    for file in legacy["files"].as_object_mut().unwrap().values_mut() {
+        file.as_object_mut().unwrap().remove("parser_version");
+        for row in file["rows"].as_array_mut().unwrap() {
+            row["counts"]["turns"] = json!(99);
+        }
+    }
+    std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let upgraded = QualityStore::open(&path);
+    assert_eq!(upgraded.scan(&scanners).unwrap().files_parsed, 2);
+    assert_eq!(
+        upgraded.summary(&QualityQuery::default()).unwrap().rows,
+        summary.rows
+    );
+    drop(upgraded);
+    let reopened = QualityStore::open(&path);
+    assert_eq!(reopened.scan(&scanners).unwrap().files_parsed, 0);
+    assert_eq!(
+        reopened.summary(&QualityQuery::default()).unwrap().rows,
+        summary.rows
+    );
+}
+
 fn codex_items() -> Vec<Value> {
     let event =
         |at: &str, payload: Value| json!({"timestamp":at,"type":"event_msg","payload":payload});

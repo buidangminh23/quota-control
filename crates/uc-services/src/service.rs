@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -295,13 +296,35 @@ impl Roots {
 type MemoEntry = (Value, Option<DateTime<Utc>>);
 
 /// Per-card memory kept between refreshes: a renewed access token, a looked-up project id.
-#[derive(Default)]
-pub struct Memo(tokio::sync::Mutex<HashMap<&'static str, MemoEntry>>);
+#[derive(Clone, Default)]
+pub struct Memo {
+    entries: Arc<tokio::sync::Mutex<HashMap<&'static str, MemoEntry>>>,
+    renewal: Option<Arc<tokio::sync::Mutex<Renewal>>>,
+}
+
+struct Renewal {
+    snapshot: uc_accounts::LoginSnapshot,
+    lock: Option<uc_accounts::RenewalLock>,
+}
 
 impl Memo {
+    pub(crate) fn with_renewal(
+        &self,
+        snapshot: uc_accounts::LoginSnapshot,
+        lock: uc_accounts::RenewalLock,
+    ) -> Self {
+        Self {
+            entries: self.entries.clone(),
+            renewal: Some(Arc::new(tokio::sync::Mutex::new(Renewal {
+                snapshot,
+                lock: Some(lock),
+            }))),
+        }
+    }
+
     /// The value under `key`, unless it expired by `now`.
     pub async fn get(&self, key: &'static str, now: DateTime<Utc>) -> Option<Value> {
-        let mut entries = self.0.lock().await;
+        let mut entries = self.entries.lock().await;
         match entries.get(key) {
             Some((_, Some(expires))) if *expires <= now => {
                 entries.remove(key);
@@ -313,11 +336,11 @@ impl Memo {
     }
 
     pub async fn put(&self, key: &'static str, value: Value, expires: Option<DateTime<Utc>>) {
-        self.0.lock().await.insert(key, (value, expires));
+        self.entries.lock().await.insert(key, (value, expires));
     }
 
     pub async fn remove(&self, key: &'static str) {
-        self.0.lock().await.remove(key);
+        self.entries.lock().await.remove(key);
     }
 }
 
@@ -333,14 +356,28 @@ pub struct FetchContext<'a> {
 pub(crate) const RENEWED: &str = "signin.renewed";
 
 impl FetchContext<'_> {
-    /// Hand an owned sign-in's renewed token document to its card, which saves it in place of the
-    /// old one as soon as this fetch ends, even when the fetch then fails: a rotated refresh token
-    /// is already the only one that works. Another app's login is never written, so for it this
-    /// does nothing.
-    pub async fn keep_renewed(&self, document: Value) {
+    pub async fn keep_renewed(&self, document: Value) -> Result<(), SimpleProviderError> {
         if self.secret.is_owned() {
-            self.memo.put(RENEWED, document, None).await;
+            if let Some(renewal) = &self.memo.renewal {
+                let mut renewal = renewal.lock().await;
+                let mut snapshot = renewal.snapshot.clone();
+                renewal.snapshot = uc_core::load_blocking(move || {
+                    snapshot.replace(&document)?;
+                    Ok::<_, uc_accounts::AccountError>(snapshot)
+                })
+                .await
+                .map_err(|_| {
+                    SimpleProviderError::new(
+                        uc_core::ErrorCategory::CredentialAccess,
+                        "The renewed sign-in could not be saved. Reconnect it in Accounts.",
+                    )
+                })?;
+                renewal.lock.take();
+            } else {
+                self.memo.put(RENEWED, document, None).await;
+            }
         }
+        Ok(())
     }
 }
 
