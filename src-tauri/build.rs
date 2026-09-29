@@ -27,7 +27,8 @@ fn main() {
     }
 }
 
-/// The Dynamic Island, the popup's window style and the widget reload live in Swift
+/// The Dynamic Island, the popup's window style, the widget reload, the menu bar strip,
+/// notifications and the login item live in Swift
 /// (`macos/Shared` and `macos/Host`), compiled into a static library linked into the app. The
 /// widget extension itself is built separately by `scripts/macos-widget.mjs`.
 mod macos {
@@ -126,7 +127,16 @@ mod macos {
         println!("cargo:rustc-link-search=native={}", toolchain.display());
         println!("cargo:rustc-link-search=native=/usr/lib/swift");
         println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
-        for framework in ["AppKit", "SwiftUI", "WidgetKit", "QuartzCore", "Foundation"] {
+        for framework in [
+            "AppKit",
+            "SwiftUI",
+            "WidgetKit",
+            "QuartzCore",
+            "Foundation",
+            "CoreText",
+            "UserNotifications",
+            "ServiceManagement",
+        ] {
             println!("cargo:rustc-link-lib=framework={framework}");
         }
     }

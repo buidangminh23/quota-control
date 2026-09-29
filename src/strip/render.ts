@@ -20,7 +20,11 @@ export type StripStyle = "taskbar" | "menuBar" | "panel";
 export const GLYPH_SIDE = 16;
 /** Upstream draws the Bars glyph 18 points square in the macOS menu bar. */
 export const MENU_BAR_GLYPH_SIDE = 18;
-const MARK_INSET = 0.04;
+/** The clear margin around a mark, as a share of its side. */
+export const MARK_INSET = 0.04;
+/** Weights of a lone reading and of stacked readings. */
+export const SINGLE_WEIGHT = 700;
+export const STACKED_WEIGHT = 600;
 
 interface StripMetrics {
   font: string;
@@ -224,7 +228,7 @@ export async function renderTextStrip(
   const [, measure] = canvas(1, 1);
   const font = (size: number, weight: number) => `${weight} ${size * scale}px ${metrics.font}`;
   const labelFont = metrics.labelSize === null ? null : font(metrics.labelSize, metrics.labelWeight ?? 500);
-  const valueFont = (rows: number) => (rows > 1 ? font(metrics.stackedSize, 600) : font(metrics.singleSize, 700));
+  const valueFont = (rows: number) => (rows > 1 ? font(metrics.stackedSize, STACKED_WEIGHT) : font(metrics.singleSize, SINGLE_WEIGHT));
   const textWidth = (text: string, fontSpec: string) => {
     measure.font = fontSpec;
     return measure.measureText(text).width;

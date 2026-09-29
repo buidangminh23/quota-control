@@ -43,8 +43,9 @@ export function useUsageNotifications(): void {
     );
     if (!settingsOn) return;
     for (const alert of alerts) {
-      notify(alert.title, alert.body).catch((error: unknown) => console.error("Sending notification failed", error));
       const descriptorId = alert.key.split("|")[0] ?? "";
+      const topic = { id: `usage.${descriptorId}`, group: `usage.${descriptorProviderId(descriptorId)}` };
+      notify(alert.title, alert.body, topic).catch((error: unknown) => console.error("Sending notification failed", error));
       announceOnIsland({ title: alert.title, body: alert.body, brand: brandOf(descriptorProviderId(descriptorId)), severity: ISLAND_SEVERITY[alert.milestone] });
     }
   }, [engine, catalog, layout.placed, toggles, display, isEnabled]);

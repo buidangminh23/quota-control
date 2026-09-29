@@ -5,7 +5,7 @@
  * Rust command names live in `src-tauri/src/commands.rs`; keep both sides in sync.
  */
 import type { Language } from "@/i18n/language";
-import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, SavedKey, ServiceEntry, SignInMethod, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
+import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, SavedKey, ServiceEntry, SignInMethod, StripFrame, SystemNotification, SystemNotificationAccess, TaskbarInfo, UpdateStatus } from "./types";
 
 import type { ContextWindowSession, ExchangeRate, UsageGroupRow, UsageLedgerInfo, UsageQuery } from "./types";
 import type { LimitResetResult } from "./types";
@@ -94,6 +94,15 @@ export interface Backend {
   setTaskbarStrip?(frame: StripFrame | null): Promise<void>;
   /** Send the starred metrics to the macOS Dynamic Island and desktop widget; absent elsewhere. */
   setGlance?(document: GlanceDocument): Promise<void>;
+  /**
+   * Notifications and launch at login the operating system's own way (macOS). Each answers `null`,
+   * or `false` for a notification, where the system has none and the Tauri plugin does the work.
+   */
+  systemNotificationAccess?(): Promise<SystemNotificationAccess | null>;
+  requestSystemNotificationAccess?(): Promise<SystemNotificationAccess | null>;
+  sendSystemNotification?(notification: SystemNotification): Promise<boolean>;
+  systemLaunchAtLogin?(): Promise<boolean | null>;
+  setSystemLaunchAtLogin?(enabled: boolean): Promise<boolean | null>;
   /** The accelerator that toggles the popup from anywhere (`Ctrl+Alt+KeyU`), or `null` for none. */
   globalShortcut?(): Promise<string | null>;
   /** Register and save a new accelerator, or clear it with `null`; rejects when it is unusable. */

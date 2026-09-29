@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { messagesFor } from "@/i18n";
 import { backend } from "@/lib/backend";
+import { markArt } from "@/glance/markArt";
 import { glanceGroups } from "@/model/layout";
 import { buildStripContent, isStripEmpty, stripSummary, type StripContent } from "@/model/menuBar";
 import { providerTitle } from "@/model/providerText";
@@ -14,6 +15,7 @@ import { widgetDataFor } from "@/model/widgetData";
 import { useDisplay, useIsEnabled, useSystemDark } from "@/state/hooks";
 import { useApp } from "@/state/store";
 import { MENU_BAR_GLYPH_SIDE, GLYPH_SIDE, renderBarsGlyph, renderTextStrip, stripText, type StripStyle } from "./render";
+import { nativeStrip, type NativeStrip } from "./native";
 import { pushStripFrame, useTaskbarInfo, watchTaskbarInfo } from "./support";
 
 type Output =
@@ -43,10 +45,19 @@ async function apply(output: Output, appName: string): Promise<void> {
     return;
   }
   const frame = await renderTextStrip(output.content, output.height, output.scale, output.color, output.style);
+  const native = frame && output.style === "menuBar" ? await describe(output.content, output.height, output.scale) : null;
   await Promise.all([
     api.setTrayIcon(null, appName),
-    pushStripFrame(frame ? { ...frame, text: stripText(output.content), tooltip: output.tooltip } : null),
+    pushStripFrame(frame ? { ...frame, text: stripText(output.content), tooltip: output.tooltip, ...(native ? { native } : {}) } : null),
   ]);
+}
+
+/** The strip as a description for macOS to draw, with the color logos of the brands that have one. */
+async function describe(content: StripContent, height: number, scale: number): Promise<NativeStrip | null> {
+  const brands = [...new Set(content.groups.map((group) => group.brand))];
+  const drawn = await Promise.all(brands.map(async (brand) => [brand, await markArt(brand)] as const));
+  const art = Object.fromEntries(drawn.filter((entry): entry is readonly [string, string] => entry[1] !== null));
+  return nativeStrip(content, height, scale, art);
 }
 
 export function useTaskbarStrip(): void {

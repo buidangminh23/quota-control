@@ -215,7 +215,7 @@ describe("reset notifications", () => {
     body.data.scheduled_reset.id = "999";
     act(() => useInsights.setState({ feeds: { ...useInsights.getState().feeds, codexResetStatus: { ...status, body: JSON.stringify(body) } } }));
     expect(notify).toHaveBeenCalledOnce();
-    expect(notify).toHaveBeenCalledWith("Codex hẹn reset", expect.stringContaining("reset usage limits"));
+    expect(notify).toHaveBeenCalledWith("Codex hẹn reset", expect.stringContaining("reset usage limits"), { id: "resets.scheduled", group: "resets" });
   });
 
   it("announces a watch once while it is active", async () => {
@@ -236,7 +236,7 @@ describe("reset notifications", () => {
     const push = () => act(() => useInsights.setState({ feeds: { ...useInsights.getState().feeds, codexResetStatus: { ...status, body: JSON.stringify(body) } } }));
     push();
     expect(notify).toHaveBeenCalledOnce();
-    expect(notify).toHaveBeenCalledWith("Codex Resets: dấu hiệu mạnh sắp reset", expect.stringContaining("you know what comes next"));
+    expect(notify).toHaveBeenCalledWith("Codex Resets: dấu hiệu mạnh sắp reset", expect.stringContaining("you know what comes next"), { id: "resets.watch", group: "resets" });
     body.data.active_watch = { ...(body.data.active_watch as object), text: "same watch, new wording" };
     push();
     expect(notify).toHaveBeenCalledOnce();

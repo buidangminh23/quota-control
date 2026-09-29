@@ -17,6 +17,7 @@ mod macos;
 pub mod public_feeds;
 mod service;
 mod shortcut;
+mod system;
 mod taskbar_strip;
 mod updates;
 mod usage_commands;
@@ -31,7 +32,6 @@ use tauri::{
 use std::time::{Duration, Instant};
 
 use service::{BackendService, safe_error};
-use tauri_plugin_autostart::ManagerExt as _;
 
 /// How often the app looks for a CLI that signed in, out, or into another account. Opening the
 /// popup looks as well.
@@ -131,6 +131,11 @@ pub fn run() -> anyhow::Result<()> {
             chat_commands::list_chat_sessions,
             chat_commands::create_chat_session,
             chat_commands::open_chat_session,
+            system::system_notification_access,
+            system::request_system_notification_access,
+            system::send_system_notification,
+            system::system_launch_at_login,
+            system::set_system_launch_at_login,
             taskbar_strip::taskbar_info,
             taskbar_strip::set_taskbar_strip,
             glance::set_glance,
@@ -145,12 +150,7 @@ pub fn run() -> anyhow::Result<()> {
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-            if !cfg!(debug_assertions)
-                && app.autolaunch().is_enabled().unwrap_or(false)
-                && let Err(error) = app.autolaunch().enable()
-            {
-                tracing::warn!("Could not refresh launch-at-login path: {error}");
-            }
+            system::keep_launch_at_login(app.handle());
             app.manage(integrations::IntegrationStore::default_store());
             app.manage(usage_commands::UsageService::new()?);
             app.manage(insights_commands::InsightsService::new());
@@ -272,6 +272,7 @@ pub fn run() -> anyhow::Result<()> {
             {
                 macos::start_island(app.handle());
                 macos::adopt_current_widget();
+                system::start(app.handle());
             }
             app.state::<BackendService>().start(app.handle());
             app.state::<updates::Updates>().start(app.handle());

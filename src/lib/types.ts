@@ -4,6 +4,8 @@
  * (`providerID`, `costUSD`, …). Dates arrive as ISO-8601 strings.
  */
 
+import type { NativeStrip } from "@/strip/native";
+
 export type MetricKind = "percent" | "dollars" | "count";
 
 export type ProgressFormat = { kind: "percent" } | { kind: "dollars" } | { kind: "count"; suffix: string };
@@ -429,6 +431,21 @@ export interface StripFrame {
   height: number;
   text: string;
   tooltip: string;
+  /** The same strip as a description, which macOS draws itself in place of the picture. */
+  native?: NativeStrip;
+}
+
+/** The system's own answer about notification access (`system.rs`). */
+export type SystemNotificationAccess = "granted" | "denied" | "undetermined";
+
+/** A notification for the system to show (`system.rs`). */
+export interface SystemNotification {
+  title: string;
+  body: string;
+  /** What the notification is about: the next one about the same thing replaces it. */
+  id?: string;
+  /** Notifications with the same group stay together in the system's list. */
+  group?: string;
 }
 
 /** Where the app's self-update stands (`updates.rs`). */

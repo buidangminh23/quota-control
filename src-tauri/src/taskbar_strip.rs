@@ -17,9 +17,12 @@
 //! `taskbar-info`.
 //! Linux: the frame's text becomes the tray title.
 //! macOS: the frame becomes the menu bar item's image itself, drawn in color like the Windows taskbar
-//! and the Linux panel, its text in the menu bar's own light or dark color (reported by the Swift
-//! side); the Bars glyph and the plain icon stay templates the system tints. The three share that one
-//! image, so the strip wins over the glyph and the glyph over the icon.
+//! and the Linux panel, its text in the menu bar's own light or dark color. The frame carries a
+//! description of the strip beside its picture (`src/strip/native.ts`), and the system draws the
+//! strip from that (`macos/Host/MenuBarStrip.swift`): sharp on every display, in the menu bar's look
+//! the moment it changes, its readings open to VoiceOver. The picture shows when the description
+//! cannot be drawn. The Bars glyph and the plain icon stay templates the system tints. The three
+//! share that one image, so the strip wins over the glyph and the glyph over the icon.
 //! Other platforms report the strip unsupported.
 
 use serde::{Deserialize, Serialize};
@@ -67,6 +70,10 @@ const MAX_FRAME_HEIGHT: u32 = 512;
 const MAX_PNG_BYTES: usize = 4 * 1_048_576;
 const MAX_TEXT_CHARS: usize = 512;
 const MAX_TOOLTIP_CHARS: usize = 1024;
+/// Largest description of the strip the popup may send: the marks' paths and color logos make up
+/// nearly all of it.
+const MAX_NATIVE_BYTES: usize = 1_048_576;
+const NATIVE_VERSION: u64 = 1;
 /// Popup event carrying a changed [`TaskbarInfo`].
 #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 pub const TASKBAR_INFO_EVENT: &str = "taskbar-info";
@@ -124,6 +131,9 @@ pub struct StripFrame {
     /// Plain-text rendering of the same readings (tray title on Linux).
     pub text: String,
     pub tooltip: String,
+    /// The same strip as a description the system can draw itself (macOS).
+    #[serde(default)]
+    pub native: Option<serde_json::Value>,
 }
 
 /// Which mouse button released over the strip.
@@ -186,6 +196,27 @@ pub fn decode_frame(frame: &StripFrame) -> Result<Bitmap, String> {
         text: frame.text.clone(),
         tooltip: frame.tooltip.clone(),
     })
+}
+
+/// Validate the strip's description and serialize it for the platform that draws it.
+pub fn encode_native(document: &serde_json::Value) -> Result<Vec<u8>, String> {
+    use serde_json::Value;
+    if document.get("version").and_then(Value::as_u64) != Some(NATIVE_VERSION) {
+        return Err("Unsupported strip description".into());
+    }
+    if !document
+        .get("groups")
+        .and_then(Value::as_array)
+        .is_some_and(|groups| !groups.is_empty())
+    {
+        return Err("A strip description lists what it shows".into());
+    }
+    let bytes = serde_json::to_vec(document)
+        .map_err(|_| "The strip description cannot be written".to_string())?;
+    if bytes.len() > MAX_NATIVE_BYTES {
+        return Err("The strip description is too large".into());
+    }
+    Ok(bytes)
 }
 
 impl Bitmap {
@@ -630,6 +661,15 @@ impl TaskbarStrip {
         self.inner.set(bitmap);
     }
 
+    /// The description of the strip the next frame comes with, which macOS draws itself in place
+    /// of the frame's picture. Other systems show the picture.
+    pub fn set_native(&self, document: Option<Vec<u8>>) {
+        #[cfg(target_os = "macos")]
+        self.inner.set_native(document);
+        #[cfg(not(target_os = "macos"))]
+        let _ = document;
+    }
+
     /// The tray icon glyph (the Bars style), or `None` for the app icon, with its tooltip. The
     /// macOS menu bar and the Linux panel show the strip as the tray image itself, so the strip
     /// decides which of them shows; on Windows the caller sets the tray icon directly.
@@ -656,6 +696,12 @@ pub fn set_taskbar_strip(
     frame: Option<StripFrame>,
 ) -> Result<(), String> {
     let bitmap = frame.as_ref().map(decode_frame).transpose()?;
+    let native = frame
+        .as_ref()
+        .and_then(|frame| frame.native.as_ref())
+        .map(encode_native)
+        .transpose()?;
+    strip.set_native(native);
     strip.set(bitmap);
     Ok(())
 }
@@ -2097,11 +2143,24 @@ mod platform {
     #[derive(Default)]
     struct Images {
         strip: Option<(Image<'static>, String)>,
+        /// The strip as a description for the system to draw; `strip` is its picture.
+        native: Option<Vec<u8>>,
         glyph: Option<Image<'static>>,
         tooltip: String,
     }
 
-    type Show = Box<dyn Fn(Option<Image<'static>>, String, bool) + Send + Sync>;
+    /// What the menu bar item shows.
+    enum Shown {
+        /// The strip the system draws from its description, or its picture when it cannot.
+        Strip {
+            document: Option<Vec<u8>>,
+            picture: Image<'static>,
+        },
+        /// The Bars glyph, or the resting icon for `None`: templates the system tints.
+        Template(Option<Image<'static>>),
+    }
+
+    type Show = Box<dyn Fn(Shown, String) + Send + Sync>;
 
     pub struct Strip {
         images: Mutex<Images>,
@@ -2149,22 +2208,44 @@ mod platform {
                     tracing::warn!("could not publish the menu bar appearance");
                 }
             });
+            let by_system = AtomicBool::new(false);
             Self {
                 images: Mutex::new(Images::default()),
                 scale,
                 dark,
-                show: Box::new(move |image, tooltip, template| {
+                show: Box::new(move |shown, tooltip| {
                     let Some(tray) = app.tray_by_id(TRAY_ID) else {
                         return;
                     };
-                    let (image, template) = match image {
-                        Some(image) => (Some(image), template),
-                        None => (crate::menu_bar_icon().ok(), true),
+                    let tooltip = Some(tooltip).filter(|tip| !tip.is_empty());
+                    let (image, template) = match shown {
+                        Shown::Strip { document, picture } => {
+                            let described = document.is_some();
+                            let drawn = document.is_some_and(|document| draw(&tray, document));
+                            if described && drawn != by_system.swap(drawn, Ordering::Relaxed) {
+                                if drawn {
+                                    tracing::info!("the system draws the menu bar strip");
+                                } else {
+                                    tracing::warn!(
+                                        "the system could not draw the menu bar strip; its picture shows"
+                                    );
+                                }
+                            }
+                            if drawn {
+                                if tray.set_tooltip(tooltip).is_err() {
+                                    tracing::warn!("could not update the menu bar item");
+                                }
+                                return;
+                            }
+                            (Some(picture), false)
+                        }
+                        Shown::Template(image) => {
+                            (image.or_else(|| crate::menu_bar_icon().ok()), true)
+                        }
                     };
+                    crate::macos::clear_strip();
                     if tray.set_icon_with_as_template(image, template).is_err()
-                        || tray
-                            .set_tooltip(Some(tooltip).filter(|tip| !tip.is_empty()))
-                            .is_err()
+                        || tray.set_tooltip(tooltip).is_err()
                     {
                         tracing::warn!("could not update the menu bar item");
                     }
@@ -2176,12 +2257,22 @@ mod platform {
             info_for(self.scale, self.dark.load(Ordering::Relaxed))
         }
 
+        /// Kept for the frame that follows; `set` shows both.
+        pub fn set_native(&self, document: Option<Vec<u8>>) {
+            self.images.lock().native = document;
+        }
+
         pub fn set(&self, bitmap: Option<Bitmap>) {
             let strip = bitmap.map(|bitmap| {
                 let image = Image::new_owned(bitmap.straight_rgba(), bitmap.width, bitmap.height);
                 (image, bitmap.tooltip)
             });
-            self.images.lock().strip = strip;
+            let mut images = self.images.lock();
+            if strip.is_none() {
+                images.native = None;
+            }
+            images.strip = strip;
+            drop(images);
             self.apply();
         }
 
@@ -2197,15 +2288,35 @@ mod platform {
         }
 
         fn apply(&self) {
-            let (image, tooltip, template) = {
+            let (shown, tooltip) = {
                 let images = self.images.lock();
                 match &images.strip {
-                    Some((image, tooltip)) => (Some(image.clone()), tooltip.clone(), false),
-                    None => (images.glyph.clone(), images.tooltip.clone(), true),
+                    Some((picture, tooltip)) => (
+                        Shown::Strip {
+                            document: images.native.clone(),
+                            picture: picture.clone(),
+                        },
+                        tooltip.clone(),
+                    ),
+                    None => (
+                        Shown::Template(images.glyph.clone()),
+                        images.tooltip.clone(),
+                    ),
                 }
             };
-            (self.show)(image, tooltip, template);
+            (self.show)(shown, tooltip);
         }
+    }
+
+    /// Have the system draw the strip in the tray's menu bar item, on the main thread, where the
+    /// tray hands its item out. `false` when it did not, and the item is as it was.
+    fn draw<R: Runtime>(tray: &tauri::tray::TrayIcon<R>, document: Vec<u8>) -> bool {
+        tray.with_inner_tray_icon(move |inner| {
+            inner.ns_status_item().is_some_and(|item| {
+                crate::macos::show_strip(std::ptr::from_ref(&*item).cast_mut().cast(), &document)
+            })
+        })
+        .unwrap_or(false)
     }
 }
 
@@ -2257,7 +2368,38 @@ mod tests {
             height: 1,
             text: "Claude 12%".into(),
             tooltip: "Usage".into(),
+            native: None,
         }
+    }
+
+    #[test]
+    fn takes_a_strip_description_with_something_to_show_and_no_other() {
+        let group =
+            serde_json::json!({ "brand": "claude", "rows": [{ "label": "5h", "value": "12%" }] });
+        let document = serde_json::json!({ "version": 1, "groups": [group] });
+        let bytes = encode_native(&document).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+            document
+        );
+        assert!(encode_native(&serde_json::json!({ "version": 2, "groups": [group] })).is_err());
+        assert!(encode_native(&serde_json::json!({ "version": 1, "groups": [] })).is_err());
+        assert!(encode_native(&serde_json::json!({ "version": 1 })).is_err());
+        let heavy = serde_json::json!({ "version": 1, "groups": [group], "text": "x".repeat(MAX_NATIVE_BYTES) });
+        assert!(encode_native(&heavy).is_err());
+    }
+
+    #[test]
+    fn frames_from_a_popup_without_a_description_still_read() {
+        let frame: StripFrame = serde_json::from_value(serde_json::json!({
+            "png": TWO_PIXELS.to_vec(),
+            "width": 2,
+            "height": 1,
+            "text": "Claude 12%",
+            "tooltip": "Usage",
+        }))
+        .unwrap();
+        assert!(frame.native.is_none());
     }
 
     #[test]

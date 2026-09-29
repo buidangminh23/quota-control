@@ -5,7 +5,7 @@ import type { ContextWindowSession, ExchangeRate, SavedKey, ServiceEntry, UsageG
 import type { LimitResetResult } from "./types";
 import type { PublicFeedName, PublicFeedSnapshot, QualityInfo, QualityQuery, QualitySummary } from "./insightsTypes";
 import type { Language } from "@/i18n/language";
-import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, SignInMethod, StripFrame, TaskbarInfo, UpdateStatus } from "./types";
+import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, SignInMethod, StripFrame, SystemNotification, SystemNotificationAccess, TaskbarInfo, UpdateStatus } from "./types";
 import type { GlanceDocument } from "@/model/glance";
 
 /** Subscribe to a Tauri event synchronously; the returned function tears the listener down. */
@@ -209,6 +209,26 @@ export class TauriBackend implements Backend {
 
   setGlance(document: GlanceDocument): Promise<void> {
     return invoke("set_glance", { document });
+  }
+
+  systemNotificationAccess(): Promise<SystemNotificationAccess | null> {
+    return invoke<SystemNotificationAccess | null>("system_notification_access");
+  }
+
+  requestSystemNotificationAccess(): Promise<SystemNotificationAccess | null> {
+    return invoke<SystemNotificationAccess | null>("request_system_notification_access");
+  }
+
+  sendSystemNotification(notification: SystemNotification): Promise<boolean> {
+    return invoke<boolean>("send_system_notification", { ...notification });
+  }
+
+  systemLaunchAtLogin(): Promise<boolean | null> {
+    return invoke<boolean | null>("system_launch_at_login");
+  }
+
+  setSystemLaunchAtLogin(enabled: boolean): Promise<boolean | null> {
+    return invoke<boolean | null>("set_system_launch_at_login", { enabled });
   }
 
   setTrayIcon(png: Uint8Array | null, tooltip: string): Promise<void> {

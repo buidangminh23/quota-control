@@ -641,21 +641,12 @@ fn check_due(last: Option<SystemTime>, now: SystemTime) -> bool {
 
 /// A system notification in the app's language, for update news the closed popup cannot show.
 fn notify(app: &AppHandle, vietnamese: String, english: String) {
-    use tauri_plugin_notification::NotificationExt;
     let body = if crate::english(app) {
         english
     } else {
         vietnamese
     };
-    if let Err(error) = app
-        .notification()
-        .builder()
-        .title("Quota Control")
-        .body(body)
-        .show()
-    {
-        tracing::warn!(target: "updates", "could not show an update notification: {}", safe_error(error));
-    }
+    crate::system::announce(app, "Quota Control".into(), body, "update");
 }
 
 /// A background check found a release: say so with a system notification only while the popup is

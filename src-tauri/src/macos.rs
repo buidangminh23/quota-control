@@ -1,15 +1,19 @@
-//! macOS: the popup's window style, the Dynamic Island, and the desktop widget's reload and upkeep.
-//! They are written in Swift (`macos/Host`, built by `build.rs`) and reached through this C
-//! interface. The Swift side hops to the main thread itself, so every function here may run on any
-//! thread.
+//! macOS: the popup's window style, the Dynamic Island, the desktop widget's reload and upkeep,
+//! the menu bar strip drawn by the system, notifications through the system's notification center
+//! and launch at login as a login item. They are written in Swift (`macos/Host`, built by
+//! `build.rs`) and reached through this C interface. The Swift side hops to the main thread itself,
+//! so every function here may run on any thread, except [`show_strip`].
 
-use std::ffi::c_void;
+use std::ffi::{CString, c_char, c_void};
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use tauri::{AppHandle, PhysicalPosition, PhysicalRect, PhysicalSize, WebviewWindow};
 
 type IslandHandler = extern "C" fn(i32, f64, f64, f64, f64, f64);
 type AppearanceHandler = extern "C" fn(bool);
+type NotificationAccessHandler = extern "C" fn(*mut c_void, i32);
+type NotificationOpenHandler = extern "C" fn();
 
 unsafe extern "C" {
     fn qc_popup_configure(window: *mut c_void, radius: f64);
@@ -20,6 +24,20 @@ unsafe extern "C" {
     fn qc_widgets_reload();
     fn qc_widgets_adopt_current();
     fn qc_menu_bar_appearance_start(handler: Option<AppearanceHandler>);
+    fn qc_strip_show(item: *mut c_void, bytes: *const u8, length: usize) -> bool;
+    fn qc_strip_clear();
+    fn qc_notifications_start(handler: Option<NotificationOpenHandler>) -> bool;
+    fn qc_notifications_access(context: *mut c_void, handler: Option<NotificationAccessHandler>);
+    fn qc_notifications_request(context: *mut c_void, handler: Option<NotificationAccessHandler>);
+    fn qc_notifications_send(
+        title: *const c_char,
+        body: *const c_char,
+        identifier: *const c_char,
+        thread: *const c_char,
+        english: bool,
+    );
+    fn qc_login_item_state() -> i32;
+    fn qc_login_item_set(enabled: bool, by_user: bool) -> i32;
 }
 
 /// Corner radius of the popup, in points.
@@ -76,6 +94,148 @@ extern "C" fn menu_bar_appearance(dark: bool) {
     }
 }
 
+/// Draw the strip `document` describes (`src/strip/native.ts`) in the menu bar item. `item` is the
+/// tray's `NSStatusItem`, and this runs on the main thread, where the tray hands the item out.
+/// `false` leaves the item as it was.
+pub fn show_strip(item: *mut c_void, document: &[u8]) -> bool {
+    unsafe { qc_strip_show(item, document.as_ptr(), document.len()) }
+}
+
+/// The menu bar item shows an ordinary image again.
+pub fn clear_strip() {
+    unsafe { qc_strip_clear() }
+}
+
+/// Whether the user lets the app show notifications, as the system's notification center tells.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotificationAccess {
+    /// The notification center is out of reach: a development run outside an app bundle.
+    Unavailable,
+    /// The user was never asked.
+    Undetermined,
+    Denied,
+    Granted,
+}
+
+impl NotificationAccess {
+    fn from_code(code: i32) -> Self {
+        match code {
+            0 => Self::Undetermined,
+            1 => Self::Denied,
+            2 => Self::Granted,
+            _ => Self::Unavailable,
+        }
+    }
+}
+
+/// How long an answer about notification access may take. Reading the setting answers at once;
+/// asking waits for the user, who may leave the question unanswered.
+const ACCESS_READ: Duration = Duration::from_secs(5);
+const ACCESS_ASKED: Duration = Duration::from_secs(120);
+
+/// Send notifications through the system's notification center from now on; a click on one opens
+/// the popup. `false` when the center is out of reach.
+pub fn start_notifications(app: &AppHandle) -> bool {
+    let _ = APP.set(app.clone());
+    unsafe { qc_notifications_start(Some(notification_opened)) }
+}
+
+extern "C" fn notification_opened() {
+    let Some(app) = APP.get().cloned() else {
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = crate::show_popup(&app) {
+            tracing::warn!("{error}");
+        }
+    });
+}
+
+pub async fn notification_access() -> NotificationAccess {
+    answer(ACCESS_READ, |context| unsafe {
+        qc_notifications_access(context, Some(access_answered))
+    })
+    .await
+}
+
+/// Ask the user for notifications when they were never asked; after a refusal the system's
+/// settings open instead, the one place the answer changes then.
+pub async fn request_notification_access() -> NotificationAccess {
+    answer(ACCESS_ASKED, |context| unsafe {
+        qc_notifications_request(context, Some(access_answered))
+    })
+    .await
+}
+
+/// An answer that does not come in time counts as none: the caller then treats the user as not
+/// asked yet.
+async fn answer(wait: Duration, ask: impl FnOnce(*mut c_void)) -> NotificationAccess {
+    let (sender, receiver) = tokio::sync::oneshot::channel::<i32>();
+    ask(Box::into_raw(Box::new(sender)).cast());
+    match tokio::time::timeout(wait, receiver).await {
+        Ok(Ok(code)) => NotificationAccess::from_code(code),
+        _ => NotificationAccess::Undetermined,
+    }
+}
+
+extern "C" fn access_answered(context: *mut c_void, code: i32) {
+    if context.is_null() {
+        return;
+    }
+    let sender = unsafe { Box::from_raw(context.cast::<tokio::sync::oneshot::Sender<i32>>()) };
+    let _ = sender.send(code);
+}
+
+/// Show a notification. One with the same `identifier` replaces the one shown before it, and
+/// Notification Center keeps those with the same `thread` together.
+pub fn notify(title: &str, body: &str, identifier: &str, thread: &str, english: bool) {
+    let text = |value: &str| CString::new(value.replace('\0', "")).unwrap_or_default();
+    let (title, body, identifier, thread) =
+        (text(title), text(body), text(identifier), text(thread));
+    unsafe {
+        qc_notifications_send(
+            title.as_ptr(),
+            body.as_ptr(),
+            identifier.as_ptr(),
+            thread.as_ptr(),
+            english,
+        );
+    }
+}
+
+/// Where the app's login item stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoginItem {
+    /// No login item can be registered: a development run outside an app bundle, or the system
+    /// refused.
+    Unavailable,
+    Off,
+    On,
+    /// Registered, but switched off in System Settings, where only the user switches it back.
+    NeedsApproval,
+}
+
+impl LoginItem {
+    fn from_code(code: i32) -> Self {
+        match code {
+            0 => Self::Off,
+            1 => Self::On,
+            2 => Self::NeedsApproval,
+            _ => Self::Unavailable,
+        }
+    }
+}
+
+pub fn login_item() -> LoginItem {
+    LoginItem::from_code(unsafe { qc_login_item_state() })
+}
+
+/// Register or remove the app's login item and tell where it stands after. When the user asked
+/// (`by_user`) and the item waits for approval, System Settings opens where it is given.
+pub fn set_login_item(enabled: bool, by_user: bool) -> LoginItem {
+    LoginItem::from_code(unsafe { qc_login_item_set(enabled, by_user) })
+}
+
 /// Ask WidgetKit to reload the desktop widget's timeline.
 pub fn reload_widgets() {
     unsafe { qc_widgets_reload() }
@@ -125,6 +285,46 @@ fn island_rect(x: f64, y: f64, width: f64, height: f64) -> PhysicalRect<i32, u32
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test runs outside an app bundle, where neither is within reach: the answers still come
+    /// back through the Swift side.
+    #[tokio::test]
+    async fn outside_an_app_bundle_the_system_ways_are_out_of_reach() {
+        assert_eq!(notification_access().await, NotificationAccess::Unavailable);
+        assert_eq!(
+            request_notification_access().await,
+            NotificationAccess::Unavailable
+        );
+        assert_eq!(login_item(), LoginItem::Unavailable);
+        assert_eq!(set_login_item(true, false), LoginItem::Unavailable);
+        assert!(!show_strip(std::ptr::null_mut(), b"{}"));
+        clear_strip();
+        notify("Claude", "Almost out", "usage.claude", "usage.claude", true);
+    }
+
+    #[test]
+    fn answers_from_swift_keep_their_meaning() {
+        assert_eq!(
+            [-1, 0, 1, 2, 9].map(NotificationAccess::from_code),
+            [
+                NotificationAccess::Unavailable,
+                NotificationAccess::Undetermined,
+                NotificationAccess::Denied,
+                NotificationAccess::Granted,
+                NotificationAccess::Unavailable,
+            ]
+        );
+        assert_eq!(
+            [-1, 0, 1, 2, 9].map(LoginItem::from_code),
+            [
+                LoginItem::Unavailable,
+                LoginItem::Off,
+                LoginItem::On,
+                LoginItem::NeedsApproval,
+                LoginItem::Unavailable,
+            ]
+        );
+    }
 
     #[test]
     fn island_rectangles_stay_in_whole_points() {

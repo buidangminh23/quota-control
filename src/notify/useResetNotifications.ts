@@ -13,6 +13,8 @@ import { ensureFeed, useInsights } from "@/state/insights";
 import { useApp } from "@/state/store";
 
 const STORAGE_KEY = "quota-control.codex-resets-notified";
+/** The reset notifications stay together in the system's list. */
+const RESETS_GROUP = "resets";
 /** A reset older than this when first seen is history, not news. */
 const FRESH_MS = 48 * 3_600_000;
 
@@ -71,14 +73,15 @@ export function useResetNotifications(): void {
     writeSeen(next);
     if (!seen) return;
     const text = insightsFor(language);
-    const send = (title: string, post: string) => {
+    const send = (kind: "latest" | "scheduled" | "watch", title: string, post: string) => {
       announceOnIsland({ title, body: excerpt(post), brand: "codex", severity: "normal" });
-      return notify(title, excerpt(post)).catch((error: unknown) => console.error("Sending notification failed", error));
+      const topic = { id: `resets.${kind}`, group: RESETS_GROUP };
+      return notify(title, excerpt(post), topic).catch((error: unknown) => console.error("Sending notification failed", error));
     };
     if (status.latest && status.latest.id !== seen.latest && Date.now() - status.latest.announcedAt.getTime() < FRESH_MS) {
-      void send(text.notifyResetTitle, status.latest.text);
+      void send("latest", text.notifyResetTitle, status.latest.text);
     }
-    if (status.scheduled && status.scheduled.id !== seen.scheduled) void send(text.notifyScheduledTitle, status.scheduled.text);
-    if (watch && watchKey(watch) !== seen.watch) void send(text.notifyWatchTitle(watch.level), watch.text);
+    if (status.scheduled && status.scheduled.id !== seen.scheduled) void send("scheduled", text.notifyScheduledTitle, status.scheduled.text);
+    if (watch && watchKey(watch) !== seen.watch) void send("watch", text.notifyWatchTitle(watch.level), watch.text);
   }, [enabled, body, language]);
 }
