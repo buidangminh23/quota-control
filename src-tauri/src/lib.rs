@@ -3,6 +3,7 @@ mod browser;
 mod chat_commands;
 mod chat_store;
 mod cli_install;
+mod cli_login;
 mod commands;
 pub mod exchange_rate;
 mod glance;
@@ -123,6 +124,7 @@ pub fn run() -> anyhow::Result<()> {
             account_commands::remove_api_key,
             account_commands::dismiss_detected_card,
             account_commands::restore_dismissed_cards,
+            account_commands::begin_cli_login,
             account_commands::list_removed_logins,
             account_commands::restore_removed_logins,
             chat_commands::list_chat_sessions,

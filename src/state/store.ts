@@ -7,6 +7,7 @@ import { create } from "zustand";
 import { messagesFor, translate } from "@/i18n";
 import { backend } from "@/lib/backend";
 import type {
+  AccountLogin as BackendAccountLogin,
   AccountLoginResult,
   AccountProvider,
   AppInfo,
@@ -41,11 +42,14 @@ export type Motion = "forward" | "back";
 /**
  * A browser sign-in in progress: of a Claude or Codex account (`provider` `claude` / `codex`), or of
  * another service's account by its id. It outlives the popup, which hides while the browser is in
- * front. `userCode` is what a device sign-in (GitHub) asks the user to type on its page.
+ * front. `userCode` is what a device sign-in (GitHub) asks the user to type on its page. Method
+ * `cli` is the Claude Code or Codex CLI's own login command, run from the Accounts screen.
  */
+export type LoginMethod = SignInMethod | "cli";
+
 export type AccountLogin =
-  | { phase: "starting"; provider: string; method: SignInMethod }
-  | { phase: "waiting"; provider: string; method: SignInMethod; flowId: string; browser: LoginBrowser; userCode?: string };
+  | { phase: "starting"; provider: string; method: LoginMethod }
+  | { phase: "waiting"; provider: string; method: LoginMethod; flowId: string; browser: LoginBrowser; userCode?: string };
 
 export interface AccountLoginError {
   provider: string;
@@ -446,13 +450,25 @@ function loginBrand(provider: string): string {
  * `account-login`, so nothing here waits for the sign-in itself.
  */
 export async function startAccountLogin(provider: string, method: SignInMethod = "google"): Promise<void> {
+  const isAccount = provider === "claude" || provider === "codex";
+  await beginLogin(provider, method, () => backend().beginAccountLogin(provider, get().settings.language, isAccount ? undefined : method));
+}
+
+/**
+ * Run the Claude Code or Codex CLI's own login command. It opens the browser; the core reports
+ * through `account-login` when it ends, and the CLI's card appears.
+ */
+export async function startCliLogin(provider: AccountProvider): Promise<void> {
+  await beginLogin(provider, "cli", () => backend().beginCliLogin(provider));
+}
+
+async function beginLogin(provider: string, method: LoginMethod, begin: () => Promise<BackendAccountLogin>): Promise<void> {
   const attempt = ++loginAttempt;
   const previous = get().accountLogin;
   if (previous?.phase === "waiting") void backend().cancelAccountLogin(previous.flowId).catch(logFailure("Cancelling the sign-in"));
   set({ accountLogin: { phase: "starting", provider, method }, accountLoginError: null });
   try {
-    const isAccount = provider === "claude" || provider === "codex";
-    const login = await backend().beginAccountLogin(provider, get().settings.language, isAccount ? undefined : method);
+    const login = await begin();
     if (attempt !== loginAttempt) {
       void backend().cancelAccountLogin(login.flowId).catch(logFailure("Cancelling the sign-in"));
       return;

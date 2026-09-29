@@ -437,6 +437,10 @@ export const vi: Messages = {
     userCodeNote: "Nhập mã này trên trang vừa mở rồi cho phép truy cập.",
     signInNote: (brand) =>
       `Trang đăng nhập ${brand} mở trong Google Chrome. Chọn Continue with Google rồi cho phép truy cập. Tài khoản tự kết nối, không cần copy mã.`,
+    signInWithCli: (product) => `Đăng nhập ${product}`,
+    cliSignInNote: (product) =>
+      `Quota Control chạy lệnh đăng nhập của ${product} và mở trang đăng nhập trong trình duyệt. ${product} trên máy cũng đăng nhập luôn, thẻ của nó tự hiện ở đây.`,
+    waitingCli: (product) => `Đang chờ đăng nhập ${product} trong trình duyệt…`,
     cliNote: "Claude Code và Codex CLI đã đăng nhập trên máy này tự hiện ở đây, không cần thêm.",
     starting: "Đang mở trang đăng nhập…",
     waiting: (brand, browser) =>

@@ -34,6 +34,11 @@ export interface Backend {
    * `provider` is `claude`, `codex` or a service's id; a service signs in with `method`.
    */
   beginAccountLogin(provider: string, language: Language, method?: SignInMethod): Promise<AccountLogin>;
+  /**
+   * Run the Claude Code or Codex CLI's own login command, which opens the browser. The CLI's card
+   * appears when it finishes, and `onAccountLogin` reports how it ended.
+   */
+  beginCliLogin(provider: AccountProvider): Promise<AccountLogin>;
   /** Show the sign-in page of a login that is still waiting. */
   reopenAccountLogin(flowId: string): Promise<LoginBrowser>;
   cancelAccountLogin(flowId: string): Promise<void>;

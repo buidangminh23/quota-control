@@ -19,6 +19,8 @@ pub struct Accounts {
     oauth: OAuthManager,
     /// Browser sign-ins of the other services, saved beside their API keys.
     sign_ins: SignInManager,
+    /// Claude Code and Codex CLI login commands started from the Accounts screen.
+    cli_logins: Arc<crate::cli_login::CliLogins>,
     label_backfill: uc_providers::accounts::AccountLabelBackfill,
     changes: tokio::sync::Mutex<()>,
     /// The CLI logins the current cards were built from.
@@ -33,6 +35,7 @@ impl Accounts {
         Self {
             oauth: OAuthManager::new(store.clone()),
             sign_ins: SignInManager::new(keys.clone()),
+            cli_logins: Arc::default(),
             label_backfill: uc_providers::accounts::AccountLabelBackfill::new(store.clone()),
             store,
             changes: tokio::sync::Mutex::new(()),
@@ -595,6 +598,13 @@ pub async fn reopen_account_login(
     accounts: State<'_, Accounts>,
     flow_id: String,
 ) -> Result<LoginBrowser, String> {
+    if accounts.cli_logins.knows(&flow_id) {
+        let url = accounts
+            .cli_logins
+            .url(&flow_id)
+            .ok_or("The sign-in page has not opened yet. Wait a moment and try again.")?;
+        return open_login_page(&app, &url);
+    }
     let url = match accounts.oauth.authorization_url(&flow_id).await {
         Some(url) => Some(url),
         None => accounts.sign_ins.authorization_url(&flow_id).await,
@@ -608,6 +618,10 @@ pub async fn cancel_account_login(
     accounts: State<'_, Accounts>,
     flow_id: String,
 ) -> Result<(), String> {
+    if accounts.cli_logins.knows(&flow_id) {
+        accounts.cli_logins.cancel(&flow_id);
+        return Ok(());
+    }
     if accounts.sign_ins.knows(&flow_id).await {
         accounts.sign_ins.cancel(&flow_id).await;
         return Ok(());
@@ -617,6 +631,100 @@ pub async fn cancel_account_login(
         .cancel_login(&flow_id)
         .await
         .map_err(safe_error)
+}
+
+/// Run the Claude Code or Codex CLI's own login command (`provider` `claude` / `codex`). It opens the
+/// browser; when it finishes, the CLI's card appears (again, if it had been removed) and the popup
+/// hears how it ended through `account-login`.
+#[tauri::command]
+pub async fn begin_cli_login(
+    app: AppHandle,
+    accounts: State<'_, Accounts>,
+    provider: String,
+) -> Result<LoginOpened, String> {
+    let kind = ProviderKind::parse(&provider).ok_or("Unsupported account provider")?;
+    let (flow_id, ended) = accounts.cli_logins.start(kind)?;
+    let background = app.clone();
+    let id = flow_id.clone();
+    tauri::async_runtime::spawn(async move {
+        let end = ended.await;
+        finish_cli_login(background, id, kind, end).await;
+    });
+    Ok(LoginOpened {
+        flow_id,
+        authorization_url: String::new(),
+        expires_in_seconds: crate::cli_login::LOGIN_TIMEOUT.as_secs(),
+        browser: LoginBrowser::Default,
+        user_code: None,
+    })
+}
+
+async fn finish_cli_login(
+    app: AppHandle,
+    flow_id: String,
+    kind: ProviderKind,
+    end: crate::cli_login::CliLoginEnd,
+) {
+    use crate::cli_login::CliLoginEnd;
+    let failed = |status: &'static str, error: Option<String>| LoginOutcome {
+        flow_id: flow_id.clone(),
+        provider: kind.cli(),
+        status,
+        account_id: None,
+        error,
+    };
+    let outcome = match end {
+        CliLoginEnd::Cancelled => failed("cancelled", None),
+        CliLoginEnd::Expired => failed(
+            "expired",
+            Some("The sign-in was not finished in time. Start again.".into()),
+        ),
+        CliLoginEnd::Failed(error) => failed("failed", Some(safe_error(error))),
+        CliLoginEnd::Finished => match show_cli_login(&app, kind).await {
+            Ok(id) => LoginOutcome {
+                flow_id: flow_id.clone(),
+                provider: kind.cli(),
+                status: "connected",
+                account_id: Some(id),
+                error: None,
+            },
+            Err(error) => failed("failed", Some(error)),
+        },
+    };
+    report(&app, outcome);
+}
+
+/// Bring back a removed card of the CLI that just signed in, rebuild the cards, and give its id.
+async fn show_cli_login(app: &AppHandle, kind: ProviderKind) -> Result<String, String> {
+    let accounts = app.state::<Accounts>();
+    let _changes = accounts.changes.lock().await;
+    let previous = accounts.cli.lock().clone();
+    let logins =
+        tauri::async_runtime::spawn_blocking(move || uc_providers::cli_accounts_keeping(&previous))
+            .await
+            .map_err(safe_error)?;
+    let login = logins
+        .into_iter()
+        .find(|login| login.kind == kind)
+        .ok_or_else(|| {
+            format!(
+                "{} finished, but no login was found. Sign in again.",
+                crate::cli_login::product(kind)
+            )
+        })?;
+    if accounts.services.lock().hidden.contains(&login.id) {
+        let keys = accounts.keys();
+        let ids = vec![login.id.clone()];
+        tauri::async_runtime::spawn_blocking(move || keys.restore(&ids))
+            .await
+            .map_err(safe_error)?
+            .map_err(safe_error)?;
+        rescan_services(&accounts).await;
+    }
+    let service = app.state::<BackendService>();
+    service.replace_runtimes(accounts.runtimes()?, app)?;
+    show_card(&service, &login.id)?;
+    Ok(login.id)
 }
 
 /// Remove an account card. A Claude Code or Codex CLI login is only hidden: the CLI stays signed

@@ -399,6 +399,10 @@ export const en: Messages = {
     userCodeNote: "Enter this code on the page that opened, then allow access.",
     signInNote: (brand) =>
       `Opens the ${brand} sign-in page in Google Chrome. Choose Continue with Google, then allow access. The account connects by itself, with no code to copy.`,
+    signInWithCli: (product) => `Sign In to ${product}`,
+    cliSignInNote: (product) =>
+      `Quota Control runs ${product}'s sign-in command, which opens the sign-in page in your browser. ${product} on this computer signs in too, and its card appears here.`,
+    waitingCli: (product) => `Waiting for the ${product} sign-in in your browser…`,
     cliNote: "Claude Code and the Codex CLI signed in on this computer appear here automatically.",
     starting: "Opening the sign-in page…",
     waiting: (brand, browser) =>

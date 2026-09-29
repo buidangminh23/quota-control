@@ -75,6 +75,10 @@ export class TauriBackend implements Backend {
     return invoke("begin_account_login", { provider, language, method });
   }
 
+  beginCliLogin(provider: AccountProvider): Promise<AccountLogin> {
+    return invoke("begin_cli_login", { provider });
+  }
+
   reopenAccountLogin(flowId: string): Promise<LoginBrowser> {
     return invoke("reopen_account_login", { flowId });
   }

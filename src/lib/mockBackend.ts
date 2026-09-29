@@ -69,7 +69,7 @@ export class MockBackend implements Backend {
   private readonly documents = new Map<DocumentName, unknown>();
   private readonly accounts: ConnectedAccount[] = fixtureAccounts();
   private removedLogins: { account: ConnectedAccount; entry: ProviderEntry; runtime: ProviderRuntimeState | undefined }[] = [];
-  private readonly pendingLogins = new Map<string, { provider: string; method: SignInMethod; timer?: ReturnType<typeof setTimeout> }>();
+  private readonly pendingLogins = new Map<string, { provider: string; method: SignInMethod | "cli"; timer?: ReturnType<typeof setTimeout> }>();
   private readonly loginListeners = new Set<(result: AccountLoginResult) => void>();
   private readonly chatSessions: ChatSession[] = [];
   private readonly services: ServiceEntry[] = fixtureServices();
@@ -108,6 +108,16 @@ export class MockBackend implements Backend {
 
   async listAccounts(): Promise<ConnectedAccount[]> {
     return structuredClone(this.accounts);
+  }
+
+  async beginCliLogin(provider: AccountProvider): Promise<AccountLogin> {
+    if ([...this.pendingLogins.values()].some((pending) => pending.method === "cli" && pending.provider === provider)) {
+      throw new Error(`${provider === "claude" ? "Claude Code" : "Codex CLI"} is already signing in. Finish or cancel that sign-in first.`);
+    }
+    const flowId = mockId();
+    const timer = this.loginDelayMs === null ? undefined : setTimeout(() => this.finishLogin(flowId), this.loginDelayMs);
+    this.pendingLogins.set(flowId, { provider, method: "cli", timer });
+    return { flowId, authorizationUrl: "", expiresInSeconds: 600, browser: "default" };
   }
 
   async listRemovedLogins(): Promise<ConnectedAccount[]> {
@@ -166,6 +176,13 @@ export class MockBackend implements Backend {
     if (!pending) return;
     if (error !== undefined) {
       this.emitLogin({ flowId, provider: pending.provider, status: "failed", error });
+      return;
+    }
+    if (pending.method === "cli") {
+      const provider = pending.provider === "claude" ? "claude" : "codex";
+      void this.restoreRemovedLogins(provider);
+      const account = this.accounts.find((candidate) => candidate.provider === provider && candidate.credentialMode === "cli") ?? this.addAccount(provider, provider, "cli");
+      this.emitLogin({ flowId, provider, status: "connected", accountId: account.id });
       return;
     }
     if (pending.provider === "claude" || pending.provider === "codex") {
@@ -479,7 +496,7 @@ export class MockBackend implements Backend {
     return structuredClone(account);
   }
 
-  private takeLogin(flowId: string): { provider: string; method: SignInMethod } | undefined {
+  private takeLogin(flowId: string): { provider: string; method: SignInMethod | "cli" } | undefined {
     const pending = this.pendingLogins.get(flowId);
     if (!pending) return undefined;
     this.pendingLogins.delete(flowId);

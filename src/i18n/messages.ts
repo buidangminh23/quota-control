@@ -298,6 +298,10 @@ export interface AccountsMessages {
   signInWithGoogle: string;
   signInWithGitHub: string;
   signInNote(brand: string): string;
+  /** Run the Claude Code or Codex CLI's own login command. */
+  signInWithCli(product: string): string;
+  cliSignInNote(product: string): string;
+  waitingCli(product: string): string;
   /** Under a service's sign-in button: where the page opens and what to choose there. */
   serviceSignInNote(service: string, method: "google" | "github"): string;
   /** The Add Account panel's picker between a service's ways to connect. */

@@ -519,6 +519,29 @@ describe("popup", () => {
     expect(useApp.getState().accounts.filter((account) => account.credentialMode === "managed_oauth")).toHaveLength(2);
   });
 
+  it("signs the Codex CLI in from the Accounts screen and brings its removed card back", async () => {
+    const api = await renderApp();
+    api.loginDelayMs = null;
+    act(() => useApp.setState({ screen: "accounts" }));
+    await screen.findByRole("heading", { name: "Tài khoản" });
+    fireEvent.click(screen.getByRole("button", { name: "Xóa Codex" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Xóa" }));
+    await waitFor(() => expect(screen.queryByText("Tự động từ Codex CLI trên máy này")).not.toBeInTheDocument());
+    fireEvent.click(within(screen.getByRole("list", { name: "Thêm tài khoản" })).getByRole("button", { name: "Codex" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Đăng nhập Codex CLI" }));
+    expect(await screen.findByText("Đang chờ đăng nhập Codex CLI trong trình duyệt…")).toBeInTheDocument();
+    const login = useApp.getState().accountLogin;
+    if (login?.phase !== "waiting" || login.method !== "cli") throw new Error("the CLI sign-in should be waiting");
+    await act(async () => {
+      api.finishLogin(login.flowId);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+    expect(useApp.getState().accountLogin).toBeNull();
+    expect(screen.getByText("Đã kết nối Codex")).toBeInTheDocument();
+    expect(await screen.findByText("Tự động từ Codex CLI trên máy này")).toBeInTheDocument();
+    expect(useApp.getState().removedLogins).toHaveLength(0);
+  });
+
   it("starts a sign-in from a row's plus button and copies the code GitHub asks for", async () => {
     const api = await renderApp();
     api.loginDelayMs = null;

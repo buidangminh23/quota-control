@@ -13,7 +13,7 @@ import { backend } from "@/lib/backend";
 import type { AccountProvider, ConnectedAccount, ProviderRuntimeState } from "@/lib/types";
 import { brandName, headerNotice } from "@/model/providerText";
 import { useLanguage } from "@/state/hooks";
-import { cancelAccountLogin, loginBrandIn, reloadAccounts, reloadServices, reopenAccountLogin, showNotice, startAccountLogin, useApp } from "@/state/store";
+import { cancelAccountLogin, loginBrandIn, reloadAccounts, reloadServices, reopenAccountLogin, showNotice, startAccountLogin, startCliLogin, useApp } from "@/state/store";
 import { Button } from "../ui/controls";
 import { confirmAction } from "../ui/dialog";
 import { CloseIcon, PlusIcon, Spinner } from "../ui/icons";
@@ -90,7 +90,8 @@ export function LoginProgress({ messages }: { messages: Messages }) {
   const login = useApp((state) => state.accountLogin);
   const services = useApp((state) => state.services);
   if (!login) return null;
-  const brand = loginBrandIn(login.provider, services);
+  const cli = login.method === "cli" && (login.provider === "claude" || login.provider === "codex") ? CLI_PRODUCTS[login.provider] : null;
+  const brand = cli ?? loginBrandIn(login.provider, services);
   const userCode = login.phase === "waiting" ? login.userCode : undefined;
   return (
     <div className="uc-card uc-add-account">
@@ -101,7 +102,7 @@ export function LoginProgress({ messages }: { messages: Messages }) {
         </div>
         <p className="uc-login-waiting">
           <Spinner size={11} />
-          <span>{login.phase === "waiting" ? messages.accounts.waiting(brand, login.browser) : messages.accounts.starting}</span>
+          <span>{login.phase !== "waiting" ? messages.accounts.starting : cli ? messages.accounts.waitingCli(cli) : messages.accounts.waiting(brand, login.browser)}</span>
         </p>
         {userCode ? <UserCode code={userCode} messages={messages} /> : null}
         <p className="uc-settings-note is-flush">{messages.accounts.waitingNote}</p>
@@ -181,6 +182,10 @@ function GoogleSignIn({ provider, messages, language, onBack }: { provider: Acco
         {messages.accounts.signInWithGoogle}
       </Button>
       <p className="uc-settings-note is-flush">{messages.accounts.signInNote(brandName(provider))}</p>
+      <Button onClick={() => void startCliLogin(provider)} className="is-small is-wide">
+        {messages.accounts.signInWithCli(CLI_PRODUCTS[provider])}
+      </Button>
+      <p className="uc-settings-note is-flush">{messages.accounts.cliSignInNote(CLI_PRODUCTS[provider])}</p>
       {error ? <p className="uc-settings-notice is-flush">{messages.accounts.loginFailed(brandName(error.provider), error.text)}</p> : null}
     </div>
   );
