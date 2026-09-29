@@ -7,7 +7,8 @@
 //! hour while the `automaticUpdateChecks` setting is on. With `automaticUpdateInstalls` on as well,
 //! a found update installs on its own once the popup has been closed for ten minutes, where
 //! replacing the installation asks the user for nothing. Such an install starts only after its
-//! marker is saved, so one that fails is tried again hours later and not at every launch.
+//! marker and the try are saved, so one that fails is tried again hours later and not at every
+//! launch.
 //! Otherwise the update shows as a dialog in the
 //! popup and in the tray menu; while the popup is closed, a system notification says so once per
 //! version. The first launch after an update says which version it replaced the same way.
@@ -59,6 +60,8 @@ const MARKER_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 const AUTOMATIC_CHECKS_KEY: &str = "automaticUpdateChecks";
 /// The settings document key behind "Install updates automatically"; missing means on.
 const AUTOMATIC_INSTALLS_KEY: &str = "automaticUpdateInstalls";
+/// How far the clock may be corrected backwards while a recorded try still counts.
+const CLOCK_SLACK: Duration = Duration::from_secs(60);
 /// The version the previous launch ran, next to the pending-install marker.
 const LAST_RUN_FILE: &str = "last-version";
 /// `productName` in `tauri.conf.json`, which names the updater's installer file.
@@ -217,9 +220,11 @@ pub struct Updates {
     announced: Mutex<Option<String>>,
     /// When the popup was last open.
     seen: Mutex<Option<Instant>>,
-    /// The release an install nobody asked for was last started for, and when. It stays while
-    /// that install has not succeeded.
-    unasked_try: Mutex<Option<(String, Instant)>>,
+    /// The install nobody asked for that was last started. It stays, across restarts, while
+    /// that release is not installed.
+    unasked_try: Mutex<Option<UnaskedTry>>,
+    /// When the look before an install nobody asked for last failed.
+    unasked_look_failed: Mutex<Option<Instant>>,
 }
 
 impl Updates {
@@ -227,19 +232,36 @@ impl Updates {
         let kind = installer(app);
         let supported = kind.is_some() && app.updater().is_ok();
         let unattended = supported && kind.is_some_and(replaceable_unasked);
+        let current = app.package_info().version.to_string();
+        let tried = UnaskedTry::read().filter(|tried| {
+            let waits = tried.waits_for(&current);
+            if !waits {
+                UnaskedTry::remove();
+            }
+            waits
+        });
         Self {
-            status: Mutex::new(UpdateStatus::idle(
-                supported,
-                unattended,
-                app.package_info().version.to_string(),
-            )),
+            status: Mutex::new(UpdateStatus::idle(supported, unattended, current)),
             pending: Mutex::new(None),
             operation: tokio::sync::Mutex::new(()),
             last_check: Mutex::new(None),
             announced: Mutex::new(None),
             seen: Mutex::new(None),
-            unasked_try: Mutex::new(None),
+            unasked_try: Mutex::new(tried),
+            unasked_look_failed: Mutex::new(None),
         }
+    }
+
+    /// Remember, across restarts, that an install of `version` nobody asked for starts now.
+    /// False when the try could not be saved.
+    fn record_unasked_try(&self, version: &str) -> bool {
+        let tried = UnaskedTry::now(version);
+        let saved = tried.save();
+        if let Err(error) = &saved {
+            tracing::warn!(target: "updates", "could not record the install nobody asked for: {error}");
+        }
+        *self.unasked_try.lock() = Some(tried);
+        saved.is_ok()
     }
 
     /// The popup is open, or was closed just now.
@@ -280,7 +302,14 @@ impl Updates {
             Some(Relaunch::Updated { .. }) | None => {}
             Some(Relaunch::Unfinished { to }) => {
                 tracing::warn!(target: "updates", "the install of {to} did not finish; still on {current}");
-                *self.unasked_try.lock() = Some((to.clone(), Instant::now()));
+                let known = self
+                    .unasked_try
+                    .lock()
+                    .as_ref()
+                    .is_some_and(|tried| tried.version == to);
+                if !known {
+                    self.record_unasked_try(&to);
+                }
                 notify(
                     app,
                     format!("Chưa cài được bản {to}. Mở Quota Control để thử lại."),
@@ -397,6 +426,7 @@ impl Updates {
                     status.available = Some(offer);
                     status.checked_at = checked_at;
                     status.failure = None;
+                    status.manual = manual;
                 });
                 let on_its_own = self.status.lock().unattended
                     && automatic_installs(app)
@@ -433,6 +463,7 @@ impl Updates {
                     status.available = None;
                     status.checked_at = checked_at;
                     status.failure = None;
+                    status.manual = manual;
                 });
                 Checked::UpToDate
             }
@@ -480,28 +511,38 @@ impl Updates {
             }
             status.available.as_ref().map(|offer| offer.version.clone())
         };
-        let tried = self.unasked_try.lock().clone();
-        let closed_for = self.seen.lock().map(|seen| seen.elapsed());
-        unasked_install_due(
-            automatic_checks(app) && automatic_installs(app),
-            offered.as_deref(),
+        let recorded = self.unasked_try.lock().clone();
+        let tried = recorded.as_ref().and_then(|tried| {
             tried
-                .as_ref()
-                .map(|(version, at)| (version.as_str(), at.elapsed())),
-            popup_open,
-            closed_for,
-        )
+                .age(Utc::now())
+                .map(|age| (tried.version.as_str(), age))
+        });
+        let closed_for = self.seen.lock().map(|seen| seen.elapsed());
+        let look_failed = self.unasked_look_failed.lock().map(|at| at.elapsed());
+        look_may_repeat(look_failed)
+            && unasked_install_due(
+                automatic_checks(app) && automatic_installs(app),
+                offered.as_deref(),
+                tried,
+                popup_open,
+                closed_for,
+            )
     }
 
-    /// `manual` tells that the user asked for the install. One nobody asked for is remembered,
-    /// so a release that fails to install is not tried again right away, and it starts only
-    /// after its marker is saved: the marker is what the next launch remembers it by.
+    /// `manual` tells that the user asked for the install. One nobody asked for is remembered
+    /// across restarts, so a release that fails to install is not tried again right away, and it
+    /// starts only after its marker and the try are saved. When the look before it fails, the
+    /// next one waits for [`CHECK_INTERVAL`].
     async fn install_found(&self, app: &AppHandle, manual: bool) -> Result<(), String> {
         if !self.status.lock().supported {
             return Err("This build of Quota Control cannot update itself".into());
         }
         let _operation = self.operation.lock().await;
-        match self.check_locked(app, manual).await {
+        let checked = self.check_locked(app, manual).await;
+        if !manual {
+            *self.unasked_look_failed.lock() = (checked == Checked::Failed).then(Instant::now);
+        }
+        match checked {
             Checked::Found => {}
             Checked::UpToDate => return Err("Quota Control is already up to date".into()),
             Checked::Failed => return Err("Checking for updates failed".into()),
@@ -514,10 +555,8 @@ impl Updates {
         if let Err(error) = &marked {
             tracing::warn!(target: "updates", "could not record the pending install: {error}");
         }
-        if !manual {
-            *self.unasked_try.lock() = Some((update.version.clone(), Instant::now()));
-        }
-        if !install_may_start(manual, marked.is_ok()) {
+        let recorded = manual || self.record_unasked_try(&update.version);
+        if !install_may_start(manual, marked.is_ok() && recorded) {
             if !crate::popup_visible(app) {
                 let version = &update.version;
                 notify(
@@ -526,7 +565,7 @@ impl Updates {
                     format!("Version {version} is available. Open Quota Control to install it."),
                 );
             }
-            return Err("The install did not start because its marker could not be saved".into());
+            return Err("The install did not start because it could not be recorded".into());
         }
         self.publish(app, |status| {
             status.phase = UpdatePhase::Downloading;
@@ -769,10 +808,18 @@ fn keeps_offer(manual: bool, offered: bool) -> bool {
     !manual && offered
 }
 
-/// Whether an install may start. One nobody asked for needs its marker: a failed install restarts
-/// the app on Windows, and without the marker every launch would try the same release again.
-fn install_may_start(manual: bool, marked: bool) -> bool {
-    manual || marked
+/// Whether an install may start. One nobody asked for needs its marker and its try on disk: a
+/// failed install restarts the app on Windows, and without them every launch would try the same
+/// release again.
+fn install_may_start(manual: bool, recorded: bool) -> bool {
+    manual || recorded
+}
+
+/// Whether the look before an install nobody asked for may be repeated: not within
+/// [`CHECK_INTERVAL`] of one that failed, so a computer without a connection asks once an hour
+/// and leaves the updater free for the popup.
+fn look_may_repeat(failed: Option<Duration>) -> bool {
+    failed.is_none_or(|since| since >= CHECK_INTERVAL)
 }
 
 /// Whether the updater can replace this installation without asking for an administrator
@@ -908,6 +955,71 @@ impl LastRun {
             }
         }
         previous
+    }
+}
+
+/// The install nobody asked for that was last started, kept next to the pending-install marker.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UnaskedTry {
+    version: String,
+    at: DateTime<Utc>,
+}
+
+impl UnaskedTry {
+    fn now(version: &str) -> Self {
+        Self {
+            version: version.to_owned(),
+            at: Utc::now(),
+        }
+    }
+
+    fn path() -> PathBuf {
+        uc_core::paths::cache_dir().join("unasked-update.json")
+    }
+
+    fn save(&self) -> std::io::Result<()> {
+        let path = Self::path();
+        if let Some(directory) = path.parent() {
+            std::fs::create_dir_all(directory)?;
+        }
+        let bytes = serde_json::to_vec(self).map_err(std::io::Error::other)?;
+        uc_core::paths::write_atomic(&path, &bytes)
+    }
+
+    fn read() -> Option<Self> {
+        let bytes = std::fs::read(Self::path()).ok()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    fn remove() {
+        let _ = std::fs::remove_file(Self::path());
+    }
+
+    /// Whether the release is still to be installed over `current`. A version that cannot be
+    /// read waits.
+    fn waits_for(&self, current: &str) -> bool {
+        match (
+            semver::Version::parse(self.version.trim_start_matches('v')),
+            semver::Version::parse(current.trim_start_matches('v')),
+        ) {
+            (Ok(tried), Ok(current)) => tried > current,
+            _ => self.version != current,
+        }
+    }
+
+    /// How long ago the try was, by the clock on the wall. `None` for a try further ahead than
+    /// [`UNASKED_RETRY`]: it was recorded before the clock was set back, and no longer counts.
+    fn age(&self, now: DateTime<Utc>) -> Option<Duration> {
+        match now.signed_duration_since(self.at).to_std() {
+            Ok(age) => Some(age),
+            Err(_) => self
+                .at
+                .signed_duration_since(now)
+                .to_std()
+                .is_ok_and(|ahead| ahead <= UNASKED_RETRY + CLOCK_SLACK)
+                .then_some(Duration::ZERO),
+        }
     }
 }
 
@@ -1281,6 +1393,58 @@ mod tests {
             replaced_paths("appimage", image),
             [PathBuf::from("/home/user/Apps")]
         );
+    }
+
+    #[test]
+    fn a_try_nobody_asked_for_is_remembered_by_the_clock_on_the_wall() {
+        let at = "2026-09-29T09:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let tried = UnaskedTry {
+            version: "0.3.15".into(),
+            at,
+        };
+        let text = serde_json::to_string(&tried).unwrap();
+        assert_eq!(serde_json::from_str::<UnaskedTry>(&text).unwrap(), tried);
+        let later = at + chrono::Duration::hours(2);
+        assert_eq!(tried.age(later), Some(Duration::from_secs(2 * 3600)));
+        let due = unasked_install_due(
+            true,
+            Some("0.3.15"),
+            tried.age(later).map(|age| ("0.3.15", age)),
+            false,
+            None,
+        );
+        assert!(
+            !due,
+            "two hours after the try, whatever was restarted since"
+        );
+        assert_eq!(
+            tried.age(at - chrono::Duration::seconds(20)),
+            Some(Duration::ZERO),
+            "a clock corrected by seconds keeps the try"
+        );
+        assert_eq!(
+            tried.age(at - chrono::Duration::hours(7)),
+            None,
+            "seven hours ahead was recorded before the clock was set back"
+        );
+    }
+
+    #[test]
+    fn a_recorded_try_is_dropped_once_its_release_runs() {
+        let tried = UnaskedTry::now("0.3.15");
+        assert!(tried.waits_for("0.3.14"));
+        assert!(!tried.waits_for("0.3.15"));
+        assert!(!tried.waits_for("0.3.16"));
+    }
+
+    #[test]
+    fn a_look_that_failed_is_not_repeated_within_the_hour() {
+        assert!(look_may_repeat(None));
+        assert!(
+            !look_may_repeat(Some(Duration::from_secs(5 * 60))),
+            "without a connection every five minutes would hold the updater"
+        );
+        assert!(look_may_repeat(Some(CHECK_INTERVAL)));
     }
 
     #[test]

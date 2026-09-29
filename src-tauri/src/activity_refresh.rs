@@ -6,8 +6,8 @@
 //! A brand's accounts are read when the clock passes a multiple of their pace ([`Brand::pace`]),
 //! counted from 1970 and not from the reading before. Computers that watch one account therefore
 //! ask for it at the same moments and show the same numbers. A reading the engine holds back
-//! (the provider asked to be left alone, or the card is being read already) is asked for again at
-//! every look until it is answered, so a short wait does not cost a whole span. A provider that
+//! because the provider asked to be left alone is asked for again at every look until it is
+//! answered, so a short wait does not cost a whole span. A provider that
 //! refuses a reading for asking too often is asked at [`QUIET_PACE`] for [`QUIET`], and for twice
 //! as long each time it refuses again. A brand's history on this computer is read from its own
 //! logs, so it keeps [`LOCAL_GAP`] whatever the provider says.
@@ -37,6 +37,8 @@ const QUIET: Duration = Duration::from_secs(30 * 60);
 const QUIET_CAP: Duration = Duration::from_secs(4 * 3600);
 /// A brand that was not refused for this long after its quiet time starts again from [`QUIET`].
 const FORGIVEN_AFTER: Duration = Duration::from_secs(6 * 3600);
+/// How far the clock may be corrected backwards while a quiet time still counts.
+const CLOCK_SLACK: Duration = Duration::from_secs(60);
 
 /// Seconds since 1970 on this computer's clock.
 type Seconds = u64;
@@ -229,8 +231,9 @@ impl Watch {
     /// quiet time with more left than it was set for was set before the clock was set back, and
     /// no longer counts.
     fn quiet(&self, now: Seconds) -> bool {
-        self.quiet_until
-            .is_some_and(|(until, length)| now < until && until - now <= length.as_secs())
+        self.quiet_until.is_some_and(|(until, length)| {
+            now < until && until - now <= (length + CLOCK_SLACK).as_secs()
+        })
     }
 
     /// A provider refused one of the brand's accounts for asking too often: how long the accounts
@@ -362,12 +365,11 @@ fn enabled_cards(engine: &Engine, owned: impl Fn(&str) -> bool) -> Vec<String> {
         .collect()
 }
 
-/// Whether the engine held one of the readings back: the provider asked to be left alone for a
-/// while, or the card was being read already. Such a reading is asked for again at the next look.
+/// Whether the engine held one of the readings back because the provider asked to be left alone
+/// for a while. Such a reading is asked for again at the next look. A card that is being read
+/// already gets its reading from that read, so asking again would be a second request.
 fn held_back(outcomes: &[RefreshOutcome]) -> bool {
-    outcomes
-        .iter()
-        .any(|outcome| matches!(outcome, RefreshOutcome::BackedOff | RefreshOutcome::Skipped))
+    outcomes.contains(&RefreshOutcome::BackedOff)
 }
 
 /// Read `cards` again, past their cached readings, except those read already in the clock's
@@ -636,7 +638,10 @@ mod tests {
         assert!(!held_back(&[]));
         assert!(!held_back(&[Refreshed, CacheHit, Failed]));
         assert!(held_back(&[Refreshed, BackedOff]));
-        assert!(held_back(&[Skipped]));
+        assert!(
+            !held_back(&[Skipped]),
+            "the read that is under way answers it"
+        );
     }
 
     #[test]
@@ -645,6 +650,10 @@ mod tests {
         assert_eq!(claude.refused(NOON), Some(QUIET));
         assert!(claude.quiet(NOON + QUIET.as_secs() - 1));
         assert!(!claude.quiet(NOON + QUIET.as_secs()));
+        assert!(
+            claude.quiet(NOON - 30),
+            "a clock corrected by half a minute keeps the quiet time"
+        );
         assert!(
             !claude.quiet(NOON - 2 * 3600),
             "two and a half hours of quiet were never set"

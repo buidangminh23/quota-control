@@ -62,6 +62,8 @@ impl Default for EngineConfig {
 
 /// The scheduler's shortest sleep, so a reset it cannot act on yet never turns into a busy loop.
 const MIN_PAUSE: Duration = Duration::from_secs(1);
+/// How far the clock may be corrected backwards while a backoff still counts.
+const CLOCK_SLACK: Duration = Duration::from_secs(60);
 
 fn delta(duration: Duration) -> chrono::Duration {
     chrono::Duration::from_std(duration).unwrap_or_else(|_| chrono::Duration::zero())
@@ -473,7 +475,7 @@ impl Engine {
                 && let Some(retry_after) = inner.retry_after.get(provider_id).copied()
                 && now < retry_after
             {
-                if retry_after - now <= delta(self.longest_backoff()) {
+                if retry_after - now <= delta(self.longest_backoff() + CLOCK_SLACK) {
                     tracing::debug!(target: "refresh", "backoff skip {provider_id}");
                     return RefreshOutcome::BackedOff;
                 }
@@ -1137,6 +1139,12 @@ mod tests {
         assert_eq!(
             engine.refresh_on_the_clock("claude", every).await,
             RefreshOutcome::BackedOff
+        );
+        clock.set("2026-09-29T03:37:30Z");
+        assert_eq!(
+            engine.refresh_on_the_clock("claude", every).await,
+            RefreshOutcome::BackedOff,
+            "a clock corrected by half a minute keeps the five minutes"
         );
         assert_eq!(claude.calls(), 2);
 
