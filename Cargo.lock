@@ -3447,6 +3447,7 @@ dependencies = [
  "chrono",
  "iana-time-zone",
  "ksni",
+ "libc",
  "parking_lot",
  "quick-xml 0.41.0",
  "semver",

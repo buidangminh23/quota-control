@@ -429,6 +429,14 @@ impl Engine {
         outcomes
     }
 
+    /// The longest time a failed reading holds a provider back. A provider held back for longer
+    /// was held back before the clock was set back.
+    fn longest_backoff(&self) -> Duration {
+        self.config
+            .rate_limit_backoff
+            .max(self.config.failure_backoff)
+    }
+
     /// Refresh one provider. `force` bypasses the cache and the failure backoff; a reading that a
     /// limit window reset has put out of date bypasses the cache too.
     pub async fn refresh(&self, provider_id: &str, force: bool) -> RefreshOutcome {
@@ -462,11 +470,15 @@ impl Engine {
             }
             let now = (self.clock)();
             if !force
-                && let Some(retry_after) = inner.retry_after.get(provider_id)
-                && now < *retry_after
+                && let Some(retry_after) = inner.retry_after.get(provider_id).copied()
+                && now < retry_after
             {
-                tracing::debug!(target: "refresh", "backoff skip {provider_id}");
-                return RefreshOutcome::BackedOff;
+                if retry_after - now <= delta(self.longest_backoff()) {
+                    tracing::debug!(target: "refresh", "backoff skip {provider_id}");
+                    return RefreshOutcome::BackedOff;
+                }
+                tracing::info!(target: "refresh", "{provider_id} was held back before the clock was set back; asking again");
+                inner.retry_after.remove(provider_id);
             }
             let stale_stamp = self.cache.has_stale_account_stamp(provider_id, identity);
             let window_reset = !force
@@ -585,9 +597,7 @@ impl Engine {
             inner.errors.insert(provider_id.to_string(), message);
             let backoff = if category == Some(ErrorCategory::RateLimited) {
                 inner.rate_limited.insert(provider_id.to_string());
-                self.config
-                    .rate_limit_backoff
-                    .max(self.config.failure_backoff)
+                self.longest_backoff()
             } else {
                 inner.rate_limited.remove(provider_id);
                 self.config.failure_backoff
@@ -1107,6 +1117,37 @@ mod tests {
         );
         assert!(!engine.rate_limited("claude"));
         assert_eq!(session_used(&engine), 64.0);
+    }
+
+    #[tokio::test]
+    async fn a_card_held_back_before_the_clock_was_set_back_is_asked_again() {
+        let clock = TestClock::starting("2026-09-29T03:35:00Z");
+        let claude = WindowProvider::new(clock.clock(), 60.0, "2026-09-29T07:50:00Z");
+        let (engine, _dir) = clocked_engine(vec![claude.clone()], &clock);
+        engine.refresh_all(false).await;
+        claude.refuse.store(true, Ordering::SeqCst);
+        clock.set("2026-09-29T03:38:00Z");
+        let every = Duration::from_secs(30);
+        assert_eq!(
+            engine.refresh_on_the_clock("claude", every).await,
+            RefreshOutcome::Failed
+        );
+
+        clock.set("2026-09-29T03:40:00Z");
+        assert_eq!(
+            engine.refresh_on_the_clock("claude", every).await,
+            RefreshOutcome::BackedOff
+        );
+        assert_eq!(claude.calls(), 2);
+
+        claude.refuse.store(false, Ordering::SeqCst);
+        clock.set("2026-09-29T01:38:00Z");
+        assert_eq!(
+            engine.refresh_on_the_clock("claude", every).await,
+            RefreshOutcome::Refreshed,
+            "two hours of waiting were never asked for"
+        );
+        assert_eq!(claude.calls(), 3);
     }
 
     #[tokio::test]

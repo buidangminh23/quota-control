@@ -6,7 +6,9 @@
 //! number with an older signed build. A background task checks shortly after launch and then every
 //! hour while the `automaticUpdateChecks` setting is on. With `automaticUpdateInstalls` on as well,
 //! a found update installs on its own once the popup has been closed for ten minutes, where
-//! replacing the installation asks the user for nothing. Otherwise it shows as a dialog in the
+//! replacing the installation asks the user for nothing. Such an install starts only after its
+//! marker is saved, so one that fails is tried again hours later and not at every launch.
+//! Otherwise the update shows as a dialog in the
 //! popup and in the tray menu; while the popup is closed, a system notification says so once per
 //! version. The first launch after an update says which version it replaced the same way.
 //!
@@ -328,7 +330,8 @@ impl Updates {
     }
 
     /// Look for a newer release. A background check (`manual == false`) steps aside while
-    /// another operation runs, and its failures only reach the log.
+    /// another operation runs, and its failures only reach the log. While it holds an offer it
+    /// keeps showing that offer, and keeps it when the look fails.
     pub async fn check(&self, app: &AppHandle, manual: bool) -> UpdateStatus {
         if !self.status.lock().supported {
             return self.status();
@@ -345,14 +348,17 @@ impl Updates {
         self.status()
     }
 
-    async fn check_locked(&self, app: &AppHandle, manual: bool) {
-        *self.pending.lock() = None;
-        self.publish(app, |status| {
-            status.phase = UpdatePhase::Checking;
-            status.available = None;
-            status.failure = None;
-            status.manual = manual;
-        });
+    async fn check_locked(&self, app: &AppHandle, manual: bool) -> Checked {
+        let kept = keeps_offer(manual, self.pending.lock().is_some());
+        if !kept {
+            *self.pending.lock() = None;
+            self.publish(app, |status| {
+                status.phase = UpdatePhase::Checking;
+                status.available = None;
+                status.failure = None;
+                status.manual = manual;
+            });
+        }
         let result = match updater(app) {
             Ok(updater) => updater.check().await,
             Err(error) => Err(error),
@@ -418,6 +424,7 @@ impl Updates {
                         ),
                     );
                 }
+                Checked::Found
             }
             Ok(None) => {
                 *self.pending.lock() = None;
@@ -427,9 +434,13 @@ impl Updates {
                     status.checked_at = checked_at;
                     status.failure = None;
                 });
+                Checked::UpToDate
             }
             Err(error) => {
                 tracing::warn!(target: "updates", "update check failed: {}", safe_error(&error));
+                if kept {
+                    return Checked::Failed;
+                }
                 let failure = UpdateFailure {
                     stage: FailureStage::Check,
                     reason: FailureReason::of(&error),
@@ -443,6 +454,7 @@ impl Updates {
                         status.manual = false;
                     }
                 });
+                Checked::Failed
             }
         }
     }
@@ -482,21 +494,39 @@ impl Updates {
     }
 
     /// `manual` tells that the user asked for the install. One nobody asked for is remembered,
-    /// so a release that fails to install is not tried again right away.
+    /// so a release that fails to install is not tried again right away, and it starts only
+    /// after its marker is saved: the marker is what the next launch remembers it by.
     async fn install_found(&self, app: &AppHandle, manual: bool) -> Result<(), String> {
         if !self.status.lock().supported {
             return Err("This build of Quota Control cannot update itself".into());
         }
         let _operation = self.operation.lock().await;
-        self.check_locked(app, manual).await;
+        match self.check_locked(app, manual).await {
+            Checked::Found => {}
+            Checked::UpToDate => return Err("Quota Control is already up to date".into()),
+            Checked::Failed => return Err("Checking for updates failed".into()),
+        }
         let Some(update) = self.pending.lock().clone() else {
-            return match self.status().phase {
-                UpdatePhase::Failed => Err("Checking for updates failed".into()),
-                _ => Err("Quota Control is already up to date".into()),
-            };
+            return Err("Quota Control is already up to date".into());
         };
+        let current = self.status.lock().current_version.clone();
+        let marked = PendingInstall::new(&current, &update.version).save();
+        if let Err(error) = &marked {
+            tracing::warn!(target: "updates", "could not record the pending install: {error}");
+        }
         if !manual {
             *self.unasked_try.lock() = Some((update.version.clone(), Instant::now()));
+        }
+        if !install_may_start(manual, marked.is_ok()) {
+            if !crate::popup_visible(app) {
+                let version = &update.version;
+                notify(
+                    app,
+                    format!("Có bản mới {version}. Mở Quota Control để cài."),
+                    format!("Version {version} is available. Open Quota Control to install it."),
+                );
+            }
+            return Err("The install did not start because its marker could not be saved".into());
         }
         self.publish(app, |status| {
             status.phase = UpdatePhase::Downloading;
@@ -505,10 +535,6 @@ impl Updates {
             status.total = None;
             status.failure = None;
         });
-        let current = self.status.lock().current_version.clone();
-        if let Err(error) = PendingInstall::new(&current, &update.version).save() {
-            tracing::warn!(target: "updates", "could not record the pending install: {error}");
-        }
         let mut downloaded = 0u64;
         let mut reported: Option<Instant> = None;
         let download = update
@@ -729,21 +755,54 @@ fn unasked_install_due(
         && tried.is_none_or(|(version, since)| version != offered || since >= UNASKED_RETRY)
 }
 
-/// Whether the updater can replace this installation without asking for an administrator
-/// password: a .deb goes through pkexec, and every other package needs its folder to be one this
-/// user can write to.
-fn replaceable_unasked(kind: &str) -> bool {
-    kind != "deb" && installed_folder(kind).is_some_and(|folder| writable(&folder))
+/// What a look for a newer release came back with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Checked {
+    Found,
+    UpToDate,
+    Failed,
 }
 
-/// The folder the installed package sits in.
-fn installed_folder(kind: &str) -> Option<PathBuf> {
-    let package = match kind {
-        "appimage" => PathBuf::from(std::env::var_os("APPIMAGE")?),
-        "app" => bundle_of(&std::env::current_exe().ok()?)?,
-        _ => std::env::current_exe().ok()?,
-    };
-    package.parent().map(Path::to_path_buf)
+/// Whether a check keeps showing the offer it holds while it looks again: a background check
+/// does, so that a failed look does not take the offer away until the next one.
+fn keeps_offer(manual: bool, offered: bool) -> bool {
+    !manual && offered
+}
+
+/// Whether an install may start. One nobody asked for needs its marker: a failed install restarts
+/// the app on Windows, and without the marker every launch would try the same release again.
+fn install_may_start(manual: bool, marked: bool) -> bool {
+    manual || marked
+}
+
+/// Whether the updater can replace this installation without asking for an administrator
+/// password: a .deb goes through pkexec, and every other package needs this user to be able to
+/// write to what the updater replaces.
+fn replaceable_unasked(kind: &str) -> bool {
+    kind != "deb"
+        && installed_package(kind).is_some_and(|package| {
+            replaced_paths(kind, &package)
+                .iter()
+                .all(|path| writable(path))
+        })
+}
+
+/// The installed package: the AppImage, the `.app` bundle, or the executable.
+fn installed_package(kind: &str) -> Option<PathBuf> {
+    match kind {
+        "appimage" => Some(PathBuf::from(std::env::var_os("APPIMAGE")?)),
+        "app" => bundle_of(&std::env::current_exe().ok()?),
+        _ => std::env::current_exe().ok(),
+    }
+}
+
+/// What this user must be able to write to for `package` to be replaced: the folder it sits in
+/// and, for an `.app`, the bundle too, because the updater moves the whole bundle out of that
+/// folder first.
+fn replaced_paths(kind: &str, package: &Path) -> Vec<PathBuf> {
+    let folder = package.parent().map(Path::to_path_buf);
+    let bundle = (kind == "app").then(|| package.to_path_buf());
+    folder.into_iter().chain(bundle).collect()
 }
 
 /// The `.app` bundle that holds `executable`.
@@ -758,12 +817,27 @@ fn bundle_of(executable: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-/// Whether this user can create a file in `folder`.
+/// Whether this user can write to `path`. Nothing is created, so no file is left behind and no
+/// folder is opened.
+#[cfg(unix)]
+fn writable(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: `path` is a NUL-terminated string that outlives the call, and `access` only reads it.
+    unsafe { libc::access(path.as_ptr(), libc::W_OK) == 0 }
+}
+
+/// Whether this user can create a file in `folder`. The file keeps one name, so a copy that
+/// could not be removed is the one the next check writes and removes.
+#[cfg(not(unix))]
 fn writable(folder: &Path) -> bool {
-    let probe = folder.join(format!(".quota-control-{}", std::process::id()));
+    let probe = folder.join(".quota-control-write-test");
     let made = std::fs::OpenOptions::new()
         .write(true)
-        .create_new(true)
+        .create(true)
+        .truncate(true)
         .open(&probe)
         .is_ok();
     if made {
@@ -1193,6 +1267,41 @@ mod tests {
             "the check leaves nothing behind"
         );
         assert!(!writable(&folder.path().join("missing")));
+    }
+
+    #[test]
+    fn an_app_bundle_must_be_writable_like_the_folder_it_sits_in() {
+        let bundle = Path::new("/Applications/Quota Control.app");
+        assert_eq!(
+            replaced_paths("app", bundle),
+            [PathBuf::from("/Applications"), bundle.to_path_buf()]
+        );
+        let image = Path::new("/home/user/Apps/Quota Control.AppImage");
+        assert_eq!(
+            replaced_paths("appimage", image),
+            [PathBuf::from("/home/user/Apps")]
+        );
+    }
+
+    #[test]
+    fn an_install_nobody_asked_for_waits_for_its_marker() {
+        assert!(install_may_start(false, true));
+        assert!(
+            !install_may_start(false, false),
+            "without the marker a failed install would be tried again at every launch"
+        );
+        assert!(install_may_start(true, false), "the user asked for it");
+        assert!(install_may_start(true, true));
+    }
+
+    #[test]
+    fn a_background_check_keeps_the_offer_it_holds() {
+        assert!(keeps_offer(false, true));
+        assert!(!keeps_offer(false, false));
+        assert!(
+            !keeps_offer(true, true),
+            "a check the user asked for shows that it is checking"
+        );
     }
 
     #[test]
