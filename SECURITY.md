@@ -75,6 +75,11 @@ Out of scope:
 - **Updates** must carry a minisign signature from the release key whose public half is built into
   the app (`plugins.updater.pubkey` in `src-tauri/tauri.conf.json`), and the signature must name the
   version being installed. Each release also lists its checksums in `SHA256SUMS`.
+- **Dependencies** come from crates.io and npm at the versions the lock files pin. When a fix has
+  not reached a version the app can use, it is backported into a copy under `third_party/`: the
+  Linux build compiles glib 0.18.5 with the fix for
+  [GHSA-wrw7-89jp-8q8g](https://github.com/advisories/GHSA-wrw7-89jp-8q8g), because Tauri 2's GTK
+  stack cannot use glib 0.20.
 
 ## Known limitations
 
@@ -86,6 +91,3 @@ Out of scope:
   are verified by their minisign signature.
 - Each embedded chat session keeps the website's own cookies in a separate WebView profile inside
   the app's data folder, as a browser profile does.
-- Dependabot reports `glib` 0.18.5 ([GHSA-wrw7-89jp-8q8g](https://github.com/advisories/GHSA-wrw7-89jp-8q8g))
-  in the Linux build. It comes through Tauri 2's GTK 0.18 stack and can only be upgraded when Tauri
-  moves to a newer GTK stack.

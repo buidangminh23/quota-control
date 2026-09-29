@@ -183,3 +183,6 @@ v2_78 = [
     "ffi/v2_78",
     "gobject_ffi/v2_78",
 ]
+
+[lints.rust]
+warnings = "allow"
