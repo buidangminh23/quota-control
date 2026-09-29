@@ -57,6 +57,9 @@ export interface NativeStrip {
   text: string;
 }
 
+/** The mark of a brand drawn by its color logo alone: no paths of its own. */
+const LOGO_ONLY: ProviderMark = { box: [0, 0, 1, 1], paths: [] };
+
 /**
  * The description of `content` for a band `height` device pixels tall, or `null` when the style
  * places its rows another way than by baselines (only the menu bar does) or nothing shows.
@@ -104,6 +107,7 @@ export function nativeStrip(
         rows: group.metrics.slice(0, 2).map((metric) => ({ label: named ? metric.period : null, value: metric.value })),
       };
       if (mark) entry.mark = picture ? { ...mark, art: picture } : mark;
+      else if (picture) entry.mark = { ...LOGO_ONLY, art: picture };
       return entry;
     }),
     text: stripSummary(content).replaceAll("\n", "; "),

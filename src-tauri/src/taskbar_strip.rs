@@ -699,8 +699,13 @@ pub fn set_taskbar_strip(
     let native = frame
         .as_ref()
         .and_then(|frame| frame.native.as_ref())
-        .map(encode_native)
-        .transpose()?;
+        .and_then(|document| match encode_native(document) {
+            Ok(bytes) => Some(bytes),
+            Err(error) => {
+                tracing::warn!("the strip's picture shows without its description: {error}");
+                None
+            }
+        });
     strip.set_native(native);
     strip.set(bitmap);
     Ok(())
@@ -2124,7 +2129,7 @@ mod platform {
 #[cfg(target_os = "macos")]
 mod platform {
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
     use parking_lot::Mutex;
     use tauri::image::Image;
@@ -2133,6 +2138,10 @@ mod platform {
     use super::{Bitmap, StripClick, TASKBAR_INFO_EVENT, TaskbarEdge, TaskbarInfo, TaskbarTheme};
 
     const TRAY_ID: &str = "main";
+    /// Who drew the strip last, so the log tells each change once: the system from the strip's
+    /// description, or the popup's picture when the system could not.
+    const BY_SYSTEM: u8 = 1;
+    const BY_PICTURE: u8 = 2;
     /// tray-icon draws every status item image this many points tall. The strip is drawn in color
     /// like the Windows taskbar and the Linux panel, its text in the menu bar's own light or dark
     /// color, so it goes up as a plain image; the Bars glyph and the resting icon stay templates
@@ -2208,7 +2217,7 @@ mod platform {
                     tracing::warn!("could not publish the menu bar appearance");
                 }
             });
-            let by_system = AtomicBool::new(false);
+            let drawn_by = AtomicU8::new(0);
             Self {
                 images: Mutex::new(Images::default()),
                 scale,
@@ -2222,7 +2231,8 @@ mod platform {
                         Shown::Strip { document, picture } => {
                             let described = document.is_some();
                             let drawn = document.is_some_and(|document| draw(&tray, document));
-                            if described && drawn != by_system.swap(drawn, Ordering::Relaxed) {
+                            let drawer = if drawn { BY_SYSTEM } else { BY_PICTURE };
+                            if described && drawer != drawn_by.swap(drawer, Ordering::Relaxed) {
                                 if drawn {
                                     tracing::info!("the system draws the menu bar strip");
                                 } else {
@@ -2243,8 +2253,10 @@ mod platform {
                             (image.or_else(|| crate::menu_bar_icon().ok()), true)
                         }
                     };
-                    crate::macos::clear_strip();
-                    if tray.set_icon_with_as_template(image, template).is_err()
+                    if tray
+                        .with_inner_tray_icon(|_| crate::macos::clear_strip())
+                        .is_err()
+                        || tray.set_icon_with_as_template(image, template).is_err()
                         || tray.set_tooltip(tooltip).is_err()
                     {
                         tracing::warn!("could not update the menu bar item");

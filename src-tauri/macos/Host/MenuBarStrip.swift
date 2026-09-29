@@ -18,6 +18,9 @@ struct StripDocument: Decodable, Equatable {
     /// The readings in words, for VoiceOver.
     var text: String
 
+    /// Widest strip the menu bar is given, in points.
+    static let widestPoints = 4096.0
+
     var drawable: Bool {
         version == 1 && scale.isFinite && scale >= 1 && scale <= 8 && height.isFinite && height >= 1 && height <= 512
             && !groups.isEmpty && groups.count <= 64
@@ -308,25 +311,6 @@ enum MenuBarStrip {
         )
     }
 
-    /// The strip as a PNG `pixelsPerPoint` device pixels to the point, in the light or the dark
-    /// look: what the menu bar shows on such a display.
-    static func png(_ document: StripDocument, dark: Bool, pixelsPerPoint: Double) -> Data? {
-        let layout = StripLayout(document)
-        let points = CGSize(width: layout.width / document.scale, height: layout.height / document.scale)
-        let width = Int((Double(points.width) * pixelsPerPoint).rounded(.up))
-        let height = Int((Double(points.height) * pixelsPerPoint).rounded(.up))
-        guard width > 0, height > 0,
-              let context = CGContext(
-                data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
-                space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-              )
-        else { return nil }
-        context.scaleBy(x: CGFloat(pixelsPerPoint), y: CGFloat(pixelsPerPoint))
-        draw(document, layout: layout, dark: dark, in: context)
-        guard let picture = context.makeImage() else { return nil }
-        return NSBitmapImageRep(cgImage: picture).representation(using: .png, properties: [:])
-    }
 }
 
 /// Puts the strip into the menu bar item and keeps it there. The item itself, its menu and its
@@ -345,10 +329,16 @@ final class MenuBarStripController {
               let document = try? JSONDecoder().decode(StripDocument.self, from: data),
               document.drawable
         else { return false }
-        if document == self.document, button === self.button, let image, button.image === image { return true }
+        if document == self.document, button === self.button, let image, button.image === image {
+            followButton(button)
+            return true
+        }
 
         let image = MenuBarStrip.image(for: document)
-        guard image.size.width >= 1, image.size.height >= 1 else { return false }
+        let size = image.size
+        guard size.width.isFinite, size.height.isFinite, size.width >= 1, size.height >= 1,
+              size.width <= StripDocument.widestPoints
+        else { return false }
         button.image = image
         button.imagePosition = .imageLeft
         button.setAccessibilityLabel(document.text)

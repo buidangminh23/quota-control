@@ -7,6 +7,7 @@ enum LoginItem {
     enum State: Int32 {
         /// Not an app bundle (a development run): the caller keeps its own launch agent.
         case unavailable = -1
+        /// Not registered, or the system refused to register it.
         case off = 0
         case on = 1
         /// Registered, but switched off in System Settings, where only the user switches it back.
@@ -26,22 +27,25 @@ enum LoginItem {
         }
     }
 
-    /// Register or remove the login item and say where it stands after. A failure leaves it as
-    /// it was and answers `unavailable`. When the user asked (`byUser`) and the item waits for
-    /// approval, System Settings opens at Login Items, the one place it is given.
+    /// Register or remove the login item and say where it stands after; a failure leaves it as
+    /// it was, and the answer tells so. An item that waits for approval is registered already:
+    /// only the user switches it on, in System Settings, which opens at Login Items when the user
+    /// asked (`byUser`).
     static func set(_ enabled: Bool, byUser: Bool) -> State {
         guard available else { return .unavailable }
         let service = SMAppService.mainApp
         do {
-            if enabled {
-                if service.status != .enabled { try service.register() }
-                if byUser, service.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
-            } else if service.status == .enabled || service.status == .requiresApproval {
-                try service.unregister()
+            switch (enabled, service.status) {
+            case (true, .enabled), (true, .requiresApproval): break
+            case (true, _): try service.register()
+            case (false, .enabled), (false, .requiresApproval): try service.unregister()
+            case (false, _): break
             }
         } catch {
             NSLog("Quota Control: the login item did not change: %@", error.localizedDescription)
-            return .unavailable
+        }
+        if enabled, byUser, service.status == .requiresApproval {
+            SMAppService.openSystemSettingsLoginItems()
         }
         return state
     }

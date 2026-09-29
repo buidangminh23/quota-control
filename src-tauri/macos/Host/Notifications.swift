@@ -65,8 +65,9 @@ final class SystemNotifications: NSObject, UNUserNotificationCenterDelegate {
     }
 
     /// Ask the user, when they were never asked. The system asks only once: after a refusal its
-    /// settings are the one place the answer changes, so they open instead.
-    func request(_ done: @escaping (NotificationAccess) -> Void) {
+    /// settings are the one place the answer changes, so they open instead, when the user asked
+    /// for this (`byUser`) and never because a notification was due.
+    func request(byUser: Bool, _ done: @escaping (NotificationAccess) -> Void) {
         access { current in
             switch current {
             case .undetermined:
@@ -75,7 +76,7 @@ final class SystemNotifications: NSObject, UNUserNotificationCenterDelegate {
                     self.access(done)
                 }
             case .denied:
-                Self.openSettings()
+                if byUser { Self.openSettings() }
                 done(.denied)
             default:
                 done(current)
@@ -136,8 +137,8 @@ public func qcNotificationsAccess(_ context: UnsafeMutableRawPointer?, _ handler
 }
 
 @_cdecl("qc_notifications_request")
-public func qcNotificationsRequest(_ context: UnsafeMutableRawPointer?, _ handler: QCNotificationAccessHandler?) {
-    SystemNotifications.shared.request { handler?(context, $0.rawValue) }
+public func qcNotificationsRequest(_ context: UnsafeMutableRawPointer?, _ handler: QCNotificationAccessHandler?, _ byUser: Bool) {
+    SystemNotifications.shared.request(byUser: byUser) { handler?(context, $0.rawValue) }
 }
 
 @_cdecl("qc_notifications_send")

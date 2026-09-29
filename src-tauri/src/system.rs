@@ -20,22 +20,15 @@ pub enum NotificationAccess {
     Undetermined,
 }
 
+/// The most the system is handed of a notification; what is longer is cut, never refused.
 const MAX_TITLE_CHARS: usize = 256;
 const MAX_BODY_CHARS: usize = 2048;
 const MAX_NAME_CHARS: usize = 256;
 
-fn checked(title: &str, body: &str, names: [Option<&str>; 2]) -> Result<(), String> {
-    if title.chars().count() > MAX_TITLE_CHARS || body.chars().count() > MAX_BODY_CHARS {
-        return Err("The notification is too long".into());
-    }
-    if names
-        .into_iter()
-        .flatten()
-        .any(|name| name.chars().count() > MAX_NAME_CHARS)
-    {
-        return Err("The notification's name is too long".into());
-    }
-    Ok(())
+fn clipped(text: &str, limit: usize) -> &str {
+    text.char_indices()
+        .nth(limit)
+        .map_or(text, |(end, _)| &text[..end])
 }
 
 /// The system's own answer about notification access, or `None` where the plugin answers.
@@ -60,16 +53,15 @@ pub async fn send_system_notification(
     body: String,
     id: Option<String>,
     group: Option<String>,
-) -> Result<bool, String> {
-    checked(&title, &body, [id.as_deref(), group.as_deref()])?;
-    Ok(platform::notify(
+) -> bool {
+    platform::notify(
         &app,
-        &title,
-        &body,
-        id.as_deref().unwrap_or_default(),
-        group.as_deref().unwrap_or_default(),
+        clipped(&title, MAX_TITLE_CHARS),
+        clipped(&body, MAX_BODY_CHARS),
+        clipped(id.as_deref().unwrap_or_default(), MAX_NAME_CHARS),
+        clipped(group.as_deref().unwrap_or_default(), MAX_NAME_CHARS),
     )
-    .await)
+    .await
 }
 
 /// A notification from the core itself, in the system's way where there is one and through the
@@ -132,8 +124,13 @@ mod platform {
     use tauri::AppHandle;
     use tauri_plugin_autostart::ManagerExt as _;
 
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use super::NotificationAccess;
     use crate::macos::{self, LoginItem};
+
+    /// The system's question is up, asked by a notification: the next ones do not ask again.
+    static ASKING: AtomicBool = AtomicBool::new(false);
 
     fn access(native: macos::NotificationAccess) -> Option<NotificationAccess> {
         match native {
@@ -149,7 +146,7 @@ mod platform {
     }
 
     pub async fn request_notification_access() -> Option<NotificationAccess> {
-        access(macos::request_notification_access().await)
+        access(macos::request_notification_access(true).await)
     }
 
     /// Allowed: shown. Refused: the user's word stands, nothing is shown and the plugin is not
@@ -163,9 +160,12 @@ mod platform {
             }
             macos::NotificationAccess::Denied => true,
             macos::NotificationAccess::Undetermined => {
-                tauri::async_runtime::spawn(async {
-                    macos::request_notification_access().await;
-                });
+                if !ASKING.swap(true, Ordering::Relaxed) {
+                    tauri::async_runtime::spawn(async {
+                        macos::request_notification_access(false).await;
+                        ASKING.store(false, Ordering::Relaxed);
+                    });
+                }
                 false
             }
             macos::NotificationAccess::Unavailable => false,
@@ -202,6 +202,18 @@ mod platform {
         }
     }
 
+    /// When the system refuses the login item, the launch agent of earlier versions does the
+    /// work, as it did.
+    fn enable_agent(app: &AppHandle) -> bool {
+        match app.autolaunch().enable() {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!("Could not write the launch agent: {error}");
+                false
+            }
+        }
+    }
+
     pub fn launch_at_login(app: &AppHandle) -> Option<bool> {
         match macos::login_item() {
             LoginItem::Unavailable => None,
@@ -210,18 +222,26 @@ mod platform {
         }
     }
 
+    /// Switching on: the login item, or the launch agent when the system refuses the item; an
+    /// item that waits for the user's approval in System Settings is left to the user. Switching
+    /// off removes both, and tells when the login item stayed.
     pub fn set_launch_at_login(app: &AppHandle, enabled: bool) -> Option<bool> {
-        match macos::set_login_item(enabled, true) {
-            LoginItem::Unavailable => None,
+        let item = macos::set_login_item(enabled, true);
+        if item == LoginItem::Unavailable {
+            return None;
+        }
+        if !enabled {
+            drop_agent(app);
+            return Some(item == LoginItem::On || agent_enabled(app));
+        }
+        Some(match item {
             LoginItem::On => {
                 drop_agent(app);
-                Some(true)
+                true
             }
-            LoginItem::Off | LoginItem::NeedsApproval => {
-                drop_agent(app);
-                Some(false)
-            }
-        }
+            LoginItem::NeedsApproval => agent_enabled(app),
+            LoginItem::Off | LoginItem::Unavailable => enable_agent(app),
+        })
     }
 
     pub fn adopt_launch_at_login(app: &AppHandle) -> bool {
@@ -278,12 +298,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn turns_away_notifications_that_are_too_long() {
-        assert!(checked("Claude", "Almost out", [Some("claude|almostOut"), None]).is_ok());
-        assert!(checked(&"x".repeat(MAX_TITLE_CHARS + 1), "", [None, None]).is_err());
-        assert!(checked("", &"x".repeat(MAX_BODY_CHARS + 1), [None, None]).is_err());
-        let long = "x".repeat(MAX_NAME_CHARS + 1);
-        assert!(checked("", "", [None, Some(&long)]).is_err());
+    fn cuts_a_long_notification_at_a_character_and_leaves_a_short_one() {
+        assert_eq!(clipped("Claude", MAX_TITLE_CHARS), "Claude");
+        assert_eq!(clipped("", 4), "");
+        assert_eq!(clipped("hạn mức", 3), "hạn");
+        assert_eq!(clipped("hạn mức", 7), "hạn mức");
+        let long = "ợ".repeat(MAX_BODY_CHARS + 9);
+        assert_eq!(
+            clipped(&long, MAX_BODY_CHARS).chars().count(),
+            MAX_BODY_CHARS
+        );
     }
 
     #[test]

@@ -1,8 +1,9 @@
 //! macOS: the popup's window style, the Dynamic Island, the desktop widget's reload and upkeep,
 //! the menu bar strip drawn by the system, notifications through the system's notification center
 //! and launch at login as a login item. They are written in Swift (`macos/Host`, built by
-//! `build.rs`) and reached through this C interface. The Swift side hops to the main thread itself,
-//! so every function here may run on any thread, except [`show_strip`].
+//! `build.rs`) and reached through this C interface. Every function here may run on any thread,
+//! except [`show_strip`] and [`clear_strip`]: the Swift side hops to the main thread where it
+//! touches the interface, and the rest is safe anywhere.
 
 use std::ffi::{CString, c_char, c_void};
 use std::sync::OnceLock;
@@ -28,7 +29,11 @@ unsafe extern "C" {
     fn qc_strip_clear();
     fn qc_notifications_start(handler: Option<NotificationOpenHandler>) -> bool;
     fn qc_notifications_access(context: *mut c_void, handler: Option<NotificationAccessHandler>);
-    fn qc_notifications_request(context: *mut c_void, handler: Option<NotificationAccessHandler>);
+    fn qc_notifications_request(
+        context: *mut c_void,
+        handler: Option<NotificationAccessHandler>,
+        by_user: bool,
+    );
     fn qc_notifications_send(
         title: *const c_char,
         body: *const c_char,
@@ -101,7 +106,8 @@ pub fn show_strip(item: *mut c_void, document: &[u8]) -> bool {
     unsafe { qc_strip_show(item, document.as_ptr(), document.len()) }
 }
 
-/// The menu bar item shows an ordinary image again.
+/// The menu bar item shows an ordinary image again. On the main thread, like [`show_strip`], so
+/// the two keep their order.
 pub fn clear_strip() {
     unsafe { qc_strip_clear() }
 }
@@ -151,30 +157,40 @@ extern "C" fn notification_opened() {
     });
 }
 
+/// A notification center too slow to answer counts as out of reach this once, so nothing is
+/// asked of the user on a guess.
 pub async fn notification_access() -> NotificationAccess {
-    answer(ACCESS_READ, |context| unsafe {
-        qc_notifications_access(context, Some(access_answered))
-    })
+    answer(
+        ACCESS_READ,
+        NotificationAccess::Unavailable,
+        |context| unsafe { qc_notifications_access(context, Some(access_answered)) },
+    )
     .await
 }
 
-/// Ask the user for notifications when they were never asked; after a refusal the system's
-/// settings open instead, the one place the answer changes then.
-pub async fn request_notification_access() -> NotificationAccess {
-    answer(ACCESS_ASKED, |context| unsafe {
-        qc_notifications_request(context, Some(access_answered))
-    })
+/// Ask the user for notifications when they were never asked. After a refusal the system's
+/// settings are the one place the answer changes: they open when the user asked (`by_user`). A
+/// question left unanswered leaves the user not asked yet.
+pub async fn request_notification_access(by_user: bool) -> NotificationAccess {
+    answer(
+        ACCESS_ASKED,
+        NotificationAccess::Undetermined,
+        |context| unsafe { qc_notifications_request(context, Some(access_answered), by_user) },
+    )
     .await
 }
 
-/// An answer that does not come in time counts as none: the caller then treats the user as not
-/// asked yet.
-async fn answer(wait: Duration, ask: impl FnOnce(*mut c_void)) -> NotificationAccess {
+/// The answer Swift gives, or `late` when none comes within `wait`.
+async fn answer(
+    wait: Duration,
+    late: NotificationAccess,
+    ask: impl FnOnce(*mut c_void),
+) -> NotificationAccess {
     let (sender, receiver) = tokio::sync::oneshot::channel::<i32>();
     ask(Box::into_raw(Box::new(sender)).cast());
     match tokio::time::timeout(wait, receiver).await {
         Ok(Ok(code)) => NotificationAccess::from_code(code),
-        _ => NotificationAccess::Undetermined,
+        _ => late,
     }
 }
 
@@ -292,7 +308,7 @@ mod tests {
     async fn outside_an_app_bundle_the_system_ways_are_out_of_reach() {
         assert_eq!(notification_access().await, NotificationAccess::Unavailable);
         assert_eq!(
-            request_notification_access().await,
+            request_notification_access(true).await,
             NotificationAccess::Unavailable
         );
         assert_eq!(login_item(), LoginItem::Unavailable);

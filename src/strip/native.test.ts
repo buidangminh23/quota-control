@@ -70,6 +70,11 @@ describe("the strip described for macOS", () => {
     expect(withArt.groups[0]!.mark).toEqual(PROVIDER_MARKS.claude);
   });
 
+  it("sends the color logo of a brand that has no mark of its own, as the picture draws it", () => {
+    const logoOnly = nativeStrip(CONTENT, 36, 2, { "no-such-brand": "UE5H" })!;
+    expect(logoOnly.groups[2]!.mark).toEqual({ box: [0, 0, 1, 1], paths: [], art: "UE5H" });
+  });
+
   it("says the readings in words on one line", () => {
     expect(strip.text).toBe("Claude: Phiên 5h 12%, Tuần 58%, Fable 3%; Codex: Tín dụng $4.20; Mystery: Tháng 7%");
   });
