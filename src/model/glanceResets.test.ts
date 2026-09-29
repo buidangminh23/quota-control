@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setSystemTimeZone } from "@/model/timeZone";
 import { insightsFor } from "@/i18n/insights";
-import { buildGlanceResets, buildResetPresentation, parseResetFeeds, resetAgoText, type GlanceResetsInput, type ResetFeeds } from "./glanceResets";
+import type { GlanceResets } from "./glance";
+import { addHistory, buildGlanceResets, buildResetPresentation, parseResetFeeds, resetAgoText, type GlanceResetsInput, type ResetFeeds } from "./glanceResets";
 
 /** Friday 25/09/2026 10:00 in Vietnam. */
 const NOW = new Date("2026-09-25T03:00:00Z");
@@ -302,5 +303,26 @@ describe("parseResetFeeds", () => {
     const feeds = parseResetFeeds(status(null, null, post("0", "banked", "2026-09-25T01:00:00Z")), HISTORY);
     expect(feeds.status?.latest?.id).toBe("0");
     expect(feeds.resets.map((reset) => reset.id)).toEqual(["0", "1", "2", "3", "4", "5"]);
+  });
+});
+
+describe("addHistory", () => {
+  const blank = (): GlanceResets => ({ title: "", source: "", brand: "claude", color: "#DE7356", forecastTitle: "", forecast: [], forecastNote: "" });
+
+  it("reads any tracker's history exactly as the Codex tracker reads its own", () => {
+    const feeds = parseResetFeeds(status(), HISTORY);
+    const codex = build(feeds)!;
+    const other = blank();
+    addHistory(other, feeds.resets, NOW, "vi", "auto");
+    for (const key of ["latest", "forecast", "forecastNote", "wait", "median", "calendar", "rhythm"] as const) {
+      expect(other[key], key).toEqual(codex[key]);
+    }
+    expect(other.calendar?.cells.replace(/[^rb]/g, "")).toHaveLength(feeds.resets.length);
+  });
+
+  it("leaves a tracker without history as it was", () => {
+    const other = blank();
+    addHistory(other, [], NOW, "vi", "auto");
+    expect(other).toEqual(blank());
   });
 });

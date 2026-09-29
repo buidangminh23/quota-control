@@ -164,8 +164,18 @@ export function buildGlanceResets(input: GlanceResetsInput): GlanceResets | null
 
   const next = upcomingReset(feeds.status, now);
   if (next) resets.upcoming = upcomingOf(next, now, timeFormat, language, text);
+  addHistory(resets, feeds.resets, now, language, timeFormat);
+  return resets;
+}
 
-  const latest = feeds.resets[0];
+/**
+ * What a tracker's history gives it, the same way for Codex and Claude: the newest reset and the
+ * time since it, the chances with the words under them, the wait against earlier ones, the calendar
+ * and the rhythm. `history` holds resets only, newest first.
+ */
+export function addHistory(resets: GlanceResets, history: readonly CodexReset[], now: Date, language: Language, timeFormat: TimeFormat): void {
+  const text = insightsFor(language);
+  const latest = history[0];
   if (latest) {
     const at = latest.announcedAt.toISOString();
     resets.latest = {
@@ -178,24 +188,23 @@ export function buildGlanceResets(input: GlanceResetsInput): GlanceResets | null
     };
   }
 
-  const forecast = forecastResets(feeds.resets, now);
+  const forecast = forecastResets(history, now);
   if (forecast) {
     resets.forecast = FORECAST_HORIZONS.map((days) => ({ days, percent: Math.round(forecast.chance[days] * 100), label: text.horizon(days) }));
     resets.forecastNote = text.glanceForecastNote;
   }
 
-  const wait = currentWait(feeds.resets, now);
+  const wait = currentWait(history, now);
   if (wait) {
     resets.wait = text.waitLine(text.days(numberText(language, wait.waitedDays, 1)), percentText(language, wait.shorterShare, 0));
     const markTime = `${shortTime(wait.medianMark, timeFormat, language)} ${shortDate(wait.medianMark, now, language)}`;
     resets.median = (wait.medianMark.getTime() > now.getTime() ? text.medianMark : text.medianMarkPassed)(text.days(numberText(language, wait.medianGapDays, 1)), markTime);
   }
 
-  if (feeds.resets.length > 0) {
-    resets.calendar = calendarOf(feeds.resets, now, text);
-    resets.rhythm = rhythmOf(feeds.resets, text);
+  if (history.length > 0) {
+    resets.calendar = calendarOf(history, now, text);
+    resets.rhythm = rhythmOf(history, text);
   }
-  return resets;
 }
 
 /**
