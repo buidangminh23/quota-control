@@ -4,6 +4,121 @@
 
 AI usage limits, reset countdowns and token history in your Windows/Linux system tray or macOS menu bar.
 
+## Install
+
+Every release ships Windows, macOS and Linux builds from the same commit: see [Releases](https://github.com/buidangminh23/quota-control/releases/latest).
+The recommended PowerShell, install-script and `curl` commands check the download against the release's `SHA256SUMS` before installing.
+
+### Windows (x64)
+
+**PowerShell** (recommended):
+
+```powershell
+$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'
+$release = Invoke-RestMethod 'https://api.github.com/repos/buidangminh23/quota-control/releases/latest'
+$asset = $release.assets | Where-Object name -Like '*_x64-setup.exe'
+$sums = $release.assets | Where-Object name -EQ 'SHA256SUMS'
+$installer = Join-Path $env:TEMP $asset.name
+Invoke-WebRequest $asset.browser_download_url -OutFile $installer
+Invoke-WebRequest $sums.browser_download_url -OutFile "$env:TEMP\SHA256SUMS"
+$expected = (Select-String -Path "$env:TEMP\SHA256SUMS" -SimpleMatch $asset.name).Line.Split(' ')[0]
+if ((Get-FileHash $installer -Algorithm SHA256).Hash -ne $expected) { throw 'Checksum mismatch' }
+Start-Process $installer
+```
+
+**GitHub CLI:**
+
+```powershell
+gh release download --repo buidangminh23/quota-control --pattern '*_x64-setup.exe' --dir $env:TEMP --clobber
+Start-Process (Get-ChildItem "$env:TEMP\Quota-Control_*_x64-setup.exe" | Sort-Object LastWriteTime | Select-Object -Last 1).FullName
+```
+
+**Uninstall:**
+
+```powershell
+& "$env:LOCALAPPDATA\Quota Control\uninstall.exe"
+```
+
+Installs for the current user in `%LOCALAPPDATA%\Quota Control`. The installer is not code-signed; Windows SmartScreen may ask for confirmation.
+
+### macOS (Apple Silicon, macOS 14+)
+
+**Install script** (recommended):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/buidangminh23/quota-control/main/scripts/install-macos.sh | bash
+```
+
+Installs `Quota Control.app` in `/Applications` (`~/Applications` if that is not writable), links `usagectl` and opens the app.
+Files downloaded this way carry no quarantine flag, so the app opens without the **Open Anyway** step.
+
+**A specific version:**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/buidangminh23/quota-control/main/scripts/install-macos.sh | bash -s -- --version 0.3.18
+```
+
+**Disk image with GitHub CLI:**
+
+```sh
+gh release download --repo buidangminh23/quota-control --pattern '*_aarch64.dmg' --output QuotaControl.dmg --clobber &&
+open QuotaControl.dmg
+```
+
+Drag **Quota Control** to **Applications**. The app is not notarized by Apple; a copy downloaded in a browser may need
+**System Settings → Privacy & Security → Open Anyway**.
+
+**Uninstall** (accounts and settings stay):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/buidangminh23/quota-control/main/scripts/install-macos.sh | bash -s -- --uninstall
+```
+
+### Linux (x64)
+
+**Ubuntu/Debian — `.deb`:**
+
+```sh
+url=$(curl -fsSL https://api.github.com/repos/buidangminh23/quota-control/releases/latest | grep -o 'https://[^"]*_amd64\.deb' | head -n1) &&
+curl -fLO "$url" &&
+curl -fsSL "${url%/*}/SHA256SUMS" | sha256sum --check --ignore-missing &&
+sudo apt install "./${url##*/}"
+```
+
+**Other distributions — AppImage:**
+
+```sh
+url=$(curl -fsSL https://api.github.com/repos/buidangminh23/quota-control/releases/latest | grep -o 'https://[^"]*_amd64\.AppImage' | head -n1) &&
+curl -fLO "$url" &&
+curl -fsSL "${url%/*}/SHA256SUMS" | sha256sum --check --ignore-missing &&
+chmod +x "${url##*/}" &&
+"./${url##*/}"
+```
+
+If FUSE is unavailable, start it with `APPIMAGE_EXTRACT_AND_RUN=1` in front.
+
+**GitHub CLI:**
+
+```sh
+gh release download --repo buidangminh23/quota-control --pattern '*_amd64.deb' --output quota-control.deb --clobber &&
+sudo apt install ./quota-control.deb
+```
+
+```sh
+gh release download --repo buidangminh23/quota-control --pattern '*_amd64.AppImage' --output quota-control.AppImage --clobber &&
+chmod +x quota-control.AppImage &&
+./quota-control.AppImage
+```
+
+**Uninstall:** `sudo apt remove quota-control` for the `.deb`; delete the file for the AppImage.
+
+A desktop with system tray support is recommended (on GNOME, the AppIndicator extension).
+
+### Updates
+
+After the first install the app updates itself: new versions install while the popup is closed, verified with the
+release signing key. **Settings → App Updates** turns that off, and **Check Now** looks for one right away.
+
 ## Preview
 
 https://github.com/user-attachments/assets/05afff30-24bb-41df-a1bd-a7db58bdaac7
@@ -19,54 +134,6 @@ https://github.com/user-attachments/assets/05afff30-24bb-41df-a1bd-a7db58bdaac7
 
 </details>
 
-## Installation
-
-[Download the latest release](https://github.com/buidangminh23/quota-control/releases/latest), or use the commands below.
-
-### Windows (x64)
-
-Run in **PowerShell** to download and open the latest installer:
-
-```powershell
-$release = Invoke-RestMethod 'https://api.github.com/repos/buidangminh23/quota-control/releases/latest' -ErrorAction Stop
-$asset = $release.assets | Where-Object name -Like '*_x64-setup.exe'
-Invoke-WebRequest $asset.browser_download_url -OutFile "$env:TEMP\quota-control-setup.exe" -ErrorAction Stop
-Start-Process "$env:TEMP\quota-control-setup.exe"
-```
-
-Installs for the current user. The installer is not code-signed; Windows SmartScreen may ask for confirmation.
-
-### macOS (Apple Silicon, macOS 14+)
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/buidangminh23/quota-control/main/scripts/install-macos.sh | bash
-```
-
-Downloads the latest release, verifies its SHA-256 checksum, installs the app and opens it.
-For a manual install, download the `.dmg` and drag **Quota Control** to **Applications**.
-The app is not notarized by Apple; a browser download may require **System Settings → Privacy & Security → Open Anyway**.
-
-### Linux (x64)
-
-The commands below require [GitHub CLI](https://cli.github.com/). Run them in a download folder.
-
-**Ubuntu/Debian — `.deb`:**
-
-```sh
-gh release download --repo buidangminh23/quota-control --pattern '*_amd64.deb' --output quota-control.deb &&
-sudo apt install ./quota-control.deb
-```
-
-**Other distributions — AppImage:**
-
-```sh
-gh release download --repo buidangminh23/quota-control --pattern '*_amd64.AppImage' --output quota-control.AppImage &&
-chmod +x quota-control.AppImage &&
-./quota-control.AppImage
-```
-
-A desktop with system tray support is recommended. If FUSE is unavailable, run `APPIMAGE_EXTRACT_AND_RUN=1 ./quota-control.AppImage`.
-
 ## Features
 
 - Claude, Codex, Cursor, Copilot and many other AI services in one dashboard.
@@ -80,8 +147,6 @@ A desktop with system tray support is recommended. If FUSE is unavailable, run `
 1. Open Quota Control from the system tray or menu bar.
 2. Existing Claude Code and Codex CLI logins appear automatically. Use **Accounts → +** to connect other accounts with the methods offered for each service.
 3. Choose the accounts and readings to display in **Customize** and **Settings**.
-
-New versions install on their own while the popup is closed; **Settings → App Updates** turns that off, and **Check Now** looks for one right away. Updates are verified with the release signing key.
 
 The backend runs locally; provider requests go to the relevant services. Local token history covers this computer only.
 
