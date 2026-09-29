@@ -3440,7 +3440,7 @@ dependencies = [
 
 [[package]]
 name = "quota-control"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5362,7 +5362,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "uc-accounts"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "chrono",
  "libc",
@@ -5378,7 +5378,7 @@ dependencies = [
 
 [[package]]
 name = "uc-api"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5398,7 +5398,7 @@ dependencies = [
 
 [[package]]
 name = "uc-core"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5418,7 +5418,7 @@ dependencies = [
 
 [[package]]
 name = "uc-engine"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5436,7 +5436,7 @@ dependencies = [
 
 [[package]]
 name = "uc-logscan"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5455,7 +5455,7 @@ dependencies = [
 
 [[package]]
 name = "uc-pricing"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "serde",
  "serde_json",
@@ -5463,7 +5463,7 @@ dependencies = [
 
 [[package]]
 name = "uc-providers"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -5481,7 +5481,7 @@ dependencies = [
 
 [[package]]
 name = "uc-services"
-version = "0.3.15"
+version = "0.3.16"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
