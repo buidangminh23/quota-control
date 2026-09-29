@@ -413,6 +413,21 @@ impl Engine {
     /// Refresh one provider. `force` bypasses the cache and the failure backoff; a reading that a
     /// limit window reset has put out of date bypasses the cache too.
     pub async fn refresh(&self, provider_id: &str, force: bool) -> RefreshOutcome {
+        self.refresh_with(provider_id, force, force).await
+    }
+
+    /// Read one provider again now, past its cached reading, because it is being used on this
+    /// computer. A provider that asked to be left alone (rate limited, backing off) is not asked.
+    pub async fn refresh_in_use(&self, provider_id: &str) -> RefreshOutcome {
+        self.refresh_with(provider_id, false, true).await
+    }
+
+    async fn refresh_with(
+        &self,
+        provider_id: &str,
+        force: bool,
+        past_cache: bool,
+    ) -> RefreshOutcome {
         let identity = self.identity_keys.get(provider_id).map(String::as_str);
         {
             let mut inner = self.inner.lock();
@@ -435,7 +450,7 @@ impl Engine {
                 && self
                     .reset_refresh_at(&inner, provider_id)
                     .is_some_and(|due| due <= now);
-            if !force
+            if !past_cache
                 && !stale_stamp
                 && !window_reset
                 && let Some(cached) = self.cache.fresh_snapshot(provider_id)
@@ -942,6 +957,28 @@ mod tests {
             Some(at("2026-09-27T06:10:01Z")),
             "a reset refresh leaves the interval schedule alone"
         );
+    }
+
+    #[tokio::test]
+    async fn a_card_in_use_is_read_past_its_cache_but_not_past_a_backoff() {
+        let clock = TestClock::starting("2026-09-29T02:30:00Z");
+        let claude = WindowProvider::new(clock.clock(), 60.0, "2026-09-29T04:50:00Z");
+        let (engine, _dir) = clocked_engine(vec![claude.clone()], &clock);
+        engine.refresh_all(false).await;
+
+        claude.roll_over(70.0, "2026-09-29T04:50:00Z");
+        clock.set("2026-09-29T02:30:30Z");
+        assert_eq!(engine.refresh("claude", false).await, RefreshOutcome::CacheHit);
+        assert_eq!(engine.refresh_in_use("claude").await, RefreshOutcome::Refreshed);
+        assert_eq!(session_used(&engine), 70.0);
+
+        claude.fail.store(true, Ordering::SeqCst);
+        clock.set("2026-09-29T02:31:00Z");
+        assert_eq!(engine.refresh_in_use("claude").await, RefreshOutcome::Failed);
+        clock.set("2026-09-29T02:31:30Z");
+        assert_eq!(engine.refresh_in_use("claude").await, RefreshOutcome::BackedOff);
+        assert_eq!(claude.calls(), 3);
+        assert_eq!(session_used(&engine), 70.0, "the last good reading stays");
     }
 
     #[tokio::test]

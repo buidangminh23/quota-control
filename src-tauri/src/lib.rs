@@ -1,4 +1,5 @@
 mod account_commands;
+mod activity_refresh;
 mod browser;
 mod chat_commands;
 mod chat_store;
@@ -290,6 +291,7 @@ pub fn run() -> anyhow::Result<()> {
                     account_commands::sync_logins(&cli_app).await;
                 }
             });
+            tauri::async_runtime::spawn(activity_refresh::run(app.handle().clone()));
             if let Err(error) = shortcut::restore(app.handle()) {
                 tracing::warn!("The saved global shortcut is unavailable: {error}");
             }
