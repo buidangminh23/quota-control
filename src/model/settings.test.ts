@@ -111,6 +111,22 @@ describe("glance surfaces", () => {
   it("keeps any wing id up to 512 characters, special ones included", () => {
     expect(parseSettings({ island: { wings: ["codex-resets:chance-7", "quota:next"] } }).island.wings).toEqual(["codex-resets:chance-7", "quota:next"]);
     expect(parseSettings({ island: { wings: ["x".repeat(513), "codex-resets:since"] } }).island.wings).toEqual(["", "codex-resets:since"]);
+    expect(parseSettings({ island: { wings: ["claude-resets:next", "claude-resets:chance-3"] } }).island.wings).toEqual(["claude-resets:next", "claude-resets:chance-3"]);
+  });
+
+  it("reads each surface's reset tracker on its own, falling back to Codex for anything but Claude", () => {
+    expect(DEFAULT_SETTINGS.island.resetsProvider).toBe("codex");
+    expect(DEFAULT_SETTINGS.widget.resetsProvider).toBe("codex");
+    const parsed = parseSettings({ island: { resetsProvider: "claude" }, widget: { resetsProvider: "gemini" } });
+    expect(parsed.island.resetsProvider).toBe("claude");
+    expect(parsed.widget.resetsProvider).toBe("codex");
+    expect(parseSettings({ widget: { resetsProvider: "claude" } }).widget.resetsProvider).toBe("claude");
+    expect(parseSettings({ widget: { resetsProvider: "claude" } }).island.resetsProvider).toBe("codex");
+    for (const value of ["Claude", "", ["claude"], 1, null, { claude: true }]) {
+      expect(parseSettings({ island: { resetsProvider: value }, widget: { resetsProvider: value } }).island.resetsProvider).toBe("codex");
+      expect(parseSettings({ island: { resetsProvider: value }, widget: { resetsProvider: value } }).widget.resetsProvider).toBe("codex");
+    }
+    expect(parseSettings({ resetsProvider: "claude" }).island.resetsProvider).toBe("codex");
   });
 });
 
@@ -125,6 +141,34 @@ describe("mergeSettingsDocument", () => {
 
   it("does not invent an enabledProviders key", () => {
     expect("enabledProviders" in mergeSettingsDocument({}, DEFAULT_SETTINGS, new Set())).toBe(false);
+  });
+
+  it("saves the surfaces of someone who never picked Claude exactly as before, with no reset tracker key", () => {
+    const stored = { island: { content: "starred", tabs: ["quota", "resets"], wings: ["codex-resets:next", ""] }, widget: { content: "custom", metrics: ["a"] } };
+    const merged = mergeSettingsDocument(stored, parseSettings(stored), new Set()) as { island: Record<string, unknown>; widget: Record<string, unknown> };
+    expect(Object.keys(merged.island)).toEqual(["content", "metrics", "showAccount", "showPlan", "showResets", "showProblems", "tabs", "resetParts", "upcomingLimit", "style", "wings", "expandOnHover", "alerts", "layout"]);
+    expect(Object.keys(merged.widget)).toEqual(["content", "metrics", "showAccount", "showPlan", "showResets", "showProblems", "tabs", "resetParts", "upcomingLimit"]);
+    const fresh = mergeSettingsDocument({}, DEFAULT_SETTINGS, new Set()) as { island: object; widget: object };
+    expect("resetsProvider" in fresh.island).toBe(false);
+    expect("resetsProvider" in fresh.widget).toBe(false);
+  });
+
+  it("saves a surface's Claude choice on that surface alone, and Codex again once a choice was saved", () => {
+    const settings = parseSettings({});
+    const picked = { ...settings, island: { ...settings.island, resetsProvider: "claude" as const } };
+    const merged = mergeSettingsDocument({}, picked, new Set()) as { island: Record<string, unknown>; widget: Record<string, unknown> };
+    expect(merged.island.resetsProvider).toBe("claude");
+    expect("resetsProvider" in merged.widget).toBe(false);
+    const reread = parseSettings(merged);
+    expect(reread.island.resetsProvider).toBe("claude");
+    expect(reread.widget.resetsProvider).toBe("codex");
+    const again = mergeSettingsDocument(merged, reread, new Set()) as { island: Record<string, unknown>; widget: Record<string, unknown> };
+    expect(again.island.resetsProvider).toBe("claude");
+    expect("resetsProvider" in again.widget).toBe(false);
+    const back = mergeSettingsDocument(merged, { ...reread, island: { ...reread.island, resetsProvider: "codex" } }, new Set()) as { island: Record<string, unknown>; widget: Record<string, unknown> };
+    expect(back.island.resetsProvider).toBe("codex");
+    expect("resetsProvider" in back.widget).toBe(false);
+    expect(parseSettings(back).island.resetsProvider).toBe("codex");
   });
 });
 
