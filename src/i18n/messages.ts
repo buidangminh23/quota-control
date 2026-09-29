@@ -5,7 +5,7 @@
 import type { ErrorCategory, LimitResetResult, UpdateFailureReason, UpdateFailureStage } from "@/lib/types";
 import type { PlanTermLeft } from "@/model/planTerm";
 import type { SpecialWing } from "@/model/glance";
-import type { GlanceContent, IslandLayout, IslandStyle, IslandView, ResetPart, TaskbarDisplay } from "@/model/settings";
+import type { GlanceContent, IslandLayout, IslandStyle, IslandView, ResetPart, ResetProvider, TaskbarDisplay } from "@/model/settings";
 import type { PriceMessages, UsageMessages } from "./usageMessages";
 
 export type DisplayModeKey = "used" | "remaining";
@@ -231,13 +231,16 @@ export interface SettingsMessages {
   desktopWidgetKindsNote: string;
   /** The small headings that split a glance card: while closed, while open, how it behaves. */
   glanceGroup(group: "closed" | "open" | "behavior" | "content"): string;
-  /** A view's name, as the popup's tab reads. */
-  glanceTabName(view: IslandView): string;
+  /** A view's name, as the popup's tab reads; the reset view is named after the tracker the surface shows. */
+  glanceTabName(view: IslandView, provider: ResetProvider): string;
   /** The chips choosing the views: the island's tabs, the Overview widget's parts. */
   glanceTabs(surface: "island" | "widget"): string;
   glanceTabsNote(surface: "island" | "widget"): string;
-  /** What each view's editor changes on the widgets. */
-  glanceWidgetScope(view: IslandView): string;
+  /**
+   * What each view's editor changes on the widgets. The reset widgets keep their Codex names in the
+   * widget gallery, so with Claude chosen the reset view's note says they show Claude's resets.
+   */
+  glanceWidgetScope(view: IslandView, provider: ResetProvider): string;
   /** The editor of a view that is switched off on the island. */
   glanceTabOff: string;
   /** Quick ways to fill the metric list; `dashboard` and `starred` keep following the popup. */
@@ -257,8 +260,8 @@ export interface SettingsMessages {
   resetParts: string;
   resetPart(part: ResetPart): string;
   resetPartsSummary(shown: number, total: number): string;
-  /** Neither the Reset tab nor reset notifications is on, so the tracker has no data. */
-  resetPartsOff: string;
+  /** Neither the Reset tab nor that tracker's notifications is on, so the tracker has no data. */
+  resetPartsOff(provider: ResetProvider): string;
   upcomingLimit: string;
   upcomingLimitOption(limit: number): string;
   upcomingNote: string;

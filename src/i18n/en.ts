@@ -1,4 +1,5 @@
 /** English catalog: the upstream OpenUsage copy, adapted for Windows and Linux. */
+import type { ResetProvider } from "@/model/settings";
 import { deviceTimeZone } from "@/model/timeZone";
 import type { Messages, RestoreDay, When } from "./messages";
 import { pricesEn, usageEn } from "./usageEn";
@@ -30,6 +31,9 @@ function restoreDay(day: RestoreDay): string {
 }
 
 const VERBS = { resets: "Resets", limit: "Limit", resetExpires: "Reset expires" } as const;
+
+/** Whose resets a tracker follows, as its name reads. */
+const RESET_OWNERS: Readonly<Record<ResetProvider, string>> = { codex: "Codex", claude: "Claude" };
 
 function lowerFirst(text: string): string {
   return text.charAt(0).toLowerCase() + text.slice(1);
@@ -287,16 +291,19 @@ export const en: Messages = {
     desktopWidgetKindsNote:
       "To keep them separate, add the Codex Resets, Codex Reset Calendar or Coming Back widget; to combine them, add Overview and choose the parts it combines right below.",
     glanceGroup: (group) => ({ closed: "Closed", open: "Open", behavior: "Behavior", content: "Content" })[group],
-    glanceTabName: (view) => ({ quota: "Limits", resets: "Codex Resets", upcoming: "Coming Back" })[view],
+    glanceTabName: (view, provider) => ({ quota: "Limits", resets: `${RESET_OWNERS[provider]} Resets`, upcoming: "Coming Back" })[view],
     glanceTabs: (surface) => (surface === "island" ? "Tabs When Open" : "Overview Widget Shows"),
     glanceTabsNote: (surface) =>
       surface === "island"
         ? "Click to turn a tab on or off; at least one stays on. Each tab has its own options in the list below."
         : "Choose the parts the Overview widget combines. The single widgets always follow each part's options below.",
-    glanceWidgetScope: (view) =>
+    glanceWidgetScope: (view, provider) =>
       ({
         quota: "Applies to the Details, Rings, Compact and Overview widgets.",
-        resets: "Applies to the Codex Resets, Codex Reset Calendar and Overview widgets.",
+        resets:
+          provider === "claude"
+            ? "Applies to the Codex Resets, Codex Reset Calendar and Overview widgets; all three now show Claude's resets."
+            : "Applies to the Codex Resets, Codex Reset Calendar and Overview widgets.",
         upcoming: "Applies to the Coming Back and Overview widgets.",
       })[view],
     glanceTabOff: "Tab off",
@@ -328,7 +335,7 @@ export const en: Messages = {
         rhythm: "Reset rhythm",
       })[part],
     resetPartsSummary: (shown, total) => (shown === total ? "Every part" : `${shown}/${total} parts`),
-    resetPartsOff: "No data yet: turn on the Resets tab or Codex reset notifications.",
+    resetPartsOff: (provider) => `No data yet: turn on the Resets tab or ${RESET_OWNERS[provider]} reset notifications.`,
     upcomingLimit: "Show at Most",
     upcomingLimitOption: (limit) => (limit === 0 ? "All that fit" : `${limit} limits`),
     upcomingNote: "The limits coming back next among the accounts chosen under Limits, soonest first.",

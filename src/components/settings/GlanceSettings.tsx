@@ -2,11 +2,13 @@
  * What the menu bar strip, the Dynamic Island and the desktop widgets show. Each surface picks its
  * views (the island's tabs, the Overview widget's parts), then tunes every view on its own: the
  * limits list by account and metric with quick picks that can keep following the Hạn mức tab or the
- * stars, the parts of the Codex reset tracker, and how many limits coming back are listed. The island
- * also has its closed look (style and the readings beside the notch) and how it opens.
+ * stars, whose reset tracker it shows (Codex or Claude) and that tracker's parts, and how many limits
+ * coming back are listed. The island also has its closed look (style and the readings beside the
+ * notch) and how it opens.
  */
 import { useMemo, useState, type ReactNode } from "react";
 import { messagesFor, type Language } from "@/i18n";
+import { insightsFor } from "@/i18n/insights";
 import type { SettingsMessages } from "@/i18n/messages";
 import type { WidgetDescriptor } from "@/lib/types";
 import { SPECIAL_WINGS, type SpecialWing } from "@/model/glance";
@@ -17,13 +19,14 @@ import {
   ISLAND_STYLES,
   ISLAND_VIEWS,
   RESET_PARTS,
+  RESET_PROVIDERS,
   UPCOMING_LIMITS,
   type GlanceContent,
   type GlanceSurfaceSettings,
   type IslandSettings,
   type IslandView,
   type ResetPart,
-  type ResetParts,
+  type ResetProvider,
   type StripSettings,
   type TaskbarDisplay,
 } from "@/model/settings";
@@ -44,6 +47,11 @@ const SHOW_KEYS: Readonly<Record<ShowPart, "showAccount" | "showPlan" | "showRes
   plan: "showPlan",
   resets: "showResets",
   problems: "showProblems",
+};
+/** Besides the Reset tab, the switch that keeps each reset tracker's feed loading. */
+const TRACKER_NOTIFICATIONS: Readonly<Record<ResetProvider, "notifyCodexResets" | "notifyClaudeResets">> = {
+  codex: "notifyCodexResets",
+  claude: "notifyClaudeResets",
 };
 
 function patchStrip(patch: Partial<StripSettings>): void {
@@ -111,8 +119,8 @@ function Disclosure({ title, summary, open, onToggle, children }: { title: strin
   );
 }
 
-/** The views as chips, kept in the popup's tab order; the last one on cannot be switched off. */
-function TabChips({ tabs, onChange, text }: { tabs: readonly IslandView[]; onChange: (tabs: IslandView[]) => void; text: SettingsMessages }) {
+/** The views as chips, kept in the popup's tab order, the reset view named after `provider`'s tracker; the last one on cannot be switched off. */
+function TabChips({ tabs, provider, onChange, text }: { tabs: readonly IslandView[]; provider: ResetProvider; onChange: (tabs: IslandView[]) => void; text: SettingsMessages }) {
   const toggle = (view: IslandView, on: boolean) => {
     const next = ISLAND_VIEWS.filter((candidate) => (candidate === view ? on : tabs.includes(candidate)));
     if (next.length > 0) onChange(next);
@@ -123,7 +131,7 @@ function TabChips({ tabs, onChange, text }: { tabs: readonly IslandView[]; onCha
         const on = tabs.includes(view);
         return (
           <Chip key={view} checked={on} disabled={on && tabs.length === 1} onChange={(value) => toggle(view, value)}>
-            {text.glanceTabName(view)}
+            {text.glanceTabName(view, provider)}
           </Chip>
         );
       })}
@@ -264,18 +272,48 @@ function AccountPicker({
   );
 }
 
-/** The parts of the Codex reset tracker; the last one on stays on. */
-function ResetEditor({ parts, onChange, text, trackerOff }: { parts: ResetParts; onChange: (parts: ResetParts) => void; text: SettingsMessages; trackerOff: boolean }) {
+/** Whether a reset tracker has no data: the Reset tab and that tracker's notifications are both off. */
+function useTrackerOff(provider: ResetProvider): boolean {
+  const settings = useSettings();
+  return !settings.showResetsTab && !settings[TRACKER_NOTIFICATIONS[provider]];
+}
+
+/**
+ * Whose reset tracker a surface shows, worded like the Reset tab's own choice, then that tracker's
+ * parts; the last part on stays on.
+ */
+function ResetEditor({
+  value,
+  onChange,
+  text,
+  language,
+}: {
+  value: GlanceSurfaceSettings;
+  onChange: (patch: Partial<GlanceSurfaceSettings>) => void;
+  text: SettingsMessages;
+  language: Language;
+}) {
+  const provider = value.resetsProvider;
+  const parts = value.resetParts;
+  const trackerOff = useTrackerOff(provider);
+  const insights = insightsFor(language);
   const on = RESET_PARTS.filter((part) => parts[part]).length;
-  const toggle = (part: ResetPart, value: boolean) => {
-    const next = { ...parts, [part]: value };
-    if (RESET_PARTS.some((candidate) => next[candidate])) onChange(next);
+  const toggle = (part: ResetPart, checked: boolean) => {
+    const next = { ...parts, [part]: checked };
+    if (RESET_PARTS.some((candidate) => next[candidate])) onChange({ resetParts: next });
   };
   return (
     <div className="uc-editor">
-      <ChipRow label={text.resetParts} note={trackerOff ? text.resetPartsOff : undefined}>
+      <ChipRow label={insights.resetProviderLabel}>
+        {RESET_PROVIDERS.map((option) => (
+          <Chip key={option} kind="radio" checked={provider === option} onChange={() => onChange({ resetsProvider: option })}>
+            {insights.resetProvider(option)}
+          </Chip>
+        ))}
+      </ChipRow>
+      <ChipRow label={text.resetParts} note={trackerOff ? text.resetPartsOff(provider) : undefined}>
         {RESET_PARTS.map((part) => (
-          <Chip key={part} checked={parts[part]} disabled={parts[part] && on === 1} onChange={(value) => toggle(part, value)}>
+          <Chip key={part} checked={parts[part]} disabled={parts[part] && on === 1} onChange={(checked) => toggle(part, checked)}>
             {text.resetPart(part)}
           </Chip>
         ))}
@@ -298,7 +336,7 @@ function UpcomingEditor({ limit, onChange, text }: { limit: number; onChange: (l
   );
 }
 
-/** Every view's options for one surface, one open at a time. */
+/** Every view's options for one surface, one open at a time; the reset view is named after its tracker. */
 function ViewEditors({
   views,
   value,
@@ -306,18 +344,17 @@ function ViewEditors({
   scope,
   text,
   language,
-  trackerOff,
 }: {
   views: readonly IslandView[];
   value: GlanceSurfaceSettings;
   onChange: (patch: Partial<GlanceSurfaceSettings>) => void;
-  scope?: (view: IslandView) => string;
+  scope?: (view: IslandView, provider: ResetProvider) => string;
   text: SettingsMessages;
   language: Language;
-  trackerOff: boolean;
 }) {
   const [open, setOpen] = useState<IslandView | null>(views[0] ?? null);
   const quotaSummary = useQuotaSummary(value, text);
+  const provider = value.resetsProvider;
   const resetsOn = RESET_PARTS.filter((part) => value.resetParts[part]).length;
   const summary = (view: IslandView): string => {
     if (view === "quota") return quotaSummary;
@@ -327,10 +364,10 @@ function ViewEditors({
   return (
     <div className="uc-disclosures">
       {views.map((view) => (
-        <Disclosure key={view} title={text.glanceTabName(view)} summary={summary(view)} open={open === view} onToggle={() => setOpen(open === view ? null : view)}>
-          {scope ? <p className="uc-settings-note is-flush">{scope(view)}</p> : null}
+        <Disclosure key={view} title={text.glanceTabName(view, provider)} summary={summary(view)} open={open === view} onToggle={() => setOpen(open === view ? null : view)}>
+          {scope ? <p className="uc-settings-note is-flush">{scope(view, provider)}</p> : null}
           {view === "quota" ? <QuotaEditor value={value} onChange={onChange} shows={{ value, onChange }} text={text} language={language} /> : null}
-          {view === "resets" ? <ResetEditor parts={value.resetParts} onChange={(resetParts) => onChange({ resetParts })} text={text} trackerOff={trackerOff} /> : null}
+          {view === "resets" ? <ResetEditor value={value} onChange={onChange} text={text} language={language} /> : null}
           {view === "upcoming" ? <UpcomingEditor limit={value.upcomingLimit} onChange={(upcomingLimit) => onChange({ upcomingLimit })} text={text} /> : null}
         </Disclosure>
       ))}
@@ -368,11 +405,6 @@ export function StripRows({ display }: { display: TaskbarDisplay }) {
   );
 }
 
-function useTrackerOff(): boolean {
-  const settings = useSettings();
-  return !settings.showResetsTab && !settings.notifyCodexResets;
-}
-
 export function IslandSection() {
   const settings = useSettings();
   const language = settings.language;
@@ -380,7 +412,6 @@ export function IslandSection() {
   const island = settings.island;
   const candidates = useCandidates();
   const engine = useApp((state) => state.engine);
-  const trackerOff = useTrackerOff();
   const metricsById = useMemo(() => {
     const byId = new Map<string, { group: ProviderMetrics; descriptor: WidgetDescriptor }>();
     for (const group of candidates) for (const descriptor of group.always) byId.set(descriptor.id, { group, descriptor });
@@ -422,14 +453,14 @@ export function IslandSection() {
 
           <SubHeading>{text.glanceGroup("open")}</SubHeading>
           <ChipRow label={text.glanceTabs("island")} note={text.glanceTabsNote("island")}>
-            <TabChips tabs={island.tabs} onChange={(tabs) => patchIsland({ tabs })} text={text} />
+            <TabChips tabs={island.tabs} provider={island.resetsProvider} onChange={(tabs) => patchIsland({ tabs })} text={text} />
           </ChipRow>
           {island.tabs.length > 1 ? (
             <Row label={text.islandLayout} note={text.islandLayoutNote(island.layout)}>
               <Picker value={island.layout} options={ISLAND_LAYOUTS} label={text.islandLayoutOption} onChange={(layout) => patchIsland({ layout })} ariaLabel={text.islandLayout} />
             </Row>
           ) : null}
-          <ViewEditors views={island.tabs} value={island} onChange={patchIsland} text={text} language={language} trackerOff={trackerOff} />
+          <ViewEditors views={island.tabs} value={island} onChange={patchIsland} text={text} language={language} />
 
           <SubHeading>{text.glanceGroup("behavior")}</SubHeading>
           <Row label={text.islandExpandOnHover} note={text.islandExpandOnHoverNote}>
@@ -448,7 +479,6 @@ export function WidgetSection() {
   const settings = useSettings();
   const text = messagesFor(settings.language).settings;
   const widget = settings.widget;
-  const trackerOff = useTrackerOff();
   return (
     <Section title={text.section("widget")}>
       <Row label={text.desktopWidget} note={text.desktopWidgetNote}>
@@ -456,10 +486,10 @@ export function WidgetSection() {
       </Row>
       <p className="uc-settings-note">{text.desktopWidgetKindsNote}</p>
       <ChipRow label={text.glanceTabs("widget")} note={text.glanceTabsNote("widget")}>
-        <TabChips tabs={widget.tabs} onChange={(tabs) => patchWidget({ tabs })} text={text} />
+        <TabChips tabs={widget.tabs} provider={widget.resetsProvider} onChange={(tabs) => patchWidget({ tabs })} text={text} />
       </ChipRow>
       <SubHeading>{text.glanceGroup("content")}</SubHeading>
-      <ViewEditors views={ISLAND_VIEWS} value={widget} onChange={patchWidget} scope={text.glanceWidgetScope} text={text} language={settings.language} trackerOff={trackerOff} />
+      <ViewEditors views={ISLAND_VIEWS} value={widget} onChange={patchWidget} scope={text.glanceWidgetScope} text={text} language={settings.language} />
     </Section>
   );
 }

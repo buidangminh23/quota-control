@@ -1,4 +1,5 @@
 /** Vietnamese catalog — the default language. Numbers follow vi-VN (see `numbers.ts`). */
+import type { ResetProvider } from "@/model/settings";
 import { zonedParts } from "@/model/timeZone";
 import type { Messages, RestoreDay, When } from "./messages";
 import { pricesVi, usageVi } from "./usageVi";
@@ -43,6 +44,9 @@ const VERBS = {
   limit: { lead: "Hết hạn mức", soon: "Sắp hết hạn mức" },
   resetExpires: { lead: "Hết hạn", soon: "Sắp hết hạn" },
 } as const;
+
+/** Whose resets a tracker follows, as its name reads. */
+const RESET_OWNERS: Readonly<Record<ResetProvider, string>> = { codex: "Codex", claude: "Claude" };
 
 function lowerFirst(text: string): string {
   return text.charAt(0).toLocaleLowerCase("vi-VN") + text.slice(1);
@@ -325,16 +329,19 @@ export const vi: Messages = {
     desktopWidgetKindsNote:
       "Muốn tách riêng thì thêm widget Reset Codex, Lịch reset Codex hoặc Sắp đặt lại; muốn gộp chung thì thêm widget Tổng quan và chọn các phần nó ghép ở ngay bên dưới.",
     glanceGroup: (group) => ({ closed: "Khi thu gọn", open: "Khi mở rộng", behavior: "Cách hoạt động", content: "Nội dung" })[group],
-    glanceTabName: (view) => ({ quota: "Hạn mức", resets: "Reset Codex", upcoming: "Sắp đặt lại" })[view],
+    glanceTabName: (view, provider) => ({ quota: "Hạn mức", resets: `Reset ${RESET_OWNERS[provider]}`, upcoming: "Sắp đặt lại" })[view],
     glanceTabs: (surface) => (surface === "island" ? "Các tab hiện khi mở" : "Widget Tổng quan gồm"),
     glanceTabsNote: (surface) =>
       surface === "island"
         ? "Bấm để bật hoặc tắt tab, luôn giữ ít nhất một tab. Mỗi tab tuỳ chỉnh riêng ở danh sách bên dưới."
         : "Chọn những phần ghép trong widget Tổng quan. Các widget riêng lẻ luôn theo tuỳ chỉnh của từng phần bên dưới.",
-    glanceWidgetScope: (view) =>
+    glanceWidgetScope: (view, provider) =>
       ({
         quota: "Áp dụng cho widget Chi tiết, Vòng tròn, Gọn và Tổng quan.",
-        resets: "Áp dụng cho widget Reset Codex, Lịch reset Codex và Tổng quan.",
+        resets:
+          provider === "claude"
+            ? "Áp dụng cho widget Reset Codex, Lịch reset Codex và Tổng quan; cả ba sẽ hiện reset của Claude."
+            : "Áp dụng cho widget Reset Codex, Lịch reset Codex và Tổng quan.",
         upcoming: "Áp dụng cho widget Sắp đặt lại và Tổng quan.",
       })[view],
     glanceTabOff: "Tab đang tắt",
@@ -366,7 +373,7 @@ export const vi: Messages = {
         rhythm: "Nhịp reset",
       })[part],
     resetPartsSummary: (shown, total) => (shown === total ? "Đủ mọi phần" : `${shown}/${total} phần`),
-    resetPartsOff: "Chưa có số liệu: bật tab Reset hoặc thông báo khi Codex reset.",
+    resetPartsOff: (provider) => `Chưa có số liệu: bật tab Reset hoặc thông báo khi ${RESET_OWNERS[provider]} reset.`,
     upcomingLimit: "Hiện tối đa",
     upcomingLimitOption: (limit) => (limit === 0 ? "Tất cả vừa khung" : `${limit} hạn mức`),
     upcomingNote: "Các hạn mức sắp được đặt lại của những tài khoản chọn ở phần Hạn mức, sớm nhất lên đầu.",
