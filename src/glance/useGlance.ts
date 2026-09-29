@@ -4,18 +4,22 @@
  * glance document, which goes to the core only when it changed. Each surface lists what its Settings
  * choose (the Hạn mức cards, the starred metrics or a hand-picked set). The Codex free-reset
  * tracker rides along while the Reset tab or reset notifications are on, loading the feeds they
- * need. The hidden popup keeps running, so both stay live while it is closed. Elsewhere the core has
- * no glance and this does nothing.
+ * need; the Claude tracker only while a surface or a wing reads it and the Reset tab or Claude reset
+ * notifications are on. The hidden popup keeps running, so both stay live while it is closed.
+ * Elsewhere the core has no glance and this does nothing.
  */
 import { useEffect, useMemo, useRef } from "react";
 import { messagesFor } from "@/i18n";
 import { backend } from "@/lib/backend";
 import type { Provider, WidgetDescriptor } from "@/lib/types";
-import { buildGlance, isSpecialWing, type GlanceWingChoice } from "@/model/glance";
+import { buildGlance, isClaudeResetsWing, isSpecialWing, type GlanceWingChoice } from "@/model/glance";
+import { buildClaudeGlanceResets } from "@/model/glanceClaudeResets";
 import { buildGlanceResets, parseResetFeeds } from "@/model/glanceResets";
+import { parseClaudeResets } from "@/model/insights/claudeResets";
 import { brandOf, glanceGroups } from "@/model/layout";
 import { cardIdentity } from "@/model/providerText";
 import { widgetDataFor } from "@/model/widgetData";
+import { useClaudeAccountPlans } from "@/state/claudePlans";
 import { useDisplay, useIsEnabled, useWallClock } from "@/state/hooks";
 import { ensureFeed, useInsights } from "@/state/insights";
 import { useApp } from "@/state/store";
@@ -38,11 +42,16 @@ export function useGlance(): void {
   const theme = useApp((state) => state.settings.theme);
   const showResetsTab = useApp((state) => state.settings.showResetsTab);
   const notifyCodexResets = useApp((state) => state.settings.notifyCodexResets);
+  const notifyClaudeResets = useApp((state) => state.settings.notifyClaudeResets);
+  const usedBankedResets = useApp((state) => state.settings.usedBankedResets);
   const tracking = showResetsTab || notifyCodexResets;
   const statusFeed = useInsights((state) => state.feeds.codexResetStatus);
   const historyFeed = useInsights((state) => state.feeds.codexResets);
   const statusError = useInsights((state) => state.feedErrors.codexResetStatus);
   const historyError = useInsights((state) => state.feedErrors.codexResets);
+  const claudeFeed = useInsights((state) => state.feeds.claudeResets);
+  const claudeError = useInsights((state) => state.feedErrors.claudeResets);
+  const claudeAccounts = useClaudeAccountPlans();
   const display = useDisplay();
   const isEnabled = useIsEnabled();
   const alert = useIslandAlert();
@@ -65,6 +74,22 @@ export function useGlance(): void {
   const resets = useMemo(
     () => (tracking ? buildGlanceResets({ feeds, stale, now, language: display.language, timeFormat, theme }) : null),
     [tracking, feeds, stale, now, display.language, timeFormat, theme],
+  );
+
+  const claudeRead = island.resetsProvider === "claude" || widget.resetsProvider === "claude" || island.wings.some(isClaudeResetsWing);
+  const claudeTracking = supported && claudeRead && (showResetsTab || notifyClaudeResets);
+  useEffect(() => {
+    if (claudeTracking) ensureFeed("claudeResets");
+  }, [claudeTracking]);
+  const claudeBody = claudeTracking ? (claudeFeed?.body ?? null) : null;
+  const claudeParsed = useMemo(() => parseClaudeResets(claudeBody), [claudeBody]);
+  const claudeStale = Boolean(claudeFeed?.error || claudeError);
+  const claudeResets = useMemo(
+    () =>
+      claudeParsed
+        ? buildClaudeGlanceResets({ feed: claudeParsed, accounts: claudeAccounts ?? [], used: usedBankedResets, stale: claudeStale, now, language: display.language, timeFormat, theme })
+        : null,
+    [claudeParsed, claudeAccounts, usedBankedResets, claudeStale, now, display.language, timeFormat, theme],
   );
 
   const document = useMemo(() => {
@@ -96,10 +121,11 @@ export function useGlance(): void {
       appName: info?.name ?? messagesFor(display.language).chrome.appName,
       alert,
       resets,
+      claudeResets,
       markArt,
       now,
     });
-  }, [supported, layout, catalog, isEnabled, engine, display, info, islandEnabled, island, widget, timeFormat, alert, resets, markArt, now]);
+  }, [supported, layout, catalog, isEnabled, engine, display, info, islandEnabled, island, widget, timeFormat, alert, resets, claudeResets, markArt, now]);
 
   useEffect(() => {
     if (!ready || !document) return;
