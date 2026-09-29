@@ -158,10 +158,27 @@ fn login_command(kind: ProviderKind) -> Result<Command, String> {
     );
     let shell = std::env::var_os("SHELL")
         .filter(|shell| std::path::Path::new(shell).is_absolute())
-        .unwrap_or_else(|| "/bin/sh".into());
+        .unwrap_or_else(default_shell);
     let mut command = Command::new(shell);
     command.arg("-l").arg("-c").arg(script).process_group(0);
     Ok(piped(command))
+}
+
+/// The shell an app opened from the desktop, which is given no `SHELL`, signs in with: zsh on
+/// macOS (its default), else bash, else sh.
+#[cfg(unix)]
+fn default_shell() -> std::ffi::OsString {
+    let candidates: &[&str] = if cfg!(target_os = "macos") {
+        &["/bin/zsh", "/bin/bash"]
+    } else {
+        &["/bin/bash"]
+    };
+    candidates
+        .iter()
+        .find(|shell| std::path::Path::new(shell).is_file())
+        .copied()
+        .unwrap_or("/bin/sh")
+        .into()
 }
 
 fn piped(mut command: Command) -> Command {
