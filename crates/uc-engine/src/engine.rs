@@ -6,6 +6,7 @@
 //!   few seconds after the reset instead of at the next interval.
 //! - A failed refresh never wipes data: the last good snapshot stays, the error is kept beside it.
 //! - A failing provider is backed off for 60 s so a wake burst can't re-probe it in a tight loop.
+//! - A provider that refuses a reading for asking too often is left alone for five minutes.
 //! - A provider that never returns is abandoned after 120 s and reported as timed out.
 //! - Scheduling compares wall-clock time, so a machine waking from sleep refreshes right away.
 
@@ -29,6 +30,8 @@ pub struct EngineConfig {
     pub refresh_interval: Duration,
     pub provider_timeout: Duration,
     pub failure_backoff: Duration,
+    /// How long a provider that refused a reading for asking too often is left alone.
+    pub rate_limit_backoff: Duration,
     pub slow_threshold: Duration,
     /// How often the scheduler checks whether a batch is due.
     pub tick: Duration,
@@ -47,6 +50,7 @@ impl Default for EngineConfig {
             refresh_interval: Duration::from_secs(5 * 60),
             provider_timeout: Duration::from_secs(120),
             failure_backoff: Duration::from_secs(60),
+            rate_limit_backoff: Duration::from_secs(5 * 60),
             slow_threshold: Duration::from_secs(10),
             tick: Duration::from_secs(15),
             reset_settle: Duration::from_secs(5),
@@ -145,6 +149,8 @@ struct Inner {
     snapshots: HashMap<String, ProviderSnapshot>,
     refreshing: HashSet<String>,
     errors: HashMap<String, String>,
+    /// Providers whose last answer refused the reading for asking too often.
+    rate_limited: HashSet<String>,
     retry_after: HashMap<String, DateTime<Utc>>,
     /// When each provider was last asked, whatever came of it.
     attempted_at: HashMap<String, DateTime<Utc>>,
@@ -340,6 +346,11 @@ impl Engine {
 
     pub fn error_message(&self, provider_id: &str) -> Option<String> {
         self.inner.lock().errors.get(provider_id).cloned()
+    }
+
+    /// Whether the provider's last answer refused the reading for asking too often.
+    pub fn rate_limited(&self, provider_id: &str) -> bool {
+        self.inner.lock().rate_limited.contains(provider_id)
     }
 
     fn publish(&self) {
@@ -548,9 +559,17 @@ impl Engine {
         {
             let mut inner = self.inner.lock();
             inner.errors.insert(provider_id.to_string(), message);
+            let backoff = if category == Some(ErrorCategory::RateLimited) {
+                inner.rate_limited.insert(provider_id.to_string());
+                self.config
+                    .rate_limit_backoff
+                    .max(self.config.failure_backoff)
+            } else {
+                inner.rate_limited.remove(provider_id);
+                self.config.failure_backoff
+            };
             let retry = (self.clock)()
-                + chrono::Duration::from_std(self.config.failure_backoff)
-                    .unwrap_or(chrono::Duration::seconds(60));
+                + chrono::Duration::from_std(backoff).unwrap_or(chrono::Duration::seconds(60));
             inner.retry_after.insert(provider_id.to_string(), retry);
         }
         self.notify_outcome(provider_id, RefreshOutcome::Failed, category, force);
@@ -567,6 +586,7 @@ impl Engine {
         {
             let mut inner = self.inner.lock();
             inner.errors.remove(provider_id);
+            inner.rate_limited.remove(provider_id);
             inner.retry_after.remove(provider_id);
             if snapshot.usage_history.is_none() {
                 let previous = inner
@@ -831,6 +851,7 @@ mod tests {
         used: Mutex<f64>,
         resets_at: Mutex<Option<DateTime<Utc>>>,
         fail: AtomicBool,
+        refuse: AtomicBool,
         calls: AtomicUsize,
     }
 
@@ -842,6 +863,7 @@ mod tests {
                 used: Mutex::new(used),
                 resets_at: Mutex::new(Some(at(resets_at))),
                 fail: AtomicBool::new(false),
+                refuse: AtomicBool::new(false),
                 calls: AtomicUsize::new(0),
             })
         }
@@ -868,6 +890,15 @@ mod tests {
 
         async fn refresh(&self, _context: RefreshContext) -> ProviderSnapshot {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.refuse.load(Ordering::SeqCst) {
+                let mut snapshot = ProviderSnapshot::error_message(
+                    &self.provider,
+                    "Usage updates are rate limited. Try again later.",
+                    Some(ErrorCategory::RateLimited),
+                );
+                snapshot.refreshed_at = (self.clock)();
+                return snapshot;
+            }
             if self.fail.load(Ordering::SeqCst) {
                 let mut snapshot = ProviderSnapshot::error_message(
                     &self.provider,
@@ -968,17 +999,109 @@ mod tests {
 
         claude.roll_over(70.0, "2026-09-29T04:50:00Z");
         clock.set("2026-09-29T02:30:30Z");
-        assert_eq!(engine.refresh("claude", false).await, RefreshOutcome::CacheHit);
-        assert_eq!(engine.refresh_in_use("claude").await, RefreshOutcome::Refreshed);
+        assert_eq!(
+            engine.refresh("claude", false).await,
+            RefreshOutcome::CacheHit
+        );
+        assert_eq!(
+            engine.refresh_in_use("claude").await,
+            RefreshOutcome::Refreshed
+        );
         assert_eq!(session_used(&engine), 70.0);
 
         claude.fail.store(true, Ordering::SeqCst);
         clock.set("2026-09-29T02:31:00Z");
-        assert_eq!(engine.refresh_in_use("claude").await, RefreshOutcome::Failed);
+        assert_eq!(
+            engine.refresh_in_use("claude").await,
+            RefreshOutcome::Failed
+        );
         clock.set("2026-09-29T02:31:30Z");
-        assert_eq!(engine.refresh_in_use("claude").await, RefreshOutcome::BackedOff);
+        assert_eq!(
+            engine.refresh_in_use("claude").await,
+            RefreshOutcome::BackedOff
+        );
         assert_eq!(claude.calls(), 3);
         assert_eq!(session_used(&engine), 70.0, "the last good reading stays");
+    }
+
+    #[tokio::test]
+    async fn a_card_refused_for_asking_too_often_is_left_alone_for_five_minutes() {
+        let clock = TestClock::starting("2026-09-29T03:35:00Z");
+        let claude = WindowProvider::new(clock.clock(), 60.0, "2026-09-29T07:50:00Z");
+        let (engine, _dir) = clocked_engine(vec![claude.clone()], &clock);
+        engine.refresh_all(false).await;
+        assert!(!engine.rate_limited("claude"));
+
+        claude.refuse.store(true, Ordering::SeqCst);
+        clock.set("2026-09-29T03:38:02Z");
+        assert_eq!(
+            engine.refresh_in_use("claude").await,
+            RefreshOutcome::Failed
+        );
+        assert!(engine.rate_limited("claude"));
+
+        for later in [
+            "2026-09-29T03:39:03Z",
+            "2026-09-29T03:41:00Z",
+            "2026-09-29T03:43:01Z",
+        ] {
+            clock.set(later);
+            assert_eq!(
+                engine.refresh_in_use("claude").await,
+                RefreshOutcome::BackedOff
+            );
+            assert_eq!(
+                engine.refresh("claude", false).await,
+                RefreshOutcome::BackedOff
+            );
+        }
+        assert_eq!(
+            claude.calls(),
+            2,
+            "a refused card is not asked again within five minutes"
+        );
+        assert_eq!(session_used(&engine), 60.0, "the last good reading stays");
+
+        claude.refuse.store(false, Ordering::SeqCst);
+        claude.roll_over(64.0, "2026-09-29T07:50:00Z");
+        clock.set("2026-09-29T03:43:02Z");
+        assert_eq!(
+            engine.refresh_in_use("claude").await,
+            RefreshOutcome::Refreshed
+        );
+        assert!(!engine.rate_limited("claude"));
+        assert_eq!(session_used(&engine), 64.0);
+    }
+
+    #[tokio::test]
+    async fn another_failure_after_a_refusal_keeps_the_short_backoff() {
+        let clock = TestClock::starting("2026-09-29T03:35:00Z");
+        let claude = WindowProvider::new(clock.clock(), 60.0, "2026-09-29T07:50:00Z");
+        let (engine, _dir) = clocked_engine(vec![claude.clone()], &clock);
+        claude.refuse.store(true, Ordering::SeqCst);
+        assert_eq!(
+            engine.refresh("claude", false).await,
+            RefreshOutcome::Failed
+        );
+        assert!(engine.rate_limited("claude"));
+
+        claude.refuse.store(false, Ordering::SeqCst);
+        claude.fail.store(true, Ordering::SeqCst);
+        clock.set("2026-09-29T03:40:00Z");
+        assert_eq!(
+            engine.refresh("claude", false).await,
+            RefreshOutcome::Failed
+        );
+        assert!(
+            !engine.rate_limited("claude"),
+            "the network failed; nothing was refused"
+        );
+        clock.set("2026-09-29T03:41:00Z");
+        assert_eq!(
+            engine.refresh("claude", false).await,
+            RefreshOutcome::Failed
+        );
+        assert_eq!(claude.calls(), 3);
     }
 
     #[tokio::test]
