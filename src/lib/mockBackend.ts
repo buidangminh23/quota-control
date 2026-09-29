@@ -18,6 +18,7 @@ import type {
   LoginBrowser,
   PopoverScreen,
   ProviderEntry,
+  ProviderRuntimeState,
   SavedKey,
   ServiceEntry,
   SignInMethod,
@@ -67,6 +68,7 @@ export class MockBackend implements Backend {
   private readonly navigateListeners = new Set<(screen: PopoverScreen) => void>();
   private readonly documents = new Map<DocumentName, unknown>();
   private readonly accounts: ConnectedAccount[] = fixtureAccounts();
+  private removedLogins: { account: ConnectedAccount; entry: ProviderEntry; runtime: ProviderRuntimeState | undefined }[] = [];
   private readonly pendingLogins = new Map<string, { provider: string; method: SignInMethod; timer?: ReturnType<typeof setTimeout> }>();
   private readonly loginListeners = new Set<(result: AccountLoginResult) => void>();
   private readonly chatSessions: ChatSession[] = [];
@@ -106,6 +108,24 @@ export class MockBackend implements Backend {
 
   async listAccounts(): Promise<ConnectedAccount[]> {
     return structuredClone(this.accounts);
+  }
+
+  async listRemovedLogins(): Promise<ConnectedAccount[]> {
+    return structuredClone(this.removedLogins.map((removed) => removed.account));
+  }
+
+  async restoreRemovedLogins(provider: AccountProvider): Promise<void> {
+    const restored = this.removedLogins.filter((removed) => removed.account.provider === provider);
+    if (restored.length === 0) return;
+    this.removedLogins = this.removedLogins.filter((removed) => removed.account.provider !== provider);
+    for (const { account, entry, runtime } of restored) {
+      this.accounts.push(account);
+      this.entries.push(entry);
+      this.update((state) => {
+        state.providers[account.id] = runtime ?? { refreshing: true };
+      });
+    }
+    this.emitCatalog();
   }
 
   async beginAccountLogin(provider: string, _language?: unknown, method: SignInMethod = "google"): Promise<AccountLogin> {
@@ -213,7 +233,9 @@ export class MockBackend implements Backend {
 
   async removeAccount(accountId: string): Promise<void> {
     const index = this.accounts.findIndex((account) => account.id === accountId);
-    if (index >= 0) this.accounts.splice(index, 1);
+    const [removed] = index >= 0 ? this.accounts.splice(index, 1) : [];
+    const entry = this.entries.find((candidate) => candidate.provider.id === accountId);
+    if (removed?.credentialMode === "cli" && entry) this.removedLogins.push({ account: removed, entry, runtime: this.state.providers[accountId] });
     this.entries = this.entries.filter((entry) => entry.provider.id !== accountId);
     this.update((state) => {
       delete state.providers[accountId];

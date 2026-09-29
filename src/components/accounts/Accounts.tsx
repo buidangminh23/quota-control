@@ -35,13 +35,23 @@ function AccountRow({ account, runtime, messages, language }: { account: Connect
   const status = statusOf(runtime);
   const notice = status === "error" ? headerNotice(runtime, language) : null;
   const title = accountTitle(account.provider, account.label);
+  const cli = account.credentialMode === "cli";
   const remove = async () => {
-    const confirmed = await confirmAction({
-      title: messages.accounts.removeTitle(title),
-      message: messages.accounts.removeMessage,
-      confirmLabel: messages.accounts.removeConfirm,
-      cancelLabel: messages.accounts.cancel,
-    });
+    const confirmed = await confirmAction(
+      cli
+        ? {
+            title: messages.accounts.dismissTitle(title),
+            message: messages.accounts.dismissMessage("login", CLI_PRODUCTS[account.provider], brandName(account.provider)),
+            confirmLabel: messages.accounts.remove,
+            cancelLabel: messages.accounts.cancel,
+          }
+        : {
+            title: messages.accounts.removeTitle(title),
+            message: messages.accounts.removeMessage,
+            confirmLabel: messages.accounts.removeConfirm,
+            cancelLabel: messages.accounts.cancel,
+          },
+    );
     if (!confirmed) return;
     try {
       await backend().removeAccount(account.id);
@@ -65,11 +75,9 @@ function AccountRow({ account, runtime, messages, language }: { account: Connect
           {messages.accounts.status(status)}
         </span>
       </span>
-      {account.credentialMode === "cli" ? null : (
-        <button type="button" className="uc-icon-button" aria-label={`${messages.accounts.remove} ${title}`} onClick={() => void remove()} {...tooltipProps(messages.accounts.remove)}>
-          <CloseIcon size={11} />
-        </button>
-      )}
+      <button type="button" className="uc-icon-button" aria-label={`${messages.accounts.remove} ${title}`} onClick={() => void remove()} {...tooltipProps(messages.accounts.remove)}>
+        <CloseIcon size={11} />
+      </button>
     </div>
   );
 }
@@ -138,7 +146,26 @@ function UserCode({ code, messages }: { code: string; messages: Messages }) {
   );
 }
 
-function GoogleSignIn({ provider, messages, onBack }: { provider: AccountProvider; messages: Messages; onBack: () => void }) {
+/** Bring back the Claude Code or Codex CLI login removed from the Accounts screen. */
+function RestoreRemovedLogin({ provider, messages, language }: { provider: AccountProvider; messages: Messages; language: Language }) {
+  const count = useApp((state) => state.removedLogins.filter((login) => login.provider === provider).length);
+  if (count === 0) return null;
+  const restore = async () => {
+    try {
+      await backend().restoreRemovedLogins(provider);
+      await reloadAccounts();
+    } catch (error) {
+      showNotice(messages.accounts.failed(errorText(error, language)), "notice");
+    }
+  };
+  return (
+    <Button onClick={() => void restore()} className="is-small is-wide">
+      {messages.accounts.restoreDismissed(count)}
+    </Button>
+  );
+}
+
+function GoogleSignIn({ provider, messages, language, onBack }: { provider: AccountProvider; messages: Messages; language: Language; onBack: () => void }) {
   const error = useApp((state) => state.accountLoginError);
   return (
     <div className="uc-card uc-add-account">
@@ -149,6 +176,7 @@ function GoogleSignIn({ provider, messages, onBack }: { provider: AccountProvide
           {messages.accounts.changeService}
         </Button>
       </div>
+      <RestoreRemovedLogin provider={provider} messages={messages} language={language} />
       <Button variant="prominent" onClick={() => void startAccountLogin(provider)} className="is-small is-wide">
         {messages.accounts.signInWithGoogle}
       </Button>
@@ -180,7 +208,7 @@ function AddAccount({ messages, language }: { messages: Messages; language: Lang
   if (login) return <LoginProgress messages={messages} />;
   const back = () => setChoice(null);
   const google = PROVIDERS.find((provider) => provider === choice);
-  if (google) return <GoogleSignIn provider={google} messages={messages} onBack={back} />;
+  if (google) return <GoogleSignIn provider={google} messages={messages} language={language} onBack={back} />;
   const service = addable.find((candidate) => candidate.id === choice);
   if (service) {
     const saved = () => {

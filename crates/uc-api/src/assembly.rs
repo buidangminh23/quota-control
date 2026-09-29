@@ -18,13 +18,14 @@ pub fn provider_runtimes(
     provider_runtimes_with(store, &uc_providers::cli_accounts(), &services)
 }
 
-/// [`provider_runtimes`] for CLI logins and service cards the caller already read.
+/// [`provider_runtimes`] for CLI logins and service cards the caller already read. A CLI login the
+/// user removed from Quota Control gets no card.
 pub fn provider_runtimes_with(
     store: Arc<AccountStore>,
     cli: &[CliAccount],
     services: &ServiceCards,
 ) -> Result<Vec<Arc<dyn ProviderRuntime>>, SimpleProviderError> {
-    let mut runtimes = uc_providers::account_runtimes(store, cli)?;
+    let mut runtimes = uc_providers::account_runtimes(store, &services.shown_logins(cli))?;
     runtimes.extend(services.runtimes());
     runtimes.push(Arc::new(LocalHistoryRuntime::new(LogSource::Claude)));
     runtimes.push(Arc::new(LocalHistoryRuntime::new(LogSource::Codex)));
@@ -41,6 +42,8 @@ pub struct ServiceCards {
     pub detected: Vec<Detected>,
     /// Cards found on this computer that the user removed from Quota Control; they get no runtime.
     pub dismissed: Vec<Detected>,
+    /// Every removed card's id, the Claude Code and Codex CLI logins' included.
+    pub hidden: Vec<String>,
 }
 
 impl ServiceCards {
@@ -67,7 +70,24 @@ impl ServiceCards {
             saved,
             detected,
             dismissed,
+            hidden,
         }
+    }
+
+    /// The CLI logins in `cli` the user has not removed from Quota Control.
+    pub fn shown_logins(&self, cli: &[CliAccount]) -> Vec<CliAccount> {
+        cli.iter()
+            .filter(|login| !self.hidden.contains(&login.id))
+            .cloned()
+            .collect()
+    }
+
+    /// The CLI logins in `cli` the user removed from Quota Control.
+    pub fn hidden_logins(&self, cli: &[CliAccount]) -> Vec<CliAccount> {
+        cli.iter()
+            .filter(|login| self.hidden.contains(&login.id))
+            .cloned()
+            .collect()
     }
 
     /// Each card's id and label: the cards are rebuilt when a rescan finds these changed.
@@ -265,6 +285,35 @@ mod tests {
             elevenlabs(&ServiceCards::scan(store, roots).detected),
             found
         );
+    }
+
+    #[test]
+    fn a_removed_cli_login_is_left_out_until_restored() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = KeyStore::new(dir.path().join("api-keys"));
+        let login = |kind: uc_providers::ProviderKind, digit: &str| CliAccount {
+            kind,
+            id: format!("{}@{}", kind.cli(), digit.repeat(64)),
+            email: None,
+            updated_at: chrono::Utc::now(),
+            location: uc_providers::CliLocation::File(dir.path().join(kind.cli())),
+            profile: None,
+        };
+        let cli = vec![
+            login(uc_providers::ProviderKind::Claude, "a"),
+            login(uc_providers::ProviderKind::Codex, "b"),
+        ];
+        let roots = Roots::under(dir.path());
+        let cards = ServiceCards::scan(store.clone(), roots.clone());
+        assert_eq!(cards.shown_logins(&cli), cli);
+        assert!(cards.hidden_logins(&cli).is_empty());
+        store.dismiss(&cli[1].id).unwrap();
+        let cards = ServiceCards::scan(store.clone(), roots.clone());
+        assert_eq!(cards.shown_logins(&cli), vec![cli[0].clone()]);
+        assert_eq!(cards.hidden_logins(&cli), vec![cli[1].clone()]);
+        assert!(cards.dismissed.is_empty());
+        store.restore(&[cli[1].id.clone()]).unwrap();
+        assert_eq!(ServiceCards::scan(store, roots).shown_logins(&cli), cli);
     }
 
     #[test]

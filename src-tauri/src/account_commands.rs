@@ -76,11 +76,20 @@ impl Accounts {
 
     fn entries(&self) -> Result<Vec<AccountEntry>, String> {
         let records = self.store.list().map_err(safe_error)?;
-        let cli = self.cli.lock().clone();
+        let cli = self.services.lock().shown_logins(&self.cli.lock());
         Ok(uc_providers::visible_accounts(&records, &cli)
             .into_iter()
             .map(AccountEntry::from)
             .collect())
+    }
+
+    /// Whether the card `id` on the Accounts screen is a CLI login, which removing only hides.
+    fn is_cli_card(&self, id: &str) -> Result<bool, String> {
+        let records = self.store.list().map_err(safe_error)?;
+        let cli = self.services.lock().shown_logins(&self.cli.lock());
+        Ok(uc_providers::visible_accounts(&records, &cli)
+            .into_iter()
+            .any(|account| matches!(account, VisibleAccount::Cli(login) if login.id == id)))
     }
 
     /// Each CLI card's account and where its login is read from: a card is rebuilt when either
@@ -610,6 +619,8 @@ pub async fn cancel_account_login(
         .map_err(safe_error)
 }
 
+/// Remove an account card. A Claude Code or Codex CLI login is only hidden: the CLI stays signed
+/// in, and the card comes back from the provider's Add account panel.
 #[tauri::command]
 pub async fn remove_account(
     app: AppHandle,
@@ -618,7 +629,58 @@ pub async fn remove_account(
     account_id: String,
 ) -> Result<(), String> {
     let _changes = accounts.changes.lock().await;
-    accounts.store.remove(&account_id).map_err(safe_error)?;
+    if accounts.is_cli_card(&account_id)? {
+        let keys = accounts.keys();
+        tauri::async_runtime::spawn_blocking(move || keys.dismiss(&account_id))
+            .await
+            .map_err(safe_error)?
+            .map_err(safe_error)?;
+        rescan_services(&accounts).await;
+    } else {
+        accounts.store.remove(&account_id).map_err(safe_error)?;
+    }
+    service.replace_runtimes(accounts.runtimes()?, &app)
+}
+
+/// The Claude Code and Codex CLI logins on this computer that were removed from Quota Control.
+#[tauri::command]
+pub async fn list_removed_logins(
+    accounts: State<'_, Accounts>,
+) -> Result<Vec<AccountEntry>, String> {
+    let hidden = accounts.services.lock().hidden_logins(&accounts.cli.lock());
+    Ok(hidden
+        .iter()
+        .map(|login| AccountEntry::from(VisibleAccount::Cli(login)))
+        .collect())
+}
+
+/// Show again the removed CLI login of `provider` (`claude`, `codex`).
+#[tauri::command]
+pub async fn restore_removed_logins(
+    app: AppHandle,
+    accounts: State<'_, Accounts>,
+    service: State<'_, BackendService>,
+    provider: String,
+) -> Result<(), String> {
+    let kind = ProviderKind::parse(&provider).ok_or("Unsupported account provider")?;
+    let _changes = accounts.changes.lock().await;
+    let ids: Vec<String> = accounts
+        .services
+        .lock()
+        .hidden_logins(&accounts.cli.lock())
+        .into_iter()
+        .filter(|login| login.kind == kind)
+        .map(|login| login.id)
+        .collect();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let keys = accounts.keys();
+    tauri::async_runtime::spawn_blocking(move || keys.restore(&ids))
+        .await
+        .map_err(safe_error)?
+        .map_err(safe_error)?;
+    rescan_services(&accounts).await;
     service.replace_runtimes(accounts.runtimes()?, &app)
 }
 

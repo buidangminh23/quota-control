@@ -66,6 +66,8 @@ export interface AppState {
   /** The core's engine state, with every limit window whose reset has passed shown as reset. */
   engine: EngineState | null;
   accounts: ConnectedAccount[];
+  /** Claude Code and Codex CLI logins on this computer removed from the Accounts screen. */
+  removedLogins: ConnectedAccount[];
   /** Services beyond Claude and Codex, with their cards. */
   services: ServiceEntry[];
   accountLogin: AccountLogin | null;
@@ -110,6 +112,7 @@ export const useApp = create<AppState>(() => ({
   catalog: [],
   engine: null,
   accounts: [],
+  removedLogins: [],
   services: [],
   accountLogin: null,
   accountLoginError: null,
@@ -405,7 +408,8 @@ export function acknowledgeUpdate(): void {
 
 export async function reloadAccounts(): Promise<void> {
   try {
-    set({ accounts: await backend().listAccounts() });
+    const [accounts, removedLogins] = await Promise.all([backend().listAccounts(), backend().listRemovedLogins()]);
+    set({ accounts, removedLogins });
   } catch (error) {
     logFailure("Listing accounts")(error);
   }

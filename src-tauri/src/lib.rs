@@ -123,6 +123,8 @@ pub fn run() -> anyhow::Result<()> {
             account_commands::remove_api_key,
             account_commands::dismiss_detected_card,
             account_commands::restore_dismissed_cards,
+            account_commands::list_removed_logins,
+            account_commands::restore_removed_logins,
             chat_commands::list_chat_sessions,
             chat_commands::create_chat_session,
             chat_commands::open_chat_session,

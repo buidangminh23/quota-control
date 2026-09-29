@@ -38,7 +38,12 @@ export interface Backend {
   reopenAccountLogin(flowId: string): Promise<LoginBrowser>;
   cancelAccountLogin(flowId: string): Promise<void>;
   onAccountLogin(listener: (result: AccountLoginResult) => void): Unsubscribe;
+  /** Remove an account card. A Claude Code or Codex CLI login is only hidden; the CLI stays signed in. */
   removeAccount(accountId: string): Promise<void>;
+  /** The Claude Code and Codex CLI logins on this computer that were removed from Quota Control. */
+  listRemovedLogins(): Promise<ConnectedAccount[]>;
+  /** Show again the removed CLI login of `provider`. */
+  restoreRemovedLogins(provider: AccountProvider): Promise<void>;
   /** Every service beyond Claude and Codex, with the logins found on this computer and the keys saved. */
   listServices(): Promise<ServiceEntry[]>;
   /** Save an API key (and the values its service asks for beside it) and add its card. */

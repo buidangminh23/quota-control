@@ -417,17 +417,33 @@ describe("popup", () => {
     expect(await screen.findByRole("button", { name: "Xóa Antigravity · minh@example.com" })).toBeInTheDocument();
   });
 
+  it("removes a CLI login's card without signing the CLI out, and shows it again", async () => {
+    await renderApp();
+    act(() => useApp.setState({ screen: "accounts" }));
+    await screen.findByRole("heading", { name: "Tài khoản" });
+    fireEvent.click(screen.getByRole("button", { name: "Xóa Codex" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(/Đăng nhập Codex CLI trên máy vẫn giữ nguyên/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Xóa" }));
+    await waitFor(() => expect(screen.queryByText("Tự động từ Codex CLI trên máy này")).not.toBeInTheDocument());
+    const add = screen.getByRole("list", { name: "Thêm tài khoản" });
+    fireEvent.click(within(add).getByRole("button", { name: "Codex" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Hiện lại tài khoản đã xóa" }));
+    expect(await screen.findByText("Tự động từ Codex CLI trên máy này")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Hiện lại tài khoản đã xóa" })).not.toBeInTheDocument());
+  });
+
   it("lists connected accounts with a Google sign-in, without chat buttons or a sessions list", async () => {
     await renderApp();
     act(() => useApp.setState({ screen: "accounts" }));
     expect(await screen.findByRole("heading", { name: "Tài khoản" })).toBeInTheDocument();
     expect(screen.getByText("Tự động từ Codex CLI trên máy này")).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /^Xóa (?!OpenRouter|Copilot|Antigravity)/ })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: /^Xóa (?!OpenRouter|Copilot|Antigravity)/ })).toHaveLength(3);
     expect(screen.getByRole("button", { name: "Xóa Antigravity · minh@example.com" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Xóa OpenRouter/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Xóa Copilot/ })).toBeInTheDocument();
     expect(screen.getByText("Đăng nhập bằng GitHub")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Xóa Codex" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Xóa Codex" })).toBeInTheDocument();
     const add = screen.getByRole("list", { name: "Thêm tài khoản" });
     const offered = within(add)
       .getAllByRole("listitem")

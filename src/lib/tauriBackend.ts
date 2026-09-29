@@ -91,6 +91,14 @@ export class TauriBackend implements Backend {
     return invoke("remove_account", { accountId });
   }
 
+  listRemovedLogins(): Promise<ConnectedAccount[]> {
+    return invoke("list_removed_logins");
+  }
+
+  restoreRemovedLogins(provider: AccountProvider): Promise<void> {
+    return invoke("restore_removed_logins", { provider });
+  }
+
   listServices(): Promise<ServiceEntry[]> {
     return invoke("list_services");
   }
