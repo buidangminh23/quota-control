@@ -64,6 +64,29 @@ pub struct KeyStore {
     root: PathBuf,
 }
 
+#[derive(Clone)]
+pub struct LoginSnapshot {
+    store: KeyStore,
+    id: String,
+    revision: Uuid,
+    document: Value,
+}
+
+impl LoginSnapshot {
+    pub fn document(&self) -> &Value {
+        &self.document
+    }
+
+    pub fn replace(&mut self, document: &Value) -> Result<()> {
+        let revision =
+            self.store
+                .replace_login_revision(&self.id, document, Some(self.revision))?;
+        self.revision = revision;
+        self.document = document.clone();
+        Ok(())
+    }
+}
+
 impl KeyStore {
     pub fn new(root: PathBuf) -> Self {
         Self { root }
@@ -159,12 +182,24 @@ impl KeyStore {
 
     /// Replace a signed-in account's token document, when a renewal rotated its refresh token.
     pub fn replace_login(&self, id: &str, document: &Value) -> Result<()> {
+        self.replace_login_revision(id, document, None).map(|_| ())
+    }
+
+    fn replace_login_revision(
+        &self,
+        id: &str,
+        document: &Value,
+        expected: Option<Uuid>,
+    ) -> Result<Uuid> {
         let bytes = document_bytes(document)?;
         let _lock = storage::lock(&self.root)?;
         let mut registry = self.registry()?;
         let entry = registry.keys.get_mut(id).ok_or(AccountError::NotFound)?;
         if entry.record.sign_in.is_none() {
             return Err(AccountError::InvalidAccount);
+        }
+        if expected.is_some_and(|revision| revision != entry.revision) {
+            return Err(AccountError::CredentialsUnavailable);
         }
         let previous = entry.revision;
         let revision = Uuid::new_v4();
@@ -176,7 +211,7 @@ impl KeyStore {
             return Err(error);
         }
         let _ = storage::remove(&self.secret_path(id, previous));
-        Ok(())
+        Ok(revision)
     }
 
     fn save(
@@ -229,6 +264,39 @@ impl KeyStore {
         let _lock = storage::lock(&self.root)?;
         let registry = self.registry()?;
         let entry = registry.keys.get(id).ok_or(AccountError::NotFound)?;
+        self.read_secret(id, entry)
+    }
+
+    pub fn login_snapshot(&self, id: &str) -> Result<LoginSnapshot> {
+        let _lock = storage::lock(&self.root)?;
+        let registry = self.registry()?;
+        let entry = registry.keys.get(id).ok_or(AccountError::NotFound)?;
+        if entry.record.sign_in.is_none() {
+            return Err(AccountError::InvalidAccount);
+        }
+        Ok(LoginSnapshot {
+            store: self.clone(),
+            id: id.to_owned(),
+            revision: entry.revision,
+            document: self.read_secret(id, entry)?,
+        })
+    }
+
+    pub fn renewal_lock(&self, id: &str) -> Result<crate::RenewalLock> {
+        if !valid_card_id(id) {
+            return Err(AccountError::InvalidAccount);
+        }
+        storage::lock_file(
+            &self.root,
+            &self
+                .root
+                .join("credentials")
+                .join(format!("{id}.renewal.lock")),
+        )
+        .map(|file| crate::RenewalLock { _file: file })
+    }
+
+    fn read_secret(&self, id: &str, entry: &StoredKey) -> Result<Value> {
         let encrypted = storage::read(&self.secret_path(id, entry.revision), 64 * 1024)
             .map_err(|_| AccountError::CredentialsUnavailable)?
             .ok_or(AccountError::CredentialsUnavailable)?;
@@ -595,6 +663,53 @@ mod tests {
         let huge = json!({"token": "t".repeat(MAX_DOCUMENT_BYTES)});
         assert!(add(&id, "copilot", "github", &huge).is_err());
         assert!(store.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn stale_renewals_cannot_overwrite_a_reconnected_or_deleted_login() {
+        let (store, _dir) = store();
+        let id = login_id("kiro", 'a');
+        let original = json!({"refreshToken": "original"});
+        store
+            .add_login(&id, "kiro", "Kiro", "github", &original)
+            .unwrap();
+        let mut stale = store.login_snapshot(&id).unwrap();
+        store
+            .add_login(&id, "kiro", "Kiro", "github", &original)
+            .unwrap();
+        assert!(stale.replace(&json!({"refreshToken": "stale"})).is_err());
+        assert_eq!(store.secret(&id).unwrap(), original);
+        let mut deleted = store.login_snapshot(&id).unwrap();
+        store.remove(&id).unwrap();
+        assert!(matches!(
+            deleted.replace(&original),
+            Err(AccountError::NotFound)
+        ));
+        assert!(store.list().unwrap().is_empty());
+        store
+            .add_login(&id, "kiro", "Kiro", "github", &original)
+            .unwrap();
+        assert!(deleted.replace(&json!({"refreshToken": "stale"})).is_err());
+        assert_eq!(store.secret(&id).unwrap(), original);
+    }
+
+    #[test]
+    fn renewal_snapshots_advance_their_revision_after_each_save() {
+        let (store, _dir) = store();
+        let id = login_id("kiro", 'a');
+        store
+            .add_login(&id, "kiro", "Kiro", "github", &json!({"generation": 0}))
+            .unwrap();
+        let mut snapshot = store.login_snapshot(&id).unwrap();
+        let mut stale = snapshot.clone();
+        for generation in 1..=2 {
+            snapshot
+                .replace(&json!({"generation": generation}))
+                .unwrap();
+            assert_eq!(store.secret(&id).unwrap(), *snapshot.document());
+        }
+        assert!(stale.replace(&json!({"generation": 9})).is_err());
+        assert_eq!(store.secret(&id).unwrap()["generation"], 2);
     }
 
     #[test]

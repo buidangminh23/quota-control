@@ -228,7 +228,7 @@ impl Service for Kiro {
         let fresh;
         let secret = match renewed {
             Some(document) => {
-                context.keep_renewed(document.clone()).await;
+                context.keep_renewed(document.clone()).await?;
                 fresh = Secret::owned(document);
                 &fresh
             }

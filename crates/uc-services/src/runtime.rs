@@ -9,7 +9,7 @@ use uc_core::{
 };
 
 use crate::catalog::identity_hash;
-use crate::service::{FetchContext, Memo, RENEWED, Roots, Secret, Service};
+use crate::service::{FetchContext, Memo, Reading, Roots, Secret, Service};
 
 /// How long a card waits after the service answered "too many requests".
 const RATE_LIMIT_PAUSE_MINUTES: i64 = 5;
@@ -134,19 +134,33 @@ impl ServiceRuntime {
                 "Usage updates are rate limited. Waiting before retrying.",
             ));
         }
-        let secret = self.secret().await?;
-        let context = FetchContext {
-            secret: &secret,
-            http: &self.http,
-            now,
-            memo: &self.memo,
+        let reading = if let CredentialSource::Saved {
+            store,
+            id,
+            signed_in: true,
+        } = self.source.clone()
+        {
+            let service = self.service;
+            let http = self.http.clone();
+            let memo = self.memo.clone();
+            tokio::spawn(async move {
+                let (lock, snapshot) = uc_core::load_blocking(move || {
+                    let lock = store.renewal_lock(&id)?;
+                    let snapshot = store.login_snapshot(&id)?;
+                    Ok::<_, uc_accounts::AccountError>((lock, snapshot))
+                })
+                .await
+                .map_err(|_| credential_error())?;
+                let secret = Secret::owned(snapshot.document().clone());
+                let memo = memo.with_renewal(snapshot, lock);
+                fetch(service, &secret, &http, now, &memo).await
+            })
+            .await
+            .map_err(|_| credential_error())??
+        } else {
+            let secret = self.secret().await?;
+            fetch(self.service, &secret, &self.http, now, &self.memo).await?
         };
-        let reading = self.service.fetch(&context).await;
-        if let Some(document) = self.memo.get(RENEWED, now).await {
-            self.memo.remove(RENEWED).await;
-            self.keep_renewed(document).await;
-        }
-        let reading = reading?;
         Ok(
             ProviderSnapshot::make(&self.provider, reading.plan, reading.lines, now)
                 .with_plan_term(reading.plan_term)
@@ -156,26 +170,28 @@ impl ServiceRuntime {
     }
 }
 
-impl ServiceRuntime {
-    /// Save a signed-in account's renewed token document, so the rotated refresh token is the one
-    /// the next refresh uses. Another app's login is never written.
-    async fn keep_renewed(&self, document: serde_json::Value) {
-        let CredentialSource::Saved {
-            store,
-            id,
-            signed_in: true,
-        } = self.source.clone()
-        else {
-            return;
-        };
-        let saved = uc_core::load_blocking(move || store.replace_login(&id, &document)).await;
-        if saved.is_err() {
-            tracing::warn!(
-                "A renewed sign-in of {} could not be saved",
-                self.service.name()
-            );
-        }
-    }
+async fn fetch(
+    service: &'static dyn Service,
+    secret: &Secret,
+    http: &SharedHttpClient,
+    now: DateTime<Utc>,
+    memo: &Memo,
+) -> Result<Reading, SimpleProviderError> {
+    service
+        .fetch(&FetchContext {
+            secret,
+            http,
+            now,
+            memo,
+        })
+        .await
+}
+
+fn credential_error() -> SimpleProviderError {
+    SimpleProviderError::new(
+        ErrorCategory::CredentialAccess,
+        "The saved sign-in could not be read. Sign in again in Accounts.",
+    )
 }
 
 #[async_trait]
@@ -350,12 +366,150 @@ mod tests {
             let generation = context.secret.value()["generation"].as_u64().unwrap_or(0);
             context
                 .keep_renewed(json!({"refresh": "rotated", "generation": generation + 1}))
-                .await;
+                .await?;
             Err(SimpleProviderError::new(ErrorCategory::Network, "down"))
         }
     }
 
     static ROTATING: Rotating = Rotating;
+
+    struct GatedRotating {
+        calls: std::sync::atomic::AtomicUsize,
+        started: tokio::sync::Notify,
+        response: tokio::sync::Notify,
+        persisted: tokio::sync::Notify,
+        usage: tokio::sync::Notify,
+        finished: tokio::sync::Notify,
+    }
+
+    impl GatedRotating {
+        fn new() -> &'static Self {
+            Box::leak(Box::new(Self {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+                started: tokio::sync::Notify::new(),
+                response: tokio::sync::Notify::new(),
+                persisted: tokio::sync::Notify::new(),
+                usage: tokio::sync::Notify::new(),
+                finished: tokio::sync::Notify::new(),
+            }))
+        }
+    }
+
+    #[async_trait]
+    impl Service for GatedRotating {
+        fn id(&self) -> &'static str {
+            "rotating"
+        }
+        fn name(&self) -> &'static str {
+            "Rotating"
+        }
+        fn connection(&self) -> Connection {
+            Connection::default()
+        }
+        fn descriptors(&self, _: &Provider) -> Vec<WidgetDescriptor> {
+            Vec::new()
+        }
+
+        async fn fetch(&self, context: &FetchContext<'_>) -> Result<Reading, SimpleProviderError> {
+            let first = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+            if first {
+                self.started.notify_one();
+                self.response.notified().await;
+            }
+            let generation = context.secret.value()["generation"].as_u64().unwrap_or(0);
+            context
+                .keep_renewed(json!({"generation": generation + 1}))
+                .await?;
+            if first {
+                self.persisted.notify_one();
+                self.usage.notified().await;
+                self.finished.notify_one();
+            }
+            Err(SimpleProviderError::new(ErrorCategory::Network, "down"))
+        }
+    }
+
+    async fn signal(notify: &tokio::sync::Notify) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), notify.notified())
+            .await
+            .unwrap();
+    }
+
+    fn login() -> (tempfile::TempDir, KeyStore, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = KeyStore::new(dir.path().join("api-keys"));
+        let id = format!("rotating@{}", "a".repeat(64));
+        store
+            .add_login(&id, "rotating", "me", "google", &json!({"generation": 0}))
+            .unwrap();
+        (dir, store, id)
+    }
+
+    #[tokio::test]
+    async fn cancellation_during_rotation_persists_before_usage_and_unblocks_replacement() {
+        let (_dir, store, id) = login();
+        let service = GatedRotating::new();
+        let mut card = runtime(&store, &id, true);
+        card.service = service;
+        let first = tokio::spawn(async move { card.refresh(RefreshContext::manual()).await });
+        signal(&service.started).await;
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+        service.response.notify_one();
+        signal(&service.persisted).await;
+        assert_eq!(store.secret(&id).unwrap()["generation"], 1);
+
+        let mut replacement = runtime(&store, &id, true);
+        replacement.service = service;
+        let snapshot = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            replacement.refresh(RefreshContext::manual()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(snapshot.error_category, Some(ErrorCategory::Network));
+        assert_eq!(store.secret(&id).unwrap()["generation"], 2);
+        service.usage.notify_one();
+        signal(&service.finished).await;
+        assert_eq!(store.secret(&id).unwrap()["generation"], 2);
+    }
+
+    #[tokio::test]
+    async fn cancellation_after_rotation_keeps_the_saved_document() {
+        let (_dir, store, id) = login();
+        let service = GatedRotating::new();
+        let mut card = runtime(&store, &id, true);
+        card.service = service;
+        let first = tokio::spawn(async move { card.refresh(RefreshContext::manual()).await });
+        signal(&service.started).await;
+        service.response.notify_one();
+        signal(&service.persisted).await;
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+        assert_eq!(store.secret(&id).unwrap()["generation"], 1);
+        service.usage.notify_one();
+        signal(&service.finished).await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_runtimes_reload_credentials_after_the_renewal_lock() {
+        let (_dir, store, id) = login();
+        let mut tasks = Vec::new();
+        for _ in 0..8 {
+            let card = runtime(&store, &id, true);
+            tasks.push(tokio::spawn(async move {
+                card.refresh(RefreshContext::manual()).await
+            }));
+        }
+        for task in tasks {
+            let snapshot = tokio::time::timeout(std::time::Duration::from_secs(10), task)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(snapshot.error_category, Some(ErrorCategory::Network));
+        }
+        assert_eq!(store.secret(&id).unwrap()["generation"], 8);
+    }
 
     fn runtime(store: &KeyStore, id: &str, signed_in: bool) -> ServiceRuntime {
         ServiceRuntime::new(

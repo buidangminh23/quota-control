@@ -40,7 +40,7 @@ pub(crate) struct Parser {
     previous: Option<RawTokens>,
     line: usize,
     saw_meta: bool,
-    child_gate: Option<i64>,
+    child_gate: Option<CodexChildGate>,
     fast: bool,
     cwd: String,
     repository: Option<String>,
@@ -168,15 +168,8 @@ impl Parser {
             if let Some(id) = text(payload, "id") {
                 self.session = id.to_owned();
             }
-            let present =
-                |v: &Value| !v.is_null() && v.as_str().is_none_or(|s| !s.trim().is_empty());
-            let child = present(&payload["forked_from_id"])
-                || present(&payload["parent_thread_id"])
-                || payload["thread_source"] == "subagent"
-                || present(&payload["source"]["subagent"]);
-            if child {
-                self.child_gate = Some(timestamp(root).map_or(i64::MAX, |t| t.timestamp()));
-            }
+            let gate = CodexChildGate::from_meta(root);
+            self.child_gate = gate.waiting.then_some(gate);
             return None;
         }
         if root["type"] == "turn_context" {
@@ -198,13 +191,9 @@ impl Parser {
             return None;
         }
         if payload["type"] == "task_started" {
-            if let (Some(gate), Some(started)) = (self.child_gate, payload["started_at"].as_f64()) {
-                let threshold = if gate == i64::MAX {
-                    timestamp(root)?.timestamp()
-                } else {
-                    gate
-                };
-                if started >= threshold as f64 {
+            if let Some(gate) = &mut self.child_gate {
+                gate.observe(root);
+                if !gate.waiting {
                     self.child_gate = None;
                 }
             }
@@ -289,6 +278,51 @@ impl Parser {
             request_boundaries_known: last.is_some_and(|v| v == usage),
             sidechain: false,
         })
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+pub(crate) struct CodexChildGate {
+    pub waiting: bool,
+    created_at: Option<DateTime<Utc>>,
+}
+
+impl CodexChildGate {
+    pub fn from_meta(root: &Value) -> Self {
+        let payload = &root["payload"];
+        let present = |v: &Value| !v.is_null() && v.as_str().is_none_or(|s| !s.trim().is_empty());
+        Self {
+            waiting: present(&payload["forked_from_id"])
+                || present(&payload["parent_thread_id"])
+                || payload["thread_source"] == "subagent"
+                || present(&payload["source"]["subagent"]),
+            created_at: timestamp(root).or_else(|| timestamp(payload)),
+        }
+    }
+
+    pub fn observe(&mut self, root: &Value) {
+        if !self.waiting || root["type"] != "event_msg" || root["payload"]["type"] != "task_started"
+        {
+            return;
+        }
+        let Some(created) = self.created_at else {
+            return;
+        };
+        let numeric = root["payload"]["started_at"]
+            .as_f64()
+            .filter(|value| value.is_finite());
+        let own_turn = match numeric {
+            Some(started) if started.fract() == 0.0 => started >= created.timestamp() as f64,
+            Some(started) => {
+                started
+                    >= created.timestamp() as f64
+                        + created.timestamp_subsec_nanos() as f64 / 1_000_000_000.0
+            }
+            None => timestamp(root).is_some_and(|started| started > created),
+        };
+        if own_turn {
+            self.waiting = false;
+        }
     }
 }
 
@@ -483,6 +517,74 @@ mod tests {
         assert!(actual.tokens.fast);
         assert_eq!(actual.project, "sample-project");
         assert!(resumed.parse(&codex_count(140, 30)).is_none());
+    }
+
+    #[test]
+    fn codex_legacy_forks_resume_only_after_creation_and_preserve_baselines() {
+        for child in [
+            json!({"forked_from_id":"parent"}),
+            json!({"parent_thread_id":"parent"}),
+            json!({"thread_source":"subagent"}),
+            json!({"source":{"subagent":{"parent_thread_id":"parent"}}}),
+        ] {
+            let mut parser = Parser::new(LogSource::Codex, Path::new("child.jsonl"));
+            parser.parse(&json!({"type":"session_meta","timestamp":"2026-09-26T12:00:00.500Z","payload":child}));
+            parser.parse(&json!({"type":"event_msg","timestamp":"2026-09-26T12:00:00.100Z","payload":{"type":"task_started"}}));
+            assert!(parser.parse(&codex_count(100, 20)).is_none());
+            parser = serde_json::from_slice(&serde_json::to_vec(&parser).unwrap()).unwrap();
+            parser.parse(&json!({"type":"event_msg","timestamp":"2026-09-26T12:00:00.600Z","payload":{"type":"task_started"}}));
+            let own = parser.parse(&codex_count(600, 120)).unwrap();
+            assert_eq!(own.total, 600);
+            assert_eq!(own.tokens.input, 500);
+            assert_eq!(own.tokens.output, 100);
+            assert!(parser.parse(&codex_count(600, 120)).is_none());
+        }
+    }
+
+    #[test]
+    fn codex_numeric_task_time_takes_precedence_over_replay_record_time() {
+        let mut parser = Parser::new(LogSource::Codex, Path::new("child.jsonl"));
+        parser.parse(&json!({"type":"session_meta","timestamp":"2026-09-26T12:00:00.500Z","payload":{"forked_from_id":"parent"}}));
+        parser.parse(&json!({"type":"event_msg","timestamp":"2026-09-26T12:00:02Z","payload":{"type":"task_started","started_at":1790424000.25}}));
+        assert!(parser.parse(&codex_count(100, 20)).is_none());
+        parser.parse(&json!({"type":"event_msg","payload":{"type":"task_started","started_at":1790424000.75}}));
+        assert_eq!(parser.parse(&codex_count(110, 30)).unwrap().total, 20);
+    }
+
+    #[test]
+    fn codex_integer_start_accepts_own_turn_in_the_creation_second() {
+        let mut parser = Parser::new(LogSource::Codex, Path::new("child.jsonl"));
+        parser.parse(&json!({"type":"session_meta","timestamp":"2026-09-26T12:00:00.567Z","payload":{"forked_from_id":"parent"}}));
+        parser.parse(&json!({"type":"event_msg","timestamp":"2026-09-26T12:00:00.567Z","payload":{"type":"task_started","started_at":1790423999_i64}}));
+        assert!(parser.parse(&codex_count(100, 20)).is_none());
+        parser.parse(&json!({"type":"event_msg","timestamp":"2026-09-26T12:00:00.567Z","payload":{"type":"task_started","started_at":1790424000_i64}}));
+        assert_eq!(parser.parse(&codex_count(110, 30)).unwrap().total, 20);
+    }
+
+    #[test]
+    fn codex_legacy_replay_stamped_at_creation_does_not_open_child_gate() {
+        let mut parser = Parser::new(LogSource::Codex, Path::new("child.jsonl"));
+        parser.parse(&json!({"type":"session_meta","timestamp":"2026-09-26T12:00:00.567Z","payload":{"forked_from_id":"parent"}}));
+        parser.parse(&json!({"type":"event_msg","timestamp":"2026-09-26T12:00:00.567Z","payload":{"type":"task_started"}}));
+        assert!(parser.parse(&codex_count(100, 20)).is_none());
+        parser.parse(&json!({"type":"event_msg","timestamp":"2026-09-26T12:00:01Z","payload":{"type":"task_started"}}));
+        assert_eq!(parser.parse(&codex_count(110, 30)).unwrap().total, 20);
+    }
+
+    #[test]
+    fn codex_unknown_child_timestamps_never_admit_inherited_history() {
+        let mut parser = Parser::new(LogSource::Codex, Path::new("child.jsonl"));
+        parser.parse(&json!({"type":"session_meta","payload":{"forked_from_id":"parent"}}));
+        parser.parse(&json!({"type":"event_msg","timestamp":"2026-09-26T12:00:01Z","payload":{"type":"task_started"}}));
+        assert!(parser.parse(&codex_count(100, 20)).is_none());
+        let mut parser = Parser::new(LogSource::Codex, Path::new("child.jsonl"));
+        parser.parse(&json!({"type":"session_meta","payload":{"forked_from_id":"parent","timestamp":"2026-09-26T12:00:00Z"}}));
+        parser.parse(
+            &json!({"type":"event_msg","payload":{"type":"task_started","started_at":"invalid"}}),
+        );
+        assert!(parser.parse(&codex_count(100, 20)).is_none());
+        parser.parse(&json!({"type":"event_msg","timestamp":"2026-09-26T12:00:01Z","payload":{"type":"task_started","started_at":"invalid"}}));
+        assert_eq!(parser.parse(&codex_count(110, 30)).unwrap().total, 20);
     }
 
     #[test]

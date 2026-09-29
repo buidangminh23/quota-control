@@ -18,6 +18,7 @@ const BATCH_LINES: usize = 512;
 const BATCH_BYTES: u64 = 4 * 1024 * 1024;
 const PROBE_BYTES: u64 = 4096;
 const DERIVATION_VERSION: i64 = 3;
+const CODEX_PARSER_VERSION: &str = "1";
 
 #[derive(Serialize, Deserialize)]
 struct EventDetails {
@@ -194,6 +195,21 @@ impl UsageLedger {
                  ALTER TABLE usage_events ADD COLUMN derivation_version INTEGER NOT NULL DEFAULT 0;
                  DELETE FROM file_checkpoints;
                  PRAGMA user_version=2;",
+            )?;
+        }
+        let parser_version: Option<String> = connection
+            .query_row(
+                "SELECT value FROM ledger_metadata WHERE key='codexParserVersion'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if parser_version.as_deref() != Some(CODEX_PARSER_VERSION) {
+            connection.execute("DELETE FROM file_checkpoints WHERE source='codex'", [])?;
+            connection.execute(
+                "INSERT INTO ledger_metadata(key,value) VALUES('codexParserVersion',?1)
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                [CODEX_PARSER_VERSION],
             )?;
         }
         connection.execute_batch("COMMIT;")?;

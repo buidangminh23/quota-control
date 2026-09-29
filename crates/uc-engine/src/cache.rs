@@ -5,6 +5,8 @@
 //! than one refresh interval. A one-shot reader (the CLI) opts into timestamp-only freshness.
 
 use std::collections::{BTreeMap, HashSet};
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,6 +29,13 @@ struct Payload {
 struct CacheState {
     payload: Option<Payload>,
     session_writes: HashSet<String>,
+    disk_version: Option<DiskVersion>,
+}
+
+#[derive(PartialEq, Eq)]
+struct DiskVersion {
+    generation: u64,
+    metadata: Option<(std::time::SystemTime, u64)>,
 }
 
 #[derive(Clone)]
@@ -81,12 +90,10 @@ impl SnapshotCache {
     /// The snapshot only when it is fresh enough to skip a refresh.
     pub fn fresh_snapshot(&self, provider_id: &str) -> Option<ProviderSnapshot> {
         let mut memo = self.memo.lock();
-        let snapshot = memo
-            .payload
-            .get_or_insert_with(|| self.decode_stored())
-            .snapshots
-            .get(provider_id)?
-            .clone();
+        if !self.refresh(&mut memo) {
+            return None;
+        }
+        let snapshot = memo.payload.as_ref()?.snapshots.get(provider_id)?.clone();
         let written_this_session = memo.session_writes.contains(provider_id);
         let age = (self.clock)().signed_duration_since(snapshot.refreshed_at);
         let trusted = self.allows_persisted_freshness || written_this_session;
@@ -110,8 +117,39 @@ impl SnapshotCache {
             return;
         }
         let mut memo = self.memo.lock();
-        memo.session_writes.insert(snapshot.provider_id.clone());
-        let payload = memo.payload.get_or_insert_with(|| self.decode_stored());
+        let mut lock = match self.lock(true) {
+            Ok(lock) => lock,
+            Err(error) => {
+                tracing::warn!(target: "cache", "snapshot not persisted: {error}");
+                return;
+            }
+        };
+        let mut payload = match self.decode_stored() {
+            Ok(payload) => payload,
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+                memo.payload.clone().unwrap_or_default()
+            }
+            Err(error) => {
+                tracing::warn!(target: "cache", "snapshot not persisted: {error}");
+                return;
+            }
+        };
+        Self::accept_payload(&mut memo, payload.clone());
+        if payload
+            .produced_by_identity_keys
+            .get(&snapshot.provider_id)
+            .map(String::as_str)
+            == produced_by_identity_key
+            && payload
+                .snapshots
+                .get(&snapshot.provider_id)
+                .is_some_and(|stored| {
+                    stored.refreshed_at > snapshot.refreshed_at
+                        && stored.refreshed_at <= (self.clock)()
+                })
+        {
+            return;
+        }
         payload
             .snapshots
             .insert(snapshot.provider_id.clone(), snapshot.clone());
@@ -127,23 +165,57 @@ impl SnapshotCache {
                     .remove(&snapshot.provider_id);
             }
         }
-        self.save(payload);
+        if self.save(&payload, &mut lock) {
+            memo.payload = Some(payload);
+            memo.disk_version = self.disk_version(&mut lock).ok();
+            memo.session_writes.insert(snapshot.provider_id.clone());
+        }
     }
 
     /// Replace a stored snapshot without touching its freshness or account stamp.
     pub fn replace_silently(&self, snapshot: &ProviderSnapshot) {
         let mut memo = self.memo.lock();
-        let payload = memo.payload.get_or_insert_with(|| self.decode_stored());
-        if payload.snapshots.contains_key(&snapshot.provider_id) {
-            payload
+        let mut lock = match self.lock(true) {
+            Ok(lock) => lock,
+            Err(error) => {
+                tracing::warn!(target: "cache", "snapshot not replaced: {error}");
+                return;
+            }
+        };
+        let mut payload = match self.decode_stored() {
+            Ok(payload) => payload,
+            Err(error) => {
+                tracing::warn!(target: "cache", "snapshot not replaced: {error}");
+                return;
+            }
+        };
+        let id = &snapshot.provider_id;
+        let unchanged = memo.payload.as_ref().is_some_and(|observed| {
+            observed.snapshots.get(id) == payload.snapshots.get(id)
+                && observed.produced_by_identity_keys.get(id)
+                    == payload.produced_by_identity_keys.get(id)
+        });
+        Self::accept_payload(&mut memo, payload.clone());
+        if !unchanged
+            || !payload
                 .snapshots
-                .insert(snapshot.provider_id.clone(), snapshot.clone());
-            self.save(payload);
+                .get(id)
+                .is_some_and(|stored| stored.refreshed_at == snapshot.refreshed_at)
+        {
+            return;
+        }
+        payload.snapshots.insert(id.clone(), snapshot.clone());
+        if self.save(&payload, &mut lock) {
+            memo.payload = Some(payload);
+            memo.disk_version = self.disk_version(&mut lock).ok();
         }
     }
 
     pub fn produced_by_identity_key(&self, provider_id: &str) -> Option<String> {
-        self.payload()
+        let mut memo = self.memo.lock();
+        self.refresh(&mut memo);
+        memo.payload
+            .as_ref()?
             .produced_by_identity_keys
             .get(provider_id)
             .cloned()
@@ -159,7 +231,13 @@ impl SnapshotCache {
         let Some(current) = current_identity_key else {
             return false;
         };
-        let payload = self.payload();
+        let mut memo = self.memo.lock();
+        if !self.refresh(&mut memo) {
+            return true;
+        }
+        let Some(payload) = &memo.payload else {
+            return false;
+        };
         payload.snapshots.contains_key(provider_id)
             && payload
                 .produced_by_identity_keys
@@ -170,38 +248,118 @@ impl SnapshotCache {
 
     fn payload(&self) -> Payload {
         let mut memo = self.memo.lock();
-        memo.payload
-            .get_or_insert_with(|| self.decode_stored())
-            .clone()
+        self.refresh(&mut memo);
+        memo.payload.clone().unwrap_or_default()
     }
 
-    fn decode_stored(&self) -> Payload {
+    fn lock(&self, exclusive: bool) -> std::io::Result<File> {
+        if let Some(parent) = self
+            .path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut lock_path = self.path.as_os_str().to_os_string();
+        lock_path.push(".lock");
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(PathBuf::from(lock_path))?;
+        if exclusive {
+            lock.lock()?;
+        } else {
+            lock.lock_shared()?;
+        }
+        Ok(lock)
+    }
+
+    fn refresh(&self, memo: &mut CacheState) -> bool {
+        let result = (|| {
+            let mut lock = self.lock(false)?;
+            let version = self.disk_version(&mut lock)?;
+            if memo.disk_version.as_ref() == Some(&version) {
+                return Ok(None);
+            }
+            let payload = self.decode_stored()?;
+            Ok::<_, std::io::Error>(Some((payload, version)))
+        })();
+        match result {
+            Ok(Some((payload, version))) => {
+                Self::accept_payload(memo, payload);
+                memo.disk_version = Some(version);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(target: "cache", "cache read failed, keeping last snapshot: {error}");
+                return false;
+            }
+        }
+        true
+    }
+
+    fn accept_payload(memo: &mut CacheState, payload: Payload) {
+        if let Some(previous) = &memo.payload {
+            memo.session_writes.retain(|id| {
+                previous.snapshots.get(id) == payload.snapshots.get(id)
+                    && previous.produced_by_identity_keys.get(id)
+                        == payload.produced_by_identity_keys.get(id)
+            });
+        }
+        memo.payload = Some(payload);
+        memo.disk_version = None;
+    }
+
+    fn generation(lock: &mut File) -> std::io::Result<u64> {
+        lock.seek(SeekFrom::Start(0))?;
+        if lock.metadata()?.len() == 0 {
+            return Ok(0);
+        }
+        let mut bytes = [0; 8];
+        lock.read_exact(&mut bytes)?;
+        Ok(u64::from_le_bytes(bytes))
+    }
+
+    fn disk_version(&self, lock: &mut File) -> std::io::Result<DiskVersion> {
+        let metadata = match std::fs::metadata(&self.path) {
+            Ok(metadata) => Some((metadata.modified()?, metadata.len())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        };
+        Ok(DiskVersion {
+            generation: Self::generation(lock)?,
+            metadata,
+        })
+    }
+
+    fn decode_stored(&self) -> std::io::Result<Payload> {
         let bytes = match std::fs::read(&self.path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Payload::default();
+                return Ok(Payload::default());
             }
-            Err(error) => {
-                tracing::warn!(target: "cache", "cache read failed, starting empty: {error}");
-                return Payload::default();
-            }
+            Err(error) => return Err(error),
         };
-        match serde_json::from_slice(&bytes) {
-            Ok(payload) => payload,
-            Err(error) => {
-                tracing::warn!(target: "cache", "cache decode failed, dropping stored snapshots: {error}");
-                Payload::default()
-            }
-        }
+        serde_json::from_slice(&bytes)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
     }
 
-    fn save(&self, payload: &Payload) {
-        let written = serde_json::to_vec(payload)
-            .map_err(std::io::Error::other)
-            .and_then(|bytes| uc_core::paths::write_atomic(&self.path, &bytes));
+    fn save(&self, payload: &Payload, lock: &mut File) -> bool {
+        let written = (|| {
+            let bytes = serde_json::to_vec(payload).map_err(std::io::Error::other)?;
+            let generation = Self::generation(lock)?.wrapping_add(1);
+            lock.seek(SeekFrom::Start(0))?;
+            lock.write_all(&generation.to_le_bytes())?;
+            lock.sync_data()?;
+            uc_core::paths::write_atomic(&self.path, &bytes)
+        })();
         if let Err(error) = written {
             tracing::warn!(target: "cache", "snapshot not persisted: {error}");
+            return false;
         }
+        true
     }
 
     /// Age helper for tests and diagnostics.
@@ -369,5 +527,239 @@ mod tests {
             );
             assert!(persisted.fresh_snapshot(&id).is_none());
         }
+    }
+
+    #[test]
+    fn independent_instances_merge_writes_and_refresh_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+        let app = SnapshotCache::with_options(
+            path.clone(),
+            Duration::from_secs(300),
+            false,
+            fixed_clock(now()),
+        );
+        let cli = SnapshotCache::with_options(
+            path.clone(),
+            Duration::from_secs(300),
+            true,
+            fixed_clock(now()),
+        );
+        let ids = ["claude".into(), "codex".into()];
+        assert!(app.load_snapshots(&ids).is_empty());
+        assert!(cli.load_snapshots(&ids).is_empty());
+        cli.store(&snapshot("claude", 0, now()), Some("claude-user"));
+        app.store(&snapshot("codex", 0, now()), Some("codex-user"));
+        assert_eq!(app.load_snapshots(&ids), cli.load_snapshots(&ids));
+        assert_eq!(cli.load_snapshots(&ids).len(), 2);
+        assert_eq!(
+            app.produced_by_identity_key("claude").as_deref(),
+            Some("claude-user")
+        );
+        assert_eq!(
+            cli.produced_by_identity_key("codex").as_deref(),
+            Some("codex-user")
+        );
+        assert!(app.fresh_snapshot("claude").is_none());
+        assert!(app.fresh_snapshot("codex").is_some());
+        assert!(cli.fresh_snapshot("codex").is_some());
+    }
+
+    #[test]
+    fn simultaneous_independent_instances_preserve_all_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+        let ids: Vec<String> = (0..16).map(|index| format!("provider-{index}")).collect();
+        let barrier = std::sync::Barrier::new(ids.len());
+        std::thread::scope(|scope| {
+            for id in &ids {
+                let path = &path;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    let cache = SnapshotCache::new(path.clone(), Duration::from_secs(300));
+                    assert!(cache.load_snapshots(std::slice::from_ref(id)).is_empty());
+                    barrier.wait();
+                    cache.store(&snapshot(id, 0, now()), Some(id));
+                });
+            }
+        });
+        let cache = SnapshotCache::new(path, Duration::from_secs(300));
+        assert_eq!(cache.load_snapshots(&ids).len(), ids.len());
+        for id in ids {
+            assert_eq!(cache.produced_by_identity_key(&id), Some(id));
+        }
+    }
+
+    #[test]
+    fn external_identity_update_invalidates_session_freshness() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+        let app = SnapshotCache::with_options(
+            path.clone(),
+            Duration::from_secs(300),
+            false,
+            fixed_clock(now()),
+        );
+        let cli = SnapshotCache::new(path, Duration::from_secs(300));
+        let value = snapshot("claude", 0, now());
+        app.store(&value, Some("user-a"));
+        assert!(app.fresh_snapshot("claude").is_some());
+        cli.store(&value, Some("user-b"));
+        assert!(app.has_stale_account_stamp("claude", Some("user-a")));
+        assert_eq!(
+            app.produced_by_identity_key("claude").as_deref(),
+            Some("user-b")
+        );
+        assert!(app.fresh_snapshot("claude").is_none());
+        cli.store(&value, None);
+        assert_eq!(app.produced_by_identity_key("claude"), None);
+    }
+
+    #[test]
+    fn delayed_store_cannot_replace_a_fresher_snapshot_for_the_same_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+        let first = SnapshotCache::new(path.clone(), Duration::from_secs(300));
+        let second = SnapshotCache::new(path, Duration::from_secs(300));
+        let latest = snapshot("claude", 0, now());
+        first.store(&latest, Some("new-user"));
+        second.store(&snapshot("claude", 1, now()), Some("new-user"));
+        assert_eq!(second.load_snapshots(&["claude".into()])["claude"], latest);
+        assert_eq!(
+            second.produced_by_identity_key("claude").as_deref(),
+            Some("new-user")
+        );
+    }
+
+    #[test]
+    fn silent_replace_preserves_other_entries_stamp_and_freshness() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+        let app = SnapshotCache::with_options(
+            path.clone(),
+            Duration::from_secs(300),
+            false,
+            fixed_clock(now()),
+        );
+        let cli = SnapshotCache::new(path.clone(), Duration::from_secs(300));
+        let mut value = snapshot("claude", 0, now());
+        app.store(&value, Some("user-a"));
+        cli.store(&snapshot("codex", 0, now()), Some("user-b"));
+        value.plan = Some("Updated plan".into());
+        app.replace_silently(&value);
+        assert_eq!(app.fresh_snapshot("claude"), Some(value.clone()));
+        assert_eq!(
+            app.produced_by_identity_key("claude").as_deref(),
+            Some("user-a")
+        );
+        assert_eq!(
+            app.load_snapshots(&["claude".into(), "codex".into()]).len(),
+            2
+        );
+        let relaunched =
+            SnapshotCache::with_options(path, Duration::from_secs(300), false, fixed_clock(now()));
+        relaunched.load_snapshots(&["claude".into()]);
+        value.plan = Some("Another plan".into());
+        relaunched.replace_silently(&value);
+        assert!(relaunched.fresh_snapshot("claude").is_none());
+        assert_eq!(
+            relaunched.load_snapshots(&["claude".into()])["claude"],
+            value
+        );
+    }
+
+    #[test]
+    fn silent_replace_rejects_external_account_change_with_same_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+        let app = SnapshotCache::new(path.clone(), Duration::from_secs(300));
+        let cli = SnapshotCache::new(path, Duration::from_secs(300));
+        let mut value = snapshot("claude", 0, now());
+        app.store(&value, Some("user-a"));
+        cli.store(&value, Some("user-b"));
+        let latest = value.clone();
+        value.plan = Some("Old account plan".into());
+        app.replace_silently(&value);
+        assert_eq!(app.load_snapshots(&["claude".into()])["claude"], latest);
+        assert_eq!(
+            app.produced_by_identity_key("claude").as_deref(),
+            Some("user-b")
+        );
+    }
+
+    #[test]
+    fn silent_replace_cannot_roll_back_or_extend_freshness() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+        let app = SnapshotCache::new(path.clone(), Duration::from_secs(300));
+        let cli = SnapshotCache::new(path, Duration::from_secs(300));
+        let old = snapshot("claude", 1, now());
+        let latest = snapshot("claude", 0, now());
+        app.store(&old, Some("user-a"));
+        cli.store(&latest, Some("user-b"));
+        app.replace_silently(&old);
+        assert_eq!(app.load_snapshots(&["claude".into()])["claude"], latest);
+        app.replace_silently(&snapshot("claude", -1, now()));
+        assert_eq!(app.load_snapshots(&["claude".into()])["claude"], latest);
+    }
+
+    #[test]
+    fn failed_cache_reads_preserve_last_display_but_cannot_skip_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+        let cache = SnapshotCache::with_options(
+            path.clone(),
+            Duration::from_secs(300),
+            false,
+            fixed_clock(now()),
+        );
+        let value = snapshot("claude", 0, now());
+        cache.store(&value, Some("user-a"));
+        std::fs::write(&path, b"invalid JSON").unwrap();
+        assert_eq!(cache.load_snapshots(&["claude".into()])["claude"], value);
+        assert!(cache.fresh_snapshot("claude").is_none());
+        assert!(cache.has_stale_account_stamp("claude", Some("user-a")));
+        cache.store(&snapshot("codex", 0, now()), None);
+        let recovered = cache.load_snapshots(&["claude".into(), "codex".into()]);
+        assert_eq!(recovered.len(), 2);
+        assert_eq!(recovered["claude"], value);
+        assert!(serde_json::from_slice::<Payload>(&std::fs::read(&path).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn account_switch_and_clock_rollback_can_replace_a_newer_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = SnapshotCache::with_options(
+            dir.path().join("cache.json"),
+            Duration::from_secs(300),
+            false,
+            fixed_clock(now()),
+        );
+        cache.store(&snapshot("claude", 0, now()), Some("old-account"));
+        let current = snapshot("claude", 1, now());
+        cache.store(&current, Some("new-account"));
+        assert_eq!(cache.load_snapshots(&["claude".into()])["claude"], current);
+        assert_eq!(
+            cache.produced_by_identity_key("claude").as_deref(),
+            Some("new-account")
+        );
+        cache.store(&snapshot("claude", -1, now()), Some("new-account"));
+        cache.store(&current, Some("new-account"));
+        assert_eq!(cache.load_snapshots(&["claude".into()])["claude"], current);
+    }
+
+    #[test]
+    fn failed_lock_does_not_overwrite_persisted_snapshots() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+        let cache = SnapshotCache::new(path.clone(), Duration::from_secs(300));
+        cache.store(&snapshot("claude", 0, now()), Some("user-a"));
+        let before = std::fs::read(&path).unwrap();
+        let lock_path = dir.path().join("cache.json.lock");
+        std::fs::remove_file(&lock_path).unwrap();
+        std::fs::create_dir(&lock_path).unwrap();
+        cache.store(&snapshot("codex", 0, now()), None);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert!(cache.fresh_snapshot("codex").is_none());
     }
 }

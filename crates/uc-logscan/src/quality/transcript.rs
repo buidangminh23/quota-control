@@ -482,6 +482,7 @@ enum CodexCall {
 /// script reaches neither: it only shows in the script's error text, and is counted from there.
 pub(crate) struct CodexTranscript {
     saw_meta: bool,
+    child_gate: crate::parser::CodexChildGate,
     human_thread: bool,
     project: Project,
     model: Option<String>,
@@ -499,6 +500,7 @@ impl CodexTranscript {
     pub fn new() -> Self {
         Self {
             saw_meta: false,
+            child_gate: crate::parser::CodexChildGate::default(),
             human_thread: false,
             project: Project::default(),
             model: None,
@@ -516,6 +518,16 @@ impl CodexTranscript {
     pub fn line(&mut self, root: &Value, tally: &mut Tally) {
         let payload = &root["payload"];
         let at = timestamp(root);
+        if root["type"] == "session_meta" && !self.saw_meta {
+            self.child_gate = crate::parser::CodexChildGate::from_meta(root);
+        }
+        self.child_gate.observe(root);
+        if self.child_gate.waiting
+            && root["type"] != "session_meta"
+            && root["type"] != "turn_context"
+        {
+            return;
+        }
         match root["type"].as_str() {
             Some("session_meta") => self.meta(payload, tally),
             Some("turn_context") => {
@@ -552,6 +564,7 @@ impl CodexTranscript {
             |value: &Value| !value.is_null() && value.as_str().is_none_or(|s| !s.trim().is_empty());
         let child = present(&payload["forked_from_id"])
             || present(&payload["parent_thread_id"])
+            || payload["thread_source"] == "subagent"
             || present(&payload["source"]["subagent"]);
         self.human_thread =
             payload["thread_source"] == "user" && payload["source"] != "exec" && !child;
