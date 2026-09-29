@@ -554,7 +554,14 @@ export const vi: Messages = {
       })[reason],
     retry: "Thử lại",
     automaticChecks: "Tự động kiểm tra phiên bản mới",
-    automaticChecksNote: "Kiểm tra khi mở ứng dụng rồi 6 giờ một lần. Bản mới chỉ được tải về khi bạn bấm cài.",
+    automaticChecksNote: "Kiểm tra khi mở ứng dụng rồi mỗi giờ một lần.",
+    automaticInstalls: "Tự động cài bản mới",
+    automaticInstallsNote: (state) =>
+      ({
+        on: "Khi có bản mới, ứng dụng tự tải, cài rồi mở lại trong lúc bảng hạn mức đang đóng.",
+        off: "Bản mới chỉ được tải về khi bạn bấm cài.",
+        unavailable: "Trên máy này, cài bản mới cần mật khẩu quản trị nên ứng dụng chỉ báo khi có bản mới.",
+      })[state],
     version: (version) => `Phiên bản ${version}`,
     checkNow: "Kiểm tra ngay",
     lastChecked: (time) => `Đang dùng bản mới nhất · kiểm tra lúc ${time}.`,

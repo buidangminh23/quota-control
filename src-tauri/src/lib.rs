@@ -497,6 +497,9 @@ fn show_popup_at(app: &AppHandle, anchor: Option<PhysicalRect<i32, u32>>) -> Res
     window.show().map_err(safe_error)?;
     window.set_focus().map_err(safe_error)?;
     window.emit("popup-visibility", true).map_err(safe_error)?;
+    if let Some(updates) = app.try_state::<updates::Updates>() {
+        updates.popup_seen();
+    }
     app.state::<BackendService>().engine().wake();
     let handle = app.clone();
     tauri::async_runtime::spawn(async move { account_commands::sync_logins(&handle).await });
@@ -508,6 +511,9 @@ fn hide_popup(app: &AppHandle) -> Result<(), String> {
         .get_webview_window("popup")
         .ok_or("Popup is unavailable")?;
     window.hide().map_err(safe_error)?;
+    if let Some(updates) = app.try_state::<updates::Updates>() {
+        updates.popup_seen();
+    }
     #[cfg(target_os = "macos")]
     macos::set_popup_visible(false);
     if let Some(strip) = app.try_state::<taskbar_strip::TaskbarStrip>() {

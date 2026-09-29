@@ -463,6 +463,8 @@ export interface AvailableUpdate {
 export interface UpdateStatus {
   /** This installation can replace itself; development builds and other packages cannot. */
   supported: boolean;
+  /** A found release can install on its own here; `false` where installing asks for an administrator password. */
+  unattended?: boolean;
   currentVersion: string;
   phase: UpdatePhase;
   /** The user started the current check or install; background checks stay quiet until they find something. */

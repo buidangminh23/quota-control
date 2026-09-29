@@ -516,7 +516,14 @@ export const en: Messages = {
       })[reason],
     retry: "Try Again",
     automaticChecks: "Check for Updates Automatically",
-    automaticChecksNote: "Checks at launch and every 6 hours. Updates download only when you choose to install.",
+    automaticChecksNote: "Checks at launch and every hour.",
+    automaticInstalls: "Install Updates Automatically",
+    automaticInstallsNote: (state) =>
+      ({
+        on: "A new version downloads, installs and reopens the app on its own while the popup is closed.",
+        off: "Updates download only when you choose to install.",
+        unavailable: "Installing an update on this computer needs an administrator password, so the app only tells you when one is available.",
+      })[state],
     version: (version) => `Version ${version}`,
     checkNow: "Check Now",
     lastChecked: (time) => `Up to date · checked at ${time}.`,

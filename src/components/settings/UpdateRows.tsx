@@ -1,7 +1,7 @@
 /**
- * The App Updates card (upstream Settings → Updates): "check automatically", the running version with
- * Check Now or Install, and one line on where the updater stands. A build that cannot replace itself
- * links to the releases page instead of offering a check.
+ * The App Updates card (upstream Settings → Updates): "check automatically", "install automatically",
+ * the running version with Check Now or Install, and one line on where the updater stands. A build
+ * that cannot replace itself links to the releases page instead of offering a check.
  */
 import { messagesFor, type Language, type Messages } from "@/i18n";
 import { backend } from "@/lib/backend";
@@ -39,6 +39,12 @@ export function updateStatusLine(status: UpdateStatus, messages: Messages, timeF
   }
 }
 
+/** What the "install automatically" switch shows: it follows the checks, and is off where installing asks for a password. */
+export function automaticInstallState(status: UpdateStatus, checks: boolean, installs: boolean): "on" | "off" | "unavailable" {
+  if (status.unattended === false) return "unavailable";
+  return checks && installs ? "on" : "off";
+}
+
 export function UpdateRows() {
   const settings = useSettings();
   const status = useApp((state) => state.update);
@@ -48,6 +54,7 @@ export function UpdateRows() {
   const busy = status.phase === "checking" || status.phase === "downloading" || status.phase === "installing";
   const offered = status.phase === "available" || (status.phase === "failed" && status.failure?.stage !== "check" && status.available !== undefined);
   const line = updateStatusLine(status, messages, settings.timeFormat, settings.language);
+  const installs = automaticInstallState(status, settings.automaticUpdateChecks, settings.automaticUpdateInstalls);
 
   return (
     <>
@@ -58,6 +65,20 @@ export function UpdateRows() {
             <Switch checked={settings.automaticUpdateChecks} label={text.automaticChecks} onChange={(on) => updateSettings({ automaticUpdateChecks: on })} />
           </div>
           <p className="uc-settings-note">{text.automaticChecksNote}</p>
+        </div>
+      ) : null}
+      {status.supported ? (
+        <div className="uc-settings-row-group">
+          <div className="uc-settings-row">
+            <span className="uc-settings-label">{text.automaticInstalls}</span>
+            <Switch
+              checked={installs === "on"}
+              label={text.automaticInstalls}
+              disabled={installs === "unavailable" || !settings.automaticUpdateChecks}
+              onChange={(on) => updateSettings({ automaticUpdateInstalls: on })}
+            />
+          </div>
+          <p className="uc-settings-note">{text.automaticInstallsNote(installs)}</p>
         </div>
       ) : null}
       <div className="uc-settings-row-group">

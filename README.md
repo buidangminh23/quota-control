@@ -72,7 +72,7 @@ A desktop with system tray support is recommended. If FUSE is unavailable, run `
 - Claude, Codex, Cursor, Copilot and many other AI services in one dashboard.
 - Account limits, credits and reset countdowns, depending on what each service exposes.
 - Local token history and estimated API-equivalent costs, separate from subscription charges.
-- Quota notifications, a global shortcut and automatic update checks.
+- Quota notifications, a global shortcut and automatic updates.
 - Dynamic Island and desktop widgets on macOS.
 
 ## Get started
@@ -81,7 +81,7 @@ A desktop with system tray support is recommended. If FUSE is unavailable, run `
 2. Existing Claude Code and Codex CLI logins appear automatically. Use **Accounts → +** to connect other accounts with the methods offered for each service.
 3. Choose the accounts and readings to display in **Customize** and **Settings**.
 
-Use **Settings → App Updates → Check Now** to install a newer version. Updates are verified with the release signing key.
+New versions install on their own while the popup is closed; **Settings → App Updates** turns that off, and **Check Now** looks for one right away. Updates are verified with the release signing key.
 
 The backend runs locally; provider requests go to the relevant services. Local token history covers this computer only.
 

@@ -4,7 +4,7 @@
  * Privacy, Logging) as one typed record.
  *
  * The document is shared with the Rust core: it reads `language` for native menus and
- * `automaticUpdateChecks` for its update schedule, and owns `enabledProviders`. Saving always merges
+ * `automaticUpdateChecks` and `automaticUpdateInstalls` for its updates, and owns `enabledProviders`. Saving always merges
  * onto the stored document, so keys the popup does not own survive untouched.
  */
 import { DEFAULT_LANGUAGE, isLanguage, type Language } from "@/i18n";
@@ -159,8 +159,10 @@ export interface AppSettings {
   customizeHintDismissed: boolean;
   /** The "connect an account" hint was closed; it stays closed even while no account is connected. */
   accountsHintDismissed: boolean;
-  /** The core looks for a new release at launch and every six hours (upstream "Update Automatically"). */
+  /** The core looks for a new release at launch and every hour (upstream "Update Automatically"). */
   automaticUpdateChecks: boolean;
+  /** The core installs a release it found on its own while the popup is closed. */
+  automaticUpdateInstalls: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -223,6 +225,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   customizeHintDismissed: false,
   accountsHintDismissed: false,
   automaticUpdateChecks: true,
+  automaticUpdateInstalls: true,
 };
 
 /** Keys the core owns inside the shared document; the popup never writes them from its own copy. */
@@ -353,6 +356,7 @@ export function parseSettings(raw: unknown): AppSettings {
     customizeHintDismissed: flag(stored.customizeHintDismissed, defaults.customizeHintDismissed),
     accountsHintDismissed: flag(stored.accountsHintDismissed, defaults.accountsHintDismissed),
     automaticUpdateChecks: flag(stored.automaticUpdateChecks, defaults.automaticUpdateChecks),
+    automaticUpdateInstalls: flag(stored.automaticUpdateInstalls, defaults.automaticUpdateInstalls),
   };
 }
 

@@ -141,6 +141,35 @@ describe("app updates", () => {
     expect(await screen.findByText(/^Đang dùng bản mới nhất · kiểm tra lúc .+\.$/)).toBeInTheDocument();
   });
 
+  it("installs new versions on its own until that is turned off", async () => {
+    const api = await openSettings();
+    const installs = screen.getByRole("switch", { name: "Tự động cài bản mới" });
+    expect(installs).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText(/ứng dụng tự tải, cài rồi mở lại/)).toBeInTheDocument();
+    act(() => {
+      fireEvent.click(installs);
+    });
+    expect(useApp.getState().settings.automaticUpdateInstalls).toBe(false);
+    expect(installs).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText("Bản mới chỉ được tải về khi bạn bấm cài.")).toBeInTheDocument();
+
+    act(() => {
+      fireEvent.click(installs);
+      fireEvent.click(screen.getByRole("switch", { name: "Tự động kiểm tra phiên bản mới" }));
+    });
+    expect(installs).toHaveAttribute("aria-checked", "false");
+    expect(installs).toBeDisabled();
+    expect(useApp.getState().settings.automaticUpdateInstalls).toBe(true);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("switch", { name: "Tự động kiểm tra phiên bản mới" }));
+      api.setUpdateStatus({ supported: true, unattended: false, currentVersion: "0.1.0", phase: "idle", manual: false, downloaded: 0 });
+    });
+    expect(await screen.findByText(/cần mật khẩu quản trị/)).toBeInTheDocument();
+    expect(installs).toBeDisabled();
+    expect(installs).toHaveAttribute("aria-checked", "false");
+  });
+
   it("offers the release a check found, in the section and in the update dialog", async () => {
     await openSettings();
     await act(async () => {
@@ -157,6 +186,7 @@ describe("app updates", () => {
     act(() => api.setUpdateStatus({ supported: false, currentVersion: "0.1.0", phase: "idle", manual: false, downloaded: 0 }));
     expect(await screen.findByText(/không tự cập nhật được/)).toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: "Tự động kiểm tra phiên bản mới" })).toBeNull();
+    expect(screen.queryByRole("switch", { name: "Tự động cài bản mới" })).toBeNull();
     const open = vi.spyOn(api, "openUrl").mockResolvedValue();
     fireEvent.click(screen.getByRole("button", { name: "Mở trang phát hành" }));
     expect(open).toHaveBeenCalledWith("https://github.com/buidangminh23/quota-control/releases");

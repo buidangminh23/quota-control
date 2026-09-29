@@ -427,6 +427,9 @@ export interface UpdateMessages {
   retry: string;
   automaticChecks: string;
   automaticChecksNote: string;
+  automaticInstalls: string;
+  /** `unavailable`: installing on this computer asks for an administrator password. */
+  automaticInstallsNote(state: "on" | "off" | "unavailable"): string;
   version(version: string): string;
   checkNow: string;
   lastChecked(time: string): string;

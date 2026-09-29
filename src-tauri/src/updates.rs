@@ -4,9 +4,11 @@
 //! signatures. The updater plugin verifies each download against the public key in
 //! `tauri.conf.json`, and `requireSignedVersion` rejects a manifest that pairs a new version
 //! number with an older signed build. A background task checks shortly after launch and then every
-//! six hours while the `automaticUpdateChecks` setting is on. A found update shows as a dialog in
-//! the popup and in the tray menu; while the popup is closed, a system notification says so once
-//! per version. The first launch after an update says which version it replaced the same way.
+//! hour while the `automaticUpdateChecks` setting is on. With `automaticUpdateInstalls` on as well,
+//! a found update installs on its own once the popup has been closed for ten minutes, where
+//! replacing the installation asks the user for nothing. Otherwise it shows as a dialog in the
+//! popup and in the tray menu; while the popup is closed, a system notification says so once per
+//! version. The first launch after an update says which version it replaced the same way.
 //!
 //! Installing hands Windows over to the NSIS installer in passive `/UPDATE` mode, which keeps the
 //! shortcuts and launch at login and relaunches the app. On Linux the AppImage is replaced in place
@@ -19,7 +21,7 @@
 //! Builds the updater cannot replace (development runs, other packages) report `supported: false`,
 //! and the popup links to the releases page instead.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{DateTime, Utc};
@@ -38,9 +40,14 @@ mod release;
 const FIRST_CHECK_DELAY: Duration = Duration::from_secs(20);
 /// How often the background task looks at the clock. A check is due by wall-clock time, so a
 /// computer that slept through the interval checks soon after it wakes.
-const SCHEDULER_TICK: Duration = Duration::from_secs(15 * 60);
+const SCHEDULER_TICK: Duration = Duration::from_secs(5 * 60);
 /// Minimum time between two background checks.
-const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+const CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
+/// How long the popup must have been closed before a release installs without being asked, so
+/// that a sign-in which went on in the browser is not cut off.
+const POPUP_REST: Duration = Duration::from_secs(10 * 60);
+/// How long after an install nobody asked for failed the same release is tried again.
+const UNASKED_RETRY: Duration = Duration::from_secs(6 * 60 * 60);
 const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 /// Download progress reaches the popup at most this often.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(200);
@@ -48,6 +55,8 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(200);
 const MARKER_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 /// The settings document key behind "Check for updates automatically"; missing means on.
 const AUTOMATIC_CHECKS_KEY: &str = "automaticUpdateChecks";
+/// The settings document key behind "Install updates automatically"; missing means on.
+const AUTOMATIC_INSTALLS_KEY: &str = "automaticUpdateInstalls";
 /// The version the previous launch ran, next to the pending-install marker.
 const LAST_RUN_FILE: &str = "last-version";
 /// `productName` in `tauri.conf.json`, which names the updater's installer file.
@@ -153,6 +162,10 @@ impl AvailableUpdate {
 pub struct UpdateStatus {
     /// This installation can replace itself (an installed NSIS, deb, AppImage or .app release build).
     pub supported: bool,
+    /// Replacing this installation asks the user for nothing, so a found release can install on
+    /// its own. A .deb, or a package in a folder this user cannot write to, asks for an
+    /// administrator password.
+    pub unattended: bool,
     pub current_version: String,
     pub phase: UpdatePhase,
     /// The user started the current check or install. Background checks leave it false, so the
@@ -174,9 +187,10 @@ pub struct UpdateStatus {
 }
 
 impl UpdateStatus {
-    fn idle(supported: bool, current_version: String) -> Self {
+    fn idle(supported: bool, unattended: bool, current_version: String) -> Self {
         Self {
             supported,
+            unattended,
             current_version,
             phase: UpdatePhase::Idle,
             manual: false,
@@ -199,21 +213,36 @@ pub struct Updates {
     last_check: Mutex<Option<SystemTime>>,
     /// The release a background check last found, so its system notification shows once.
     announced: Mutex<Option<String>>,
+    /// When the popup was last open.
+    seen: Mutex<Option<Instant>>,
+    /// The release an install nobody asked for was last started for, and when. It stays while
+    /// that install has not succeeded.
+    unasked_try: Mutex<Option<(String, Instant)>>,
 }
 
 impl Updates {
     pub fn new(app: &AppHandle) -> Self {
-        let supported = installer(app).is_some() && app.updater().is_ok();
+        let kind = installer(app);
+        let supported = kind.is_some() && app.updater().is_ok();
+        let unattended = supported && kind.is_some_and(replaceable_unasked);
         Self {
             status: Mutex::new(UpdateStatus::idle(
                 supported,
+                unattended,
                 app.package_info().version.to_string(),
             )),
             pending: Mutex::new(None),
             operation: tokio::sync::Mutex::new(()),
             last_check: Mutex::new(None),
             announced: Mutex::new(None),
+            seen: Mutex::new(None),
+            unasked_try: Mutex::new(None),
         }
+    }
+
+    /// The popup is open, or was closed just now.
+    pub fn popup_seen(&self) {
+        *self.seen.lock() = Some(Instant::now());
     }
 
     pub fn status(&self) -> UpdateStatus {
@@ -249,6 +278,7 @@ impl Updates {
             Some(Relaunch::Updated { .. }) | None => {}
             Some(Relaunch::Unfinished { to }) => {
                 tracing::warn!(target: "updates", "the install of {to} did not finish; still on {current}");
+                *self.unasked_try.lock() = Some((to.clone(), Instant::now()));
                 notify(
                     app,
                     format!("Chưa cài được bản {to}. Mở Quota Control để thử lại."),
@@ -286,6 +316,11 @@ impl Updates {
                 let last = *updates.last_check.lock();
                 if automatic_checks(&app) && check_due(last, SystemTime::now()) {
                     updates.check(&app, false).await;
+                }
+                if updates.installs_unasked(&app)
+                    && let Err(error) = updates.install_found(&app, false).await
+                {
+                    tracing::warn!(target: "updates", "the update did not install on its own: {error}");
                 }
                 tokio::time::sleep(SCHEDULER_TICK).await;
             }
@@ -357,14 +392,18 @@ impl Updates {
                     status.checked_at = checked_at;
                     status.failure = None;
                 });
+                let on_its_own = self.status.lock().unattended
+                    && automatic_installs(app)
+                    && self.unasked_try.lock().is_none();
                 let announce = {
                     let mut announced = self.announced.lock();
-                    let announce = should_announce_offer(
-                        manual,
-                        crate::popup_visible(app),
-                        announced.as_deref(),
-                        &version,
-                    );
+                    let announce = !on_its_own
+                        && should_announce_offer(
+                            manual,
+                            crate::popup_visible(app),
+                            announced.as_deref(),
+                            &version,
+                        );
                     if !manual {
                         *announced = Some(version.clone());
                     }
@@ -413,20 +452,55 @@ impl Updates {
     /// installer relaunches the app) and Linux restarts; `Err` leaves the app running with the
     /// failure in the status.
     pub async fn install(&self, app: &AppHandle) -> Result<(), String> {
+        self.install_found(app, true).await
+    }
+
+    /// Whether the release the last check found installs now without being asked.
+    fn installs_unasked(&self, app: &AppHandle) -> bool {
+        let popup_open = crate::popup_visible(app);
+        if popup_open {
+            self.popup_seen();
+        }
+        let offered = {
+            let status = self.status.lock();
+            if !status.unattended || status.phase != UpdatePhase::Available {
+                return false;
+            }
+            status.available.as_ref().map(|offer| offer.version.clone())
+        };
+        let tried = self.unasked_try.lock().clone();
+        let closed_for = self.seen.lock().map(|seen| seen.elapsed());
+        unasked_install_due(
+            automatic_checks(app) && automatic_installs(app),
+            offered.as_deref(),
+            tried
+                .as_ref()
+                .map(|(version, at)| (version.as_str(), at.elapsed())),
+            popup_open,
+            closed_for,
+        )
+    }
+
+    /// `manual` tells that the user asked for the install. One nobody asked for is remembered,
+    /// so a release that fails to install is not tried again right away.
+    async fn install_found(&self, app: &AppHandle, manual: bool) -> Result<(), String> {
         if !self.status.lock().supported {
             return Err("This build of Quota Control cannot update itself".into());
         }
         let _operation = self.operation.lock().await;
-        self.check_locked(app, true).await;
+        self.check_locked(app, manual).await;
         let Some(update) = self.pending.lock().clone() else {
             return match self.status().phase {
                 UpdatePhase::Failed => Err("Checking for updates failed".into()),
                 _ => Err("Quota Control is already up to date".into()),
             };
         };
+        if !manual {
+            *self.unasked_try.lock() = Some((update.version.clone(), Instant::now()));
+        }
         self.publish(app, |status| {
             status.phase = UpdatePhase::Downloading;
-            status.manual = true;
+            status.manual = manual;
             status.downloaded = 0;
             status.total = None;
             status.failure = None;
@@ -619,16 +693,83 @@ fn updater(app: &AppHandle) -> tauri_plugin_updater::Result<Updater> {
 }
 
 fn automatic_checks(app: &AppHandle) -> bool {
+    switched_on(app, AUTOMATIC_CHECKS_KEY)
+}
+
+fn automatic_installs(app: &AppHandle) -> bool {
+    switched_on(app, AUTOMATIC_INSTALLS_KEY)
+}
+
+/// A switch in the settings document that is on until the user turns it off.
+fn switched_on(app: &AppHandle, key: &str) -> bool {
     app.state::<BackendService>()
         .load("settings")
         .ok()
         .flatten()
-        .and_then(|settings| {
-            settings
-                .get(AUTOMATIC_CHECKS_KEY)
-                .and_then(|value| value.as_bool())
-        })
+        .and_then(|settings| settings.get(key).and_then(|value| value.as_bool()))
         .unwrap_or(true)
+}
+
+/// Whether the release a check found installs now without being asked: the user left automatic
+/// installs on, the popup has been closed for [`POPUP_REST`] or was never open, and no install
+/// of this release that nobody asked for was tried within [`UNASKED_RETRY`].
+fn unasked_install_due(
+    wanted: bool,
+    offered: Option<&str>,
+    tried: Option<(&str, Duration)>,
+    popup_open: bool,
+    closed_for: Option<Duration>,
+) -> bool {
+    let Some(offered) = offered else {
+        return false;
+    };
+    wanted
+        && !popup_open
+        && closed_for.is_none_or(|closed| closed >= POPUP_REST)
+        && tried.is_none_or(|(version, since)| version != offered || since >= UNASKED_RETRY)
+}
+
+/// Whether the updater can replace this installation without asking for an administrator
+/// password: a .deb goes through pkexec, and every other package needs its folder to be one this
+/// user can write to.
+fn replaceable_unasked(kind: &str) -> bool {
+    kind != "deb" && installed_folder(kind).is_some_and(|folder| writable(&folder))
+}
+
+/// The folder the installed package sits in.
+fn installed_folder(kind: &str) -> Option<PathBuf> {
+    let package = match kind {
+        "appimage" => PathBuf::from(std::env::var_os("APPIMAGE")?),
+        "app" => bundle_of(&std::env::current_exe().ok()?)?,
+        _ => std::env::current_exe().ok()?,
+    };
+    package.parent().map(Path::to_path_buf)
+}
+
+/// The `.app` bundle that holds `executable`.
+fn bundle_of(executable: &Path) -> Option<PathBuf> {
+    executable
+        .ancestors()
+        .find(|folder| {
+            folder
+                .extension()
+                .is_some_and(|extension| extension == "app")
+        })
+        .map(Path::to_path_buf)
+}
+
+/// Whether this user can create a file in `folder`.
+fn writable(folder: &Path) -> bool {
+    let probe = folder.join(format!(".quota-control-{}", std::process::id()));
+    let made = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+        .is_ok();
+    if made {
+        let _ = std::fs::remove_file(&probe);
+    }
+    made
 }
 
 /// A background check is due when none ran yet, the interval passed, or the clock moved back.
@@ -976,6 +1117,96 @@ mod tests {
     }
 
     #[test]
+    fn a_release_is_found_within_the_hour_it_comes_out() {
+        let now = SystemTime::now();
+        assert!(!check_due(Some(now - Duration::from_secs(59 * 60)), now));
+        assert!(check_due(Some(now - Duration::from_secs(60 * 60)), now));
+        assert!(SCHEDULER_TICK <= Duration::from_secs(5 * 60));
+    }
+
+    #[test]
+    fn a_found_release_installs_on_its_own_while_the_popup_rests() {
+        let rested = Some(POPUP_REST);
+        assert!(unasked_install_due(true, Some("0.3.14"), None, false, None));
+        assert!(unasked_install_due(
+            true,
+            Some("0.3.14"),
+            None,
+            false,
+            rested
+        ));
+        assert!(
+            !unasked_install_due(true, None, None, false, rested),
+            "nothing was found"
+        );
+        assert!(
+            !unasked_install_due(false, Some("0.3.14"), None, false, rested),
+            "the user turned automatic installs off"
+        );
+        assert!(
+            !unasked_install_due(true, Some("0.3.14"), None, true, rested),
+            "the popup is open"
+        );
+        assert!(
+            !unasked_install_due(
+                true,
+                Some("0.3.14"),
+                None,
+                false,
+                Some(POPUP_REST - Duration::from_secs(1))
+            ),
+            "a sign-in may still go on in the browser"
+        );
+    }
+
+    #[test]
+    fn a_release_that_failed_to_install_is_not_tried_again_right_away() {
+        let soon = Some(("0.3.14", Duration::from_secs(5 * 60)));
+        let later = Some(("0.3.14", UNASKED_RETRY));
+        assert!(!unasked_install_due(
+            true,
+            Some("0.3.14"),
+            soon,
+            false,
+            None
+        ));
+        assert!(unasked_install_due(
+            true,
+            Some("0.3.14"),
+            later,
+            false,
+            None
+        ));
+        assert!(
+            unasked_install_due(true, Some("0.3.15"), soon, false, None),
+            "a newer release is another try"
+        );
+    }
+
+    #[test]
+    fn a_package_that_needs_a_password_waits_to_be_asked() {
+        assert!(!replaceable_unasked("deb"));
+        let folder = tempfile::tempdir().unwrap();
+        assert!(writable(folder.path()));
+        assert!(
+            std::fs::read_dir(folder.path()).unwrap().next().is_none(),
+            "the check leaves nothing behind"
+        );
+        assert!(!writable(&folder.path().join("missing")));
+    }
+
+    #[test]
+    fn the_bundle_is_the_app_folder_around_the_executable() {
+        assert_eq!(
+            bundle_of(Path::new(
+                "/Applications/Quota Control.app/Contents/MacOS/quota-control"
+            )),
+            Some(PathBuf::from("/Applications/Quota Control.app"))
+        );
+        assert_eq!(bundle_of(Path::new("/usr/local/bin/quota-control")), None);
+    }
+
+    #[test]
     fn failures_are_grouped_for_the_popup() {
         use tauri_plugin_updater::Error;
         assert_eq!(
@@ -1013,11 +1244,12 @@ mod tests {
 
     #[test]
     fn the_status_serializes_in_the_popup_shape() {
-        let mut status = UpdateStatus::idle(true, "0.1.0".into());
+        let mut status = UpdateStatus::idle(true, true, "0.1.0".into());
         assert_eq!(
             serde_json::to_value(&status).unwrap(),
             serde_json::json!({
                 "supported": true,
+                "unattended": true,
                 "currentVersion": "0.1.0",
                 "phase": "idle",
                 "manual": false,
@@ -1070,7 +1302,7 @@ mod tests {
 
     #[test]
     fn the_replaced_version_reaches_the_popup() {
-        let mut status = UpdateStatus::idle(true, "0.3.1".into());
+        let mut status = UpdateStatus::idle(true, false, "0.3.1".into());
         status.updated_from = Some("0.3.0".into());
         assert_eq!(
             serde_json::to_value(&status).unwrap()["updatedFrom"],
