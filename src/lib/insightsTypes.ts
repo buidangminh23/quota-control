@@ -68,7 +68,7 @@ export interface QualitySummary {
 }
 
 /** The public feeds the core fetches from fixed addresses. */
-export type PublicFeedName = "codexResetStatus" | "codexResets" | "epochScores" | "epochBenchmarks" | "arena" | "arena3d";
+export type PublicFeedName = "codexResetStatus" | "codexResets" | "claudeResets" | "epochScores" | "epochBenchmarks" | "arena" | "arena3d";
 
 export interface PublicFeedSnapshot {
   name: PublicFeedName;

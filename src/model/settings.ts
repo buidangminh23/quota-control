@@ -22,10 +22,15 @@ export type TotalSpendPeriod = "today" | "last30" | "last365" | "all";
 export const TOTAL_SPEND_PERIODS: readonly TotalSpendPeriod[] = ["today", "last30", "last365", "all"];
 /**
  * The dashboard's tabs, left to right: account limits, the token use, the official price list, model
- * quality and benchmarks, then Codex resets.
+ * quality and benchmarks, then the Codex and Claude resets.
  */
 export type DashboardTab = "quota" | "tokens" | "prices" | "benchmark" | "resets";
 export const DASHBOARD_TABS: readonly DashboardTab[] = ["quota", "tokens", "prices", "benchmark", "resets"];
+/** Whose resets the Reset tab shows. */
+export type ResetProvider = "codex" | "claude";
+export const RESET_PROVIDERS: readonly ResetProvider[] = ["codex", "claude"];
+/** More banked resets than this marked as applied are forgotten, oldest first. */
+const MAX_USED_BANKED_RESETS = 50;
 /** The Token tab's views, left to right. */
 export type TokenView = "overview" | "history" | "charts" | "projects";
 export const TOKEN_VIEWS: readonly TokenView[] = ["overview", "history", "charts", "projects"];
@@ -133,10 +138,16 @@ export interface AppSettings {
   showTotalSpend: boolean;
   /** Whether the dashboard has its Benchmark tab (model quality, public leaderboards, comparison). */
   showBenchmarkTab: boolean;
-  /** Whether the dashboard has its Codex reset tab. */
+  /** Whether the dashboard has its Reset tab (Codex and Claude). */
   showResetsTab: boolean;
   /** Notify when a Codex reset is announced or scheduled. */
   notifyCodexResets: boolean;
+  /** Notify when Claude resets, changes its limits, or a banked reset is about to expire. */
+  notifyClaudeResets: boolean;
+  /** Whose resets the Reset tab opens on. */
+  resetsProvider: ResetProvider;
+  /** Banked Claude resets (announcement ids) the user marked as already applied. */
+  usedBankedResets: string[];
   /** The dashboard tab the popup opens on. */
   dashboardTab: DashboardTab;
   totalSpendPeriod: TotalSpendPeriod;
@@ -206,6 +217,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showBenchmarkTab: true,
   showResetsTab: true,
   notifyCodexResets: true,
+  notifyClaudeResets: true,
+  resetsProvider: "codex",
+  usedBankedResets: [],
   dashboardTab: "quota",
   totalSpendPeriod: "today",
   totalSpendMetric: "tokens",
@@ -247,6 +261,12 @@ function metricIds(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const ids = value.filter((id): id is string => typeof id === "string" && id.length > 0 && id.length <= 512);
   return [...new Set(ids)].slice(0, MAX_GLANCE_METRICS);
+}
+
+function announcementIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const ids = value.filter((id): id is string => typeof id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(id));
+  return [...new Set(ids)].slice(-MAX_USED_BANKED_RESETS);
 }
 
 function parseTabs(value: unknown, fallback: readonly IslandView[]): IslandView[] {
@@ -333,6 +353,9 @@ export function parseSettings(raw: unknown): AppSettings {
     showBenchmarkTab: flag(stored.showBenchmarkTab, defaults.showBenchmarkTab),
     showResetsTab: flag(stored.showResetsTab, defaults.showResetsTab),
     notifyCodexResets: flag(stored.notifyCodexResets, defaults.notifyCodexResets),
+    notifyClaudeResets: flag(stored.notifyClaudeResets, defaults.notifyClaudeResets),
+    resetsProvider: oneOf(stored.resetsProvider, RESET_PROVIDERS, defaults.resetsProvider),
+    usedBankedResets: announcementIds(stored.usedBankedResets),
     dashboardTab: oneOf(stored.dashboardTab, DASHBOARD_TABS, defaults.dashboardTab),
     totalSpendPeriod: oneOf(stored.totalSpendPeriod, TOTAL_SPEND_PERIODS, defaults.totalSpendPeriod),
     totalSpendMetric: oneOf(stored.totalSpendMetric, ["cost", "costPerMtok", "tokens"], defaults.totalSpendMetric),

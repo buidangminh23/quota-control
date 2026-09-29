@@ -2,7 +2,7 @@
  * The first row of a Codex card while codex-resets.com knows a free reset is coming: a countdown,
  * the time in the device's zone underneath and, on hover, the post and how its time was read. It
  * follows the reset tracking, shown while the Reset tab or the reset notification is on (the same
- * settings the core fetches the status for), and opens the Reset tab when that tab is on.
+ * settings the core fetches the status for), and opens the Reset tab's Codex view when that tab is on.
  */
 import { useEffect, useMemo } from "react";
 import { insightsFor } from "@/i18n/insights";
@@ -11,9 +11,14 @@ import { parseResetStatus } from "@/model/insights/resets";
 import { upcomingReset } from "@/model/insights/upcomingReset";
 import { useSettings } from "@/state/hooks";
 import { ensureFeed, useInsights } from "@/state/insights";
-import { selectDashboardTab } from "@/state/store";
+import { selectDashboardTab, updateSettings } from "@/state/store";
 import { ResetAuthorAvatar } from "../ui/ResetAuthorAvatar";
 import { tooltipProps } from "../ui/tooltip";
+
+function openCodexResets(): void {
+  updateSettings({ resetsProvider: "codex" });
+  selectDashboardTab("resets");
+}
 
 export function FreeResetRow({ now }: { now: Date }) {
   const { showResetsTab, notifyCodexResets, timeFormat, language } = useSettings();
@@ -45,7 +50,7 @@ export function FreeResetRow({ now }: { now: Date }) {
     </>
   );
   return showResetsTab ? (
-    <button type="button" className={className} onClick={() => selectDashboardTab("resets")} aria-label={label} {...tooltipProps(details)}>
+    <button type="button" className={className} onClick={openCodexResets} aria-label={label} {...tooltipProps(details)}>
       {content}
     </button>
   ) : (

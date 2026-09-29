@@ -230,7 +230,8 @@ export interface GlanceResetAuthor {
 
 export interface GlanceResetStatusCard {
   id: string;
-  kind: "scheduled" | "watch" | "quiet";
+  /** `banked` (the popup's Claude view only): a banked reset that can still be applied. */
+  kind: "scheduled" | "watch" | "quiet" | "banked";
   level?: "elevated" | "strong";
   title: string;
   excerpt?: string;
@@ -252,6 +253,8 @@ export interface GlanceResetForecastPresentation {
   waitFraction?: number;
   median?: string;
   sampleNote?: string;
+  /** How the estimate would have done on this history (the popup's Reset tab). */
+  reliability?: string;
   disclaimer?: string;
   unavailable?: string;
 }
@@ -265,12 +268,16 @@ export interface GlanceResetHistoryItem {
   author?: GlanceResetAuthor;
   url?: string;
   observed?: string;
+  /** Who it covered, worded (the Claude view). */
+  scope?: string;
+  /** `Chưa kiểm chứng`, while the site has not reviewed the entry. */
+  provisional?: string;
 }
 
 export interface GlanceResetPresentation {
   locale: string;
   authorAvatar: string;
-  latest?: { title: string; ago: string; at: string; meta: string; author?: GlanceResetAuthor };
+  latest?: { title: string; ago: string; at: string; meta: string; author?: GlanceResetAuthor; notes?: string[] };
   statuses: GlanceResetStatusCard[];
   quietTitle?: string;
   forecast: GlanceResetForecastPresentation;

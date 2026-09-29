@@ -1,6 +1,66 @@
 /** English text for the Benchmark and Reset tabs. */
 import type { ResetWindow } from "@/model/insights/upcomingReset";
-import type { InsightsMessages } from "./insights";
+import type { ClaudeResetMessages, InsightsMessages } from "./insights";
+
+const claudeEn: ClaudeResetMessages = {
+  forecastDisclaimer: "A guess from the history, not official word from Anthropic.",
+  scopeEveryone: "All users",
+  scopeAffected: "Affected users",
+  scopePaid: "Paid plans",
+  plan: (plan) => ({ free: "Free", pro: "Pro", max: "Max", team: "Team", enterprise: "Enterprise" })[plan],
+  scopePlans: (plans) => `${plans} plans`,
+  yourPlan: (plan, covered) => (covered ? `Your ${plan} plan: covered` : `Your ${plan} plan: not covered`),
+  provisional: "Not reviewed",
+  provisionalNote: "claude-resets.com detected this on its own and has not reviewed it yet; it may be withdrawn.",
+  bankedTitle: "A banked reset is available",
+  bankedUntil: (time) => `Usable until ${time}`,
+  bankedLeft: (duration) => `${duration} left`,
+  bankedHow: "Apply it from Settings → Usage on claude.ai. The app cannot see whether your account has already applied it.",
+  bankedMarkUsed: "I have used it",
+  bankedUsed: "You marked this one as used.",
+  bankedUndo: "Undo",
+  detectorBehind: "claude-resets.com is behind on its checks, so the newest announcements may be missing.",
+  datasetNote: "claude-resets.com's live list could not be read, so its published copy is shown; the last 24 hours may be missing.",
+  changesTitle: "Limit changes",
+  changesNote: "A ceiling was raised or lowered without clearing usage, so these do not count as resets.",
+  changeBadge: "Limits",
+  statChanges: "Limit changes",
+  statEveryone: "Reset for all users",
+  statYourPlan: (plan) => `Reset for the ${plan} plan`,
+  ago: (duration, date) => `${duration} ago · ${date}`,
+  compareTitle: "Claude vs Codex",
+  compareSince: (date) => `Counted from ${date}, when both were tracked.`,
+  compareRow: (row) =>
+    ({
+      resets: "Resets",
+      average: "Average gap",
+      median: "Median gap",
+      longest: "Longest quiet spell",
+      sinceLast: "Since the last one",
+      last30: "Last 30 days",
+    })[row],
+  compareMonths: "Resets per month",
+  compareMonth: (month, claude, codex) => `${month}: Claude ${claude}, Codex ${codex}`,
+  source: "Data from claude-resets.com, which follows @ClaudeDevs and the Claude Code team on X.",
+  method: [
+    "The list comes from claude-resets.com, which follows posts by @ClaudeDevs and Claude Code team members on X. The app reads the live list every 5 minutes; when that cannot be read it uses the site's published copy. An entry the site detected and has not reviewed yet is marked “Not reviewed”.",
+    "Limit changes (a ceiling raised or lowered) do not clear usage, so they never count as resets. A banked reset is one you apply yourself from Settings → Usage before its deadline; neither the site nor the app can see which accounts have applied theirs.",
+    "The scope (all users, or which plans) is what claude-resets.com recorded from the post. The app compares it with the plans of the Claude accounts connected here; when a post only says “affected users”, the app draws no conclusion.",
+    "The chance of a reset is worked out as for Codex: each past reset counts with a weight that halves every 21 days. The “Tried again…” line scores that method on the same history: for each past day, the chance it gave against the average until that day and against what happened. Claude has few resets so far, so the numbers are a rough guide. The source site does not predict resets.",
+    "The comparison with Codex only counts from the day both were tracked, to keep it fair. The Codex numbers come from codex-resets.com.",
+  ],
+  notifyResets: "When Claude resets",
+  notifyResetsNote: "Tells you when @ClaudeDevs announces a reset or a limit change, and when a banked reset has 3 days left.",
+  notifyResetTitle: (kind, provisional) => `${kind === "banked" ? "Claude gave a banked reset" : "Claude just reset"}${provisional ? " (not reviewed)" : ""}`,
+  notifyChangeTitle: "Claude changed its limits",
+  notifyBankedTitle: "Claude's banked reset expires soon",
+  notifyBankedBody: (duration, time) => `${duration} left: apply it before ${time} from Settings → Usage.`,
+  cardTitle: "Banked reset",
+  cardLeft: (duration) => `${duration} left`,
+  cardCaption: (time, offset) => `Use before ${time} · ${offset}`,
+  cardPosted: (handle, time, post) => `${handle} posted at ${time}:\n“${post}”`,
+  cardHow: "Apply it from Settings → Usage on claude.ai. The app cannot see whether this account has applied it; if it has, mark it in the Reset tab to hide this row.",
+};
 
 const EN_WINDOWS: Record<ResetWindow, string> = { thisWeek: "This week", weekend: "This weekend", nextWeek: "Next week" };
 
@@ -190,7 +250,16 @@ export const insightsEn: InsightsMessages = {
   ],
 
   showBenchmarkTab: "Show Benchmark Tab",
-  showResetsTab: "Show Codex Reset Tab",
+  resetProviderLabel: "Resets of",
+  resetProvider: (provider) => (provider === "claude" ? "Claude" : "Codex"),
+  forecastReliability: (verdict, percent, days) =>
+    verdict === "better"
+      ? `Tried again on ${days} past days: this estimate was ${percent} closer than the plain average.`
+      : verdict === "worse"
+        ? `Tried again on ${days} past days: this estimate was ${percent} worse than the plain average; do not rely on it.`
+        : `Tried again on ${days} past days: this estimate did no better than the history's plain average, so read it as a rough guide.`,
+  claude: claudeEn,
+  showResetsTab: "Show Reset Tab",
   notifyCodexResets: "When Codex resets",
   notifyCodexResetsNote: "Tells you when @thsottiaux announces or schedules a reset, or Codex Resets sees signs of one (via Codex Resets).",
   notifyResetTitle: "Codex just reset",
@@ -231,7 +300,7 @@ export const insightsEn: InsightsMessages = {
     `Codex Resets is watching until then${chance ? `, estimating ${chance}` : ""}. This is their forecast, not a promise from OpenAI.`,
   freeResetHowWindow: (window) => `The post only says ${EN_WINDOWS[window].toLowerCase()} (San Francisco time), with no time to count down to.`,
   freeResetHowUntimed: "The post does not say when; this line hides after 7 days without a time.",
-  freeResetOpenTab: "Click to open the Codex Reset tab.",
+  freeResetOpenTab: "Click to open the Reset tab.",
 
   glanceTitle: "Codex Resets",
   glanceSource: "From codex-resets.com",

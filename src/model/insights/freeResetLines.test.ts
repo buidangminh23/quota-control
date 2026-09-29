@@ -39,6 +39,11 @@ describe("freeResetLines", () => {
     expect(lines.details).toMatch(/^@thsottiaux đăng lúc 4:41 · hôm nay:\n“Resets coming tomorrow!”\n“Ngày mai” tính theo giờ San Francisco/);
   });
 
+  it("names the day of a post made on an earlier day", () => {
+    const lines = freeResetLines(reset({ kind: "exact", at: new Date("2026-09-28T01:00:00Z"), from: "site" }, { announcedAt: new Date("2026-09-25T21:41:35Z") }), NOW, "auto", "vi");
+    expect(lines.details).toMatch(/^@thsottiaux đăng lúc 4:41 · T7 26\/09:\n/);
+  });
+
   it("marks a passed time as waiting for confirmation", () => {
     const lines = freeResetLines(reset({ kind: "exact", at: new Date("2026-09-26T23:00:00Z"), from: "post" }), NOW, "24h", "vi");
     expect(lines).toMatchObject({ value: "chờ xác nhận", caption: "Hẹn 6:00 · hôm nay · GMT+7", awaiting: true });

@@ -13,6 +13,7 @@ import { useGlance } from "@/glance/useGlance";
 import { useDashboardTabs, useIsDark, useTimeZoneWatch } from "@/state/hooks";
 import { cycleDashboardTab, dashboardTabs, navigate, refresh, startApp, undoLayout, useApp, type Screen } from "@/state/store";
 import { startInsights } from "@/state/insights";
+import { useClaudeResetNotifications } from "@/notify/useClaudeResetNotifications";
 import { useResetNotifications } from "@/notify/useResetNotifications";
 import { Accounts } from "./components/accounts/Accounts";
 import { DashboardTabs } from "./components/chrome/DashboardTabs";
@@ -198,6 +199,7 @@ export function App() {
   useGlance();
   useUsageNotifications();
   useResetNotifications();
+  useClaudeResetNotifications();
   useTimeZoneWatch();
 
   const direction = tabMotion ?? (screen === "dashboard" && previous !== "dashboard" ? "back" : "forward");

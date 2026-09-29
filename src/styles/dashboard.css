@@ -319,6 +319,20 @@ button.uc-row-warning:hover {
   user-select: none;
 }
 
+.uc-reset-avatar.is-initial {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--uc-quaternary);
+  font-weight: 700;
+  line-height: 1;
+  color: var(--uc-secondary);
+}
+
+.uc-free-reset.is-banked {
+  --uc-free-reset-tone: var(--uc-accent);
+}
+
 .uc-free-reset-value {
   color: var(--uc-free-reset-tone);
 }

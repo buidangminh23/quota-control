@@ -1,5 +1,6 @@
 //! Public data shown beside the user's own numbers: Codex reset announcements from
-//! codex-resets.com (which follows @thsottiaux on X), model benchmark scores from Epoch AI and
+//! codex-resets.com (which follows @thsottiaux on X), Claude reset announcements from
+//! claude-resets.com (which follows @ClaudeDevs on X), model benchmark scores from Epoch AI and
 //! human-preference leaderboards from Arena and 3D Arena. Only these fixed addresses are fetched:
 //! the popup names a feed, never a URL. Each body is validated, cached on disk with its ETag and
 //! refreshed on its own schedule, so the tabs work offline and one slow source never blocks another.
@@ -21,6 +22,23 @@ const MANUAL_REFRESH_GAP_SECONDS: i64 = 60;
 const MAX_RESET_PAGES: usize = 5;
 /// A `Retry-After` longer than this is trusted only this far.
 const RETRY_AFTER_CAP_SECONDS: i64 = 6 * 3600;
+/// The published Claude catalog, read when the live one (`FeedName::ClaudeResets`) cannot be.
+const CLAUDE_RESETS_DATASET: &str = "https://claude-resets.com/data/resets.json";
+/// More announcements than this in one answer are left unread.
+const MAX_CLAUDE_EVENTS: usize = 500;
+/// What the popup reads of a Claude announcement; any other key is dropped.
+const CLAUDE_EVENT_KEYS: &[&str] = &[
+    "id",
+    "date",
+    "kind",
+    "resetType",
+    "usableUntil",
+    "account",
+    "scope",
+    "note",
+    "url",
+    "verification",
+];
 const ARENA_ROOT: &str =
     "https://raw.githubusercontent.com/oolong-tea-2026/arena-ai-leaderboards/main/data";
 /// The Arena leaderboards the popup knows how to label; any other name in the index is ignored.
@@ -43,6 +61,7 @@ pub const ARENA_BOARDS: &[&str] = &[
 pub enum FeedName {
     CodexResetStatus,
     CodexResets,
+    ClaudeResets,
     EpochScores,
     EpochBenchmarks,
     Arena,
@@ -50,9 +69,10 @@ pub enum FeedName {
 }
 
 impl FeedName {
-    pub const ALL: [FeedName; 6] = [
+    pub const ALL: [FeedName; 7] = [
         FeedName::CodexResetStatus,
         FeedName::CodexResets,
+        FeedName::ClaudeResets,
         FeedName::EpochScores,
         FeedName::EpochBenchmarks,
         FeedName::Arena,
@@ -63,6 +83,7 @@ impl FeedName {
         match self {
             FeedName::CodexResetStatus => "codex-reset-status.json",
             FeedName::CodexResets => "codex-resets.json",
+            FeedName::ClaudeResets => "claude-resets.json",
             FeedName::EpochScores => "epoch-scores.json",
             FeedName::EpochBenchmarks => "epoch-benchmarks.json",
             FeedName::Arena => "arena.json",
@@ -74,6 +95,7 @@ impl FeedName {
         match self {
             FeedName::CodexResetStatus => "https://codex-resets.com/api/v1/status",
             FeedName::CodexResets => "https://codex-resets.com/api/v1/resets?limit=100",
+            FeedName::ClaudeResets => "https://claude-resets.com/api/resets",
             FeedName::EpochScores => "https://epoch.ai/data/eci_scores.csv",
             FeedName::EpochBenchmarks => "https://epoch.ai/data/eci_benchmarks.csv",
             FeedName::Arena => {
@@ -86,7 +108,7 @@ impl FeedName {
     /// How long a successful fetch stays current.
     pub fn interval(self) -> chrono::Duration {
         match self {
-            FeedName::CodexResetStatus => chrono::Duration::minutes(5),
+            FeedName::CodexResetStatus | FeedName::ClaudeResets => chrono::Duration::minutes(5),
             FeedName::CodexResets => chrono::Duration::minutes(30),
             FeedName::Arena => chrono::Duration::hours(6),
             FeedName::EpochScores | FeedName::EpochBenchmarks | FeedName::Arena3d => {
@@ -98,7 +120,7 @@ impl FeedName {
     /// After a failure the next attempt waits this long, so an outage is not hammered.
     fn retry(self) -> chrono::Duration {
         match self {
-            FeedName::CodexResetStatus => chrono::Duration::minutes(5),
+            FeedName::CodexResetStatus | FeedName::ClaudeResets => chrono::Duration::minutes(5),
             _ => chrono::Duration::minutes(30),
         }
     }
@@ -106,6 +128,7 @@ impl FeedName {
     fn max_bytes(self) -> usize {
         match self {
             FeedName::CodexResetStatus | FeedName::Arena3d => 256 * 1024,
+            FeedName::ClaudeResets => 512 * 1024,
             FeedName::CodexResets | FeedName::EpochScores => 2 * 1024 * 1024,
             FeedName::EpochBenchmarks => 8 * 1024 * 1024,
             FeedName::Arena => 1024 * 1024,
@@ -255,6 +278,12 @@ impl PublicFeeds {
                 .map(|body| Fetched::Body { body, etag: None })
                 .map_err(FetchFailure::from);
         }
+        if name == FeedName::ClaudeResets {
+            return self
+                .fetch_claude_resets()
+                .await
+                .map(|body| Fetched::Body { body, etag: None });
+        }
         let mut request = HttpRequest::get(name.url()).timeout(TIMEOUT);
         if let Some(etag) = etag {
             request = request.header("If-None-Match", etag);
@@ -314,6 +343,34 @@ impl PublicFeeds {
             "meta": meta,
         })
         .to_string())
+    }
+
+    /// The live catalog carries what the site detected in the last day, before its review. When
+    /// it cannot be read, the published dataset stands in, unless the site asked to be left alone
+    /// (`Retry-After`); a failure of both is reported as the live one's.
+    async fn fetch_claude_resets(&self) -> Result<String, FetchFailure> {
+        let live = self
+            .claude_catalog(FeedName::ClaudeResets.url(), true)
+            .await;
+        let failure = match live {
+            Ok(body) => return Ok(body),
+            Err(failure) => failure,
+        };
+        if failure.retry_after.is_some() {
+            return Err(failure);
+        }
+        match self.claude_catalog(CLAUDE_RESETS_DATASET, false).await {
+            Ok(body) => Ok(body),
+            Err(_) => Err(failure),
+        }
+    }
+
+    async fn claude_catalog(&self, url: &str, live: bool) -> Result<String, FetchFailure> {
+        let limit = FeedName::ClaudeResets.max_bytes();
+        let response = self.get(HttpRequest::get(url), limit).await?;
+        let text = successful_text(&response, limit)?;
+        claude_catalog(&text, live)
+            .ok_or_else(|| "The source answered with data in an unexpected shape".into())
     }
 
     async fn fetch_arena(&self) -> Result<String, String> {
@@ -433,6 +490,55 @@ fn is_cursor(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
 }
 
+/// The Claude side of claude-resets.com's catalog, reduced to what the popup reads: the
+/// announcements, who posts them, whether the site's detector is up to date and which entries
+/// still await its review. The Codex side (read from codex-resets.com itself) and every time that
+/// moves with each poll are left out, so the stored body only changes when the catalog does.
+fn claude_catalog(body: &str, live: bool) -> Option<String> {
+    let root: Value = serde_json::from_str(body).ok()?;
+    let provider = root["providers"]["claude"].as_object()?;
+    let events: Vec<Value> = provider
+        .get("events")?
+        .as_array()?
+        .iter()
+        .filter(|event| {
+            ["id", "date", "kind"]
+                .iter()
+                .all(|key| event[*key].as_str().is_some_and(|text| !text.is_empty()))
+        })
+        .take(MAX_CLAUDE_EVENTS)
+        .map(|event| {
+            let kept = CLAUDE_EVENT_KEYS
+                .iter()
+                .filter(|key| event[**key].is_string())
+                .map(|key| ((*key).to_owned(), event[*key].clone()));
+            Value::Object(kept.collect())
+        })
+        .collect();
+    if events.is_empty() {
+        return None;
+    }
+    let text = |value: &Value| value.as_str().map(str::to_owned);
+    let ids = |value: &Value| -> Vec<String> {
+        let listed = value.as_array().map(Vec::as_slice).unwrap_or_default();
+        listed.iter().filter_map(text).collect()
+    };
+    let named = |key: &str| provider.get(key).and_then(text);
+    let meta = &root["meta"];
+    Some(
+        serde_json::json!({
+            "account": named("account"),
+            "product": named("product"),
+            "events": events,
+            "live": live,
+            "detector": text(&meta["detector"]["status"]),
+            "provisionalEventIds": ids(&meta["provisionalEventIds"]),
+            "provisionalPolicyIds": ids(&meta["provisionalPolicyIds"]),
+        })
+        .to_string(),
+    )
+}
+
 fn valid(name: FeedName, body: &str) -> bool {
     match name {
         FeedName::CodexResetStatus => serde_json::from_str::<Value>(body)
@@ -440,6 +546,12 @@ fn valid(name: FeedName, body: &str) -> bool {
         FeedName::CodexResets => {
             serde_json::from_str::<Value>(body).is_ok_and(|value| value["data"].is_array())
         }
+        FeedName::ClaudeResets => serde_json::from_str::<Value>(body).is_ok_and(|value| {
+            value["live"].is_boolean()
+                && value["events"]
+                    .as_array()
+                    .is_some_and(|events| !events.is_empty())
+        }),
         FeedName::EpochScores => body
             .trim_start_matches('\u{feff}')
             .starts_with("Model,Display name,eci,"),
@@ -519,6 +631,8 @@ mod tests {
                 4096
             } else if url.starts_with(ARENA_ROOT) {
                 256 * 1024
+            } else if url == CLAUDE_RESETS_DATASET {
+                FeedName::ClaudeResets.max_bytes()
             } else {
                 FeedName::ALL
                     .into_iter()
@@ -587,7 +701,7 @@ mod tests {
     async fn every_direct_feed_sends_its_transport_budget() {
         for name in FeedName::ALL
             .into_iter()
-            .filter(|name| *name != FeedName::Arena)
+            .filter(|name| *name != FeedName::Arena && *name != FeedName::ClaudeResets)
         {
             let root = tempfile::tempdir().unwrap();
             let http = Script::new(vec![(name.url(), status(503))]);
@@ -780,6 +894,117 @@ mod tests {
         assert!(store.due(FeedName::CodexResetStatus).await);
     }
 
+    fn claude_answer(as_of: &str, notes: &[(&str, &str)], provisional: &[&str]) -> String {
+        let events = notes
+            .iter()
+            .map(|(id, note)| {
+                let verification = if provisional.contains(id) {
+                    "provisional"
+                } else {
+                    "curated"
+                };
+                format!(
+                    r#"{{"id":"{id}","date":"2026-09-22T16:44:06Z","kind":"reset","scope":"all","note":"{note}","url":"https://x.com/ClaudeDevs/status/{id}","verification":"{verification}","internal":{{"score":1}}}}"#
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let ids = provisional
+            .iter()
+            .map(|id| format!(r#""{id}""#))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            r#"{{"providers":{{"claude":{{"name":"Claude","product":"Claude Code","account":"ClaudeDevs","accountUrl":"https://x.com/ClaudeDevs","events":[{events}]}},"codex":{{"name":"Codex","events":[{{"id":"1","date":"2026-09-26T18:17:54Z","kind":"reset"}}]}}}},"meta":{{"asOf":"{as_of}","detector":{{"status":"fresh","lastCheckedAt":"{as_of}"}},"provisionalEventIds":[{ids}],"provisionalPolicyIds":[]}}}}"#
+        )
+    }
+
+    #[tokio::test]
+    async fn claude_catalog_keeps_its_own_side_and_only_changes_with_the_data() {
+        let root = tempfile::tempdir().unwrap();
+        let seconds = Arc::new(AtomicI64::new(0));
+        let url = FeedName::ClaudeResets.url();
+        let first = claude_answer("2026-09-29T12:56:49Z", &[("7", "Reset for all.")], &[]);
+        let polled = claude_answer("2026-09-29T13:01:49Z", &[("7", "Reset for all.")], &[]);
+        let detected = claude_answer(
+            "2026-09-29T13:06:49Z",
+            &[("7", "Reset for all."), ("8", "Limits reset.")],
+            &["8"],
+        );
+        let http = Script::new(vec![
+            (url, ok(&first, None)),
+            (url, ok(&polled, None)),
+            (url, ok(&detected, None)),
+        ]);
+        let store = feeds(root.path(), http.clone(), seconds.clone());
+        let (snapshot, changed) = store.refresh(FeedName::ClaudeResets, false).await;
+        assert!(changed && snapshot.error.is_none());
+        let body: Value = serde_json::from_str(snapshot.body.as_deref().unwrap()).unwrap();
+        assert_eq!(body["live"], true);
+        assert_eq!(body["account"], "ClaudeDevs");
+        assert_eq!(body["detector"], "fresh");
+        assert_eq!(body["events"].as_array().unwrap().len(), 1);
+        assert_eq!(body["events"][0]["note"], "Reset for all.");
+        assert!(body["events"][0].get("internal").is_none());
+        assert!(body.get("providers").is_none() && body.get("meta").is_none());
+        assert!(http.seen.lock().unwrap()[0].headers.is_empty());
+
+        seconds.store(299, Ordering::SeqCst);
+        assert!(!store.due(FeedName::ClaudeResets).await);
+        seconds.store(300, Ordering::SeqCst);
+        assert!(store.due(FeedName::ClaudeResets).await);
+        let (same, changed) = store.refresh(FeedName::ClaudeResets, false).await;
+        assert!(!changed);
+        assert_eq!(same.body, snapshot.body);
+
+        seconds.store(600, Ordering::SeqCst);
+        let (next, changed) = store.refresh(FeedName::ClaudeResets, false).await;
+        assert!(changed);
+        let body: Value = serde_json::from_str(next.body.as_deref().unwrap()).unwrap();
+        assert_eq!(body["events"][1]["verification"], "provisional");
+        assert_eq!(body["provisionalEventIds"], serde_json::json!(["8"]));
+    }
+
+    #[tokio::test]
+    async fn claude_catalog_falls_back_to_the_published_dataset() {
+        let root = tempfile::tempdir().unwrap();
+        let seconds = Arc::new(AtomicI64::new(0));
+        let url = FeedName::ClaudeResets.url();
+        let dataset = r#"{"providers":{"claude":{"account":"ClaudeDevs","events":[{"id":"7","date":"2026-09-22T16:44:06Z","kind":"reset","url":"https://x.com/ClaudeDevs/status/7"},{"id":"","date":"x","kind":"reset"},{"date":"2026-09-22T16:44:06Z","kind":"reset"}]}}}"#;
+        let http = Script::new(vec![
+            (url, status(503)),
+            (CLAUDE_RESETS_DATASET, ok(dataset, Some("d1"))),
+            (url, ok("<html>maintenance</html>", None)),
+            (CLAUDE_RESETS_DATASET, status(500)),
+            (url, status_with(429, "retry-after", "900")),
+        ]);
+        let store = feeds(root.path(), http.clone(), seconds.clone());
+        let (snapshot, changed) = store.refresh(FeedName::ClaudeResets, false).await;
+        assert!(changed && snapshot.error.is_none());
+        let body: Value = serde_json::from_str(snapshot.body.as_deref().unwrap()).unwrap();
+        assert_eq!(body["live"], false);
+        assert_eq!(body["detector"], Value::Null);
+        assert_eq!(body["events"].as_array().unwrap().len(), 1);
+
+        seconds.store(300, Ordering::SeqCst);
+        let (down, changed) = store.refresh(FeedName::ClaudeResets, false).await;
+        assert!(!changed && down.stale);
+        assert_eq!(
+            down.error.as_deref(),
+            Some("The source answered with data in an unexpected shape")
+        );
+        assert_eq!(down.body, snapshot.body);
+
+        seconds.store(600, Ordering::SeqCst);
+        let (limited, _) = store.refresh(FeedName::ClaudeResets, false).await;
+        assert_eq!(limited.error.as_deref(), Some("HTTP 429"));
+        assert_eq!(http.seen.lock().unwrap().len(), 5);
+        seconds.store(600 + 899, Ordering::SeqCst);
+        assert!(!store.due(FeedName::ClaudeResets).await);
+        seconds.store(600 + 900, Ordering::SeqCst);
+        assert!(store.due(FeedName::ClaudeResets).await);
+    }
+
     #[tokio::test]
     async fn arena_reads_only_known_boards_from_a_dated_folder() {
         let root = tempfile::tempdir().unwrap();
@@ -820,6 +1045,15 @@ mod tests {
         assert!(valid(FeedName::CodexResetStatus, STATUS));
         assert!(!valid(FeedName::CodexResetStatus, "{}"));
         assert!(valid(FeedName::CodexResets, r#"{"data":[]}"#));
+        assert!(valid(
+            FeedName::ClaudeResets,
+            r#"{"live":true,"events":[{"id":"7","date":"2026-09-22T16:44:06Z","kind":"reset"}]}"#
+        ));
+        assert!(!valid(
+            FeedName::ClaudeResets,
+            r#"{"live":true,"events":[]}"#
+        ));
+        assert!(!valid(FeedName::ClaudeResets, r#"{"providers":{}}"#));
         assert!(valid(
             FeedName::EpochBenchmarks,
             "model_id,benchmark_id,performance,benchmark,x\n"

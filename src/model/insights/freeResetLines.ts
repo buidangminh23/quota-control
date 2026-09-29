@@ -8,7 +8,7 @@ import type { Language } from "@/i18n";
 import { insightsFor } from "@/i18n/insights";
 import { localeOf } from "@/i18n/numbers";
 import { compactDuration, timeOnDayLabel, type TimeFormat } from "@/model/format";
-import { deviceTimeZone, offsetLabel, zoneName } from "@/model/timeZone";
+import { calendarDaysBetween, deviceTimeZone, offsetLabel, zoneName } from "@/model/timeZone";
 import { excerpt } from "./resets";
 import { timingMoment, type UpcomingReset } from "./upcomingReset";
 
@@ -77,6 +77,7 @@ export function freeResetLines(next: UpcomingReset, now: Date, timeFormat: TimeF
       break;
   }
   const post = excerpt(next.text, POST_LENGTH);
-  const origin = next.origin === "scheduled" ? text.freeResetPosted(clock(next.announcedAt), post) : text.freeResetWatched(clock(next.announcedAt), post);
+  const announced = timeOnDayLabel(next.announcedAt, now, timeFormat, language, calendarDaysBetween(next.announcedAt, now) === 0);
+  const origin = next.origin === "scheduled" ? text.freeResetPosted(announced, post) : text.freeResetWatched(announced, post);
   return { title: text.freeResetTitle(next.origin, next.kind), value, caption, note, details: `${origin}\n${how}`, awaiting };
 }

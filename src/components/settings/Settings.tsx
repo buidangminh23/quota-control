@@ -90,7 +90,7 @@ export function Settings() {
   const platform = platformKey(info?.platform);
   const bar = barKind(info?.platform);
   const [autostart, changeAutostart, autostartError] = useAutostart();
-  const notificationsOn = anyNotificationEnabled(settings) || settings.notifyCodexResets;
+  const notificationsOn = anyNotificationEnabled(settings) || settings.notifyCodexResets || settings.notifyClaudeResets;
   const [access, requestAccess] = useNotificationAccess(notificationsOn);
   const [shortcutError, setShortcutError] = useState<string | null>(null);
   const [shortcutGeneration, setShortcutGeneration] = useState(0);
@@ -215,6 +215,16 @@ export function Settings() {
             label={insights.notifyCodexResets}
             onChange={(on) => {
               updateSettings({ notifyCodexResets: on });
+              if (on && access !== "granted") requestAccess();
+            }}
+          />
+        </Row>
+        <Row label={insights.claude.notifyResets} note={insights.claude.notifyResetsNote}>
+          <Switch
+            checked={settings.notifyClaudeResets}
+            label={insights.claude.notifyResets}
+            onChange={(on) => {
+              updateSettings({ notifyClaudeResets: on });
               if (on && access !== "granted") requestAccess();
             }}
           />

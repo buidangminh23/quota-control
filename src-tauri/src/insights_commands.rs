@@ -1,6 +1,6 @@
 //! The Benchmark and Reset tabs' data: quality counted from this machine's Claude Code and Codex
-//! transcripts, and the public feeds (Codex resets, Epoch AI, Arena, 3D Arena). Both refresh in
-//! the background and announce changes to the popup, which asks for the data it shows. Background
+//! transcripts, and the public feeds (Codex and Claude resets, Epoch AI, Arena, 3D Arena). Both
+//! refresh in the background and announce changes to the popup, which asks for the data it shows. Background
 //! work follows the popup's settings: nothing is scanned or fetched for a tab that is turned off.
 
 use std::sync::Arc;
@@ -28,13 +28,16 @@ fn setting(app: &AppHandle, key: &str) -> bool {
 }
 
 /// Whether anything on screen still uses the feed: Epoch AI and Arena feed the Benchmark tab, the
-/// reset list the Reset tab, and the reset status also the reset notification.
+/// reset lists the Reset tab, and the Codex status and the Claude catalog also their notifications.
 fn feed_wanted(app: &AppHandle, name: FeedName) -> bool {
     match name {
         FeedName::CodexResetStatus => {
             setting(app, "showResetsTab") || setting(app, "notifyCodexResets")
         }
         FeedName::CodexResets => setting(app, "showResetsTab"),
+        FeedName::ClaudeResets => {
+            setting(app, "showResetsTab") || setting(app, "notifyClaudeResets")
+        }
         FeedName::EpochScores | FeedName::EpochBenchmarks | FeedName::Arena | FeedName::Arena3d => {
             setting(app, "showBenchmarkTab")
         }

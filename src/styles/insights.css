@@ -108,6 +108,11 @@
   color: var(--uc-accent);
 }
 
+.uc-insight-badge.is-notice {
+  background: color-mix(in srgb, var(--uc-orange) 18%, transparent);
+  color: var(--uc-notice-text);
+}
+
 .uc-insight-more {
   align-self: flex-start;
   padding: 6px 12px 8px;
@@ -612,6 +617,35 @@
   box-shadow: inset 0 0 0 2px var(--uc-orange);
 }
 
+.uc-reset-status.is-banked {
+  box-shadow: inset 0 0 0 2px var(--uc-accent);
+}
+
+.uc-reset-status.is-used {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.uc-reset-banked-left {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--uc-accent);
+}
+
+.uc-reset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  align-self: stretch;
+}
+
 .uc-reset-status-title {
   font-size: var(--uc-header-size);
   font-weight: 700;
@@ -877,4 +911,75 @@
   font-size: var(--uc-caption-size);
   font-weight: 600;
   color: var(--uc-secondary);
+}
+
+/* Claude against Codex: a small table, then a pair of columns per month. */
+.uc-reset-compare {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.uc-reset-compare .uc-insight-note {
+  padding: 0;
+}
+
+.uc-reset-compare-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--uc-plan-size);
+}
+
+.uc-reset-compare-table th,
+.uc-reset-compare-table td {
+  padding: 4px 0 4px 10px;
+  text-align: right;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.uc-reset-compare-table th[scope="row"] {
+  width: 100%;
+  padding-left: 0;
+  text-align: left;
+  white-space: normal;
+  font-weight: 400;
+  color: var(--uc-secondary);
+}
+
+.uc-reset-compare-table thead th {
+  padding-bottom: 6px;
+  font-size: var(--uc-caption-size);
+  color: var(--uc-secondary);
+}
+
+.uc-reset-compare-table tbody tr + tr {
+  border-top: 0.5px solid var(--uc-separator);
+}
+
+.uc-reset-compare-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.uc-reset-bar.is-pair .uc-reset-bar-count {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  width: 100%;
+  text-align: center;
+}
+
+.uc-reset-bar.is-pair .uc-reset-bar-track {
+  gap: 2px;
+}
+
+.uc-reset-bar-fill.is-claude {
+  background: #de7356;
+}
+
+.uc-reset-bar-fill.is-codex {
+  background: #10a37f;
 }

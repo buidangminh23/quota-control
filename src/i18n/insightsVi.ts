@@ -1,6 +1,66 @@
 /** Vietnamese text for the Benchmark and Reset tabs. */
 import type { ResetWindow } from "@/model/insights/upcomingReset";
-import type { InsightsMessages } from "./insights";
+import type { ClaudeResetMessages, InsightsMessages } from "./insights";
+
+const claudeVi: ClaudeResetMessages = {
+  forecastDisclaimer: "Chỉ là ước đoán từ lịch sử, không phải thông tin chính thức từ Anthropic.",
+  scopeEveryone: "Mọi người dùng",
+  scopeAffected: "Người dùng bị ảnh hưởng",
+  scopePaid: "Các gói trả phí",
+  plan: (plan) => ({ free: "Free", pro: "Pro", max: "Max", team: "Team", enterprise: "Enterprise" })[plan],
+  scopePlans: (plans) => `Gói ${plans}`,
+  yourPlan: (plan, covered) => (covered ? `Gói ${plan} của bạn: có áp dụng` : `Gói ${plan} của bạn: không áp dụng`),
+  provisional: "Chưa kiểm chứng",
+  provisionalNote: "claude-resets.com vừa tự phát hiện tin này và chưa duyệt lại; tin có thể bị rút.",
+  bankedTitle: "Có lượt reset để dành",
+  bankedUntil: (time) => `Dùng được đến ${time}`,
+  bankedLeft: (duration) => `Còn ${duration}`,
+  bankedHow: "Vào Settings → Usage trên claude.ai để dùng. Ứng dụng không biết tài khoản của bạn đã dùng lượt này hay chưa.",
+  bankedMarkUsed: "Tôi đã dùng rồi",
+  bankedUsed: "Bạn đã đánh dấu lượt này là đã dùng.",
+  bankedUndo: "Hoàn tác",
+  detectorBehind: "claude-resets.com đang chậm cập nhật, nên danh sách có thể thiếu tin mới nhất.",
+  datasetNote: "Bản trực tiếp của claude-resets.com chưa đọc được, đang hiện bản đã công bố; tin trong 24 giờ qua có thể chưa có.",
+  changesTitle: "Thay đổi hạn mức",
+  changesNote: "Tăng hoặc giảm mức trần, không xoá mức đã dùng, nên không tính là reset.",
+  changeBadge: "Hạn mức",
+  statChanges: "Số lần đổi hạn mức",
+  statEveryone: "Reset cho mọi người",
+  statYourPlan: (plan) => `Reset cho gói ${plan}`,
+  ago: (duration, date) => `${duration} trước · ${date}`,
+  compareTitle: "Claude so với Codex",
+  compareSince: (date) => `Tính từ ${date}, khi cả hai cùng được theo dõi.`,
+  compareRow: (row) =>
+    ({
+      resets: "Số lần reset",
+      average: "Trung bình giữa hai lần",
+      median: "Trung vị giữa hai lần",
+      longest: "Khoảng lặng dài nhất",
+      sinceLast: "Từ lần gần nhất",
+      last30: "30 ngày qua",
+    })[row],
+  compareMonths: "Số lần reset mỗi tháng",
+  compareMonth: (month, claude, codex) => `${month}: Claude ${claude}, Codex ${codex}`,
+  source: "Dữ liệu từ claude-resets.com, trang theo dõi @ClaudeDevs và nhóm Claude Code trên X.",
+  method: [
+    "Danh sách lấy từ claude-resets.com, trang theo dõi bài của @ClaudeDevs và các thành viên nhóm Claude Code trên X. Ứng dụng đọc bản trực tiếp 5 phút một lần; khi bản trực tiếp không đọc được thì dùng bản đã công bố của trang. Tin trang vừa tự phát hiện và chưa duyệt lại được ghi “Chưa kiểm chứng”.",
+    "Thay đổi hạn mức (tăng, giảm mức trần) không xoá mức đã dùng nên không tính là reset. Lượt reset để dành do bạn tự dùng trong Settings → Usage trước hạn; trang và ứng dụng đều không biết tài khoản nào đã dùng.",
+    "Phạm vi (mọi người hay gói nào) do claude-resets.com ghi theo bài đăng. Ứng dụng so phạm vi đó với gói của các tài khoản Claude bạn đã kết nối; khi bài chỉ nói “người bị ảnh hưởng” thì ứng dụng không kết luận.",
+    "Khả năng có reset tính như bên Codex: mỗi lần reset có trọng số giảm một nửa sau mỗi 21 ngày. Dòng “Thử lại…” chấm cách tính này trên chính lịch sử đó: mỗi ngày đã qua, so con số nó đưa ra với mức trung bình tính đến ngày ấy và với việc đã xảy ra. Claude mới có ít lần reset nên con số chỉ để tham khảo. Trang nguồn không dự đoán reset.",
+    "Bảng so với Codex chỉ tính từ ngày cả hai cùng được theo dõi, để so cho công bằng. Số liệu Codex lấy từ codex-resets.com.",
+  ],
+  notifyResets: "Khi Claude reset",
+  notifyResetsNote: "Báo khi @ClaudeDevs thông báo reset hoặc đổi hạn mức, và khi lượt reset để dành còn 3 ngày là hết hạn.",
+  notifyResetTitle: (kind, provisional) => `${kind === "banked" ? "Claude tặng lượt reset để dành" : "Claude vừa reset"}${provisional ? " (chưa kiểm chứng)" : ""}`,
+  notifyChangeTitle: "Claude đổi hạn mức",
+  notifyBankedTitle: "Lượt reset để dành của Claude sắp hết hạn",
+  notifyBankedBody: (duration, time) => `Còn ${duration}, dùng trước ${time} trong Settings → Usage.`,
+  cardTitle: "Lượt reset để dành",
+  cardLeft: (duration) => `còn ${duration}`,
+  cardCaption: (time, offset) => `Dùng trước ${time} · ${offset}`,
+  cardPosted: (handle, time, post) => `${handle} đăng lúc ${time}:\n“${post}”`,
+  cardHow: "Vào Settings → Usage trên claude.ai để dùng. Ứng dụng không biết tài khoản này đã dùng hay chưa; nếu đã dùng, đánh dấu trong tab Reset để ẩn dòng này.",
+};
 
 const VI_WINDOWS: Record<ResetWindow, string> = { thisWeek: "Trong tuần này", weekend: "Cuối tuần này", nextWeek: "Tuần sau" };
 
@@ -191,7 +251,16 @@ export const insightsVi: InsightsMessages = {
   ],
 
   showBenchmarkTab: "Hiện tab Benchmark",
-  showResetsTab: "Hiện tab Reset Codex",
+  resetProviderLabel: "Reset của",
+  resetProvider: (provider) => (provider === "claude" ? "Claude" : "Codex"),
+  forecastReliability: (verdict, percent, days) =>
+    verdict === "better"
+      ? `Thử lại trên ${days} ngày đã qua: cách ước tính này đoán sát hơn mức trung bình ${percent}.`
+      : verdict === "worse"
+        ? `Thử lại trên ${days} ngày đã qua: cách ước tính này đoán kém mức trung bình ${percent}, đừng dựa vào nó.`
+        : `Thử lại trên ${days} ngày đã qua: cách ước tính này chỉ ngang mức trung bình của lịch sử, nên chỉ để tham khảo.`,
+  claude: claudeVi,
+  showResetsTab: "Hiện tab Reset",
   notifyCodexResets: "Khi Codex reset",
   notifyCodexResetsNote: "Báo khi @thsottiaux thông báo reset, hẹn reset, hoặc Codex Resets thấy dấu hiệu sắp reset.",
   notifyResetTitle: "Codex vừa reset",
@@ -233,7 +302,7 @@ export const insightsVi: InsightsMessages = {
   freeResetHowWindow: (window) =>
     `Bài đăng chỉ nói ${VI_WINDOWS[window].toLocaleLowerCase("vi-VN")} (giờ San Francisco), chưa có giờ để đếm ngược.`,
   freeResetHowUntimed: "Bài đăng chưa nói khi nào; dòng này tự ẩn sau 7 ngày nếu chưa có giờ.",
-  freeResetOpenTab: "Bấm để mở tab Reset Codex.",
+  freeResetOpenTab: "Bấm để mở tab Reset.",
 
   glanceTitle: "Reset Codex",
   glanceSource: "Theo codex-resets.com",

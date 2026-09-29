@@ -8,12 +8,66 @@ import type { ArenaBoardSlug } from "@/model/insights/arena";
 import type { BenchmarkCategory } from "@/model/insights/epoch";
 import type { EffortLevel } from "@/model/insights/modelNames";
 import type { QualityPartKey, QualityRange } from "@/model/insights/quality";
+import type { ClaudePlan, ForecastSkill } from "@/model/insights/claudeResets";
 import type { ForecastHorizon, ResetKind } from "@/model/insights/resets";
 import type { NamedDay, ResetWindow } from "@/model/insights/upcomingReset";
+import type { ResetProvider } from "@/model/settings";
 import type { BenchmarkView } from "@/state/insights";
 import { insightsEn } from "./insightsEn";
 import { insightsVi } from "./insightsVi";
 import type { Language } from "./language";
+
+/** The rows of the Claude and Codex comparison. */
+export type CompareRow = "resets" | "average" | "median" | "longest" | "sinceLast" | "last30";
+
+/** The Claude view of the Reset tab (claude-resets.com) and the row it adds to a Claude card. */
+export interface ClaudeResetMessages {
+  forecastDisclaimer: string;
+  scopeEveryone: string;
+  scopeAffected: string;
+  scopePaid: string;
+  plan(plan: ClaudePlan): string;
+  scopePlans(plans: string): string;
+  /** Whether a reset covered the plan of an account connected here. */
+  yourPlan(plan: string, covered: boolean): string;
+  provisional: string;
+  provisionalNote: string;
+  bankedTitle: string;
+  bankedUntil(time: string): string;
+  bankedLeft(duration: string): string;
+  bankedHow: string;
+  bankedMarkUsed: string;
+  bankedUsed: string;
+  bankedUndo: string;
+  detectorBehind: string;
+  datasetNote: string;
+  changesTitle: string;
+  changesNote: string;
+  changeBadge: string;
+  statChanges: string;
+  statEveryone: string;
+  statYourPlan(plan: string): string;
+  ago(duration: string, date: string): string;
+  compareTitle: string;
+  compareSince(date: string): string;
+  compareRow(row: CompareRow): string;
+  compareMonths: string;
+  compareMonth(month: string, claude: string, codex: string): string;
+  source: string;
+  method: string[];
+  notifyResets: string;
+  notifyResetsNote: string;
+  notifyResetTitle(kind: ResetKind, provisional: boolean): string;
+  notifyChangeTitle: string;
+  notifyBankedTitle: string;
+  notifyBankedBody(duration: string, time: string): string;
+  /** The row on a Claude card while a banked reset can still be applied. */
+  cardTitle: string;
+  cardLeft(duration: string): string;
+  cardCaption(time: string, offset: string): string;
+  cardPosted(handle: string, time: string, post: string): string;
+  cardHow: string;
+}
 
 export interface InsightsMessages {
   source(source: UsageSource): string;
@@ -152,6 +206,12 @@ export interface InsightsMessages {
   openPost: string;
   resetsSource: string;
   resetsMethod: string[];
+  /** The Reset tab's switch between the two trackers. */
+  resetProviderLabel: string;
+  resetProvider(provider: ResetProvider): string;
+  /** How the estimate would have done on its own history: better or worse by `percent`, over `days`. */
+  forecastReliability(verdict: ForecastSkill["verdict"], percent: string, days: string): string;
+  claude: ClaudeResetMessages;
 
   showBenchmarkTab: string;
   showResetsTab: string;
