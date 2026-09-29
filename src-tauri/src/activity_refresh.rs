@@ -1,32 +1,63 @@
-//! Reads Claude and Codex limits again while they are being used on this computer. Claude Code and
-//! the Codex CLI append to their session logs as they work; when a log grows, every card of that
-//! brand is read again soon, so the numbers go down while the work goes on instead of at the next
-//! scheduled refresh. Only file sizes and times are looked at; nothing in the logs is read.
+//! Reads Claude and Codex limits at the same moments on every computer, and sooner while they are
+//! being used on this one. Claude Code and the Codex CLI append to their session logs as they
+//! work; when a log grows, the brand's cards are read again soon, so the numbers go down while the
+//! work goes on. Only file sizes and times are looked at; nothing in the logs is read.
 //!
-//! How soon depends on what the provider allows ([`Brand::pace`]). A provider that refuses a
-//! reading for asking too often is left to the engine's interval for [`QUIET`], and for twice as
-//! long each time it refuses again.
+//! A brand's accounts are read when the clock passes a multiple of their pace ([`Brand::pace`]),
+//! counted from 1970 and not from the reading before. Computers that watch one account therefore
+//! ask for it at the same moments and show the same numbers. A provider that refuses a reading for
+//! asking too often is asked at [`QUIET_PACE`] for [`QUIET`], and for twice as long each time it
+//! refuses again. A brand's history on this computer is read from its own logs, so it keeps
+//! [`LOCAL_GAP`] whatever the provider says.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use tauri::{AppHandle, Manager};
 use uc_engine::Engine;
 
 use crate::service::BackendService;
 
-/// How often the session logs are looked at.
+/// How often the session logs are looked at, on multiples of it on the clock.
 const TICK: Duration = Duration::from_secs(5);
 /// The most log entries one look visits.
 const BUDGET: usize = 50_000;
-/// How long a brand keeps to the engine's interval after a provider refused a reading for asking
-/// too often.
+/// The shortest time between two readings of a brand's history on this computer while its logs
+/// grow.
+const LOCAL_GAP: Duration = Duration::from_secs(30);
+/// How often a brand's accounts are read after a provider refused a reading for asking too often:
+/// as often as before the readings followed the use, which no provider refused.
+const QUIET_PACE: Duration = Duration::from_secs(5 * 60);
+/// How long a brand's accounts keep [`QUIET_PACE`] after a refusal.
 const QUIET: Duration = Duration::from_secs(30 * 60);
 /// The longest such time.
 const QUIET_CAP: Duration = Duration::from_secs(4 * 3600);
 /// A brand that was not refused for this long after its quiet time starts again from [`QUIET`].
 const FORGIVEN_AFTER: Duration = Duration::from_secs(6 * 3600);
+
+/// Seconds since 1970 on this computer's clock.
+type Seconds = u64;
+
+fn clock() -> Seconds {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
+
+/// Which span of `every` the moment `at` falls in. The spans are the same on every computer.
+fn span(at: Seconds, every: Duration) -> u64 {
+    at / every.as_secs().max(1)
+}
+
+/// How long until the clock reaches the next multiple of [`TICK`].
+fn until_next_tick() -> Duration {
+    let tick = TICK.as_millis();
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis());
+    Duration::from_millis(u64::try_from(tick - now % tick).unwrap_or(0))
+}
 
 /// A brand whose use on this computer shows in its session logs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,67 +66,131 @@ enum Brand {
     Codex,
 }
 
-/// How soon a brand's cards are read again outside the engine's interval.
+/// How often a brand's accounts are read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Pace {
-    /// The shortest time between two readings the brand's use asks for.
+    /// While the brand is used on this computer.
     in_use: Duration,
-    /// How often the cards are read while the logs stay still; `None` leaves that to the engine's
-    /// interval.
-    steady: Option<Duration>,
+    /// While its logs stay still.
+    steady: Duration,
 }
 
 impl Brand {
-    /// Whether the card `id` belongs to this brand: its accounts and its local history.
-    fn owns(self, id: &str) -> bool {
-        let family = match self {
+    fn family(self) -> &'static str {
+        match self {
             Brand::Claude => "claude",
             Brand::Codex => "codex",
-        };
-        id.strip_prefix(family)
-            .is_some_and(|rest| rest.starts_with('@') || rest == "-local")
+        }
+    }
+
+    /// Whether the card `id` is one of this brand's accounts, which its provider answers for.
+    fn owns_account(self, id: &str) -> bool {
+        id.strip_prefix(self.family())
+            .is_some_and(|rest| rest.starts_with('@'))
+    }
+
+    /// Whether the card `id` is this brand's history on this computer.
+    fn owns_history(self, id: &str) -> bool {
+        id.strip_prefix(self.family()) == Some("-local")
     }
 
     /// Anthropic answers about 60 usage readings an hour for one account, counting every computer
     /// that watches it. Measured on 29/09/2026: two computers reading every 30 seconds were served
-    /// 59 an hour and refused every six minutes, while 9 to 19 an hour had never been refused. One
-    /// reading every three minutes here leaves room for two more computers and for Claude's own
-    /// apps. OpenAI served 64 readings an hour for one account without refusing any.
+    /// 59 an hour and refused every six minutes, while 9 to 19 an hour had never been refused.
+    /// Every computer now asks 20 times an hour, in use or not, so that they all show the same
+    /// numbers; three computers watching one account stay inside what Anthropic answers. OpenAI
+    /// served 64 readings an hour for one account without refusing any.
     fn pace(self) -> Pace {
         match self {
             Brand::Claude => Pace {
                 in_use: Duration::from_secs(3 * 60),
-                steady: None,
+                steady: Duration::from_secs(3 * 60),
             },
             Brand::Codex => Pace {
                 in_use: Duration::from_secs(30),
-                steady: Some(Duration::from_secs(2 * 60)),
+                steady: Duration::from_secs(2 * 60),
             },
         }
     }
 }
 
-/// When a brand was last seen working, last read because of it, and last refused.
+/// When some cards were last read from here, and whether the logs changed since.
+#[derive(Default)]
+struct Reader {
+    pending: bool,
+    read_at: Option<Seconds>,
+}
+
+impl Reader {
+    fn since(&self, now: Seconds) -> Duration {
+        self.read_at.map_or(Duration::MAX, |at| {
+            Duration::from_secs(now.saturating_sub(at))
+        })
+    }
+
+    /// Whether the clock passed a multiple of `every` since the cards were read.
+    fn passed(&self, now: Seconds, every: Duration) -> bool {
+        self.read_at
+            .is_none_or(|at| span(at, every) != span(now, every))
+    }
+
+    fn read(&mut self, now: Seconds) {
+        self.pending = false;
+        self.read_at = Some(now);
+    }
+}
+
+/// Why a brand's accounts are read now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Why {
+    InUse,
+    Steady,
+    Refused,
+}
+
+/// A reading of a brand's accounts: no card read already in the clock's span of `every` is asked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Reading {
+    every: Duration,
+    why: Why,
+}
+
+/// What one look at a brand asks for.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Plan {
+    accounts: Option<Reading>,
+    history: bool,
+    /// The brand's accounts keep [`QUIET_PACE`] for this long from now on.
+    quiet: Option<Duration>,
+}
+
+/// When a brand was last seen working, last read, and last refused.
 struct Watch {
     brand: Brand,
     roots: Vec<PathBuf>,
     depth: usize,
     newest: Option<SystemTime>,
-    pending: bool,
-    read_at: Option<Instant>,
+    accounts: Reader,
+    history: Reader,
     refusals: u32,
-    quiet_until: Option<Instant>,
+    quiet_until: Option<Seconds>,
 }
 
 impl Watch {
-    fn new(brand: Brand, roots: Vec<PathBuf>, depth: usize, read_at: Option<Instant>) -> Self {
+    fn new(brand: Brand, roots: Vec<PathBuf>, depth: usize, read_at: Option<Seconds>) -> Self {
         Self {
             brand,
             roots,
             depth,
             newest: None,
-            pending: false,
-            read_at,
+            accounts: Reader {
+                pending: false,
+                read_at,
+            },
+            history: Reader {
+                pending: false,
+                read_at,
+            },
             refusals: 0,
             quiet_until: None,
         }
@@ -115,20 +210,26 @@ impl Watch {
         changed
     }
 
-    /// Whether the brand keeps to the engine's interval because a provider refused a reading.
-    fn quiet(&self, now: Instant) -> bool {
+    /// The brand was used on this computer since the last look.
+    fn used(&mut self) {
+        self.accounts.pending = true;
+        self.history.pending = true;
+    }
+
+    /// Whether the brand's accounts keep [`QUIET_PACE`] because a provider refused a reading.
+    fn quiet(&self, now: Seconds) -> bool {
         self.quiet_until.is_some_and(|until| now < until)
     }
 
-    /// A provider refused one of the brand's cards for asking too often: how long the brand now
-    /// keeps to the engine's interval, or `None` while it already does.
-    fn refused(&mut self, now: Instant) -> Option<Duration> {
+    /// A provider refused one of the brand's accounts for asking too often: how long the accounts
+    /// now keep [`QUIET_PACE`], or `None` while they already do.
+    fn refused(&mut self, now: Seconds) -> Option<Duration> {
         if self.quiet(now) {
             return None;
         }
         let again = self
             .quiet_until
-            .is_some_and(|until| now.saturating_duration_since(until) < FORGIVEN_AFTER);
+            .is_some_and(|until| now.saturating_sub(until) < FORGIVEN_AFTER.as_secs());
         self.refusals = if again {
             self.refusals.saturating_add(1)
         } else {
@@ -136,29 +237,38 @@ impl Watch {
         };
         let doubled = 1_u32 << (self.refusals - 1).min(8);
         let quiet = QUIET.saturating_mul(doubled).min(QUIET_CAP);
-        self.quiet_until = Some(now + quiet);
+        self.quiet_until = Some(now + quiet.as_secs());
         Some(quiet)
     }
 
-    /// Whether a reading is due: the logs changed and the last reading is one in-use gap old, or
-    /// the last reading is one steady gap old. Never while the brand is quiet.
-    fn due(&self, now: Instant) -> bool {
-        if self.quiet(now) {
-            return false;
-        }
-        let since = self
-            .read_at
-            .map_or(Duration::MAX, |at| now.saturating_duration_since(at));
+    /// What is due now. `refused` tells that a provider's last answer to one of the brand's
+    /// accounts refused the reading for asking too often.
+    fn plan(&mut self, now: Seconds, refused: bool) -> Plan {
+        let quiet = if refused { self.refused(now) } else { None };
         let pace = self.brand.pace();
-        (self.pending && since >= pace.in_use) || pace.steady.is_some_and(|gap| since >= gap)
-    }
-
-    /// A reading starts now; true when the brand's use asked for it.
-    fn read(&mut self, now: Instant) -> bool {
-        let in_use = self.pending;
-        self.pending = false;
-        self.read_at = Some(now);
-        in_use
+        let (every, why) = if self.quiet(now) {
+            (QUIET_PACE, Why::Refused)
+        } else if self.accounts.pending {
+            (pace.in_use, Why::InUse)
+        } else {
+            (pace.steady, Why::Steady)
+        };
+        let accounts = self
+            .accounts
+            .passed(now, every)
+            .then_some(Reading { every, why });
+        if accounts.is_some() {
+            self.accounts.read(now);
+        }
+        let history = self.history.pending && self.history.since(now) >= LOCAL_GAP;
+        if history {
+            self.history.read(now);
+        }
+        Plan {
+            accounts,
+            history,
+            quiet,
+        }
     }
 }
 
@@ -167,19 +277,17 @@ pub async fn run(app: AppHandle) {
     let claude =
         uc_core::paths::env_path("CLAUDE_CONFIG_DIR").unwrap_or_else(|| home.join(".claude"));
     let codex = uc_core::paths::env_path("CODEX_HOME").unwrap_or_else(|| home.join(".codex"));
-    let started = Some(Instant::now());
+    let started = Some(clock());
     let mut watches = vec![
         Watch::new(Brand::Claude, vec![claude.join("projects")], 4, started),
         Watch::new(Brand::Codex, vec![codex.join("sessions")], 5, started),
     ];
-    let mut ticks = tokio::time::interval(TICK);
-    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
-        ticks.tick().await;
+        tokio::time::sleep(until_next_tick()).await;
         let looked = tauri::async_runtime::spawn_blocking(move || {
             for watch in &mut watches {
                 if watch.look() {
-                    watch.pending = true;
+                    watch.used();
                 }
             }
             watches
@@ -189,47 +297,57 @@ pub async fn run(app: AppHandle) {
             return;
         };
         watches = looked;
-        let now = Instant::now();
+        let now = clock();
         let engine = app.state::<BackendService>().engine();
         for watch in &mut watches {
-            let cards = enabled_cards(&engine, watch.brand);
-            if cards.iter().any(|id| engine.rate_limited(id))
-                && let Some(quiet) = watch.refused(now)
-            {
+            let brand = watch.brand;
+            let accounts = enabled_cards(&engine, |id| brand.owns_account(id));
+            let refused = accounts.iter().any(|id| engine.rate_limited(id));
+            let plan = watch.plan(now, refused);
+            if let Some(quiet) = plan.quiet {
                 tracing::warn!(
                     target: "refresh",
-                    "{:?} refused a reading for asking too often: its cards keep the regular interval for {} minutes",
-                    watch.brand,
+                    "{brand:?} refused a reading for asking too often: its accounts are read every {} minutes for {} minutes",
+                    QUIET_PACE.as_secs() / 60,
                     quiet.as_secs() / 60
                 );
             }
-            if cards.is_empty() || !watch.due(now) {
-                continue;
+            if let Some(reading) = plan.accounts
+                && !accounts.is_empty()
+            {
+                let why = match reading.why {
+                    Why::InUse => "in use here",
+                    Why::Steady => "on the clock",
+                    Why::Refused => "after a refusal",
+                };
+                tracing::info!(target: "refresh", "{brand:?} {why}: reading {} cards again", accounts.len());
+                read_cards(&engine, accounts, reading.every).await;
             }
-            let in_use = watch.read(now);
-            read_cards(&engine, watch.brand, cards, in_use).await;
+            if plan.history {
+                let history = enabled_cards(&engine, |id| brand.owns_history(id));
+                read_cards(&engine, history, LOCAL_GAP).await;
+            }
         }
     }
 }
 
-/// The enabled cards of `brand`.
-fn enabled_cards(engine: &Engine, brand: Brand) -> Vec<String> {
+/// The enabled cards that `owned` picks.
+fn enabled_cards(engine: &Engine, owned: impl Fn(&str) -> bool) -> Vec<String> {
     engine
         .provider_ids()
         .into_iter()
-        .filter(|id| brand.owns(id) && engine.is_enabled(id))
+        .filter(|id| owned(id) && engine.is_enabled(id))
         .collect()
 }
 
-/// Read `cards` again, past their cached readings.
-async fn read_cards(engine: &Arc<Engine>, brand: Brand, cards: Vec<String>, in_use: bool) {
-    let why = if in_use { "in use here" } else { "steady read" };
-    tracing::info!(target: "refresh", "{brand:?} {why}: reading {} cards again", cards.len());
+/// Read `cards` again, past their cached readings, except those read already in the clock's
+/// current span of `every`.
+async fn read_cards(engine: &Arc<Engine>, cards: Vec<String>, every: Duration) {
     let mut reads = tokio::task::JoinSet::new();
     for id in cards {
         let engine = engine.clone();
         reads.spawn(async move {
-            engine.refresh_in_use(&id).await;
+            engine.refresh_on_the_clock(&id, every).await;
         });
     }
     while reads.join_next().await.is_some() {}
@@ -279,48 +397,67 @@ mod tests {
     use super::*;
 
     const HOUR: Duration = Duration::from_secs(3600);
+    /// A full hour on the clock.
+    const NOON: Seconds = 497_000 * 3600;
 
-    fn watch(brand: Brand, read_at: Option<Instant>) -> Watch {
+    fn watch(brand: Brand, read_at: Option<Seconds>) -> Watch {
         Watch::new(brand, Vec::new(), 0, read_at)
     }
 
-    /// How many readings `watch` asks for from `start` for `span` while its logs grow at every
-    /// look.
-    fn readings_while_working(watch: &mut Watch, start: Instant, span: Duration) -> usize {
-        let looks = span.as_secs() / TICK.as_secs();
-        (1..=looks)
-            .filter(|look| {
-                let now = start + TICK * u32::try_from(*look).unwrap();
-                watch.pending = true;
-                let due = watch.due(now);
-                if due {
-                    watch.read(now);
+    /// The plans of every look from `start` for `span`, with the moment of each. `working` tells
+    /// whether the logs grow at every look.
+    fn plans(
+        watch: &mut Watch,
+        start: Seconds,
+        span: Duration,
+        working: bool,
+    ) -> Vec<(Seconds, Plan)> {
+        let tick = TICK.as_secs();
+        (1..=span.as_secs() / tick)
+            .map(|look| {
+                if working {
+                    watch.used();
                 }
-                due
+                let now = start + tick * look;
+                (now, watch.plan(now, false))
             })
-            .count()
+            .collect()
+    }
+
+    fn account_readings(plans: &[(Seconds, Plan)]) -> Vec<Seconds> {
+        plans
+            .iter()
+            .filter(|(_, plan)| plan.accounts.is_some())
+            .map(|(at, _)| *at)
+            .collect()
+    }
+
+    fn history_readings(plans: &[(Seconds, Plan)]) -> usize {
+        plans.iter().filter(|(_, plan)| plan.history).count()
     }
 
     #[test]
-    fn a_brand_owns_its_accounts_and_its_local_history_only() {
-        assert!(Brand::Claude.owns("claude@abc"));
-        assert!(Brand::Claude.owns("claude-local"));
-        assert!(!Brand::Claude.owns("claude-code@abc"));
-        assert!(!Brand::Claude.owns("codex@abc"));
-        assert!(Brand::Codex.owns("codex-local"));
-        assert!(!Brand::Codex.owns("antigravity@abc"));
+    fn a_brand_owns_its_accounts_and_its_history_only() {
+        assert!(Brand::Claude.owns_account("claude@abc"));
+        assert!(!Brand::Claude.owns_account("claude-local"));
+        assert!(Brand::Claude.owns_history("claude-local"));
+        assert!(!Brand::Claude.owns_history("claude@abc"));
+        assert!(!Brand::Claude.owns_account("claude-code@abc"));
+        assert!(!Brand::Claude.owns_account("codex@abc"));
+        assert!(Brand::Codex.owns_history("codex-local"));
+        assert!(!Brand::Codex.owns_account("antigravity@abc"));
+        assert!(!Brand::Codex.owns_history("codex-locals"));
     }
 
     #[test]
-    fn a_growing_log_asks_for_a_reading_at_most_once_per_gap() {
+    fn a_growing_log_asks_for_a_reading_once_in_each_span() {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().join("project");
         std::fs::create_dir_all(&project).unwrap();
         let log = project.join("session.jsonl");
         std::fs::write(&log, "{}\n").unwrap();
-        let mut watch = Watch::new(Brand::Codex, vec![dir.path().to_path_buf()], 4, None);
+        let mut watch = Watch::new(Brand::Codex, vec![dir.path().to_path_buf()], 4, Some(NOON));
         let pace = Brand::Codex.pace();
-        let steady = pace.steady.unwrap();
         assert!(
             !watch.look(),
             "the first look only learns where the logs stand"
@@ -334,65 +471,147 @@ mod tests {
             .set_modified(later)
             .unwrap();
         assert!(watch.look());
-        watch.pending = true;
-        let now = Instant::now();
-        assert!(watch.due(now));
-        assert!(watch.read(now));
-        assert!(!watch.due(now + Duration::from_secs(5)));
-        watch.pending = true;
-        assert!(!watch.due(now + Duration::from_secs(5)));
-        assert!(watch.due(now + pace.in_use));
-        watch.pending = false;
-        assert!(!watch.due(now + pace.in_use));
-        assert!(watch.due(now + steady));
-    }
-
-    #[test]
-    fn a_busy_hour_asks_claude_for_a_third_of_what_anthropic_allows() {
-        let start = Instant::now();
-        let mut claude = watch(Brand::Claude, Some(start));
-        assert_eq!(readings_while_working(&mut claude, start, HOUR), 20);
-        let mut codex = watch(Brand::Codex, Some(start));
-        assert_eq!(readings_while_working(&mut codex, start, HOUR), 120);
-    }
-
-    #[test]
-    fn idle_claude_cards_are_left_to_the_interval() {
-        let start = Instant::now();
-        let claude = watch(Brand::Claude, Some(start));
-        assert!(!claude.due(start + 24 * HOUR));
-        let codex = watch(Brand::Codex, Some(start));
-        assert!(codex.due(start + Brand::Codex.pace().steady.unwrap()));
-    }
-
-    #[test]
-    fn a_refusal_leaves_the_brand_to_the_interval_for_a_while() {
-        let start = Instant::now();
-        let mut claude = watch(Brand::Claude, Some(start));
-        let refused = start + Duration::from_secs(17 * 60);
-        assert_eq!(claude.refused(refused), Some(QUIET));
+        watch.used();
         assert_eq!(
-            claude.refused(refused + TICK),
+            watch.plan(NOON + 25, false),
+            Plan::default(),
+            "the accounts were read in this half minute"
+        );
+        let in_use = Some(Reading {
+            every: pace.in_use,
+            why: Why::InUse,
+        });
+        assert_eq!(
+            watch.plan(NOON + 30, false),
+            Plan {
+                accounts: in_use,
+                history: true,
+                quiet: None
+            }
+        );
+        watch.used();
+        assert_eq!(watch.plan(NOON + 55, false), Plan::default());
+        assert_eq!(
+            watch.plan(NOON + 60, false),
+            Plan {
+                accounts: in_use,
+                history: true,
+                quiet: None
+            }
+        );
+        assert_eq!(watch.plan(NOON + 115, false), Plan::default());
+        assert_eq!(
+            watch.plan(NOON + 120, false).accounts,
+            Some(Reading {
+                every: pace.steady,
+                why: Why::Steady
+            })
+        );
+    }
+
+    #[test]
+    fn computers_started_at_different_moments_read_claude_at_the_same_ones() {
+        let every = Brand::Claude.pace().steady;
+        let desk = NOON + 17;
+        let closet = NOON + 101;
+        let worked = account_readings(&plans(
+            &mut watch(Brand::Claude, Some(desk)),
+            desk,
+            HOUR,
+            true,
+        ));
+        let idle = account_readings(&plans(
+            &mut watch(Brand::Claude, Some(closet)),
+            closet,
+            HOUR,
+            false,
+        ));
+        assert_eq!(worked.len(), 20);
+        assert_eq!(idle.len(), 20);
+        for (worked, idle) in worked.iter().zip(&idle) {
+            assert_eq!(span(*worked, every), span(*idle, every));
+            assert!(
+                worked.abs_diff(*idle) < TICK.as_secs(),
+                "{worked} and {idle} are less than one look apart"
+            );
+        }
+    }
+
+    #[test]
+    fn an_hour_asks_claude_for_a_third_of_what_anthropic_answers() {
+        let claude = plans(&mut watch(Brand::Claude, Some(NOON)), NOON, HOUR, true);
+        assert_eq!(account_readings(&claude).len(), 20);
+        assert_eq!(history_readings(&claude), 120);
+        let idle = plans(&mut watch(Brand::Claude, Some(NOON)), NOON, HOUR, false);
+        assert_eq!(account_readings(&idle).len(), 20);
+        assert_eq!(history_readings(&idle), 0);
+    }
+
+    #[test]
+    fn codex_is_read_every_half_minute_in_use_and_every_two_minutes_otherwise() {
+        let codex = plans(&mut watch(Brand::Codex, Some(NOON)), NOON, HOUR, true);
+        assert_eq!(account_readings(&codex).len(), 120);
+        assert_eq!(history_readings(&codex), 120);
+        let idle = plans(&mut watch(Brand::Codex, Some(NOON)), NOON, HOUR, false);
+        let readings = account_readings(&idle);
+        assert_eq!(readings.len(), 30);
+        assert!(readings.iter().all(|at| at % 120 == 0));
+    }
+
+    #[test]
+    fn a_refusal_slows_the_accounts_down_and_leaves_the_history_alone() {
+        let mut claude = watch(Brand::Claude, Some(NOON));
+        let refused = NOON + 18 * 60;
+        claude.used();
+        assert_eq!(
+            claude.plan(refused, true),
+            Plan {
+                accounts: Some(Reading {
+                    every: QUIET_PACE,
+                    why: Why::Refused
+                }),
+                history: true,
+                quiet: Some(QUIET)
+            },
+            "the reading is asked for; the engine holds it back while the provider must be left alone"
+        );
+        assert_eq!(
+            claude.plan(refused + TICK.as_secs(), true).quiet,
             None,
             "one refusal is counted once"
         );
+        let quiet = plans(&mut claude, refused, QUIET - TICK, true);
+        let readings = account_readings(&quiet);
+        assert_eq!(readings.len(), 6);
+        assert!(readings.iter().all(|at| at % QUIET_PACE.as_secs() == 0));
+        assert_eq!(history_readings(&quiet), 59);
+        claude.used();
         assert_eq!(
-            readings_while_working(&mut claude, refused, QUIET - TICK),
-            0
+            claude.plan(refused + QUIET.as_secs(), false).accounts,
+            Some(Reading {
+                every: Brand::Claude.pace().in_use,
+                why: Why::InUse
+            })
         );
-        claude.pending = true;
-        assert!(claude.due(refused + QUIET));
+    }
+
+    #[test]
+    fn codex_is_slowed_down_when_it_is_refused_too() {
+        let mut codex = watch(Brand::Codex, Some(NOON));
+        assert_eq!(codex.plan(NOON + 3600, true).quiet, Some(QUIET));
+        let quiet = plans(&mut codex, NOON + 3600, QUIET - TICK, true);
+        assert_eq!(account_readings(&quiet).len(), 5);
     }
 
     #[test]
     fn refusals_in_a_row_double_the_quiet_time_up_to_the_cap() {
         let mut claude = watch(Brand::Claude, None);
-        let mut now = Instant::now();
+        let mut now = NOON;
         let mut quiets = Vec::new();
         for _ in 0..6 {
             let quiet = claude.refused(now).unwrap();
             quiets.push(quiet.as_secs() / 60);
-            now += quiet + Duration::from_secs(10 * 60);
+            now += quiet.as_secs() + 10 * 60;
         }
         assert_eq!(quiets, [30, 60, 120, 240, 240, 240]);
     }
@@ -400,12 +619,17 @@ mod tests {
     #[test]
     fn a_long_time_without_a_refusal_starts_again_from_the_shortest_quiet_time() {
         let mut claude = watch(Brand::Claude, None);
-        let start = Instant::now();
-        assert_eq!(claude.refused(start), Some(QUIET));
-        let soon = start + QUIET + HOUR;
+        assert_eq!(claude.refused(NOON), Some(QUIET));
+        let soon = NOON + QUIET.as_secs() + 3600;
         assert_eq!(claude.refused(soon), Some(QUIET * 2));
-        let much_later = soon + QUIET * 2 + FORGIVEN_AFTER;
+        let much_later = soon + 2 * QUIET.as_secs() + FORGIVEN_AFTER.as_secs();
         assert_eq!(claude.refused(much_later), Some(QUIET));
+    }
+
+    #[test]
+    fn the_looks_fall_on_the_clock() {
+        let wait = until_next_tick();
+        assert!(wait > Duration::ZERO && wait <= TICK);
     }
 
     #[test]

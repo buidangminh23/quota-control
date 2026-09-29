@@ -67,6 +67,13 @@ fn delta(duration: Duration) -> chrono::Duration {
     chrono::Duration::from_std(duration).unwrap_or_else(|_| chrono::Duration::zero())
 }
 
+/// Which span of `every` on the clock `at` falls in. The spans are counted from 1970, so every
+/// computer keeps the same ones.
+fn span(at: DateTime<Utc>, every: Duration) -> i64 {
+    let seconds = i64::try_from(every.as_secs()).unwrap_or(i64::MAX).max(1);
+    at.timestamp().div_euclid(seconds)
+}
+
 /// When a limit window in `snapshot` puts it out of date: the first reset after the reading was
 /// taken, plus `reset_settle`. A reading that already shows a passed reset (the provider had not
 /// rolled that window over yet) is due `reset_recheck` after it was taken, for up to
@@ -373,6 +380,7 @@ impl Engine {
             let added: Vec<String> = next.difference(&inner.enabled).cloned().collect();
             for id in &added {
                 inner.retry_after.remove(id);
+                inner.rate_limited.remove(id);
             }
             inner.enabled = next;
             !added.is_empty()
@@ -424,20 +432,24 @@ impl Engine {
     /// Refresh one provider. `force` bypasses the cache and the failure backoff; a reading that a
     /// limit window reset has put out of date bypasses the cache too.
     pub async fn refresh(&self, provider_id: &str, force: bool) -> RefreshOutcome {
-        self.refresh_with(provider_id, force, force).await
+        self.refresh_with(provider_id, force, None).await
     }
 
-    /// Read one provider again now, past its cached reading, because it is being used on this
-    /// computer. A provider that asked to be left alone (rate limited, backing off) is not asked.
-    pub async fn refresh_in_use(&self, provider_id: &str) -> RefreshOutcome {
-        self.refresh_with(provider_id, false, true).await
+    /// Read one provider again, past its cached reading, unless it was read already in the span
+    /// of `every` the clock is in. The spans are the same on every computer, so computers that
+    /// watch one account read it at the same moments. A provider that asked to be left alone
+    /// (rate limited, backing off) is not asked.
+    pub async fn refresh_on_the_clock(&self, provider_id: &str, every: Duration) -> RefreshOutcome {
+        self.refresh_with(provider_id, false, Some(every)).await
     }
 
+    /// With `every`, a reading taken in the clock's current span of it decides; without it the
+    /// cached reading does.
     async fn refresh_with(
         &self,
         provider_id: &str,
         force: bool,
-        past_cache: bool,
+        every: Option<Duration>,
     ) -> RefreshOutcome {
         let identity = self.identity_keys.get(provider_id).map(String::as_str);
         {
@@ -461,7 +473,19 @@ impl Engine {
                 && self
                     .reset_refresh_at(&inner, provider_id)
                     .is_some_and(|due| due <= now);
-            if !past_cache
+            if let Some(every) = every
+                && !stale_stamp
+                && !window_reset
+                && inner
+                    .snapshots
+                    .get(provider_id)
+                    .is_some_and(|reading| span(reading.refreshed_at, every) == span(now, every))
+            {
+                tracing::debug!(target: "refresh", "{provider_id} was read in this span of {}s", every.as_secs());
+                return RefreshOutcome::CacheHit;
+            }
+            if !force
+                && every.is_none()
                 && !stale_stamp
                 && !window_reset
                 && let Some(cached) = self.cache.fresh_snapshot(provider_id)
@@ -1004,7 +1028,9 @@ mod tests {
             RefreshOutcome::CacheHit
         );
         assert_eq!(
-            engine.refresh_in_use("claude").await,
+            engine
+                .refresh_on_the_clock("claude", Duration::from_secs(30))
+                .await,
             RefreshOutcome::Refreshed
         );
         assert_eq!(session_used(&engine), 70.0);
@@ -1012,12 +1038,16 @@ mod tests {
         claude.fail.store(true, Ordering::SeqCst);
         clock.set("2026-09-29T02:31:00Z");
         assert_eq!(
-            engine.refresh_in_use("claude").await,
+            engine
+                .refresh_on_the_clock("claude", Duration::from_secs(30))
+                .await,
             RefreshOutcome::Failed
         );
         clock.set("2026-09-29T02:31:30Z");
         assert_eq!(
-            engine.refresh_in_use("claude").await,
+            engine
+                .refresh_on_the_clock("claude", Duration::from_secs(30))
+                .await,
             RefreshOutcome::BackedOff
         );
         assert_eq!(claude.calls(), 3);
@@ -1035,7 +1065,9 @@ mod tests {
         claude.refuse.store(true, Ordering::SeqCst);
         clock.set("2026-09-29T03:38:02Z");
         assert_eq!(
-            engine.refresh_in_use("claude").await,
+            engine
+                .refresh_on_the_clock("claude", Duration::from_secs(30))
+                .await,
             RefreshOutcome::Failed
         );
         assert!(engine.rate_limited("claude"));
@@ -1047,7 +1079,9 @@ mod tests {
         ] {
             clock.set(later);
             assert_eq!(
-                engine.refresh_in_use("claude").await,
+                engine
+                    .refresh_on_the_clock("claude", Duration::from_secs(30))
+                    .await,
                 RefreshOutcome::BackedOff
             );
             assert_eq!(
@@ -1066,11 +1100,62 @@ mod tests {
         claude.roll_over(64.0, "2026-09-29T07:50:00Z");
         clock.set("2026-09-29T03:43:02Z");
         assert_eq!(
-            engine.refresh_in_use("claude").await,
+            engine
+                .refresh_on_the_clock("claude", Duration::from_secs(30))
+                .await,
             RefreshOutcome::Refreshed
         );
         assert!(!engine.rate_limited("claude"));
         assert_eq!(session_used(&engine), 64.0);
+    }
+
+    #[tokio::test]
+    async fn a_card_is_read_once_in_each_span_of_the_clock() {
+        let clock = TestClock::starting("2026-09-29T05:00:40Z");
+        let claude = WindowProvider::new(clock.clock(), 60.0, "2026-09-29T07:50:00Z");
+        let (engine, _dir) = clocked_engine(vec![claude.clone()], &clock);
+        let every = Duration::from_secs(3 * 60);
+        engine.refresh_all(false).await;
+
+        claude.roll_over(61.0, "2026-09-29T07:50:00Z");
+        clock.set("2026-09-29T05:02:59Z");
+        assert_eq!(
+            engine.refresh_on_the_clock("claude", every).await,
+            RefreshOutcome::CacheHit,
+            "it was read in the three minutes from 05:00 on"
+        );
+        assert_eq!(claude.calls(), 1);
+        clock.set("2026-09-29T05:03:00Z");
+        assert_eq!(
+            engine.refresh_on_the_clock("claude", every).await,
+            RefreshOutcome::Refreshed
+        );
+        assert_eq!(session_used(&engine), 61.0);
+
+        clock.set("2026-09-29T05:05:30Z");
+        assert_eq!(
+            engine.refresh_all(false).await,
+            vec![RefreshOutcome::CacheHit],
+            "the interval keeps to its cache"
+        );
+        assert_eq!(claude.calls(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_card_switched_on_again_is_no_longer_held_as_refused() {
+        let clock = TestClock::starting("2026-09-29T05:00:00Z");
+        let claude = WindowProvider::new(clock.clock(), 60.0, "2026-09-29T07:50:00Z");
+        let (engine, _dir) = clocked_engine(vec![claude.clone()], &clock);
+        claude.refuse.store(true, Ordering::SeqCst);
+        assert_eq!(
+            engine.refresh("claude", false).await,
+            RefreshOutcome::Failed
+        );
+        assert!(engine.rate_limited("claude"));
+
+        engine.set_enabled(&[]);
+        engine.set_enabled(&["claude".to_string()]);
+        assert!(!engine.rate_limited("claude"));
     }
 
     #[tokio::test]
@@ -1095,6 +1180,11 @@ mod tests {
         assert!(
             !engine.rate_limited("claude"),
             "the network failed; nothing was refused"
+        );
+        clock.set("2026-09-29T03:40:59Z");
+        assert_eq!(
+            engine.refresh("claude", false).await,
+            RefreshOutcome::BackedOff
         );
         clock.set("2026-09-29T03:41:00Z");
         assert_eq!(
