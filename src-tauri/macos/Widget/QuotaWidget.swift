@@ -4,9 +4,9 @@ import WidgetKit
 /// The desktop and Notification Center widgets. They read `glance.json`, which Quota Control writes
 /// next to its settings whenever a reading changes and then asks WidgetKit to reload, so they list
 /// the accounts and metrics Settings → Widget chooses, worded exactly like the popup. Three styles
-/// show the limits, one the limits coming back next, two the Codex free-reset tracker and one an
-/// overview of both. Countdowns tick on their own; when the app is closed the widgets keep their
-/// last readings and say how old they are.
+/// show the limits, one the limits coming back next, two the reset tracker Settings chose (Codex's
+/// or Claude's) and one an overview of both. Countdowns tick on their own; when the app is closed
+/// the widgets keep their last readings and say how old they are.
 @main
 struct QuotaControlWidgets: WidgetBundle {
     var body: some Widget {
@@ -27,13 +27,13 @@ enum QuotaWidgetStyle {
     case rings
     /// One line per metric, the most accounts at once.
     case compact
-    /// The limits in brief beside the Codex reset summary.
+    /// The limits in brief beside the reset summary.
     case overview
     /// The limits coming back next, soonest first.
     case upcoming
-    /// The Codex free-reset tracker.
+    /// The reset tracker Settings chose: Codex's free-reset tracker, or Claude's.
     case codexResets
-    /// The Codex reset calendar and rhythm.
+    /// That tracker's reset calendar and rhythm.
     case resetCalendar
 
     /// The sizes the style offers in the widget gallery.
@@ -114,12 +114,12 @@ struct GlanceTimeline: TimelineProvider {
     }
 
     /// The moments after `now` when something drawn changes on its own, soonest first: a limit
-    /// comes back, the announced Codex reset's countdown ends or its row goes away, or the readings
-    /// turn stale.
+    /// comes back, a countdown of the reset tracker the widget chose ends or its row goes away, or
+    /// the readings turn stale.
     static func moments(_ document: GlanceDocument?, after now: Date) -> [Date] {
         guard let document else { return [] }
         var moments = Set(GlanceUpcomingLimit.list(document.widget.providers, now: now).map(\.at))
-        moments.formUnion(document.resetMoments(after: now))
+        moments.formUnion(document.forWidget.resetMoments(after: now))
         let stale = document.generatedAt.addingTimeInterval(GlanceStaleness.after)
         if stale > now {
             moments.insert(stale)
@@ -204,16 +204,24 @@ enum WidgetText {
         vietnamese ? "Mở Quota Control để hiện hạn mức ở đây." : "Open Quota Control to show your limits here."
     }
 
-    /// What a reset widget says while the tracker is off.
+    /// What a reset widget says while the tracker the widget chose is off.
     static func resetsOff(_ document: GlanceDocument) -> String {
         if !document.labels.resetsOff.isEmpty { return document.labels.resetsOff }
+        if document.widget.resetsProvider == .claude {
+            return document.isVietnamese
+                ? "Bật tab Reset trong Quota Control để xem dự báo reset Claude."
+                : "Turn on the Reset tab in Quota Control to see the Claude reset forecast."
+        }
         return document.isVietnamese
             ? "Bật tab Reset trong Quota Control để xem dự báo reset Codex."
             : "Turn on the Reset tab in Quota Control to see the Codex reset forecast."
     }
 
     static func resetsTitle(_ document: GlanceDocument) -> String {
-        document.resets?.title ?? (document.isVietnamese ? "Reset Codex" : "Codex Resets")
+        if document.widget.resetsProvider == .claude {
+            return document.resets?.title ?? document.claudeResetsTitle
+        }
+        return document.resets?.title ?? (document.isVietnamese ? "Reset Codex" : "Codex Resets")
     }
 }
 
@@ -248,7 +256,7 @@ struct GlanceWidgetView: View {
     private var resolvedScheme: ColorScheme {
         switch style {
         case .overview, .codexResets, .resetCalendar:
-            let theme = entry.document?.resets?.theme
+            let theme = entry.document?.forWidget.resets?.theme
             return theme == "light" ? .light : theme == "dark" ? .dark : colorScheme
         default:
             return colorScheme

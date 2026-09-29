@@ -429,20 +429,21 @@ enum GlanceResetCards {
         if let presentation = resets.presentation {
             if let latest = presentation.latest {
                 var elements: [GlanceResetElement] = []
-                if let author = latest.author { elements.append(.author(author, presentation.authorAvatar)) }
+                if let author = latest.author { elements.append(.author(author, presentation.avatar(for: author))) }
                 elements += [.badge(latest.ago(now: now, locale: presentation.locale)), .text(latest.meta, .secondary)]
+                elements += (latest.notes ?? []).map { .text($0, .secondary) }
                 add("latest", latest.title, elements)
             }
             for status in presentation.statuses(at: now) {
                 var elements: [GlanceResetElement] = []
                 let metadata = status.metadata(now: now, units: units)
                 if status.kind == "watch", metadata.count > 1 { elements.append(.text(metadata[0], .secondary)) }
-                if let author = status.author { elements.append(.author(author, presentation.authorAvatar)) }
+                if let author = status.author { elements.append(.author(author, presentation.avatar(for: author))) }
                 if let excerpt = status.excerpt { elements.append(.text(excerpt, .body)) }
                 elements += (status.kind == "watch" && metadata.count > 1 ? Array(metadata.dropFirst()) : metadata).map { .text($0, .secondary) }
                 if let due = status.due(now: now, units: units) { elements.append(.text(due, .secondary)) }
                 if let url = status.url { elements.append(.link(url)) }
-                add(status.id, status.title, elements, accent: status.kind == "watch" ? GlanceResetPalette.orange : status.kind == "scheduled" ? .green : nil)
+                add(status.id, status.title, elements, accent: accent(status.kind))
             }
             let forecast = presentation.forecast
             var elements: [GlanceResetElement] = []
@@ -486,17 +487,28 @@ enum GlanceResetCards {
             }
             for item in presentation.history {
                 var elements: [GlanceResetElement] = []
-                if let author = item.author { elements.append(.author(author, presentation.authorAvatar)) }
+                if let author = item.author { elements.append(.author(author, presentation.avatar(for: author))) }
                 elements += [.text("\(item.kindLabel) · \(item.when)", .secondary), .text(item.excerpt, .body)]
-                if let observed = item.observed { elements.append(.text(observed, .secondary)) }
+                elements += [item.scope, item.provisional, item.observed].compactMap { $0 }.map { .text($0, .secondary) }
                 if let url = item.url { elements.append(.link(url)) }
                 add("history-\(item.id)", presentation.historyTitle, elements)
             }
-            add("source", "", [.text(presentation.source, .secondary), .link("https://codex-resets.com")])
+            add("source", "", [.text(presentation.source, .secondary), .link(resets.site ?? "https://codex-resets.com")])
             if !presentation.method.isEmpty {
                 add("method", presentation.methodTitle, presentation.method.map { .text($0, .body) })
             }
         }
         return cards
+    }
+
+    /// A status card's border: orange for a watch, green for a scheduled reset, blue for a banked
+    /// reset still to apply, none for the quiet card.
+    private static func accent(_ kind: String) -> Color? {
+        switch kind {
+        case "watch": return GlanceResetPalette.orange
+        case "scheduled": return .green
+        case "banked": return .blue
+        default: return nil
+        }
     }
 }

@@ -26,11 +26,6 @@ enum WidgetScale {
     static let moreHeight: CGFloat = 14
 }
 
-extension GlanceDocument {
-    /// Whether the readings are worded in Vietnamese, for the few words the widget adds itself.
-    var isVietnamese: Bool { locale.lowercased().hasPrefix("vi") }
-}
-
 extension GlanceProvider {
     /// The mark's color: the brand color, or the text color for a white brand that would vanish on a
     /// light background.
@@ -38,7 +33,7 @@ extension GlanceProvider {
 }
 
 extension GlanceResets {
-    /// The Codex mark's color, the text color when the brand is white.
+    /// The tracker's mark color, the text color when the brand is white.
     var markTint: Color { color.uppercased() == "#FFFFFF" ? .primary : tint }
 }
 

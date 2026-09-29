@@ -5,7 +5,7 @@ import AppKit
 
 // MARK: Reset tracker parts
 
-/// The reset tracker's heading: the Codex mark, the title and, where there is room, the source.
+/// The reset tracker's heading: its mark, the title and, where there is room, the source.
 struct ResetsHeader: View {
     let resets: GlanceResets
     var title: String?
@@ -193,8 +193,8 @@ struct ChanceHero: View {
 
 // MARK: Codex Resets widget
 
-/// The Codex free-reset tracker: the announced reset or the chance of one, how long since the last,
-/// and with room the wait so far, the calendar and the rhythm.
+/// The reset tracker the widget chose, Codex's or Claude's: the announced (or banked) reset or the
+/// chance of one, how long since the last, and with room the wait so far, the calendar and the rhythm.
 struct CodexResetsLayout: View {
     let document: GlanceDocument
     let resets: GlanceResets
@@ -262,7 +262,8 @@ struct ResetWidgetPager: View {
         let cards = GlanceResetCards.make(resets: resets, units: document.labels.units, now: now)
         let fragments = ResetWidgetPagination.pages(cards, width: size.width, height: height)
         let pages = ResetWidgetPagination.spreads(fragments, width: size.width, height: height)
-        let key = "reset-page.\(namespace).\(family.rawValue)"
+        let tracker = document.widget.resetsProvider == .codex ? "" : ".\(document.widget.resetsProvider.rawValue)"
+        let key = "reset-page.\(namespace)\(tracker).\(family.rawValue)"
         let initial = initialCard.flatMap { id in pages.firstIndex(where: { $0.contains(where: { $0.id.hasPrefix(id + "|") || $0.id == id }) }) }.map { prefixPages.count + $0 } ?? 0
         let stored = UserDefaults.standard.object(forKey: key) == nil ? initial : UserDefaults.standard.integer(forKey: key)
         let count = prefixPages.count + pages.count

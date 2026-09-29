@@ -440,7 +440,7 @@ struct IslandMoreLine: View {
     }
 }
 
-// MARK: Codex resets
+// MARK: Reset tracker
 
 struct IslandResetsSection: View {
     @Environment(\.colorScheme) private var systemScheme

@@ -19,13 +19,17 @@ struct GlanceDocument: Decodable, Equatable {
     var island: GlanceIsland
     var widget: GlanceWidgetContent
     /// The Codex free-reset tracker; absent while the Reset tab and reset notifications are both off.
+    /// In a surface's copy (`forIsland`, `forWidget`) it is the tracker that surface chose.
     var resets: GlanceResets?
+    /// The Claude reset tracker, sent while the island or the widget chose it; absent otherwise, and
+    /// while the Reset tab and Claude reset notifications are both off.
+    var claudeResets: GlanceResets?
     var alert: GlanceAlert?
 
     static let supportedVersion = 1
 
     private enum CodingKeys: String, CodingKey {
-        case version, generatedAt, locale, hour12, labels, providers, island, widget, resets, alert
+        case version, generatedAt, locale, hour12, labels, providers, island, widget, resets, claudeResets, alert
     }
 
     init(
@@ -38,6 +42,7 @@ struct GlanceDocument: Decodable, Equatable {
         island: GlanceIsland,
         widget: GlanceWidgetContent,
         resets: GlanceResets? = nil,
+        claudeResets: GlanceResets? = nil,
         alert: GlanceAlert?
     ) {
         self.version = version
@@ -49,6 +54,7 @@ struct GlanceDocument: Decodable, Equatable {
         self.island = island
         self.widget = widget
         self.resets = resets
+        self.claudeResets = claudeResets
         self.alert = alert
     }
 
@@ -64,6 +70,7 @@ struct GlanceDocument: Decodable, Equatable {
         widget = try container.decodeIfPresent(GlanceWidgetContent.self, forKey: .widget)
             ?? GlanceWidgetContent(providers: providers, shows: .all, empty: labels.empty)
         resets = try? container.decodeIfPresent(GlanceResets.self, forKey: .resets)
+        claudeResets = try? container.decodeIfPresent(GlanceResets.self, forKey: .claudeResets)
         alert = try container.decodeIfPresent(GlanceAlert.self, forKey: .alert)
     }
 
@@ -86,6 +93,15 @@ struct GlanceDocument: Decodable, Equatable {
 
     var resolvedLocale: Locale { Locale(identifier: locale) }
 
+    /// Whether the readings are worded in Vietnamese, for the few words a surface adds itself.
+    var isVietnamese: Bool { locale.lowercased().hasPrefix("vi") }
+
+    /// The reset view's name on a surface showing the Claude tracker: the popup's word for it, else
+    /// the tracker's title, else the same words in the document's language.
+    var claudeResetsTitle: String {
+        labels.claudeResetsTab ?? claudeResets?.title ?? (isVietnamese ? "Reset Claude" : "Claude Resets")
+    }
+
     /// The island's accounts with something to show: readings, or a notice saying why there are none.
     var visibleProviders: [GlanceProvider] {
         providers.filter { !$0.metrics.isEmpty || $0.notice != nil }
@@ -96,22 +112,35 @@ struct GlanceDocument: Decodable, Equatable {
         (providers + widget.providers).flatMap(\.metrics).compactMap(\.resetsAt).filter { $0 > now }.min()
     }
 
-    /// The document as the open island draws it: the reset tracker cut down to the island's parts.
+    /// The document as the open island draws it: the reset tracker the island chose, cut down to its
+    /// parts.
     var forIsland: GlanceDocument {
-        var copy = self
-        copy.resets = resets?.showing(island.resetParts)
-        return copy
+        showing(island.resetsProvider, parts: island.resetParts)
     }
 
-    /// The document as the widgets draw it: the reset tracker cut down to the widget's parts.
+    /// The document as the widgets draw it: the reset tracker the widget chose, cut down to its parts.
     var forWidget: GlanceDocument {
+        showing(widget.resetsProvider, parts: widget.resetParts)
+    }
+
+    /// The document with `resets` as `provider`'s tracker showing only `parts`; for Claude the reset
+    /// view is named after the Claude tracker and, while it is off, says what turns it on.
+    private func showing(_ provider: GlanceResetsProvider, parts: GlanceResetParts) -> GlanceDocument {
         var copy = self
-        copy.resets = resets?.showing(widget.resetParts)
+        switch provider {
+        case .codex:
+            copy.resets = resets?.showing(parts)
+        case .claude:
+            copy.resets = claudeResets?.showing(parts)
+            copy.labels.tabs.resets = claudeResetsTitle
+            if let off = labels.claudeResetsOff { copy.labels.resetsOff = off }
+        }
         return copy
     }
 
-    /// The moments after `now` when something drawn from the reset tracker changes on its own: the
-    /// announced reset's countdown ends or its row goes away.
+    /// The moments after `now` when something drawn from `resets` (in a surface's copy, the tracker
+    /// it chose) changes on its own: an announced or banked reset's countdown ends or its row goes
+    /// away, or the last reset's age moves on.
     func resetMoments(after now: Date) -> [Date] {
         guard let resets else { return [] }
         var moments: [Date] = []
@@ -172,9 +201,15 @@ struct GlanceLabels: Decodable, Equatable {
     var upcomingEmpty: String
     /// The open island's tab names, as the popup's tabs read.
     var tabs: GlanceTabLabels
+    /// The reset view's name on a surface showing the Claude tracker; sent while the island or the
+    /// widget chose it.
+    var claudeResetsTab: String?
+    /// What that view says while the Claude tracker is off, naming the Claude reset notifications;
+    /// sent with `claudeResetsTab`.
+    var claudeResetsOff: String?
 
     private enum CodingKeys: String, CodingKey {
-        case title, empty, updated, resetsIn, resetting, open, notRunning, noData, more, units, resetsOff, upcoming, upcomingEmpty, tabs
+        case title, empty, updated, resetsIn, resetting, open, notRunning, noData, more, units, resetsOff, upcoming, upcomingEmpty, tabs, claudeResetsTab, claudeResetsOff
     }
 
     init(
@@ -191,7 +226,9 @@ struct GlanceLabels: Decodable, Equatable {
         resetsOff: String = "",
         upcoming: String = "",
         upcomingEmpty: String = "",
-        tabs: GlanceTabLabels = .fallback
+        tabs: GlanceTabLabels = .fallback,
+        claudeResetsTab: String? = nil,
+        claudeResetsOff: String? = nil
     ) {
         self.title = title
         self.empty = empty
@@ -207,6 +244,8 @@ struct GlanceLabels: Decodable, Equatable {
         self.upcoming = upcoming
         self.upcomingEmpty = upcomingEmpty
         self.tabs = tabs
+        self.claudeResetsTab = claudeResetsTab
+        self.claudeResetsOff = claudeResetsOff
     }
 
     init(from decoder: Decoder) throws {
@@ -225,6 +264,8 @@ struct GlanceLabels: Decodable, Equatable {
         upcoming = try container.decodeIfPresent(String.self, forKey: .upcoming) ?? ""
         upcomingEmpty = try container.decodeIfPresent(String.self, forKey: .upcomingEmpty) ?? ""
         tabs = (try? container.decodeIfPresent(GlanceTabLabels.self, forKey: .tabs)) ?? .fallback
+        claudeResetsTab = try? container.decodeIfPresent(String.self, forKey: .claudeResetsTab)
+        claudeResetsOff = try? container.decodeIfPresent(String.self, forKey: .claudeResetsOff)
     }
 }
 
@@ -256,6 +297,13 @@ enum GlanceView: String, Decodable, Equatable, Hashable, CaseIterable {
 enum IslandArrangement: String, Decodable, Equatable {
     case tabs
     case stacked
+}
+
+/// Whose reset tracker a surface draws: Codex's (codex-resets.com) or Claude's (claude-resets.com).
+/// A document from an older popup, or with a value this version does not know, means Codex.
+enum GlanceResetsProvider: String, Decodable, Equatable {
+    case codex
+    case claude
 }
 
 /// The parts of the reset tracker a surface shows; a part missing from an older document shows.
@@ -337,9 +385,11 @@ struct GlanceIsland: Decodable, Equatable {
     var resetParts: GlanceResetParts
     /// The most limits coming back listed; `0` for as many as fit.
     var upcomingLimit: Int
+    /// Whose reset tracker the reset view draws.
+    var resetsProvider: GlanceResetsProvider
 
     private enum CodingKeys: String, CodingKey {
-        case enabled, alerts, style, wings, expandOnHover, shows, empty, sections, tabs, arrangement, resetParts, upcomingLimit
+        case enabled, alerts, style, wings, expandOnHover, shows, empty, sections, tabs, arrangement, resetParts, upcomingLimit, resetsProvider
     }
 
     init(
@@ -354,7 +404,8 @@ struct GlanceIsland: Decodable, Equatable {
         tabs: [GlanceView]? = nil,
         arrangement: IslandArrangement = .stacked,
         resetParts: GlanceResetParts = .all,
-        upcomingLimit: Int = 6
+        upcomingLimit: Int = 6,
+        resetsProvider: GlanceResetsProvider = .codex
     ) {
         self.enabled = enabled
         self.alerts = alerts
@@ -368,6 +419,7 @@ struct GlanceIsland: Decodable, Equatable {
         self.arrangement = arrangement
         self.resetParts = resetParts
         self.upcomingLimit = upcomingLimit
+        self.resetsProvider = resetsProvider
     }
 
     init(from decoder: Decoder) throws {
@@ -384,6 +436,7 @@ struct GlanceIsland: Decodable, Equatable {
         arrangement = (try? container.decodeIfPresent(IslandArrangement.self, forKey: .arrangement)) ?? .stacked
         resetParts = (try? container.decodeIfPresent(GlanceResetParts.self, forKey: .resetParts)) ?? .all
         upcomingLimit = max(0, (try? container.decodeIfPresent(Int.self, forKey: .upcomingLimit)) ?? 6)
+        resetsProvider = (try? container.decodeIfPresent(GlanceResetsProvider.self, forKey: .resetsProvider)) ?? .codex
     }
 }
 
@@ -418,18 +471,29 @@ struct GlanceWidgetContent: Decodable, Equatable {
     var resetParts: GlanceResetParts
     /// The most limits coming back listed; `0` for as many as fit.
     var upcomingLimit: Int
+    /// Whose reset tracker the reset widgets and the Overview's reset part draw.
+    var resetsProvider: GlanceResetsProvider
 
     private enum CodingKeys: String, CodingKey {
-        case providers, shows, empty, tabs, resetParts, upcomingLimit
+        case providers, shows, empty, tabs, resetParts, upcomingLimit, resetsProvider
     }
 
-    init(providers: [GlanceProvider], shows: GlanceShows, empty: String, tabs: [GlanceView] = GlanceView.allCases, resetParts: GlanceResetParts = .all, upcomingLimit: Int = 0) {
+    init(
+        providers: [GlanceProvider],
+        shows: GlanceShows,
+        empty: String,
+        tabs: [GlanceView] = GlanceView.allCases,
+        resetParts: GlanceResetParts = .all,
+        upcomingLimit: Int = 0,
+        resetsProvider: GlanceResetsProvider = .codex
+    ) {
         self.providers = providers
         self.shows = shows
         self.empty = empty
         self.tabs = tabs
         self.resetParts = resetParts
         self.upcomingLimit = upcomingLimit
+        self.resetsProvider = resetsProvider
     }
 
     init(from decoder: Decoder) throws {
@@ -440,6 +504,7 @@ struct GlanceWidgetContent: Decodable, Equatable {
         tabs = decodeViews(container, forKey: .tabs) ?? GlanceView.allCases
         resetParts = (try? container.decodeIfPresent(GlanceResetParts.self, forKey: .resetParts)) ?? .all
         upcomingLimit = max(0, (try? container.decodeIfPresent(Int.self, forKey: .upcomingLimit)) ?? 0)
+        resetsProvider = (try? container.decodeIfPresent(GlanceResetsProvider.self, forKey: .resetsProvider)) ?? .codex
     }
 
     func has(_ view: GlanceView) -> Bool { tabs.contains(view) }
@@ -574,7 +639,9 @@ struct GlanceCountdown: Decodable, Equatable {
     }
 }
 
-/// The Codex free-reset tracker (see `GlanceResets` in `src/model/glance.ts`).
+/// A reset tracker: the Codex free-reset tracker (codex-resets.com) or the Claude one
+/// (claude-resets.com, where `upcoming` is a banked reset's deadline); see `GlanceResets` in
+/// `src/model/glance.ts`.
 struct GlanceResets: Decodable, Equatable {
     var title: String
     var source: String
@@ -593,6 +660,8 @@ struct GlanceResets: Decodable, Equatable {
     var rhythm: GlanceResetRhythm?
     var presentation: GlanceResetPresentation? = nil
     var theme: String? = nil
+    /// The site the source line links to; absent for Codex, whose site is `https://codex-resets.com`.
+    var site: String? = nil
 
     var tint: Color { Color(glanceHex: color) ?? .white }
 
@@ -650,6 +719,8 @@ struct GlanceResetLatestPresentation: Decodable, Equatable {
     var at: Date
     var meta: String
     var author: GlanceResetAuthor?
+    /// Lines under the meta, e.g. whether the reset covers this account's plan (Claude).
+    var notes: [String]? = nil
 
     func ago(now: Date, locale: String) -> String {
         let minutes = max(1, Int(floor(now.timeIntervalSince(at) / 60)))
@@ -726,11 +797,18 @@ struct GlanceResetHistoryItem: Decodable, Equatable, Identifiable {
     var author: GlanceResetAuthor?
     var url: String?
     var observed: String?
+    /// Who the reset covered (Claude).
+    var scope: String? = nil
+    /// `Chưa kiểm chứng` / `Not reviewed`, while the site has not reviewed the entry (Claude).
+    var provisional: String? = nil
 }
 
 struct GlanceResetPresentation: Decodable, Equatable {
     var locale: String
     var authorAvatar: String
+    /// The one author `authorAvatar` pictures (Claude: `@ClaudeDevs`); absent, it pictures every
+    /// author (Codex).
+    var avatarHandle: String? = nil
     var latest: GlanceResetLatestPresentation?
     var statuses: [GlanceResetStatusCard]
     var quietTitle: String? = nil
@@ -750,6 +828,13 @@ struct GlanceResetPresentation: Decodable, Equatable {
             return [GlanceResetStatusCard(id: "quiet", kind: "quiet", title: quietTitle, meta: [])]
         }
         return current
+    }
+
+    /// The picture beside `author`: `authorAvatar`, unless it pictures `avatarHandle` alone and
+    /// `author` is someone else, who then gets none.
+    func avatar(for author: GlanceResetAuthor) -> String {
+        if let avatarHandle, avatarHandle.caseInsensitiveCompare(author.handle) != .orderedSame { return "" }
+        return authorAvatar
     }
 }
 

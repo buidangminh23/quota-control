@@ -99,9 +99,10 @@ struct ResetsSummary: View {
     }
 }
 
-/// The parts Settings chose for the Overview (the accounts' limits in the compact form, the Codex
-/// reset summary, the limits coming back next), laid out for the widget's size: side by side on the
-/// wide sizes, stacked on the large one. A part left out gives its room to the others.
+/// The parts Settings chose for the Overview (the accounts' limits in the compact form, the summary
+/// of the reset tracker the widget chose, the limits coming back next), laid out for the widget's
+/// size: side by side on the wide sizes, stacked on the large one. A part left out gives its room to
+/// the others.
 struct OverviewLayout: View {
     let document: GlanceDocument
     let providers: [GlanceProvider]

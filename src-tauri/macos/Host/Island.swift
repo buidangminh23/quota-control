@@ -3,10 +3,10 @@ import SwiftUI
 
 /// The Dynamic Island: a black shape around the MacBook notch whose two wings carry the readings
 /// picked in Settings, as a percentage, a ring or a bar. Hovering it (or, when Settings say so, a
-/// click) opens a detail view with the sections its Settings list (quota limits, the Codex reset
-/// forecast, the next limits to come back), a new alert (a limit close to running out, or one that
-/// came back) opens it for a few seconds. A screen without a notch gets the same island as a pill
-/// in the middle of the menu bar.
+/// click) opens a detail view with the sections its Settings list (quota limits, the Codex or
+/// Claude reset tracker, the next limits to come back), a new alert (a limit close to running out,
+/// or one that came back) opens it for a few seconds. A screen without a notch gets the same island
+/// as a pill in the middle of the menu bar.
 /// It lives in a non-activating panel, so it never takes focus from the app in front.
 @MainActor
 final class IslandController {
@@ -51,7 +51,9 @@ final class IslandController {
     }
 
     func update(_ data: Data) {
-        guard let document = GlanceDocument.decode(data)?.forIsland else { return }
+        guard let decoded = GlanceDocument.decode(data) else { return }
+        let document = decoded.forIsland
+        model.trackers = (decoded.resets, decoded.claudeResets)
         model.document = document
         relayout(animated: true)
         if let alert = document.alert, seenAlerts.insert(alert.id).inserted, document.island.enabled, document.island.alerts {
@@ -419,6 +421,9 @@ enum IslandWingLayout: Equatable {
 @MainActor
 final class IslandModel: ObservableObject {
     @Published var document: GlanceDocument?
+    /// The document's Codex and Claude reset trackers as sent, before the island picked one, so an
+    /// alert finds its brand's mark whichever tracker the island shows.
+    var trackers: (codex: GlanceResets?, claude: GlanceResets?) = (nil, nil)
     @Published var mode: IslandMode = .compact
     @Published var geometry: IslandGeometry?
     @Published var expandedSize = CGSize(width: IslandGeometry.expandedWidth, height: 120)
@@ -512,14 +517,17 @@ final class IslandModel: ObservableObject {
         expandedSize = CGSize(width: width, height: min(ceil(height), geometry.maxOpenHeight))
     }
 
-    /// The mark beside an alert: an island account of the alert's brand, else the Codex reset
-    /// tracker's mark for a Codex alert, else a plain dot.
+    /// The mark beside an alert: an island account of the alert's brand, else the reset tracker of
+    /// that brand (the Codex tracker for any Codex alert), else a plain dot.
     func look(for alert: GlanceAlert) -> (mark: GlanceMark?, tint: Color) {
         guard let brand = alert.brand, let document else { return (nil, .white) }
         if let provider = document.providers.first(where: { $0.brand == brand }) {
             return (provider.mark, provider.tint)
         }
-        if let resets = document.resets, resets.brand == brand || brand == "codex" {
+        if let resets = trackers.codex, resets.brand == brand || brand == "codex" {
+            return (resets.mark, resets.tint)
+        }
+        if let resets = trackers.claude, resets.brand == brand {
             return (resets.mark, resets.tint)
         }
         return (nil, .white)
