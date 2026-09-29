@@ -15,7 +15,7 @@ const claudeVi: ClaudeResetMessages = {
   bankedTitle: "Có lượt reset để dành",
   bankedUntil: (time) => `Dùng được đến ${time}`,
   bankedLeft: (duration) => `Còn ${duration}`,
-  bankedHow: "Vào Settings → Usage trên claude.ai để dùng. Ứng dụng không biết tài khoản của bạn đã dùng lượt này hay chưa.",
+  bankedHow: "Vào Settings → Usage trên claude.ai để dùng. Ứng dụng không biết tài khoản của bạn đã dùng lượt này hay chưa. Đánh dấu đã dùng sẽ tắt lời nhắc cho mọi tài khoản Claude ở đây.",
   bankedMarkUsed: "Tôi đã dùng rồi",
   bankedUsed: "Bạn đã đánh dấu lượt này là đã dùng.",
   bankedUndo: "Hoàn tác",
@@ -29,7 +29,7 @@ const claudeVi: ClaudeResetMessages = {
   statYourPlan: (plan) => `Reset cho gói ${plan}`,
   ago: (duration, date) => `${duration} trước · ${date}`,
   compareTitle: "Claude so với Codex",
-  compareSince: (date) => `Tính từ ${date}, khi cả hai cùng được theo dõi.`,
+  compareSince: (date) => `Tính các lần reset sau ${date}, khi cả hai cùng được theo dõi.`,
   compareRow: (row) =>
     ({
       resets: "Số lần reset",
@@ -40,14 +40,15 @@ const claudeVi: ClaudeResetMessages = {
       last30: "30 ngày qua",
     })[row],
   compareMonths: "Số lần reset mỗi tháng",
+  compareMonthsRecent: (months) => `Số lần reset mỗi tháng, ${months} tháng gần nhất`,
   compareMonth: (month, claude, codex) => `${month}: Claude ${claude}, Codex ${codex}`,
   source: "Dữ liệu từ claude-resets.com, trang theo dõi @ClaudeDevs và nhóm Claude Code trên X.",
   method: [
     "Danh sách lấy từ claude-resets.com, trang theo dõi bài của @ClaudeDevs và các thành viên nhóm Claude Code trên X. Ứng dụng đọc bản trực tiếp 5 phút một lần; khi bản trực tiếp không đọc được thì dùng bản đã công bố của trang. Tin trang vừa tự phát hiện và chưa duyệt lại được ghi “Chưa kiểm chứng”.",
     "Thay đổi hạn mức (tăng, giảm mức trần) không xoá mức đã dùng nên không tính là reset. Lượt reset để dành do bạn tự dùng trong Settings → Usage trước hạn; trang và ứng dụng đều không biết tài khoản nào đã dùng.",
     "Phạm vi (mọi người hay gói nào) do claude-resets.com ghi theo bài đăng. Ứng dụng so phạm vi đó với gói của các tài khoản Claude bạn đã kết nối; khi bài chỉ nói “người bị ảnh hưởng” thì ứng dụng không kết luận.",
-    "Khả năng có reset tính như bên Codex: mỗi lần reset có trọng số giảm một nửa sau mỗi 21 ngày. Dòng “Thử lại…” chấm cách tính này trên chính lịch sử đó: mỗi ngày đã qua, so con số nó đưa ra với mức trung bình tính đến ngày ấy và với việc đã xảy ra. Claude mới có ít lần reset nên con số chỉ để tham khảo. Trang nguồn không dự đoán reset.",
-    "Bảng so với Codex chỉ tính từ ngày cả hai cùng được theo dõi, để so cho công bằng. Số liệu Codex lấy từ codex-resets.com.",
+    "Khả năng có reset tính như bên Codex: mỗi lần reset có trọng số giảm một nửa sau mỗi 21 ngày. Dòng “Thử lại…” chấm cách tính này trên chính lịch sử đó: mỗi ngày đã qua, so con số nó đưa ra với mức trung bình tính đến ngày ấy và với việc đã xảy ra. Các ngày thử dựa trên ít lần reset, nên ứng dụng chỉ nói sát hơn hay kém hơn khi chênh lệch vượt mức có thể do ngẫu nhiên. Trang nguồn không dự đoán reset.",
+    "Bảng so với Codex chỉ tính các lần reset sau thời điểm cả hai cùng được theo dõi, để so cho công bằng; lần reset mở đầu khoảng này không tính cho bên nào. Số liệu Codex lấy từ codex-resets.com.",
   ],
   notifyResets: "Khi Claude reset",
   notifyResetsNote: "Báo khi @ClaudeDevs thông báo reset hoặc đổi hạn mức, và khi lượt reset để dành còn 3 ngày là hết hạn.",
@@ -59,7 +60,7 @@ const claudeVi: ClaudeResetMessages = {
   cardLeft: (duration) => `còn ${duration}`,
   cardCaption: (time, offset) => `Dùng trước ${time} · ${offset}`,
   cardPosted: (handle, time, post) => `${handle} đăng lúc ${time}:\n“${post}”`,
-  cardHow: "Vào Settings → Usage trên claude.ai để dùng. Ứng dụng không biết tài khoản này đã dùng hay chưa; nếu đã dùng, đánh dấu trong tab Reset để ẩn dòng này.",
+  cardHow: "Vào Settings → Usage trên claude.ai để dùng. Ứng dụng không biết tài khoản này đã dùng hay chưa. Đánh dấu đã dùng trong tab Reset sẽ ẩn dòng này trên mọi thẻ Claude.",
 };
 
 const VI_WINDOWS: Record<ResetWindow, string> = { thisWeek: "Trong tuần này", weekend: "Cuối tuần này", nextWeek: "Tuần sau" };
@@ -253,12 +254,12 @@ export const insightsVi: InsightsMessages = {
   showBenchmarkTab: "Hiện tab Benchmark",
   resetProviderLabel: "Reset của",
   resetProvider: (provider) => (provider === "claude" ? "Claude" : "Codex"),
-  forecastReliability: (verdict, percent, days) =>
+  forecastReliability: (verdict, percent, days, resets) =>
     verdict === "better"
-      ? `Thử lại trên ${days} ngày đã qua: cách ước tính này đoán sát hơn mức trung bình ${percent}.`
+      ? `Thử lại trên ${days} ngày đã qua (${resets} lần reset): cách ước tính này đoán sát hơn mức trung bình ${percent}.`
       : verdict === "worse"
-        ? `Thử lại trên ${days} ngày đã qua: cách ước tính này đoán kém mức trung bình ${percent}, đừng dựa vào nó.`
-        : `Thử lại trên ${days} ngày đã qua: cách ước tính này chỉ ngang mức trung bình của lịch sử, nên chỉ để tham khảo.`,
+        ? `Thử lại trên ${days} ngày đã qua (${resets} lần reset): cách ước tính này đoán kém mức trung bình ${percent}, đừng dựa vào nó.`
+        : `Thử lại trên ${days} ngày đã qua (${resets} lần reset): cách ước tính này chỉ ngang mức trung bình của lịch sử, nên chỉ để tham khảo.`,
   claude: claudeVi,
   showResetsTab: "Hiện tab Reset",
   notifyCodexResets: "Khi Codex reset",

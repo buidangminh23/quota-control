@@ -745,6 +745,17 @@
   gap: 6px;
 }
 
+.uc-reset-item-head {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+
+.uc-reset-item-author {
+  font-size: var(--uc-caption-size);
+  font-weight: 600;
+  color: var(--uc-secondary);
+}
+
 .uc-reset-item-time {
   flex: 1 1 auto;
   min-width: 0;

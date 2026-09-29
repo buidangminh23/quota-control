@@ -349,6 +349,9 @@ describe("Claude resets", () => {
     expect(screen.getByRole("img", { name: "Lịch reset 20 tuần qua" })).toBeInTheDocument();
     expect(screen.getByText("Reset cho mọi người")).toBeInTheDocument();
     expect(screen.getByText("Gói Max")).toBeInTheDocument();
+    const other = screen.getByText("Reset number 4 for all users.").closest("article")!;
+    expect(within(other).getByText("@lydiahallie")).toBeInTheDocument();
+    expect(within(screen.getByText("Reset number 5 for all users.").closest("article")!).queryByText("@ClaudeDevs")).not.toBeInTheDocument();
     expect(screen.getByText("Thay đổi hạn mức")).toBeInTheDocument();
     expect(screen.getByText("Raised weekly limits 50%.")).toBeInTheDocument();
     expect(screen.getByText("Các gói trả phí")).toBeInTheDocument();
@@ -406,9 +409,28 @@ describe("Claude resets", () => {
 
   it("stays away while Claude reset tracking is off", async () => {
     const api = await renderApp({ showResetsTab: false, notifyClaudeResets: false });
-    await push(api, catalog([banked(5 * DAY_MS), ...history()]));
+    await push(api, catalog([banked(2 * DAY_MS), ...history()]));
     expect(screen.queryByText("Lượt reset để dành")).not.toBeInTheDocument();
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("keeps the card row while only the notification is on, without a tab to open", async () => {
+    const api = await renderApp({ showResetsTab: false, notifyClaudeResets: true });
+    await push(api, catalog([banked(5 * DAY_MS), ...history()]));
+    const claude = screen.getByRole("region", { name: "Claude · Công ty" });
+    expect(within(claude).getByRole("group", { name: /^Lượt reset để dành: còn / })).toBeInTheDocument();
+    expect(within(claude).queryByRole("button", { name: /^Lượt reset để dành: / })).not.toBeInTheDocument();
+  });
+
+  it("keeps the card row while only the Reset tab is on, and sends nothing", async () => {
+    const api = await renderApp({ showResetsTab: true, notifyClaudeResets: false });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    notify.mockClear();
+    await push(api, catalog([banked(2 * DAY_MS), reset("6", 5 * 60_000), ...history()]));
+    const claude = screen.getByRole("region", { name: "Claude · Công ty" });
+    expect(within(claude).getByRole("button", { name: /^Lượt reset để dành: còn / })).toBeInTheDocument();
+    expect(notify).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem("quota-control.claude-resets-notified") ?? "").not.toContain('"6"');
   });
 
   it("records what is there on the first run, then announces new resets and limit changes once", async () => {
@@ -416,9 +438,12 @@ describe("Claude resets", () => {
     await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
     notify.mockClear();
     window.localStorage.removeItem("quota-control.claude-resets-notified");
-    await push(api, catalog([...history(), change()]));
+    await push(api, catalog([reset("0", 10 * 60_000, { note: "Announced just before the app first looked." }), ...history(), change(), reset("49", 20 * 60_000, { kind: "policy", note: "Changed minutes ago." })]));
     expect(notify).not.toHaveBeenCalled();
-    expect(JSON.parse(window.localStorage.getItem("quota-control.claude-resets-notified") ?? "{}")).toMatchObject({ changes: ["50"], resets: expect.arrayContaining(["1", "5"]) });
+    expect(JSON.parse(window.localStorage.getItem("quota-control.claude-resets-notified") ?? "{}")).toMatchObject({
+      changes: expect.arrayContaining(["49", "50"]),
+      resets: expect.arrayContaining(["0", "1", "5"]),
+    });
 
     await push(api, catalog([reset("6", 5 * 60_000, { verification: "provisional", note: "Limits are reset for everyone." }), reset("old", 5 * DAY_MS), ...history(), change()]));
     expect(notify).toHaveBeenCalledOnce();
@@ -427,6 +452,31 @@ describe("Claude resets", () => {
     await push(api, catalog([reset("6", 5 * 60_000, { note: "Limits are reset for everyone!" }), ...history(), change(), reset("51", 60_000, { kind: "policy", note: "Doubled the 5-hour limits." })]));
     expect(notify).toHaveBeenCalledTimes(2);
     expect(notify).toHaveBeenLastCalledWith("Claude đổi hạn mức", "Doubled the 5-hour limits.", { id: "claude-resets.change.51", group: "resets" });
+
+    await push(api, catalog([reset("6", 5 * 60_000, { note: "Limits are reset for everyone!!" }), ...history(), change(), reset("51", 60_000, { kind: "policy", note: "Doubled the 5-hour limits, as said." })]));
+    expect(notify).toHaveBeenCalledTimes(2);
+  });
+
+  it("forgets the oldest ids first, so a recent reset is never announced twice", async () => {
+    const api = await renderApp();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    notify.mockClear();
+    window.localStorage.removeItem("quota-control.claude-resets-notified");
+    const long = [reset("r0", 2 * HOUR_MS), ...Array.from({ length: 499 }, (_, index) => reset(`r${index + 1}`, 3 * DAY_MS + index * HOUR_MS))];
+    await push(api, catalog(long));
+    expect(notify).not.toHaveBeenCalled();
+
+    const next = [reset("n1", 5 * 60_000, { note: "A new reset." }), ...long];
+    await push(api, catalog(next));
+    expect(notify).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledWith("Claude vừa reset", "A new reset.", { id: "claude-resets.reset.n1", group: "resets" });
+    const seen = JSON.parse(window.localStorage.getItem("quota-control.claude-resets-notified") ?? "{}") as { resets: string[] };
+    expect(seen.resets).toHaveLength(500);
+    expect(seen.resets).toEqual(expect.arrayContaining(["n1", "r0", "r1"]));
+    expect(seen.resets).not.toContain("r499");
+
+    await push(api, catalog([reset("n1", 5 * 60_000, { note: "A new reset, reworded." }), ...long]));
+    expect(notify).toHaveBeenCalledOnce();
   });
 
   it("announces the deadline of a banked reset once when three days are left, unless it was marked as applied", async () => {
@@ -449,5 +499,65 @@ describe("Claude resets", () => {
     act(() => updateSettings({ usedBankedResets: ["78"] }));
     await push(api, catalog([banked(DAY_MS, { id: "78" }), ...history()]));
     expect(notify).not.toHaveBeenCalled();
+    act(() => updateSettings({ usedBankedResets: [] }));
+    await push(api, catalog([banked(DAY_MS, { id: "78", note: "Same reset, after the mark was taken back." }), ...history()]));
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("announces a near deadline on the first run too", async () => {
+    const api = await renderApp();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    notify.mockClear();
+    window.localStorage.removeItem("quota-control.claude-resets-notified");
+    await push(api, catalog([banked(2 * DAY_MS), ...history()]));
+    expect(notify).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledWith("Lượt reset để dành của Claude sắp hết hạn", expect.any(String), { id: "claude-resets.expiring.77", group: "resets" });
+  });
+
+  it("keeps the deadline reminder to resets that can concern an account connected here", async () => {
+    const api = await renderApp();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    notify.mockClear();
+    window.localStorage.removeItem("quota-control.claude-resets-notified");
+    await push(api, catalog([banked(2 * DAY_MS, { scope: "Team" }), ...history()]));
+    expect(notify).not.toHaveBeenCalled();
+    openTab("Reset");
+    fireEvent.click(screen.getByRole("radio", { name: "Claude" }));
+    expect(screen.queryByText("Có lượt reset để dành")).not.toBeInTheDocument();
+    expect(screen.getByText(/^Gói .+ của bạn: không áp dụng$/)).toBeInTheDocument();
+
+    await push(api, catalog([banked(2 * DAY_MS, { id: "78", scope: "affected users" }), ...history()]));
+    expect(notify).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledWith("Lượt reset để dành của Claude sắp hết hạn", expect.any(String), { id: "claude-resets.expiring.78", group: "resets" });
+    expect(screen.getByText("Có lượt reset để dành")).toBeInTheDocument();
+  });
+
+  it("sends one notification, not two, for a banked reset announced with under three days to use it", async () => {
+    const api = await renderApp();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    notify.mockClear();
+    window.localStorage.removeItem("quota-control.claude-resets-notified");
+    await push(api, catalog(history()));
+    const quick = (note: string) => reset("90", 60_000, { resetType: "banked", usableUntil: new Date(Date.now() + 2 * DAY_MS).toISOString(), note });
+    await push(api, catalog([quick("A banked reset, good for two days."), ...history()]));
+    expect(notify).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledWith("Claude tặng lượt reset để dành", "A banked reset, good for two days.", { id: "claude-resets.reset.90", group: "resets" });
+    await push(api, catalog([quick("A banked reset, good for two days!"), ...history()]));
+    expect(notify).toHaveBeenCalledOnce();
+  });
+
+  it("scores the Codex estimate on its own history once that is long enough", async () => {
+    const api = await renderApp();
+    const ago = (days: number) => new Date(Date.now() - days * DAY_MS).toISOString();
+    const post = (id: string, days: number) => ({ id, reset_type: "regular", announced_at: ago(days), text: `Codex reset ${id}.`, source: { type: "x_post", author: "thsottiaux", url: `https://x.com/thsottiaux/status/${id}` } });
+    const slow = Array.from({ length: 8 }, (_, index) => post(`1${index}`, 300 - index * 25));
+    const fast = Array.from({ length: 33 }, (_, index) => post(`2${index + 10}`, 100 - index * 3));
+    const snapshot = await api.publicFeed("codexResets");
+    const body = JSON.stringify({ data: [...slow, ...fast].reverse(), pagination: { has_more: false, next_cursor: null }, meta: { api_version: "v1" } });
+    openTab("Reset");
+    expect(await screen.findByText(/^Tính từ 24 lần reset đã ghi nhận/)).toBeInTheDocument();
+    expect(screen.queryByText(/^Thử lại trên/)).not.toBeInTheDocument();
+    act(() => useInsights.setState({ feeds: { ...useInsights.getState().feeds, codexResets: { ...snapshot, body } } }));
+    expect(await screen.findByText(/^Thử lại trên \d+ ngày đã qua \(\d+ lần reset\): cách ước tính này đoán sát hơn mức trung bình \d+%\.$/)).toBeInTheDocument();
   });
 });

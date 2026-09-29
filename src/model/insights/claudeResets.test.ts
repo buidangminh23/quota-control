@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FEED_FIXTURES } from "@/lib/insightsFeedFixtures";
 import { setSystemTimeZone } from "@/model/timeZone";
 import { bankedResetFor, bankedResetLines } from "./bankedResetLines";
-import { buildClaudePresentation, scopeText } from "./claudePresentation";
+import { buildClaudePresentation, COMPARE_MONTHS, scopeText } from "./claudePresentation";
 import { insightsFor } from "@/i18n/insights";
 import {
   compareTrackers,
+  concerns,
   covers,
   detectorBehind,
   forecastSkill,
@@ -13,8 +14,12 @@ import {
   latestForEveryone,
   openBanked,
   parseClaudeResets,
+  plainRate,
   planFamily,
   readScope,
+  skillMargin,
+  SKILL_MARGIN,
+  SKILL_MIN_TRIED_RESETS,
   type ClaudeReset,
 } from "./claudeResets";
 import type { CodexReset } from "./resets";
@@ -67,11 +72,13 @@ describe("parseClaudeResets", () => {
           event({ id: "1", note: "A second row under the same id." }),
           "not an event" as unknown as Record<string, unknown>,
         ],
-        { provisionalPolicyIds: ["4"] },
+        { provisionalPolicyIds: ["4"], provisionalEventIds: ["3"] },
       ),
     )!;
     expect(feed.resets.map((reset) => reset.id).sort()).toEqual(["1", "2", "3"]);
     expect(feed.resets.find((reset) => reset.id === "1")).toMatchObject({ provisional: true, text: "Reset for all." });
+    expect(feed.resets.find((reset) => reset.id === "2")!.provisional).toBe(false);
+    expect(feed.resets.find((reset) => reset.id === "3")!.provisional).toBe(true);
     expect(feed.resets.find((reset) => reset.id === "2")!.source.url).toBeNull();
     expect(feed.resets.find((reset) => reset.id === "3")!.account).toBe("ClaudeDevs");
     expect(feed.changes).toEqual([expect.objectContaining({ id: "4", provisional: true })]);
@@ -99,6 +106,30 @@ describe("scope", () => {
     expect(readScope("Max")).toEqual({ reach: "plans", plans: ["max"] });
     expect(readScope("API customers")).toEqual({ reach: "unknown" });
     expect(readScope(null)).toEqual({ reach: "unknown" });
+  });
+
+  it("reads everyone only when the scope says nothing else", () => {
+    expect(readScope("All users")).toEqual({ reach: "everyone" });
+    expect(readScope("all Max users")).toEqual({ reach: "plans", plans: ["max"] });
+    expect(readScope("everyone on Team")).toEqual({ reach: "plans", plans: ["team"] });
+  });
+
+  it("does not read a scope that leaves plans out as the plans it names", () => {
+    for (const scope of ["everyone except Free", "all but Free", "non-Enterprise", "paid plans, not Enterprise", "all plans excluding Team", "everyone other than Free", "pro-rated credit"]) {
+      expect(readScope(scope)).toEqual({ reach: "unknown" });
+      expect(covers(scope, "free")).toBeNull();
+    }
+    expect(planFamily("Pro-rated")).toBeNull();
+  });
+
+  it("rules a reset out only when its scope leaves out every account connected here", () => {
+    expect(concerns({ scope: "Team" }, ["max", "pro"])).toBe(false);
+    expect(concerns({ scope: "Team" }, ["max", "team"])).toBe(true);
+    expect(concerns({ scope: "Team" }, ["max", null])).toBe(true);
+    expect(concerns({ scope: "Team" }, [])).toBe(true);
+    expect(concerns({ scope: "affected users" }, ["max"])).toBe(true);
+    expect(concerns({ scope: "everyone except Max" }, ["max"])).toBe(true);
+    expect(concerns({ scope: null }, ["max"])).toBe(true);
   });
 
   it("settles a plan only when the scope can", () => {
@@ -130,6 +161,12 @@ describe("scope", () => {
     expect(latestFor(feed.resets, "free")!.id).toBe("2094856679250919746");
     expect(latestForEveryone(feed.resets)!.id).toBe("2094856679250919746");
   });
+
+  it("passes over a newer reset whose scope cannot settle the plan", () => {
+    const feed = parseClaudeResets(body([event({ id: "3", date: "2026-09-25T10:00:00Z", scope: "affected users" }), event({ id: "2", date: "2026-09-20T10:00:00Z", scope: "Max" }), event({ id: "1", date: "2026-09-01T10:00:00Z" })]))!;
+    expect(latestFor(feed.resets, "max")!.id).toBe("2");
+    expect(latestFor(feed.resets, "pro")!.id).toBe("1");
+  });
 });
 
 describe("banked resets", () => {
@@ -152,6 +189,13 @@ describe("banked resets", () => {
     expect(bankedResetFor(feed.resets, "Max 20x", [BANKED], NOW)).toBeNull();
   });
 
+  it("does not rule a card out on a scope that names no plan", () => {
+    const unsettled = parseClaudeResets(body([event({ id: "9", resetType: "banked", usableUntil: "2026-10-10T00:00:00Z", scope: "affected users" })]))!;
+    expect(bankedResetFor(unsettled.resets, "Max 20x", [], NOW)?.id).toBe("9");
+    const unnamed = parseClaudeResets(body([event({ id: "9", resetType: "banked", usableUntil: "2026-10-10T00:00:00Z", scope: null })]))!;
+    expect(bankedResetFor(unnamed.resets, "Free", [], NOW)?.id).toBe("9");
+  });
+
   it("words the row with the time left and the deadline in the device's zone", () => {
     const lines = bankedResetLines(feed.resets[0]!, NOW, "24h", "vi")!;
     expect(lines).toMatchObject({ title: "Lượt reset để dành", value: "còn 23 ngày 11 giờ", caption: "Dùng trước 6:59 · T6 23/10 · GMT+7" });
@@ -162,21 +206,29 @@ describe("banked resets", () => {
 });
 
 describe("compareTrackers", () => {
-  it("counts both histories over the time both were tracked", () => {
-    const claude = [plain("c1", "2026-06-10T00:00:00Z"), plain("c2", "2026-06-20T00:00:00Z"), plain("c3", "2026-09-19T12:00:00Z", "banked")];
+  it("counts what both histories hold after the moment both were tracked", () => {
+    const claude = [plain("c1", "2026-06-10T00:00:00Z"), plain("c2", "2026-06-20T00:00:00Z"), plain("c3", "2026-07-30T00:00:00Z"), plain("c4", "2026-09-19T12:00:00Z", "banked")];
     const codex = [plain("x0", "2026-01-05T00:00:00Z"), plain("x1", "2026-06-12T00:00:00Z"), plain("x2", "2026-07-02T00:00:00Z"), plain("x3", "2026-09-28T13:00:00Z")];
     const result = compareTrackers(claude, codex, NOW, "UTC")!;
     expect(result.from.toISOString()).toBe("2026-06-10T00:00:00.000Z");
-    expect(result.claude).toMatchObject({ resets: 3, banked: 1, medianGapDays: 50.75, longestGapDays: 91.5, last30Days: 1 });
-    expect(result.claude.averageGapDays).toBeCloseTo(50.75);
+    expect(result.claude).toMatchObject({ resets: 3, banked: 1, medianGapDays: 45.75, longestGapDays: 51.5, last30Days: 1 });
+    expect(result.claude.averageGapDays).toBeCloseTo(45.75);
     expect(result.claude.daysSinceLast).toBeCloseTo(10.0417, 3);
     expect(result.codex).toMatchObject({ resets: 3, banked: 0, last30Days: 1, daysSinceLast: 1 });
     expect(result.months).toEqual([
-      { year: 2026, month: 5, claude: 2, codex: 1 },
-      { year: 2026, month: 6, claude: 0, codex: 1 },
+      { year: 2026, month: 5, claude: 1, codex: 1 },
+      { year: 2026, month: 6, claude: 1, codex: 1 },
       { year: 2026, month: 7, claude: 0, codex: 0 },
       { year: 2026, month: 8, claude: 1, codex: 1 },
     ]);
+  });
+
+  it("counts the reset that opens the window for neither side", () => {
+    const opener = "2026-06-10T00:00:00Z";
+    const result = compareTrackers([plain("c1", opener), plain("c2", "2026-06-20T00:00:00Z")], [plain("x1", opener), plain("x2", "2026-06-25T00:00:00Z")], NOW, "UTC")!;
+    expect(result.claude.resets).toBe(1);
+    expect(result.codex.resets).toBe(1);
+    expect(result.months[0]).toEqual({ year: 2026, month: 5, claude: 1, codex: 1 });
   });
 
   it("waits for both histories", () => {
@@ -192,6 +244,50 @@ describe("forecastSkill", () => {
     expect(skill.verdict).toBe("same");
     expect(Math.abs(skill.skill)).toBeLessThan(0.03);
     expect(skill.days).toBeGreaterThan(120);
+    expect(skill.resets).toBe(12);
+  });
+
+  it("tries the days after three weeks of history, and counts the resets that fell in them", () => {
+    const first = Date.UTC(2026, 0, 1);
+    const every10 = Array.from({ length: 21 }, (_, index) => plain(String(index), new Date(first + index * 10 * 86_400_000).toISOString()));
+    const skill = forecastSkill(every10, new Date(first + 200 * 86_400_000))!;
+    expect(skill.days).toBe(179);
+    expect(skill.resets).toBe(18);
+  });
+
+  it("takes the plain average as the resets after the first one over the days since it", () => {
+    const day = 86_400_000;
+    expect(plainRate([0, 10 * day, 20 * day], 30 * day)).toBeCloseTo(2 / 30);
+    expect(plainRate([5 * day, 6 * day], 25 * day)).toBeCloseTo(1 / 20);
+  });
+
+  it("asks more of the score the fewer resets it rests on", () => {
+    expect(skillMargin(11)).toBeCloseTo(0.0754, 3);
+    expect(skillMargin(50)).toBeCloseTo(0.0354, 3);
+    expect(skillMargin(100)).toBe(SKILL_MARGIN);
+    expect(skillMargin(0)).toBe(0.25);
+  });
+
+  it("does not call a score better or worse that few resets could give by chance", () => {
+    const history = (ages: number[]) => ages.map((age, index) => plain(String(index), new Date(NOW.getTime() - age * 86_400_000).toISOString()));
+    const ahead = forecastSkill(history([170, 114, 112, 99, 96, 86, 78, 69, 63, 49, 38, 16, 14, 11]), NOW)!;
+    expect(ahead.resets).toBe(13);
+    expect(ahead.skill).toBeCloseTo(0.0461, 3);
+    expect(ahead.skill).toBeGreaterThan(SKILL_MARGIN);
+    expect(ahead.verdict).toBe("same");
+    const behind = forecastSkill(history([170, 166, 157, 151, 136, 119, 107, 91, 79, 68, 64, 43, 35, 33, 18, 11, 1]), NOW)!;
+    expect(behind.resets).toBe(13);
+    expect(behind.skill).toBeCloseTo(-0.056, 3);
+    expect(behind.skill).toBeLessThan(-SKILL_MARGIN);
+    expect(behind.verdict).toBe("same");
+  });
+
+  it("says nothing while fewer resets than it needs fell in the tried days", () => {
+    const day = (days: number) => new Date(NOW.getTime() - days * 86_400_000).toISOString();
+    const sparse = Array.from({ length: SKILL_MIN_TRIED_RESETS }, (_, index) => plain(String(index), day(240 - index * 30)));
+    expect(sparse.filter((reset) => reset.announcedAt.getTime() > sparse[0]!.announcedAt.getTime() + 21 * 86_400_000)).toHaveLength(SKILL_MIN_TRIED_RESETS - 1);
+    expect(forecastSkill(sparse, NOW)).toBeNull();
+    expect(forecastSkill([...sparse, plain("last", day(1))], NOW)).not.toBeNull();
   });
 
   it("finds it better on a history whose pace changed, where recent weeks tell more", () => {
@@ -243,7 +339,7 @@ describe("buildClaudePresentation", () => {
     const view = build();
     expect(view.forecast.chances.map((chance) => chance.days)).toEqual([1, 3, 7]);
     expect(view.forecast.disclaimer).toBe("Chỉ là ước đoán từ lịch sử, không phải thông tin chính thức từ Anthropic.");
-    expect(view.forecast.reliability).toMatch(/^Thử lại trên \d+ ngày đã qua: cách ước tính này chỉ ngang mức trung bình của lịch sử/);
+    expect(view.forecast.reliability).toMatch(/^Thử lại trên \d+ ngày đã qua \(12 lần reset\): cách ước tính này chỉ ngang mức trung bình của lịch sử/);
     expect(view.source).toContain("claude-resets.com");
     expect(view.method.join(" ")).not.toContain("thsottiaux");
     expect(view.history).toHaveLength(14);
@@ -267,12 +363,35 @@ describe("buildClaudePresentation", () => {
 
   it("sets Claude against Codex from the day both were tracked", () => {
     const compare = build().compare!;
-    expect(compare.since).toBe("Tính từ 17/04/2026, khi cả hai cùng được theo dõi.");
+    expect(compare.since).toBe("Tính các lần reset sau 17/04/2026, khi cả hai cùng được theo dõi.");
     expect(compare.rows.map((row) => row.label)).toEqual(["Số lần reset", "Trung bình giữa hai lần", "Trung vị giữa hai lần", "Khoảng lặng dài nhất", "Từ lần gần nhất", "30 ngày qua"]);
-    expect(compare.rows[0]).toMatchObject({ claude: "14", codex: "2" });
+    expect(compare.rows[0]).toMatchObject({ claude: "13", codex: "2" });
     expect(compare.rows[4]).toMatchObject({ claude: "6,8 ngày", codex: "2,8 ngày" });
+    expect(compare.monthsTitle).toBe("Số lần reset mỗi tháng");
     expect(compare.months.map((month) => month.label)).toEqual(["T4", "T5", "T6", "T7", "T8", "T9"]);
-    expect(compare.months.reduce((sum, month) => sum + month.claude, 0)).toBe(14);
+    expect(compare.months.reduce((sum, month) => sum + month.claude, 0)).toBe(13);
     expect(build({ codex: [] }).compare).toBeUndefined();
+  });
+
+  it("charts the newest months of a longer window, so no month name comes twice", () => {
+    const long = parseClaudeResets(body([event({ id: "1", date: "2025-07-05T10:00:00Z" }), event({ id: "2", date: "2025-08-05T10:00:00Z" }), event({ id: "3", date: "2026-09-05T10:00:00Z" })]))!;
+    const compare = build({ feed: long, codex: [plain("x0", "2025-06-01T00:00:00Z"), plain("x1", "2025-09-01T00:00:00Z"), plain("x2", "2026-09-10T00:00:00Z")] }).compare!;
+    expect(compare.rows[0]).toMatchObject({ claude: "2", codex: "2" });
+    expect(compare.monthsTitle).toBe("Số lần reset mỗi tháng, 8 tháng gần nhất");
+    expect(compare.months).toHaveLength(COMPARE_MONTHS);
+    expect(compare.months.map((month) => month.label)).toEqual(["T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9"]);
+    expect(new Set(compare.months.map((month) => month.label)).size).toBe(COMPARE_MONTHS);
+    expect(compare.months[COMPARE_MONTHS - 1]).toMatchObject({ claude: 1, codex: 1 });
+    expect(COMPARE_MONTHS).toBeLessThan(12);
+  });
+
+  it("offers a banked reset only when it can concern an account connected here", () => {
+    const left = build({ plans: ["free"] });
+    expect(left.banked).toEqual([]);
+    expect(left.statuses.map((card) => card.kind)).toEqual(["quiet"]);
+    expect(left.latest!.notes).toEqual(["Gói Free của bạn: không áp dụng"]);
+    expect(build({ plans: ["free"], accounts: ["free", null] }).banked).toHaveLength(1);
+    expect(build({ plans: ["free", "team"] }).banked).toHaveLength(1);
+    expect(build({ plans: [] }).banked).toHaveLength(1);
   });
 });

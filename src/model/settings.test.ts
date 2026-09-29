@@ -24,6 +24,19 @@ describe("parseSettings", () => {
     expect(parsed.density).toBe("compact");
     expect(parsed.notifications).toEqual({ almostOut: true, cuttingItClose: false, willRunOut: false });
   });
+
+  it("reads the Reset tab's provider and the banked resets marked as applied, dropping what is not an id", () => {
+    expect(DEFAULT_SETTINGS).toMatchObject({ resetsProvider: "codex", usedBankedResets: [], notifyClaudeResets: true });
+    expect(parseSettings({ resetsProvider: "claude" }).resetsProvider).toBe("claude");
+    expect(parseSettings({ resetsProvider: "gemini" }).resetsProvider).toBe("codex");
+    expect(parseSettings({ resetsProvider: ["claude"] }).resetsProvider).toBe("codex");
+    expect(parseSettings({ notifyClaudeResets: false }).notifyClaudeResets).toBe(false);
+    expect(parseSettings({ notifyClaudeResets: "no" }).notifyClaudeResets).toBe(true);
+    const ids = parseSettings({ usedBankedResets: ["2102438800836489554", "observed-2097_a", "", "has space", "<script>", 77, null, "x".repeat(65)] }).usedBankedResets;
+    expect(ids).toEqual(["2102438800836489554", "observed-2097_a"]);
+    expect(parseSettings({ usedBankedResets: "2102438800836489554" }).usedBankedResets).toEqual([]);
+    expect(parseSettings({ usedBankedResets: Array.from({ length: 80 }, (_, index) => `id-${index}`) }).usedBankedResets.length).toBeLessThanOrEqual(50);
+  });
 });
 
 describe("glance surfaces", () => {

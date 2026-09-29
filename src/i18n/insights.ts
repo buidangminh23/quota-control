@@ -52,6 +52,8 @@ export interface ClaudeResetMessages {
   compareSince(date: string): string;
   compareRow(row: CompareRow): string;
   compareMonths: string;
+  /** The chart's title once the window is longer than the months it shows. */
+  compareMonthsRecent(months: string): string;
   compareMonth(month: string, claude: string, codex: string): string;
   source: string;
   method: string[];
@@ -209,8 +211,8 @@ export interface InsightsMessages {
   /** The Reset tab's switch between the two trackers. */
   resetProviderLabel: string;
   resetProvider(provider: ResetProvider): string;
-  /** How the estimate would have done on its own history: better or worse by `percent`, over `days`. */
-  forecastReliability(verdict: ForecastSkill["verdict"], percent: string, days: string): string;
+  /** How the estimate would have done on its own history: better or worse by `percent`, over `days` holding `resets`. */
+  forecastReliability(verdict: ForecastSkill["verdict"], percent: string, days: string, resets: string): string;
   claude: ClaudeResetMessages;
 
   showBenchmarkTab: string;

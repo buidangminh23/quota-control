@@ -8,7 +8,7 @@ import type { Language } from "@/i18n";
 import { insightsFor } from "@/i18n/insights";
 import { compactDuration, timeOnDayLabel, type TimeFormat } from "@/model/format";
 import { calendarDaysBetween, deviceTimeZone, offsetLabel } from "@/model/timeZone";
-import { covers, openBanked, planFamily, type ClaudeReset } from "./claudeResets";
+import { concerns, openBanked, planFamily, type ClaudeReset } from "./claudeResets";
 import { excerpt } from "./resets";
 
 const POST_LENGTH = 200;
@@ -29,8 +29,8 @@ export interface BankedResetLines {
  * out.
  */
 export function bankedResetFor(resets: readonly ClaudeReset[], plan: string | null | undefined, used: readonly string[], now: Date): ClaudeReset | null {
-  const family = planFamily(plan);
-  return openBanked(resets, now).find((reset) => !used.includes(reset.id) && (family === null || covers(reset.scope, family) !== false)) ?? null;
+  const plans = [planFamily(plan)];
+  return openBanked(resets, now).find((reset) => !used.includes(reset.id) && concerns(reset, plans)) ?? null;
 }
 
 export function bankedResetLines(reset: ClaudeReset, now: Date, timeFormat: TimeFormat, language: Language): BankedResetLines | null {

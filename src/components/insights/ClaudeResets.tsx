@@ -11,15 +11,15 @@ import type { Language } from "@/i18n";
 import { buildClaudePresentation, type ClaudeBankedCard, type ClaudePresentation, type ComparePresentation } from "@/model/insights/claudePresentation";
 import { parseClaudeResets } from "@/model/insights/claudeResets";
 import { parseResets } from "@/model/insights/resets";
+import { useClaudeAccountPlans, useClaudePlans } from "@/state/claudePlans";
 import { useNow, useSettings } from "@/state/hooks";
 import { useInsights } from "@/state/insights";
 import { updateSettings, useApp } from "@/state/store";
 import { Button } from "../ui/controls";
 import { ProviderMark } from "../ui/ProviderMark";
-import { ResetAuthorAvatar } from "../ui/ResetAuthorAvatar";
-import { useClaudePlans, useFeeds } from "./data";
+import { useFeeds } from "./data";
 import { Disclosure, FeedStatus, numberText, SourceLine } from "./parts";
-import { Calendar, Forecast, History, LatestReset, Pattern, PostAuthor, PostLink, Stats, StatusCards } from "./ResetParts";
+import { Calendar, Forecast, History, LatestReset, Pattern, PostAuthor, PostLink, RowAuthor, Stats, StatusCards } from "./ResetParts";
 
 const SITE_URL = "https://claude-resets.com";
 const FEEDS = ["claudeResets"] as const;
@@ -80,7 +80,7 @@ function Changes({ presentation, text }: { presentation: ClaudePresentation; tex
         {shown.map((change) => (
           <article key={change.id} className="uc-reset-item">
             <div className="uc-reset-item-head">
-              <ResetAuthorAvatar size={18} handle={change.author.handle} />
+              <RowAuthor author={change.author} />
               <span className="uc-insight-badge">{text.claude.changeBadge}</span>
               {change.provisional ? <span className="uc-insight-badge is-notice">{change.provisional}</span> : null}
               <span className="uc-reset-item-time uc-num">{change.when}</span>
@@ -167,12 +167,13 @@ export function ClaudeResets() {
   const feeds = useFeeds(COMPARE_FEEDS);
   const errors = useInsights((state) => state.feedErrors);
   const plans = useClaudePlans();
+  const accounts = useClaudeAccountPlans();
   const feed = useMemo(() => parseClaudeResets(feeds.claudeResets?.body), [feeds.claudeResets]);
   const codex = useMemo(() => parseResets(feeds.codexResets?.body), [feeds.codexResets]);
   const now = useNow();
   const presentation = useMemo(
-    () => (feed ? buildClaudePresentation({ feed, codex, plans, used: usedBankedResets, now, language, timeFormat }) : null),
-    [feed, codex, plans, usedBankedResets, now, language, timeFormat],
+    () => (feed ? buildClaudePresentation({ feed, codex, plans, accounts: accounts ?? [], used: usedBankedResets, now, language, timeFormat }) : null),
+    [feed, codex, plans, accounts, usedBankedResets, now, language, timeFormat],
   );
   const loaded = feeds.claudeResets !== undefined;
   const empty = loaded && !presentation;

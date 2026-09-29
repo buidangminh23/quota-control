@@ -133,21 +133,33 @@ export type ScopeReading =
   /** The site does not say, or says it in words this app does not know. */
   | { reach: "unknown" };
 
-/** Who an announcement covered, read from the site's scope words. */
+/** Words that turn a list of plans into its opposite: `everyone except Free`, `non-Enterprise`. */
+const SCOPE_NEGATIONS: readonly string[] = ["except", "excluding", "exclude", "excludes", "excluded", "without", "not", "no", "but", "other", "non"];
+
+/** The words of a scope or a plan name; a hyphenated word (`pro-rated`) stays one word. */
+function wordsOf(value: string | null | undefined): string[] {
+  return (value?.toLowerCase() ?? "").split(/[^a-z0-9-]+/).filter(Boolean);
+}
+
+/**
+ * Who an announcement covered, read from the site's scope words. The site writes them by hand, so
+ * a scope that leaves plans out (`everyone except Free`) is not read as the plans it names.
+ */
 export function readScope(scope: string | null): ScopeReading {
-  const words = scope?.toLowerCase() ?? "";
-  if (!words) return { reach: "unknown" };
-  if (/^(all|everyone|all users|all plans)$/.test(words)) return { reach: "everyone" };
-  if (/\baffected\b/.test(words)) return { reach: "affected" };
-  if (/\bpaid\b/.test(words)) return { reach: "plans", plans: [...PAID_PLANS] };
-  const plans = CLAUDE_PLANS.filter((plan) => new RegExp(`\\b${plan}\\b`).test(words));
+  const words = wordsOf(scope);
+  if (words.length === 0) return { reach: "unknown" };
+  if (words.some((word) => SCOPE_NEGATIONS.includes(word) || word.startsWith("non-"))) return { reach: "unknown" };
+  if (/^(all|everyone|all users|all plans)$/.test(words.join(" "))) return { reach: "everyone" };
+  if (words.includes("affected")) return { reach: "affected" };
+  if (words.includes("paid")) return { reach: "plans", plans: [...PAID_PLANS] };
+  const plans = CLAUDE_PLANS.filter((plan) => words.includes(plan));
   return plans.length > 0 ? { reach: "plans", plans } : { reach: "unknown" };
 }
 
 /** The plan family of an account's plan name (`Max 20x` is `max`); `null` for a name not known. */
 export function planFamily(plan: string | null | undefined): ClaudePlan | null {
-  const words = plan?.toLowerCase() ?? "";
-  return CLAUDE_PLANS.find((family) => new RegExp(`\\b${family}\\b`).test(words)) ?? null;
+  const words = wordsOf(plan);
+  return CLAUDE_PLANS.find((family) => words.includes(family)) ?? null;
 }
 
 /** Whether the announcement covered the plan: `null` when the scope cannot settle it. */
@@ -166,6 +178,15 @@ export function latestFor(resets: readonly ClaudeReset[], plan: ClaudePlan): Cla
 /** The newest reset that covered every user. */
 export function latestForEveryone(resets: readonly ClaudeReset[]): ClaudeReset | null {
   return resets.find((reset) => readScope(reset.scope).reach === "everyone") ?? null;
+}
+
+/**
+ * Whether a reset can concern the accounts connected here. `plans` holds one entry per Claude
+ * account, `null` for a plan this app cannot name. Only a scope that leaves out every one of them
+ * rules the reset out: no account, an unnamed plan or an unsettled scope do not.
+ */
+export function concerns(reset: Pick<ClaudeReset, "scope">, plans: readonly (ClaudePlan | null)[]): boolean {
+  return plans.length === 0 || plans.some((plan) => plan === null || covers(reset.scope, plan) !== false);
 }
 
 /**
@@ -197,7 +218,10 @@ export interface TrackerMonth {
 }
 
 export interface TrackerComparison {
-  /** Where the shared window starts: the later of the two first resets. */
+  /**
+   * Where the shared window starts: the later of the two first resets. That reset opens the
+   * window and is counted for neither side, so both count what came after the same moment.
+   */
   from: Date;
   claude: TrackerSide;
   codex: TrackerSide;
@@ -206,7 +230,7 @@ export interface TrackerComparison {
 }
 
 function side(resets: readonly CodexReset[], from: Date, now: Date): TrackerSide {
-  const rows = resets.filter((reset) => reset.announcedAt.getTime() >= from.getTime() && reset.announcedAt.getTime() <= now.getTime());
+  const rows = resets.filter((reset) => reset.announcedAt.getTime() > from.getTime() && reset.announcedAt.getTime() <= now.getTime());
   const times = rows.map((reset) => reset.announcedAt.getTime()).sort((a, b) => a - b);
   const gaps = times
     .slice(1)
@@ -240,7 +264,7 @@ export function compareTrackers(claude: readonly CodexReset[], codex: readonly C
   const count = (resets: readonly CodexReset[]) => {
     const counts = new Map<number, number>();
     for (const reset of resets) {
-      if (reset.announcedAt.getTime() < from.getTime() || reset.announcedAt.getTime() > now.getTime()) continue;
+      if (reset.announcedAt.getTime() <= from.getTime() || reset.announcedAt.getTime() > now.getTime()) continue;
       const key = monthOf(reset.announcedAt);
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
@@ -260,12 +284,32 @@ const SKILL_WARM_UP_DAYS = 21;
 const SKILL_MIN_RESETS = 3;
 /** Fewer tried days than this say nothing either way. */
 const SKILL_MIN_DAYS = 60;
-/** How much better than the plain average the estimate has to be to be called better. */
+/** Fewer resets than this inside the tried days say nothing either way. */
+export const SKILL_MIN_TRIED_RESETS = 8;
+/** How much better than the plain average the estimate has to be to be called better, at least. */
 export const SKILL_MARGIN = 0.03;
+/**
+ * The margin over few resets. On histories drawn at a constant rate, where neither way of
+ * estimating can truly be better, the score still spreads by about 0.036 over 11 resets and 0.019
+ * over 50; this over the square root of the resets stays above twice that spread.
+ */
+const SKILL_NOISE = 0.25;
+
+/** How far from zero the score has to be, over this many resets, to be more than chance. */
+export function skillMargin(resets: number): number {
+  return Math.max(SKILL_MARGIN, SKILL_NOISE / Math.sqrt(Math.max(1, resets)));
+}
+
+/** Resets per day by a plain average: the resets after the first one, which opens the history, over the days since it. */
+export function plainRate(past: readonly number[], at: number): number {
+  return (past.length - 1) / ((at - past[0]!) / DAY_MS);
+}
 
 export interface ForecastSkill {
   /** Days in the past the estimate was tried on. */
   days: number;
+  /** Resets that fell inside those days: what the score really rests on. */
+  resets: number;
   /**
    * 1 − (the estimate's Brier score ÷ the plain average's), averaged over the three horizons:
    * above zero the recency-weighted estimate did better than the history's plain average rate.
@@ -277,9 +321,11 @@ export interface ForecastSkill {
 
 /**
  * How the chance estimate would have done on this same history. Each past day, the estimate as it
- * stood then (`forecastResets`) and the plain average rate until then (resets ÷ days) each give a
- * chance of a reset within 1, 3 and 7 days, scored against what happened (Brier). `null` while the
- * history is too short to try.
+ * stood then (`forecastResets`) and the plain average rate until then each give a chance of a reset
+ * within 1, 3 and 7 days, scored against what happened (Brier). The plain rate is the resets after
+ * the first one over the days since the first one, which opens the history. The days overlap and
+ * rest on few resets, so the verdict needs a score beyond `skillMargin`. `null` while the history
+ * is too short to try.
  */
 export function forecastSkill(resets: readonly CodexReset[], now: Date): ForecastSkill | null {
   const times = resets
@@ -288,32 +334,34 @@ export function forecastSkill(resets: readonly CodexReset[], now: Date): Forecas
     .sort((a, b) => a - b);
   if (times.length < SKILL_MIN_RESETS + 1) return null;
   const start = times[0]! + SKILL_WARM_UP_DAYS * DAY_MS;
+  const tried = times.filter((time) => time > start).length;
+  if (tried < SKILL_MIN_TRIED_RESETS) return null;
   const sorted = [...resets].sort((a, b) => a.announcedAt.getTime() - b.announcedAt.getTime());
   const byHorizon = {} as Record<ForecastHorizon, number>;
   let days = 0;
   for (const horizon of FORECAST_HORIZONS) {
     let weighted = 0;
     let plain = 0;
-    let tried = 0;
+    let count = 0;
     for (let day = start; day + horizon * DAY_MS <= now.getTime(); day += DAY_MS) {
       const past = times.filter((time) => time <= day);
       if (past.length < SKILL_MIN_RESETS) continue;
       const at = new Date(day);
       const estimate = forecastResets(sorted, at);
       if (!estimate) continue;
-      const flatRate = (past.length - 1) / ((day - past[0]!) / DAY_MS);
-      const flat = 1 - Math.exp(-flatRate * horizon);
+      const flat = 1 - Math.exp(-plainRate(past, day) * horizon);
       const happened = times.some((time) => time > day && time <= day + horizon * DAY_MS) ? 1 : 0;
       weighted += (estimate.chance[horizon] - happened) ** 2;
       plain += (flat - happened) ** 2;
-      tried += 1;
+      count += 1;
     }
-    if (tried < SKILL_MIN_DAYS || plain === 0) return null;
+    if (count < SKILL_MIN_DAYS || plain === 0) return null;
     byHorizon[horizon] = 1 - weighted / plain;
-    days = Math.max(days, tried);
+    days = Math.max(days, count);
   }
   const skill = FORECAST_HORIZONS.reduce((sum, horizon) => sum + byHorizon[horizon], 0) / FORECAST_HORIZONS.length;
-  return { days, skill, verdict: skill > SKILL_MARGIN ? "better" : skill < -SKILL_MARGIN ? "worse" : "same", byHorizon };
+  const margin = skillMargin(tried);
+  return { days, resets: tried, skill, verdict: skill > margin ? "better" : skill < -margin ? "worse" : "same", byHorizon };
 }
 
 /** Whole days left until `until`, counted on the device's calendar. */

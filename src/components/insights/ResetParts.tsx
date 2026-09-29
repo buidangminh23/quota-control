@@ -11,7 +11,7 @@ import type { GlanceResetAuthor, GlanceResetPresentation } from "@/model/glance"
 import { announcementPattern, HOUR_BLOCKS, resetCalendar, type CodexReset, type ResetSource } from "@/model/insights/resets";
 import { zonedParts } from "@/model/timeZone";
 import { useNow } from "@/state/hooks";
-import { ResetAuthorAvatar } from "../ui/ResetAuthorAvatar";
+import { hasAuthorPicture, ResetAuthorAvatar } from "../ui/ResetAuthorAvatar";
 import { tooltipProps } from "../ui/tooltip";
 import { dateText, LinkButton, numberText, RateBar } from "./parts";
 
@@ -192,6 +192,16 @@ export function Pattern({ resets, language, text }: { resets: readonly CodexRese
   );
 }
 
+/** The author at the head of a history row: the picture alone, or the initial and the handle. */
+export function RowAuthor({ author }: { author: GlanceResetAuthor }) {
+  return (
+    <>
+      <ResetAuthorAvatar size={18} handle={author.handle} />
+      {hasAuthorPicture(author.handle) ? null : <span className="uc-reset-item-author">{author.handle}</span>}
+    </>
+  );
+}
+
 export function Stats({ presentation }: { presentation: Pick<GlanceResetPresentation, "statsTitle" | "stats"> }) {
   return (
     <section className="uc-group">
@@ -218,7 +228,7 @@ export function History({ presentation, text }: { presentation: Pick<GlanceReset
         {shown.map((reset) => (
           <article key={reset.id} className="uc-reset-item">
             <div className="uc-reset-item-head">
-              {reset.author ? <ResetAuthorAvatar size={18} handle={reset.author.handle} /> : null}
+              {reset.author ? <RowAuthor author={reset.author} /> : null}
               <span className={`uc-insight-badge${reset.kind === "banked" ? " is-accent" : ""}`}>{reset.kindLabel}</span>
               {reset.provisional ? <span className="uc-insight-badge is-notice">{reset.provisional}</span> : null}
               <span className="uc-reset-item-time uc-num">{reset.when}</span>

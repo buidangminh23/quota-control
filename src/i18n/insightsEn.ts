@@ -15,7 +15,7 @@ const claudeEn: ClaudeResetMessages = {
   bankedTitle: "A banked reset is available",
   bankedUntil: (time) => `Usable until ${time}`,
   bankedLeft: (duration) => `${duration} left`,
-  bankedHow: "Apply it from Settings → Usage on claude.ai. The app cannot see whether your account has already applied it.",
+  bankedHow: "Apply it from Settings → Usage on claude.ai. The app cannot see whether your account has already applied it. Marking it as used turns the reminder off for every Claude account here.",
   bankedMarkUsed: "I have used it",
   bankedUsed: "You marked this one as used.",
   bankedUndo: "Undo",
@@ -29,7 +29,7 @@ const claudeEn: ClaudeResetMessages = {
   statYourPlan: (plan) => `Reset for the ${plan} plan`,
   ago: (duration, date) => `${duration} ago · ${date}`,
   compareTitle: "Claude vs Codex",
-  compareSince: (date) => `Counted from ${date}, when both were tracked.`,
+  compareSince: (date) => `Counts the resets after ${date}, when both were tracked.`,
   compareRow: (row) =>
     ({
       resets: "Resets",
@@ -40,14 +40,15 @@ const claudeEn: ClaudeResetMessages = {
       last30: "Last 30 days",
     })[row],
   compareMonths: "Resets per month",
+  compareMonthsRecent: (months) => `Resets per month, last ${months} months`,
   compareMonth: (month, claude, codex) => `${month}: Claude ${claude}, Codex ${codex}`,
   source: "Data from claude-resets.com, which follows @ClaudeDevs and the Claude Code team on X.",
   method: [
     "The list comes from claude-resets.com, which follows posts by @ClaudeDevs and Claude Code team members on X. The app reads the live list every 5 minutes; when that cannot be read it uses the site's published copy. An entry the site detected and has not reviewed yet is marked “Not reviewed”.",
     "Limit changes (a ceiling raised or lowered) do not clear usage, so they never count as resets. A banked reset is one you apply yourself from Settings → Usage before its deadline; neither the site nor the app can see which accounts have applied theirs.",
     "The scope (all users, or which plans) is what claude-resets.com recorded from the post. The app compares it with the plans of the Claude accounts connected here; when a post only says “affected users”, the app draws no conclusion.",
-    "The chance of a reset is worked out as for Codex: each past reset counts with a weight that halves every 21 days. The “Tried again…” line scores that method on the same history: for each past day, the chance it gave against the average until that day and against what happened. Claude has few resets so far, so the numbers are a rough guide. The source site does not predict resets.",
-    "The comparison with Codex only counts from the day both were tracked, to keep it fair. The Codex numbers come from codex-resets.com.",
+    "The chance of a reset is worked out as for Codex: each past reset counts with a weight that halves every 21 days. The “Tried again…” line scores that method on the same history: for each past day, the chance it gave against the average until that day and against what happened. Those days rest on few resets, so the app only says closer or worse when the difference is more than chance would give. The source site does not predict resets.",
+    "The comparison with Codex only counts the resets after the moment both were tracked, to keep it fair; the reset that opens that window counts for neither. The Codex numbers come from codex-resets.com.",
   ],
   notifyResets: "When Claude resets",
   notifyResetsNote: "Tells you when @ClaudeDevs announces a reset or a limit change, and when a banked reset has 3 days left.",
@@ -59,7 +60,7 @@ const claudeEn: ClaudeResetMessages = {
   cardLeft: (duration) => `${duration} left`,
   cardCaption: (time, offset) => `Use before ${time} · ${offset}`,
   cardPosted: (handle, time, post) => `${handle} posted at ${time}:\n“${post}”`,
-  cardHow: "Apply it from Settings → Usage on claude.ai. The app cannot see whether this account has applied it; if it has, mark it in the Reset tab to hide this row.",
+  cardHow: "Apply it from Settings → Usage on claude.ai. The app cannot see whether this account has applied it. Marking it as used in the Reset tab hides this row on every Claude card.",
 };
 
 const EN_WINDOWS: Record<ResetWindow, string> = { thisWeek: "This week", weekend: "This weekend", nextWeek: "Next week" };
@@ -252,12 +253,12 @@ export const insightsEn: InsightsMessages = {
   showBenchmarkTab: "Show Benchmark Tab",
   resetProviderLabel: "Resets of",
   resetProvider: (provider) => (provider === "claude" ? "Claude" : "Codex"),
-  forecastReliability: (verdict, percent, days) =>
+  forecastReliability: (verdict, percent, days, resets) =>
     verdict === "better"
-      ? `Tried again on ${days} past days: this estimate was ${percent} closer than the plain average.`
+      ? `Tried again on ${days} past days (${resets} resets): this estimate was ${percent} closer than the plain average.`
       : verdict === "worse"
-        ? `Tried again on ${days} past days: this estimate was ${percent} worse than the plain average; do not rely on it.`
-        : `Tried again on ${days} past days: this estimate did no better than the history's plain average, so read it as a rough guide.`,
+        ? `Tried again on ${days} past days (${resets} resets): this estimate was ${percent} worse than the plain average; do not rely on it.`
+        : `Tried again on ${days} past days (${resets} resets): this estimate did no better than the history's plain average, so read it as a rough guide.`,
   claude: claudeEn,
   showResetsTab: "Show Reset Tab",
   notifyCodexResets: "When Codex resets",

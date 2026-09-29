@@ -1,17 +1,23 @@
 /**
  * Desktop notifications for Claude resets: one when claude-resets.com records a new reset (also
  * one it has not reviewed yet, said so in the title), one for a limit change, and one when a banked
- * reset the user has not marked as applied has three days left. The ids already seen are kept in
- * the webview's storage so a restart does not repeat them, and the first run only records what is
- * there; a deadline that is near is announced on the first run too, since it is still news.
+ * reset has three days left. The ids already seen are kept in the webview's storage so a restart
+ * does not repeat them, and the first run only records what is there; a deadline that is near is
+ * announced on the first run too, since it is still news.
+ *
+ * The deadline reminder is for a reset the user can still apply: not one marked as applied, not
+ * one whose scope leaves out every Claude account connected here, and not one announced in this
+ * same run, whose own notification already says it. A deadline is recorded when it comes near
+ * whether or not it was announced, so taking the applied mark back later does not send it.
  */
 import { useEffect } from "react";
 import { announceOnIsland } from "@/glance/alerts";
 import { insightsFor } from "@/i18n/insights";
 import { compactDuration, timeOnDayLabel } from "@/model/format";
-import { openBanked, parseClaudeResets } from "@/model/insights/claudeResets";
+import { concerns, openBanked, parseClaudeResets } from "@/model/insights/claudeResets";
 import { excerpt } from "@/model/insights/resets";
 import { notify } from "@/platform/system";
+import { useClaudeAccountPlans } from "@/state/claudePlans";
 import { useWallClock } from "@/state/hooks";
 import { ensureFeed, useInsights } from "@/state/insights";
 import { useApp } from "@/state/store";
@@ -24,8 +30,8 @@ const FRESH_MS = 48 * 3_600_000;
 /** A banked reset is announced again this long before its deadline. */
 export const EXPIRY_NOTICE_MS = 3 * 24 * 3_600_000;
 const CLOCK_MS = 10 * 60_000;
-/** More ids than this are forgotten, oldest first. */
-const MAX_SEEN = 500;
+/** More ids than this are forgotten: those no longer in the catalog first, then its oldest. */
+export const MAX_SEEN = 500;
 
 interface Seen {
   resets: string[];
@@ -54,15 +60,17 @@ function writeSeen(seen: Seen): void {
   }
 }
 
+/** `ids` come newest first, as the catalog lists them, and are kept ahead of what was seen before. */
 function merged(seen: readonly string[], ids: readonly string[]): string[] {
-  return [...new Set([...seen, ...ids])].slice(-MAX_SEEN);
+  return [...new Set([...ids, ...seen])].slice(0, MAX_SEEN);
 }
 
 export function useClaudeResetNotifications(): void {
-  const enabled = useApp((state) => state.settings.notifyClaudeResets);
+  const enabled = useApp((state) => state.ready && state.settings.notifyClaudeResets);
   const language = useApp((state) => state.settings.language);
   const timeFormat = useApp((state) => state.settings.timeFormat);
   const used = useApp((state) => state.settings.usedBankedResets);
+  const accounts = useClaudeAccountPlans();
   const body = useInsights((state) => state.feeds.claudeResets?.body ?? null);
   const clock = useWallClock(CLOCK_MS);
 
@@ -76,13 +84,18 @@ export function useClaudeResetNotifications(): void {
     if (!feed) return;
     const now = new Date();
     const seen = readSeen();
-    const expiring = openBanked(feed.resets, now).filter(
-      (reset) => reset.usableUntil!.getTime() - now.getTime() <= EXPIRY_NOTICE_MS && !used.includes(reset.id) && !seen?.expiring.includes(reset.id),
-    );
+    const fresh = (date: Date) => now.getTime() - date.getTime() < FRESH_MS;
+    const announcedNow = (reset: { id: string; announcedAt: Date }) => seen !== null && !seen.resets.includes(reset.id) && fresh(reset.announcedAt);
+    /** Until the core has said which accounts are connected, a deadline is neither sent nor recorded. */
+    const near =
+      accounts === null
+        ? []
+        : openBanked(feed.resets, now).filter((reset) => reset.usableUntil!.getTime() - now.getTime() <= EXPIRY_NOTICE_MS && !seen?.expiring.includes(reset.id));
+    const expiring = near.filter((reset) => !used.includes(reset.id) && concerns(reset, accounts ?? []) && !announcedNow(reset));
     writeSeen({
       resets: merged(seen?.resets ?? [], feed.resets.map((reset) => reset.id)),
       changes: merged(seen?.changes ?? [], feed.changes.map((change) => change.id)),
-      expiring: merged(seen?.expiring ?? [], expiring.map((reset) => reset.id)),
+      expiring: merged(seen?.expiring ?? [], near.map((reset) => reset.id)),
     });
     const text = insightsFor(language).claude;
     const send = (kind: string, title: string, message: string) => {
@@ -90,7 +103,6 @@ export function useClaudeResetNotifications(): void {
       const topic = { id: `claude-resets.${kind}`, group: RESETS_GROUP };
       return notify(title, message, topic).catch((error: unknown) => console.error("Sending notification failed", error));
     };
-    const fresh = (date: Date) => now.getTime() - date.getTime() < FRESH_MS;
     for (const reset of expiring) {
       const until = reset.usableUntil!;
       const left = compactDuration((until.getTime() - now.getTime()) / 1000, language) ?? "";
@@ -103,5 +115,5 @@ export function useClaudeResetNotifications(): void {
     for (const change of feed.changes) {
       if (!seen.changes.includes(change.id) && fresh(change.announcedAt)) void send(`change.${change.id}`, text.notifyChangeTitle, excerpt(change.text));
     }
-  }, [enabled, body, language, timeFormat, used, clock]);
+  }, [enabled, body, language, timeFormat, used, accounts, clock]);
 }

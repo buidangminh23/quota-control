@@ -24,7 +24,11 @@ const MAX_RESET_PAGES: usize = 5;
 const RETRY_AFTER_CAP_SECONDS: i64 = 6 * 3600;
 /// The published Claude catalog, read when the live one (`FeedName::ClaudeResets`) cannot be.
 const CLAUDE_RESETS_DATASET: &str = "https://claude-resets.com/data/resets.json";
-/// More announcements than this in one answer are left unread.
+/// The published catalog only gains an announcement once the site has reviewed it, about a day
+/// after the live one shows it. A live body read within this time is therefore never older than
+/// the published one, and is kept when the live catalog cannot be read.
+const CLAUDE_DATASET_LAG_HOURS: i64 = 24;
+/// Of more announcements than this in one answer, the newest are kept.
 const MAX_CLAUDE_EVENTS: usize = 500;
 /// What the popup reads of a Claude announcement; any other key is dropped.
 const CLAUDE_EVENT_KEYS: &[&str] = &[
@@ -246,7 +250,7 @@ impl PublicFeeds {
         let mut next = previous.clone();
         next.checked_at = Some(now);
         next.retry_after = None;
-        match self.fetch(name, previous.etag.as_deref()).await {
+        match self.fetch(name, &previous, now).await {
             Ok(Fetched::Unchanged) => next.error = None,
             Ok(Fetched::Body { body, etag }) => {
                 next.body = Some(body);
@@ -255,8 +259,8 @@ impl PublicFeeds {
                 next.error = None;
             }
             Err(failure) => {
+                next.retry_after = failure.held_until(now);
                 next.error = Some(failure.message);
-                next.retry_after = failure.retry_after.map(|wait| now + wait);
             }
         }
         let changed = next.body != previous.body;
@@ -270,7 +274,13 @@ impl PublicFeeds {
         (snapshot(name, next, (self.clock)()), changed)
     }
 
-    async fn fetch(&self, name: FeedName, etag: Option<&str>) -> Result<Fetched, FetchFailure> {
+    async fn fetch(
+        &self,
+        name: FeedName,
+        previous: &StoredFeed,
+        now: DateTime<Utc>,
+    ) -> Result<Fetched, FetchFailure> {
+        let etag = previous.etag.as_deref();
         if name == FeedName::Arena {
             return self
                 .fetch_arena()
@@ -280,7 +290,7 @@ impl PublicFeeds {
         }
         if name == FeedName::ClaudeResets {
             return self
-                .fetch_claude_resets()
+                .fetch_claude_resets(previous, now)
                 .await
                 .map(|body| Fetched::Body { body, etag: None });
         }
@@ -346,9 +356,15 @@ impl PublicFeeds {
     }
 
     /// The live catalog carries what the site detected in the last day, before its review. When
-    /// it cannot be read, the published dataset stands in, unless the site asked to be left alone
-    /// (`Retry-After`); a failure of both is reported as the live one's.
-    async fn fetch_claude_resets(&self) -> Result<String, FetchFailure> {
+    /// it cannot be read, the published dataset stands in, with two exceptions: the site asked to
+    /// be left alone (a rate limit or `Retry-After`), or a live body read within the last day is
+    /// cached, which the published one could only be older than. A failure of both is reported as
+    /// the live one's.
+    async fn fetch_claude_resets(
+        &self,
+        previous: &StoredFeed,
+        now: DateTime<Utc>,
+    ) -> Result<String, FetchFailure> {
         let live = self
             .claude_catalog(FeedName::ClaudeResets.url(), true)
             .await;
@@ -356,7 +372,7 @@ impl PublicFeeds {
             Ok(body) => return Ok(body),
             Err(failure) => failure,
         };
-        if failure.retry_after.is_some() {
+        if failure.asked_to_wait() || cached_live_catalog_is_current(previous, now) {
             return Err(failure);
         }
         match self.claude_catalog(CLAUDE_RESETS_DATASET, false).await {
@@ -427,13 +443,41 @@ enum Fetched {
 /// Why a fetch failed, and how long the source asked to be left alone (`Retry-After`), if it did.
 struct FetchFailure {
     message: String,
-    retry_after: Option<chrono::Duration>,
+    /// The HTTP status, when the source answered at all.
+    status: Option<u16>,
+    retry_after: Option<RetryAfter>,
+}
+
+/// `Retry-After` in either of its forms.
+#[derive(Clone, Copy)]
+enum RetryAfter {
+    Wait(chrono::Duration),
+    Until(DateTime<Utc>),
+}
+
+impl FetchFailure {
+    /// The source is rate limiting or named a time to come back: nothing else of it is asked.
+    fn asked_to_wait(&self) -> bool {
+        self.status == Some(429) || self.retry_after.is_some()
+    }
+
+    /// When the source may be called again, trusted no further than the cap.
+    fn held_until(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        let soonest = now + chrono::Duration::seconds(1);
+        let latest = now + chrono::Duration::seconds(RETRY_AFTER_CAP_SECONDS);
+        let until = match self.retry_after? {
+            RetryAfter::Wait(wait) => now + wait,
+            RetryAfter::Until(until) => until,
+        };
+        Some(until.clamp(soonest, latest))
+    }
 }
 
 impl From<String> for FetchFailure {
     fn from(message: String) -> Self {
         Self {
             message,
+            status: None,
             retry_after: None,
         }
     }
@@ -451,12 +495,29 @@ impl From<FetchFailure> for String {
     }
 }
 
-/// `Retry-After` in seconds (the date form is ignored), clamped to a sane range.
-fn retry_after(response: &uc_core::HttpResponse) -> Option<chrono::Duration> {
-    let seconds = response.header("retry-after")?.trim().parse::<i64>().ok()?;
-    Some(chrono::Duration::seconds(
-        seconds.clamp(1, RETRY_AFTER_CAP_SECONDS),
-    ))
+/// `Retry-After` as seconds or as an HTTP date; anything else is not a wait the app can keep.
+fn retry_after(response: &uc_core::HttpResponse) -> Option<RetryAfter> {
+    let value = response.header("retry-after")?.trim();
+    if let Ok(seconds) = value.parse::<i64>() {
+        let seconds = seconds.clamp(1, RETRY_AFTER_CAP_SECONDS);
+        return Some(RetryAfter::Wait(chrono::Duration::seconds(seconds)));
+    }
+    DateTime::parse_from_rfc2822(value)
+        .ok()
+        .map(|until| RetryAfter::Until(until.with_timezone(&Utc)))
+}
+
+/// Whether the cached body is the live catalog, read recently enough that the published one
+/// cannot hold anything it lacks.
+fn cached_live_catalog_is_current(cached: &StoredFeed, now: DateTime<Utc>) -> bool {
+    let live = cached
+        .body
+        .as_deref()
+        .and_then(|body| serde_json::from_str::<Value>(body).ok())
+        .is_some_and(|body| body["live"] == true);
+    live && cached.fetched_at.is_some_and(|fetched| {
+        now.signed_duration_since(fetched) < chrono::Duration::hours(CLAUDE_DATASET_LAG_HOURS)
+    })
 }
 
 fn successful_text(
@@ -466,6 +527,7 @@ fn successful_text(
     if !response.is_success() {
         return Err(FetchFailure {
             message: format!("HTTP {}", response.status),
+            status: Some(response.status),
             retry_after: retry_after(response),
         });
     }
@@ -497,7 +559,7 @@ fn is_cursor(value: &str) -> bool {
 fn claude_catalog(body: &str, live: bool) -> Option<String> {
     let root: Value = serde_json::from_str(body).ok()?;
     let provider = root["providers"]["claude"].as_object()?;
-    let events: Vec<Value> = provider
+    let listed: Vec<&Value> = provider
         .get("events")?
         .as_array()?
         .iter()
@@ -506,7 +568,9 @@ fn claude_catalog(body: &str, live: bool) -> Option<String> {
                 .iter()
                 .all(|key| event[*key].as_str().is_some_and(|text| !text.is_empty()))
         })
-        .take(MAX_CLAUDE_EVENTS)
+        .collect();
+    let events: Vec<Value> = newest(listed, MAX_CLAUDE_EVENTS)
+        .into_iter()
         .map(|event| {
             let kept = CLAUDE_EVENT_KEYS
                 .iter()
@@ -537,6 +601,22 @@ fn claude_catalog(body: &str, live: bool) -> Option<String> {
         })
         .to_string(),
     )
+}
+
+/// The `limit` newest announcements by their date, in the order the site listed them. The dates
+/// are ISO 8601 in UTC, which sort as text.
+fn newest(mut events: Vec<&Value>, limit: usize) -> Vec<&Value> {
+    if events.len() <= limit {
+        return events;
+    }
+    let date = |event: &Value| event["date"].as_str().unwrap_or_default().to_owned();
+    let mut dates: Vec<String> = events.iter().map(|event| date(event)).collect();
+    dates.sort_unstable();
+    let oldest_kept = dates[dates.len() - limit].clone();
+    events.retain(|event| date(event) >= oldest_kept);
+    let surplus = events.len().saturating_sub(limit);
+    events.drain(..surplus);
+    events
 }
 
 fn valid(name: FeedName, body: &str) -> bool {
@@ -1003,6 +1083,121 @@ mod tests {
         assert!(!store.due(FeedName::ClaudeResets).await);
         seconds.store(600 + 900, Ordering::SeqCst);
         assert!(store.due(FeedName::ClaudeResets).await);
+    }
+
+    #[tokio::test]
+    async fn a_failed_live_read_keeps_the_live_body_it_has() {
+        let root = tempfile::tempdir().unwrap();
+        let seconds = Arc::new(AtomicI64::new(0));
+        let url = FeedName::ClaudeResets.url();
+        let live = claude_answer(
+            "2026-09-29T13:06:49Z",
+            &[("7", "Reset for all."), ("8", "Limits reset.")],
+            &["8"],
+        );
+        let published = claude_answer("2026-09-29T00:00:00Z", &[("7", "Reset for all.")], &[]);
+        let http = Script::new(vec![
+            (url, ok(&live, None)),
+            (url, status(503)),
+            (url, status(503)),
+            (CLAUDE_RESETS_DATASET, ok(&published, None)),
+        ]);
+        let store = feeds(root.path(), http.clone(), seconds.clone());
+        let (first, _) = store.refresh(FeedName::ClaudeResets, false).await;
+
+        seconds.store(300, Ordering::SeqCst);
+        let (down, changed) = store.refresh(FeedName::ClaudeResets, false).await;
+        assert!(!changed && down.stale);
+        assert_eq!(down.error.as_deref(), Some("HTTP 503"));
+        assert_eq!(down.body, first.body);
+        assert_eq!(http.seen.lock().unwrap().len(), 2);
+
+        seconds.store(24 * 3600, Ordering::SeqCst);
+        let (older, changed) = store.refresh(FeedName::ClaudeResets, false).await;
+        assert!(changed && older.error.is_none());
+        let body: Value = serde_json::from_str(older.body.as_deref().unwrap()).unwrap();
+        assert_eq!(body["live"], false);
+        assert_eq!(body["events"].as_array().unwrap().len(), 1);
+        assert_eq!(http.seen.lock().unwrap().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn a_rate_limit_is_never_answered_with_a_second_request() {
+        let day = "Tue, 29 Sep 2026 13:00:00 GMT";
+        for (answer, held_for) in [
+            (status(429), None),
+            (status_with(429, "retry-after", day), Some(3600)),
+            (status_with(503, "retry-after", day), Some(3600)),
+            (
+                status_with(503, "retry-after", "Thu, 01 Jan 2026 00:00:00 GMT"),
+                Some(1),
+            ),
+            (
+                status_with(503, "retry-after", "Fri, 01 Jan 2027 00:00:00 GMT"),
+                Some(RETRY_AFTER_CAP_SECONDS),
+            ),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let seconds = Arc::new(AtomicI64::new(0));
+            let http = Script::new(vec![(FeedName::ClaudeResets.url(), answer)]);
+            let store = PublicFeeds::new(root.path().to_path_buf())
+                .with_http(http.clone())
+                .with_clock(Arc::new({
+                    let seconds = seconds.clone();
+                    move || {
+                        DateTime::parse_from_rfc3339("2026-09-29T12:00:00Z")
+                            .unwrap()
+                            .with_timezone(&Utc)
+                            + chrono::Duration::seconds(seconds.load(Ordering::SeqCst))
+                    }
+                }));
+            let (limited, changed) = store.refresh(FeedName::ClaudeResets, false).await;
+            assert!(!changed && limited.body.is_none() && limited.error.is_some());
+            assert_eq!(http.seen.lock().unwrap().len(), 1);
+            let held_for = held_for.unwrap_or(5 * 60).max(5 * 60);
+            seconds.store(held_for - 1, Ordering::SeqCst);
+            assert!(!store.due(FeedName::ClaudeResets).await);
+            seconds.store(held_for, Ordering::SeqCst);
+            assert!(store.due(FeedName::ClaudeResets).await);
+        }
+    }
+
+    #[test]
+    fn a_long_catalog_keeps_its_newest_announcements() {
+        let event = |index: usize| {
+            format!(
+                r#"{{"id":"{index}","date":"2026-01-01T00:{:02}:{:02}Z","kind":"reset"}}"#,
+                index / 60,
+                index % 60
+            )
+        };
+        let catalog = |events: Vec<String>| {
+            format!(
+                r#"{{"providers":{{"claude":{{"events":[{}]}}}}}}"#,
+                events.join(",")
+            )
+        };
+        let ids = |body: String| -> Vec<String> {
+            let body: Value = serde_json::from_str(&body).unwrap();
+            let events = body["events"].as_array().unwrap();
+            events
+                .iter()
+                .map(|event| event["id"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let count = MAX_CLAUDE_EVENTS + 3;
+        let oldest_first =
+            ids(claude_catalog(&catalog((0..count).map(event).collect()), true).unwrap());
+        assert_eq!(oldest_first.len(), MAX_CLAUDE_EVENTS);
+        assert_eq!(oldest_first.first().map(String::as_str), Some("3"));
+        assert_eq!(oldest_first.last().map(String::as_str), Some("502"));
+        let newest_first =
+            ids(claude_catalog(&catalog((0..count).rev().map(event).collect()), true).unwrap());
+        assert_eq!(newest_first.len(), MAX_CLAUDE_EVENTS);
+        assert_eq!(newest_first.first().map(String::as_str), Some("502"));
+        assert_eq!(newest_first.last().map(String::as_str), Some("3"));
+        let few = ids(claude_catalog(&catalog((0..3).map(event).collect()), true).unwrap());
+        assert_eq!(few, ["0", "1", "2"]);
     }
 
     #[tokio::test]

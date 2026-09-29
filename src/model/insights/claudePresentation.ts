@@ -12,6 +12,7 @@ import type { GlanceResetAuthor, GlanceResetHistoryItem, GlanceResetPresentation
 import { buildResetPresentation } from "../glanceResets";
 import {
   compareTrackers,
+  concerns,
   covers,
   detectorBehind,
   forecastSkill,
@@ -31,6 +32,11 @@ import { dateText, numberText, percentText, shortDate } from "./text";
 const PAID_PLAN_COUNT = 4;
 const DAY_MS = 86_400_000;
 const COMPARE_ROWS: readonly CompareRow[] = ["resets", "average", "median", "longest", "sinceLast", "last30"];
+/**
+ * The chart shows this many months, the newest. Under twelve, so no month name comes twice, and
+ * few enough that a column of the 320px popup holds two two-digit counts side by side (24px).
+ */
+export const COMPARE_MONTHS = 8;
 
 export interface ClaudeBankedCard extends GlanceResetStatusCard {
   /** The announcement the card is about, for marking it as applied. */
@@ -75,6 +81,8 @@ export interface ClaudePresentationInput {
   codex: readonly CodexReset[];
   /** The plan families of the Claude accounts connected here. */
   plans: readonly ClaudePlan[];
+  /** One entry per Claude account, `null` for a plan this app cannot name; `plans` when left out. */
+  accounts?: readonly (ClaudePlan | null)[];
   /** Banked resets the user marked as applied. */
   used: readonly string[];
   now: Date;
@@ -113,7 +121,7 @@ export function planLines(scope: string | null, plans: readonly ClaudePlan[], te
 /** The forecast's self-check as one sentence, or nothing while the history is too short to try. */
 export function reliabilityText(skill: ForecastSkill | null, language: Language, text: InsightsMessages): string | undefined {
   if (!skill) return undefined;
-  return text.forecastReliability(skill.verdict, percentText(language, Math.abs(skill.skill), 0), numberText(language, skill.days));
+  return text.forecastReliability(skill.verdict, percentText(language, Math.abs(skill.skill), 0), numberText(language, skill.days), numberText(language, skill.resets));
 }
 
 function compareOf(feed: ClaudeResetFeed, codex: readonly CodexReset[], now: Date, language: Language, text: InsightsMessages): ComparePresentation | undefined {
@@ -141,8 +149,8 @@ function compareOf(feed: ClaudeResetFeed, codex: readonly CodexReset[], now: Dat
     title: text.claude.compareTitle,
     since: text.claude.compareSince(dateText(comparison.from, language)),
     rows: COMPARE_ROWS.map((row) => ({ label: text.claude.compareRow(row), claude: cell(row, comparison.claude), codex: cell(row, comparison.codex) })),
-    monthsTitle: text.claude.compareMonths,
-    months: comparison.months.map((month) => {
+    monthsTitle: comparison.months.length > COMPARE_MONTHS ? text.claude.compareMonthsRecent(numberText(language, COMPARE_MONTHS)) : text.claude.compareMonths,
+    months: comparison.months.slice(-COMPARE_MONTHS).map((month) => {
       const label = text.monthShort(month.month);
       return { label, claude: month.claude, codex: month.codex, summary: text.claude.compareMonth(label, count(month.claude), count(month.codex)) };
     }),
@@ -161,11 +169,13 @@ export function buildClaudePresentation(input: ClaudePresentationInput): ClaudeP
 
   const used = new Set(input.used);
   const latest = feed.resets[0];
-  const latestOpen = latest !== undefined && !used.has(latest.id) && openBanked(feed.resets, now).some((reset) => reset.id === latest.id);
+  const accounts = input.accounts ?? plans;
+  const open = openBanked(feed.resets, now).filter((reset) => concerns(reset, accounts));
+  const latestOpen = latest !== undefined && !used.has(latest.id) && open.some((reset) => reset.id === latest.id);
   const latestNotes = latest ? [...(latestOpen ? [] : planLines(latest.scope, plans, claude)), ...(latest.provisional ? [claude.provisionalNote] : [])] : [];
   const latestScope = latest ? scopeText(latest.scope, claude) : null;
 
-  const banked = openBanked(feed.resets, now).map((reset): ClaudeBankedCard => {
+  const banked = open.map((reset): ClaudeBankedCard => {
     const until = reset.usableUntil!;
     const scope = scopeText(reset.scope, claude);
     return {
