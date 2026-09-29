@@ -69,6 +69,14 @@ export interface ClaudeResetMessages {
   cardCaption(time: string, offset: string): string;
   cardPosted(handle: string, time: string, post: string): string;
   cardHow: string;
+  /** The Claude tracker's title on the Dynamic Island and the desktop widgets. */
+  glanceTitle: string;
+  /** The attribution the site asks for, under that title. */
+  glanceSource: string;
+  /** How the tracker works, as the island and the widgets tell it: nothing they do not show, no Codex. */
+  glanceMethod: string[];
+  /** Where to apply a banked reset, and how to stop the island and the widgets showing it. */
+  glanceBankedHow: string;
 }
 
 export interface InsightsMessages {
@@ -249,9 +257,10 @@ export interface InsightsMessages {
   freeResetHowUntimed: string;
   freeResetOpenTab: string;
 
-  /** The Codex reset tracker on the macOS island and desktop widgets. */
+  /** The Codex reset tracker's title and source on the macOS island and desktop widgets. */
   glanceTitle: string;
   glanceSource: string;
+  /** The chances' title there, for the Codex and the Claude tracker alike. */
   glanceChanceTitle: string;
   /** One short line under the chances saying they are an estimate. */
   glanceForecastNote: string;

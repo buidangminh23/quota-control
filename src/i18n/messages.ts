@@ -268,7 +268,7 @@ export interface SettingsMessages {
   islandStyleOption(style: IslandStyle): string;
   islandWing(side: "left" | "right"): string;
   islandWingAuto: string;
-  /** A wing choice that is not one metric: the soonest limit reset or a Codex reset reading. */
+  /** A wing choice that is not one metric: the soonest limit reset or a Codex or Claude reset reading. */
   islandWingSpecial(wing: SpecialWing): string;
   islandLayout: string;
   islandLayoutOption(layout: IslandLayout): string;
@@ -389,10 +389,12 @@ export interface GlanceMessages {
   units: { day: string; hour: string; minute: string };
   /** What a reset widget or island section says while the Reset tab and reset notifications are off. */
   resetsOff: string;
+  /** The same for a surface showing the Claude tracker, naming the Claude reset notifications. */
+  claudeResetsOff: string;
   /** The heading of the next limits to come back, and what it says when none has a reset time. */
   upcoming: string;
   upcomingEmpty: string;
-  /** The label of the wing counting the time since the last Codex reset. */
+  /** The label of the wing counting the time since a tracker's last reset, Codex's or Claude's. */
   sinceReset: string;
   /** The open island's tab names, as the popup's tabs read. */
   tabs: Record<IslandView, string>;

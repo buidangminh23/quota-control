@@ -9,11 +9,12 @@ import { PROVIDER_MARKS, type ProviderMark } from "@/assets/providerMarks";
 import { knownBrandColor } from "./totalSpend";
 import { messagesFor, type Language } from "@/i18n";
 import type { Provider, WidgetDescriptor } from "@/lib/types";
+import { insightsFor } from "@/i18n/insights";
 import { COUNTDOWN_SPAN } from "./glanceResets";
 import { brandOf, type ProviderMetrics } from "./layout";
 import { boundedTrailingText, isFreshSessionWindow, meterSeverity, meterState } from "./meterState";
 import { SOURCE_COLORS } from "./palette";
-import type { GlanceSurfaceSettings, IslandSettings, IslandStyle, IslandView, ResetParts } from "./settings";
+import type { GlanceSurfaceSettings, IslandSettings, IslandStyle, IslandView, ResetParts, ResetProvider } from "./settings";
 import { boundedHeadline, fraction, isBounded, menuBarValue, unboundedDetail, type WidgetData } from "./widgetData";
 
 export const GLANCE_VERSION = 1;
@@ -102,13 +103,15 @@ export interface GlanceIsland {
   resetParts: ResetParts;
   /** The most limits coming back listed; `0` for as many as fit. */
   upcomingLimit: number;
+  /** `claude` when the reset view draws `GlanceDocument.claudeResets`; absent for Codex. */
+  resetsProvider?: ResetProvider;
 }
 
 /** The parts of the open island, each switched in Settings. */
 export interface GlanceIslandSections {
   /** The accounts and their limits. */
   quota: boolean;
-  /** The Codex free-reset tracker (`GlanceDocument.resets`). */
+  /** The reset tracker (`GlanceDocument.resets`, or `claudeResets` when `resetsProvider` says so). */
   resets: boolean;
   /** The next limits to come back, soonest first, across the island's accounts. */
   upcoming: boolean;
@@ -118,7 +121,8 @@ export interface GlanceIslandSections {
  * Wing choices that are not one metric of one account. `quota:next` counts down to the soonest
  * limit reset among the island's accounts; the `codex-resets:` ones read the Codex free-reset
  * tracker: the announced reset's countdown (or, without one, the 24-hour chance), a chance over 1, 3
- * or 7 days, or the time since the last reset.
+ * or 7 days, or the time since the last reset. The `claude-resets:` ones read the Claude tracker the
+ * same way, its `next` counting down to the deadline of a banked reset that can still be applied.
  */
 export const SPECIAL_WINGS = [
   "quota:next",
@@ -127,11 +131,21 @@ export const SPECIAL_WINGS = [
   "codex-resets:chance-3",
   "codex-resets:chance-7",
   "codex-resets:since",
+  "claude-resets:next",
+  "claude-resets:chance-1",
+  "claude-resets:chance-3",
+  "claude-resets:chance-7",
+  "claude-resets:since",
 ] as const;
 export type SpecialWing = (typeof SPECIAL_WINGS)[number];
 
 export function isSpecialWing(id: string): id is SpecialWing {
   return (SPECIAL_WINGS as readonly string[]).includes(id);
+}
+
+/** Whether a wing reads the Claude reset tracker. */
+export function isClaudeResetsWing(id: string): boolean {
+  return isSpecialWing(id) && id.startsWith(`${CLAUDE_RESETS_PROVIDER_ID}:`);
 }
 
 /** What one wing slot asks for: a picked metric, a special reading, or `null` for automatic. */
@@ -148,6 +162,8 @@ export interface GlanceWidget {
   resetParts: ResetParts;
   /** The most limits coming back listed; `0` for as many as fit. */
   upcomingLimit: number;
+  /** `claude` when the reset widgets draw `GlanceDocument.claudeResets`; absent for Codex. */
+  resetsProvider?: ResetProvider;
 }
 
 export interface GlanceDocument {
@@ -170,7 +186,7 @@ export interface GlanceDocument {
     noData: string;
     more: string;
     units: { day: string; hour: string; minute: string };
-    /** What a reset widget or section says while the tracker is off (`GlanceDocument.resets` absent). */
+    /** What a reset widget or section says while its tracker is off (`resets` or `claudeResets` absent). */
     resetsOff: string;
     /** `Sắp đặt lại`: the heading of the next limits to come back. */
     upcoming: string;
@@ -178,6 +194,11 @@ export interface GlanceDocument {
     upcomingEmpty: string;
     /** The open island's tab names, as the popup's tabs read. */
     tabs: Record<IslandView, string>;
+    /** The reset view's name while a surface shows the Claude tracker; absent otherwise. */
+    claudeResetsTab?: string;
+    /** What that view says while the Claude tracker is off, naming Claude's notifications; absent
+     * otherwise, like `claudeResetsTab`. */
+    claudeResetsOff?: string;
   };
   /** The open island's accounts. */
   providers: GlanceProvider[];
@@ -186,27 +207,34 @@ export interface GlanceDocument {
   /** The Codex free-reset tracker, for the island's reset section and wings and the reset widgets;
    * absent while the Reset tab and reset notifications are both off. */
   resets?: GlanceResets;
+  /** The Claude reset tracker (claude-resets.com), for the island or the widget when its Settings
+   * chose it (a wing reading it needs no copy here); absent otherwise, and while the Reset tab and
+   * Claude reset notifications are both off. */
+  claudeResets?: GlanceResets;
   alert?: GlanceAlert;
 }
 
 /**
- * The Codex free-reset tracker (the Reset tab, from codex-resets.com), worked out and worded here
+ * A reset tracker: the Codex free-reset tracker (the Reset tab, from codex-resets.com) or the Claude
+ * one (claude-resets.com, where `upcoming` is a banked reset's deadline), worked out and worded here
  * like the rest of the document. Everything that moves with the clock travels as a moment plus
- * words (`GlanceCountdown`), and chances as whole percents, so the document only changes when the
- * tracker's numbers do.
+ * words (`GlanceCountdown`), and chances as whole percents, so these fields only change when the
+ * tracker's numbers do. `presentation`, the Reset tab's cards, is looser: its words for how long
+ * ago the latest reset was, and the Codex chances' meter fractions, move as time passes.
  */
 export interface GlanceResets {
-  /** `Reset Codex`. */
+  /** `Reset Codex`, `Reset Claude`. */
   title: string;
   /** The attribution the site asks for: `Theo codex-resets.com`. */
   source: string;
-  /** The Codex mark and color, so a reset surface can draw them without a Codex account. */
+  /** The tracker's mark and color, so a reset surface can draw them without an account of it. */
   brand: string;
   color: string;
   mark?: GlanceMark;
   /** The feed could not be refreshed; the numbers are from its last good copy. */
   stale?: string;
-  /** An announced reset, or the site's watch: the Codex card's "Reset free" row. */
+  /** An announced reset, or the site's watch: the Codex card's "Reset free" row. For Claude, the
+   * banked reset still to apply, counting down to its deadline. */
   upcoming?: GlanceUpcomingReset;
   /** The newest reset on record. */
   latest?: GlanceLatestReset;
@@ -222,6 +250,8 @@ export interface GlanceResets {
   rhythm?: GlanceResetRhythm;
   presentation?: GlanceResetPresentation;
   theme?: "system" | "light" | "dark";
+  /** The site the source line links to; absent for Codex, whose site the Swift side knows. */
+  site?: string;
 }
 
 export interface GlanceResetAuthor {
@@ -230,7 +260,7 @@ export interface GlanceResetAuthor {
 
 export interface GlanceResetStatusCard {
   id: string;
-  /** `banked` (the popup's Claude view only): a banked reset that can still be applied. */
+  /** `banked` (Claude only): a banked reset that can still be applied. */
   kind: "scheduled" | "watch" | "quiet" | "banked";
   level?: "elevated" | "strong";
   title: string;
@@ -277,6 +307,8 @@ export interface GlanceResetHistoryItem {
 export interface GlanceResetPresentation {
   locale: string;
   authorAvatar: string;
+  /** The one account `authorAvatar` pictures (Claude: `@ClaudeDevs`); absent, it pictures every author. */
+  avatarHandle?: string;
   latest?: { title: string; ago: string; at: string; meta: string; author?: GlanceResetAuthor; notes?: string[] };
   statuses: GlanceResetStatusCard[];
   quietTitle?: string;
@@ -292,9 +324,9 @@ export interface GlanceResetPresentation {
 }
 
 export interface GlanceUpcomingReset {
-  /** `Reset free`, `Có thể reset` (a watch), `Tặng lượt để dành` (banked). */
+  /** `Reset free`, `Có thể reset` (a watch), `Tặng lượt để dành` (banked), Claude's `Lượt reset để dành`. */
   title: string;
-  /** Scheduled resets read positive, a watch reads as a notice. */
+  /** Scheduled resets and Claude's banked reset read positive, a watch reads as a notice. */
   tone: "positive" | "notice";
   /** The countdown to its time (`sau ~{d}`), with the "waiting for confirmation" word after it. */
   countdown?: GlanceCountdown;
@@ -400,6 +432,9 @@ export interface GlanceInput {
   alert: GlanceAlert | null;
   /** The Codex free-reset tracker (`buildGlanceResets`), `null` while it is off or has no data. */
   resets: GlanceResets | null;
+  /** The Claude reset tracker (`buildClaudeGlanceResets`), `null` or absent while neither a surface
+   * nor a wing uses it, it is off or it has no data. */
+  claudeResets?: GlanceResets | null;
   /** The official color logos drawn so far (`useMarkArt`), base64 PNG by brand; optional. */
   markArt?: Readonly<Record<string, string>>;
   now: Date;
@@ -513,8 +548,17 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
       upcomingLimit: input.widget.settings.upcomingLimit,
     },
   };
+  const claudeIsland = input.island.settings.resetsProvider === "claude";
+  const claudeWidget = input.widget.settings.resetsProvider === "claude";
+  if (claudeIsland) document.island.resetsProvider = "claude";
+  if (claudeWidget) document.widget.resetsProvider = "claude";
+  if (claudeIsland || claudeWidget) {
+    document.labels.claudeResetsTab = insightsFor(input.language).claude.glanceTitle;
+    document.labels.claudeResetsOff = text.claudeResetsOff;
+  }
   if (input.hour12 !== null) document.hour12 = input.hour12;
   if (input.resets) document.resets = input.resets;
+  if (input.claudeResets && (claudeIsland || claudeWidget)) document.claudeResets = input.claudeResets;
   if (input.alert) document.alert = input.alert;
   return document;
 }
@@ -555,19 +599,24 @@ function wings(
 
 /** The provider standing for the Codex free-reset tracker in a wing. */
 export const CODEX_RESETS_PROVIDER_ID = "codex-resets";
+/** The provider standing for the Claude reset tracker in a wing. */
+export const CLAUDE_RESETS_PROVIDER_ID = "claude-resets";
 
 /**
  * A wing that is not one picked metric, or `null` when it has nothing to show (the slot then fills
  * automatically). `quota:next` is the island's account whose limit comes back first, counting down
- * to it; the Codex reset wings read the tracker as a provider of their own.
+ * to it; the reset wings read their tracker as a provider of their own. Codex's `next` counts down to
+ * an announced reset; Claude's, which announces none ahead, to a banked reset's deadline.
  */
 function specialWing(wing: SpecialWing, providers: readonly GlanceProvider[], input: GlanceInput): GlanceProvider | null {
   if (wing === "quota:next") return soonestReset(providers, input.now, input.language);
-  const resets = input.resets;
+  const [trackerId, reading] = wing.split(":") as [string, "next" | "chance-1" | "chance-3" | "chance-7" | "since"];
+  const claude = trackerId === CLAUDE_RESETS_PROVIDER_ID;
+  const resets = claude ? input.claudeResets : input.resets;
   if (!resets) return null;
   const text = messagesFor(input.language).glance;
   const tracker = (metric: GlanceMetric): GlanceProvider => {
-    const entry: GlanceProvider = { id: CODEX_RESETS_PROVIDER_ID, name: resets.title, brand: resets.brand, color: resets.color, metrics: [metric] };
+    const entry: GlanceProvider = { id: trackerId, name: resets.title, brand: resets.brand, color: resets.color, metrics: [metric] };
     if (resets.mark) entry.mark = resets.mark;
     return entry;
   };
@@ -577,24 +626,24 @@ function specialWing(wing: SpecialWing, providers: readonly GlanceProvider[], in
     const value = `${found.percent}%`;
     return tracker({ id: wing, label: found.label, value, headline: `${value} · ${found.label}`, fraction: found.percent / 100, severity: "normal" });
   };
-  switch (wing) {
-    case "codex-resets:next": {
+  switch (reading) {
+    case "next": {
       const upcoming = resets.upcoming;
       const countdown = upcoming?.countdown;
       if (upcoming && countdown && Date.parse(countdown.at) > input.now.getTime()) {
-        const moving: GlanceCountdown = { at: countdown.at, text: text.wingIn(COUNTDOWN_SPAN) };
+        const moving: GlanceCountdown = { at: countdown.at, text: claude ? countdown.text : text.wingIn(COUNTDOWN_SPAN) };
         if (countdown.after !== undefined) moving.after = countdown.after;
         return tracker({ id: wing, label: upcoming.title, value: upcoming.title, headline: upcoming.caption, fraction: null, severity: "normal", countdown: moving });
       }
       return chance(1);
     }
-    case "codex-resets:chance-1":
+    case "chance-1":
       return chance(1);
-    case "codex-resets:chance-3":
+    case "chance-3":
       return chance(3);
-    case "codex-resets:chance-7":
+    case "chance-7":
       return chance(7);
-    case "codex-resets:since": {
+    case "since": {
       const latest = resets.latest;
       if (!latest) return null;
       return tracker({

@@ -2,6 +2,13 @@
 import type { ResetWindow } from "@/model/insights/upcomingReset";
 import type { ClaudeResetMessages, InsightsMessages } from "./insights";
 
+/** The first paragraphs of the Claude view's method, which the island and the widgets tell too. */
+const CLAUDE_METHOD: readonly string[] = [
+  "The list comes from claude-resets.com, which follows posts by @ClaudeDevs and Claude Code team members on X. The app reads the live list every 5 minutes; when that cannot be read it uses the site's published copy. An entry the site detected and has not reviewed yet is marked “Not reviewed”.",
+  "Limit changes (a ceiling raised or lowered) do not clear usage, so they never count as resets. A banked reset is one you apply yourself from Settings → Usage before its deadline; neither the site nor the app can see which accounts have applied theirs.",
+  "The scope (all users, or which plans) is what claude-resets.com recorded from the post. The app compares it with the plans of the Claude accounts connected here; when a post only says “affected users”, the app draws no conclusion.",
+];
+
 const claudeEn: ClaudeResetMessages = {
   forecastDisclaimer: "A guess from the history, not official word from Anthropic.",
   scopeEveryone: "All users",
@@ -44,9 +51,7 @@ const claudeEn: ClaudeResetMessages = {
   compareMonth: (month, claude, codex) => `${month}: Claude ${claude}, Codex ${codex}`,
   source: "Data from claude-resets.com, which follows @ClaudeDevs and the Claude Code team on X.",
   method: [
-    "The list comes from claude-resets.com, which follows posts by @ClaudeDevs and Claude Code team members on X. The app reads the live list every 5 minutes; when that cannot be read it uses the site's published copy. An entry the site detected and has not reviewed yet is marked “Not reviewed”.",
-    "Limit changes (a ceiling raised or lowered) do not clear usage, so they never count as resets. A banked reset is one you apply yourself from Settings → Usage before its deadline; neither the site nor the app can see which accounts have applied theirs.",
-    "The scope (all users, or which plans) is what claude-resets.com recorded from the post. The app compares it with the plans of the Claude accounts connected here; when a post only says “affected users”, the app draws no conclusion.",
+    ...CLAUDE_METHOD,
     "The chance of a reset is worked out as for Codex: each past reset counts with a weight that halves every 21 days. The “Tried again…” line scores that method on the same history: for each past day, the chance it gave against the average until that day and against what happened. Those days rest on few resets, so the app only says closer or worse when the difference is more than chance would give. The source site does not predict resets.",
     "The comparison with Codex only counts the resets after the moment both were tracked, to keep it fair; the reset that opens that window counts for neither. The Codex numbers come from codex-resets.com.",
   ],
@@ -61,6 +66,13 @@ const claudeEn: ClaudeResetMessages = {
   cardCaption: (time, offset) => `Use before ${time} · ${offset}`,
   cardPosted: (handle, time, post) => `${handle} posted at ${time}:\n“${post}”`,
   cardHow: "Apply it from Settings → Usage on claude.ai. The app cannot see whether this account has applied it. Marking it as used in the Reset tab hides this row on every Claude card.",
+  glanceTitle: "Claude Resets",
+  glanceSource: "Via claude-resets.com",
+  glanceMethod: [
+    ...CLAUDE_METHOD,
+    "The chance of a reset is an estimate from past resets: each counts with a weight that halves every 21 days. The source site does not predict resets.",
+  ],
+  glanceBankedHow: "Apply it from Settings → Usage on claude.ai. The app cannot see whether it has been applied: mark it as used in the Reset tab to stop showing it here.",
 };
 
 const EN_WINDOWS: Record<ResetWindow, string> = { thisWeek: "This week", weekend: "This weekend", nextWeek: "Next week" };

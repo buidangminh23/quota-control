@@ -2,6 +2,13 @@
 import type { ResetWindow } from "@/model/insights/upcomingReset";
 import type { ClaudeResetMessages, InsightsMessages } from "./insights";
 
+/** The first paragraphs of the Claude view's method, which the island and the widgets tell too. */
+const CLAUDE_METHOD: readonly string[] = [
+  "Danh sách lấy từ claude-resets.com, trang theo dõi bài của @ClaudeDevs và các thành viên nhóm Claude Code trên X. Ứng dụng đọc bản trực tiếp 5 phút một lần; khi bản trực tiếp không đọc được thì dùng bản đã công bố của trang. Tin trang vừa tự phát hiện và chưa duyệt lại được ghi “Chưa kiểm chứng”.",
+  "Thay đổi hạn mức (tăng, giảm mức trần) không xoá mức đã dùng nên không tính là reset. Lượt reset để dành do bạn tự dùng trong Settings → Usage trước hạn; trang và ứng dụng đều không biết tài khoản nào đã dùng.",
+  "Phạm vi (mọi người hay gói nào) do claude-resets.com ghi theo bài đăng. Ứng dụng so phạm vi đó với gói của các tài khoản Claude bạn đã kết nối; khi bài chỉ nói “người bị ảnh hưởng” thì ứng dụng không kết luận.",
+];
+
 const claudeVi: ClaudeResetMessages = {
   forecastDisclaimer: "Chỉ là ước đoán từ lịch sử, không phải thông tin chính thức từ Anthropic.",
   scopeEveryone: "Mọi người dùng",
@@ -44,9 +51,7 @@ const claudeVi: ClaudeResetMessages = {
   compareMonth: (month, claude, codex) => `${month}: Claude ${claude}, Codex ${codex}`,
   source: "Dữ liệu từ claude-resets.com, trang theo dõi @ClaudeDevs và nhóm Claude Code trên X.",
   method: [
-    "Danh sách lấy từ claude-resets.com, trang theo dõi bài của @ClaudeDevs và các thành viên nhóm Claude Code trên X. Ứng dụng đọc bản trực tiếp 5 phút một lần; khi bản trực tiếp không đọc được thì dùng bản đã công bố của trang. Tin trang vừa tự phát hiện và chưa duyệt lại được ghi “Chưa kiểm chứng”.",
-    "Thay đổi hạn mức (tăng, giảm mức trần) không xoá mức đã dùng nên không tính là reset. Lượt reset để dành do bạn tự dùng trong Settings → Usage trước hạn; trang và ứng dụng đều không biết tài khoản nào đã dùng.",
-    "Phạm vi (mọi người hay gói nào) do claude-resets.com ghi theo bài đăng. Ứng dụng so phạm vi đó với gói của các tài khoản Claude bạn đã kết nối; khi bài chỉ nói “người bị ảnh hưởng” thì ứng dụng không kết luận.",
+    ...CLAUDE_METHOD,
     "Khả năng có reset tính như bên Codex: mỗi lần reset có trọng số giảm một nửa sau mỗi 21 ngày. Dòng “Thử lại…” chấm cách tính này trên chính lịch sử đó: mỗi ngày đã qua, so con số nó đưa ra với mức trung bình tính đến ngày ấy và với việc đã xảy ra. Các ngày thử dựa trên ít lần reset, nên ứng dụng chỉ nói sát hơn hay kém hơn khi chênh lệch vượt mức có thể do ngẫu nhiên. Trang nguồn không dự đoán reset.",
     "Bảng so với Codex chỉ tính các lần reset sau thời điểm cả hai cùng được theo dõi, để so cho công bằng; lần reset mở đầu khoảng này không tính cho bên nào. Số liệu Codex lấy từ codex-resets.com.",
   ],
@@ -61,6 +66,13 @@ const claudeVi: ClaudeResetMessages = {
   cardCaption: (time, offset) => `Dùng trước ${time} · ${offset}`,
   cardPosted: (handle, time, post) => `${handle} đăng lúc ${time}:\n“${post}”`,
   cardHow: "Vào Settings → Usage trên claude.ai để dùng. Ứng dụng không biết tài khoản này đã dùng hay chưa. Đánh dấu đã dùng trong tab Reset sẽ ẩn dòng này trên mọi thẻ Claude.",
+  glanceTitle: "Reset Claude",
+  glanceSource: "Theo claude-resets.com",
+  glanceMethod: [
+    ...CLAUDE_METHOD,
+    "Khả năng có reset là ước tính từ các lần reset trước: mỗi lần có trọng số giảm một nửa sau mỗi 21 ngày. Trang nguồn không dự đoán reset.",
+  ],
+  glanceBankedHow: "Vào Settings → Usage trên claude.ai để dùng. Ứng dụng không biết lượt này đã được dùng hay chưa: đánh dấu đã dùng trong tab Reset để thôi hiện ở đây.",
 };
 
 const VI_WINDOWS: Record<ResetWindow, string> = { thisWeek: "Trong tuần này", weekend: "Cuối tuần này", nextWeek: "Tuần sau" };

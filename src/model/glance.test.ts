@@ -1,11 +1,17 @@
+import { createHash } from "node:crypto";
 import { fixtureCatalog, fixtureSnapshots } from "@/lib/fixtures";
+import { FEED_FIXTURES } from "@/lib/insightsFeedFixtures";
 import type { ProviderSnapshot } from "@/lib/types";
-import { buildGlance, CODEX_RESETS_PROVIDER_ID, glanceMetric, GLANCE_VERSION, type GlanceAlert, type GlanceResets, type GlanceWingChoice } from "./glance";
+import { buildGlance, CLAUDE_RESETS_PROVIDER_ID, CODEX_RESETS_PROVIDER_ID, glanceMetric, GLANCE_VERSION, isClaudeResetsWing, type GlanceAlert, type GlanceResets, type GlanceWingChoice } from "./glance";
+import { buildClaudeGlanceResets } from "./glanceClaudeResets";
+import { buildGlanceResets, parseResetFeeds } from "./glanceResets";
+import { parseClaudeResets } from "./insights/claudeResets";
 import { glanceGroups, reconcileLayout } from "./layout";
 import { barKind, platformKey } from "./platform";
 import { cardIdentity } from "./providerText";
 import { DEFAULT_SETTINGS, type GlanceContent, type IslandSettings } from "./settings";
 import { makeWidget, NOW, resetsAt, WEEK_SECONDS } from "./testHelpers";
+import { setSystemTimeZone } from "./timeZone";
 import { DEFAULT_DISPLAY, widgetDataFor, type DisplayOptions } from "./widgetData";
 
 const FETCHED = Date.UTC(2026, 8, 26, 3);
@@ -25,10 +31,11 @@ interface Options {
   wings?: [GlanceWingChoice, GlanceWingChoice];
   hour12?: boolean | null;
   resets?: GlanceResets | null;
+  claudeResets?: GlanceResets | null;
   markArt?: Readonly<Record<string, string>>;
 }
 
-function glance({ display = DEFAULT_DISPLAY, data = snapshots, alert = null, island = {}, widget = {}, wings = [null, null], hour12 = null, resets = null, markArt }: Options = {}) {
+function glance({ display = DEFAULT_DISPLAY, data = snapshots, alert = null, island = {}, widget = {}, wings = [null, null], hour12 = null, resets = null, claudeResets, markArt }: Options = {}) {
   const islandSettings = { ...DEFAULT_SETTINGS.island, ...island };
   const widgetSettings = { ...DEFAULT_SETTINGS.widget, ...widget };
   const groups = (content: GlanceContent, metrics: readonly string[]) => glanceGroups(content, metrics, layout, catalog, () => true);
@@ -47,6 +54,7 @@ function glance({ display = DEFAULT_DISPLAY, data = snapshots, alert = null, isl
     appName: "Quota Control",
     alert,
     resets,
+    claudeResets,
     markArt,
     now: NOW_GLANCE,
   });
@@ -186,6 +194,79 @@ const TRACKER: GlanceResets = {
   forecastNote: "Ước tính từ lịch sử, không phải tin chính thức.",
 };
 
+const DEADLINE = "2026-10-22T23:59:59.000Z";
+
+const CLAUDE_TRACKER: GlanceResets = {
+  title: "Reset Claude",
+  source: "Theo claude-resets.com",
+  brand: "claude",
+  color: "#DE7356",
+  site: "https://claude-resets.com",
+  upcoming: {
+    title: "Lượt reset để dành",
+    tone: "positive",
+    countdown: { at: DEADLINE, text: "còn {d}" },
+    caption: "Dùng trước 6:59 · T6 23/10 · GMT+7",
+    hideAt: DEADLINE,
+  },
+  latest: {
+    at: "2026-09-22T16:44:06.000Z",
+    kind: "banked",
+    label: "Lần reset gần nhất",
+    kindLabel: "Lượt để dành",
+    since: { at: "2026-09-22T16:44:06.000Z", text: "Đã {d} chưa có reset", since: true },
+    when: "23:44 · T3 22/09",
+  },
+  forecastTitle: "Khả năng có reset",
+  forecast: [
+    { days: 1, percent: 9, label: "24 giờ tới" },
+    { days: 3, percent: 25, label: "3 ngày tới" },
+    { days: 7, percent: 49, label: "7 ngày tới" },
+  ],
+  forecastNote: "Ước tính từ lịch sử, không phải tin chính thức.",
+};
+
+describe("the Claude reset tracker", () => {
+  it("rides along for the surface that chose it, named for it, beside the Codex one", () => {
+    const island = glance({ island: { resetsProvider: "claude" }, resets: TRACKER, claudeResets: CLAUDE_TRACKER });
+    expect(island.island.resetsProvider).toBe("claude");
+    expect(island.widget.resetsProvider).toBeUndefined();
+    expect(island.labels.claudeResetsTab).toBe("Reset Claude");
+    expect(island.labels.claudeResetsOff).toBe("Bật tab Reset hoặc thông báo khi Claude reset trong Quota Control để xem dự báo.");
+    expect(island.labels.resetsOff).toBe("Bật tab Reset hoặc thông báo reset trong Quota Control để xem dự báo.");
+    expect(island.labels.tabs.resets).toBe("Reset Codex");
+    expect(island.claudeResets).toBe(CLAUDE_TRACKER);
+    expect(island.resets).toBe(TRACKER);
+    const widget = glance({ widget: { resetsProvider: "claude" }, display: { ...DEFAULT_DISPLAY, language: "en" }, claudeResets: CLAUDE_TRACKER });
+    expect(widget.widget.resetsProvider).toBe("claude");
+    expect(widget.island.resetsProvider).toBeUndefined();
+    expect(widget.labels.claudeResetsTab).toBe("Claude Resets");
+    expect(widget.labels.claudeResetsOff).toBe("Turn on the Resets tab or Claude reset notifications in Quota Control to see the forecast.");
+    expect(widget.claudeResets).toBe(CLAUDE_TRACKER);
+  });
+
+  it("names the Claude view even while its tracker is off", () => {
+    const document = glance({ island: { resetsProvider: "claude" }, resets: TRACKER, claudeResets: null });
+    expect(document.labels.claudeResetsTab).toBe("Reset Claude");
+    expect(document.labels.claudeResetsOff).toBe("Bật tab Reset hoặc thông báo khi Claude reset trong Quota Control để xem dự báo.");
+    expect("claudeResets" in document).toBe(false);
+    expect(document.resets).toBe(TRACKER);
+  });
+
+  it("stays out of a document when only a wing reads it, which carries its own reading", () => {
+    const document = glance({ wings: ["claude-resets:next", null], claudeResets: CLAUDE_TRACKER });
+    expect("claudeResets" in document).toBe(false);
+    expect(document.labels.claudeResetsTab).toBeUndefined();
+    expect(document.labels.claudeResetsOff).toBeUndefined();
+    expect(document.island.wings[0]).toMatchObject({ id: CLAUDE_RESETS_PROVIDER_ID, brand: "claude" });
+  });
+
+  it("tells the Claude wings apart from every other wing", () => {
+    expect(["claude-resets:next", "claude-resets:chance-1", "claude-resets:chance-3", "claude-resets:chance-7", "claude-resets:since"].every(isClaudeResetsWing)).toBe(true);
+    expect(["", "quota:next", "codex-resets:next", "claude-resets:soon", "claude@7c1e.session", "claude-resets"].some(isClaudeResetsWing)).toBe(false);
+  });
+});
+
 describe("island sections and labels", () => {
   it("carries the chosen tabs, how they are arranged and each view's options, as copies of the settings", () => {
     const tabs: ("quota" | "resets" | "upcoming")[] = ["quota", "upcoming"];
@@ -290,6 +371,82 @@ describe("special wings", () => {
     const bare = { ...TRACKER, forecast: [], latest: undefined, upcoming: undefined };
     expect(wingIds(glance({ resets: bare, wings: ["codex-resets:chance-1", "codex-resets:since"] }).island.wings)).toEqual(automatic);
     expect(wingIds(glance({ resets: bare, wings: ["codex-resets:next", null] }).island.wings)).toEqual(automatic);
+  });
+
+  it("counts a Claude wing down to the banked reset's deadline, then shows the 24-hour chance", () => {
+    const wing = glance({ claudeResets: CLAUDE_TRACKER, wings: ["claude-resets:next", null] }).island.wings[0]!;
+    expect(wing).toMatchObject({ id: CLAUDE_RESETS_PROVIDER_ID, name: "Reset Claude", brand: "claude", color: "#DE7356" });
+    expect(wing.metrics[0]).toEqual({
+      id: "claude-resets:next",
+      label: "Lượt reset để dành",
+      value: "Lượt reset để dành",
+      headline: "Dùng trước 6:59 · T6 23/10 · GMT+7",
+      fraction: null,
+      severity: "normal",
+      countdown: { at: DEADLINE, text: "còn {d}" },
+    });
+    const none = glance({ claudeResets: { ...CLAUDE_TRACKER, upcoming: undefined }, wings: ["claude-resets:next", null] }).island.wings[0]!.metrics[0]!;
+    expect(none).toMatchObject({ id: "claude-resets:next", label: "24 giờ tới", value: "9%", fraction: 0.09 });
+    expect(none.countdown).toBeUndefined();
+  });
+
+  it("reads Claude's chances and the time since its last reset from the Claude tracker alone", () => {
+    const wings = glance({ resets: TRACKER, claudeResets: CLAUDE_TRACKER, wings: ["claude-resets:chance-7", "claude-resets:since"] }).island.wings;
+    expect(wings.map((wing) => wing.brand)).toEqual(["claude", "claude"]);
+    expect(wings[0]!.metrics[0]).toEqual({ id: "claude-resets:chance-7", label: "7 ngày tới", value: "49%", headline: "49% · 7 ngày tới", fraction: 0.49, severity: "normal" });
+    expect(wings[1]!.metrics[0]).toMatchObject({ id: "claude-resets:since", label: "Chưa reset", value: "23:44 · T3 22/09" });
+    expect(wings[1]!.metrics[0]!.countdown).toEqual({ at: CLAUDE_TRACKER.latest!.at, text: "đã {d}", since: true });
+    const codexOnly = wingIds(glance({ resets: TRACKER, wings: ["claude-resets:chance-1", "claude-resets:since"] }).island.wings);
+    expect(codexOnly).toEqual(wingIds(glance().island.wings));
+    const claudeOnly = wingIds(glance({ claudeResets: CLAUDE_TRACKER, wings: ["codex-resets:chance-1", "codex-resets:since"] }).island.wings);
+    expect(claudeOnly).toEqual(wingIds(glance().island.wings));
+  });
+});
+
+describe("a document for someone who never chose Claude", () => {
+  beforeEach(() => setSystemTimeZone("Asia/Saigon"));
+  afterEach(() => setSystemTimeZone(null));
+
+  const codex = (language: "vi" | "en") =>
+    buildGlanceResets({ feeds: parseResetFeeds(FEED_FIXTURES.codexResetStatus, FEED_FIXTURES.codexResets), stale: false, now: NOW_GLANCE, language, timeFormat: "auto", theme: "system" });
+  const claude = () =>
+    buildClaudeGlanceResets({ feed: parseClaudeResets(FEED_FIXTURES.claudeResets)!, accounts: ["max", null], used: [], stale: false, now: NOW_GLANCE, language: "vi", timeFormat: "auto", theme: "system" });
+  const scenarios = (): Record<string, Options> => ({
+    defaults: { resets: codex("vi") },
+    wings: { resets: codex("vi"), wings: ["codex-resets:next", "codex-resets:since"], alert: { id: "a1", title: "Title", body: "Body", brand: "codex", severity: "normal" }, hour12: true },
+    tuned: {
+      display: { ...DEFAULT_DISPLAY, language: "en" },
+      resets: codex("en"),
+      island: { layout: "combined", tabs: ["resets", "quota"], resetParts: { ...DEFAULT_SETTINGS.island.resetParts, calendar: false } },
+      widget: { content: "starred", upcomingLimit: 3 },
+      wings: ["quota:next", "codex-resets:chance-7"],
+    },
+  });
+  /** SHA-256 of the documents 0.3.16 (`be761f5`) built from these same inputs. */
+  const RELEASED: Readonly<Record<string, string>> = {
+    defaults: "27f79bf299e37eeefc370b5c7c50f50479639888e0cc999596faaa04ec00652f",
+    wings: "e1d39d984056f8e5571c619d2146b07637743d83ce6fe62050e215cd3d53f1fa",
+    tuned: "d319d2b1be43d61562cff513331df6d8124f0c2c50107cf27a7267073fd52973",
+  };
+  const digest = (document: object) => createHash("sha256").update(JSON.stringify(document)).digest("hex");
+
+  it("stays byte for byte what 0.3.16 sent, even with a Claude tracker at hand", () => {
+    const tracker = claude();
+    expect(tracker).not.toBeNull();
+    for (const [name, options] of Object.entries(scenarios())) {
+      expect(digest(glance(options)), name).toBe(RELEASED[name]);
+      expect(digest(glance({ ...options, claudeResets: tracker })), name).toBe(RELEASED[name]);
+    }
+  });
+
+  it("carries no Claude key at all", () => {
+    const document = glance({ ...scenarios().defaults, claudeResets: claude() });
+    expect("claudeResets" in document).toBe(false);
+    expect("claudeResetsTab" in document.labels).toBe(false);
+    expect("claudeResetsOff" in document.labels).toBe(false);
+    expect("resetsProvider" in document.island).toBe(false);
+    expect("resetsProvider" in document.widget).toBe(false);
+    expect(JSON.stringify(document)).not.toMatch(/claude-resets/);
   });
 });
 
