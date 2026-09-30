@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /**
  * Builds the macOS desktop widget (a WidgetKit app extension) that `tauri build` copies into
- * `Quota Control.app/Contents/PlugIns` (see `bundle.macOS.files` in src-tauri/tauri.macos.conf.json).
+ * `Quota Control.app/Contents/PlugIns` (see `bundle.macOS.files` in src-tauri/tauri.macos.conf.json),
+ * and stages the popup's typeface beside it (`Fonts`) for the app's Resources, where the island
+ * reads it.
  *
  *   node scripts/macos-widget.mjs build [--arch aarch64|x86_64|universal] [--out DIR]
  *
@@ -15,7 +17,7 @@
  * ExtensionFoundation traps before the widget runs.
  */
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -26,6 +28,16 @@ const DEFAULT_OUT = join(ROOT, "src-tauri", "gen", "macos");
 const NAME = "QuotaControlWidget";
 const MINIMUM_MACOS = "14.0";
 const SWIFT_ARCH = { aarch64: "arm64", arm64: "arm64", x86_64: "x86_64", x64: "x86_64" };
+const FONT_PACKAGE = join(ROOT, "node_modules", "@fontsource-variable", "inter");
+/**
+ * The popup's typeface: the Inter subsets for Latin and Vietnamese text from the very package the
+ * popup bundles, so the island and the widgets draw the popup's letters (`Shared/GlanceFont.swift`).
+ */
+export const FONT_FILES = [
+  ["inter-latin-wght-normal.woff2", "Inter-Latin.woff2"],
+  ["inter-latin-ext-wght-normal.woff2", "Inter-LatinExt.woff2"],
+  ["inter-vietnamese-wght-normal.woff2", "Inter-Vietnamese.woff2"],
+];
 
 class WidgetError extends Error {}
 
@@ -77,6 +89,13 @@ export function signingIdentity(environment = process.env) {
   return "-";
 }
 
+/** Copy the typeface and its license into `destination`, a bundle's `Resources/Fonts`. */
+export function copyFonts(destination, fontPackage = FONT_PACKAGE) {
+  mkdirSync(destination, { recursive: true });
+  for (const [source, name] of FONT_FILES) copyFileSync(join(fontPackage, "files", source), join(destination, name));
+  copyFileSync(join(fontPackage, "LICENSE"), join(destination, "OFL.txt"));
+}
+
 export function appVersion() {
   const version = JSON.parse(readFileSync(join(ROOT, "src-tauri", "tauri.conf.json"), "utf8")).version;
   if (!/^\d+\.\d+\.\d+/.test(version ?? "")) fail(`tauri.conf.json has no usable version: ${version}`);
@@ -120,6 +139,9 @@ function build(options) {
   const version = appVersion();
   const plist = readFileSync(join(SOURCES, "Widget", "Info.plist"), "utf8").replaceAll("__VERSION__", version);
   writeFileSync(join(contents, "Info.plist"), plist);
+  copyFonts(join(contents, "Resources", "Fonts"));
+  rmSync(join(out, "Fonts"), { recursive: true, force: true });
+  copyFonts(join(out, "Fonts"));
 
   const sourceList = join(work, "intent-sources.txt");
   const constantsList = join(work, "intent-constants.txt");

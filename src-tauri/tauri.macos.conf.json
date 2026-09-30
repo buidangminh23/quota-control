@@ -11,7 +11,8 @@
       "minimumSystemVersion": "14.0",
       "signingIdentity": "-",
       "files": {
-        "PlugIns/QuotaControlWidget.appex": "gen/macos/QuotaControlWidget.appex"
+        "PlugIns/QuotaControlWidget.appex": "gen/macos/QuotaControlWidget.appex",
+        "Resources/Fonts": "gen/macos/Fonts"
       },
       "dmg": {
         "windowSize": { "width": 660, "height": 400 },
