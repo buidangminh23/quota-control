@@ -715,7 +715,7 @@ pub fn set_taskbar_strip(
 mod platform {
     use std::cell::{Cell, RefCell};
     use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, mpsc};
     use std::time::{Duration, Instant};
 
     use tauri::{AppHandle, Emitter, PhysicalPosition, PhysicalRect, PhysicalSize, Runtime};
@@ -723,7 +723,8 @@ mod platform {
     use windows_sys::Win32::Graphics::Gdi::{
         AC_SRC_ALPHA, AC_SRC_OVER, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION,
         CLR_INVALID, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject,
-        GetDC, GetPixel, MapWindowPoints, ReleaseDC, SelectObject,
+        GetDC, GetMonitorInfoW, GetPixel, MONITOR_DEFAULTTONEAREST, MONITORINFO, MapWindowPoints,
+        MonitorFromWindow, ReleaseDC, SelectObject,
     };
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
@@ -733,23 +734,21 @@ mod platform {
         TTM_UPDATETIPTEXTW, TTS_ALWAYSTIP, TTS_NOPREFIX, TTTOOLINFOW,
     };
     use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
-    use windows_sys::Win32::UI::Shell::{
-        ABE_BOTTOM, ABE_LEFT, ABE_RIGHT, ABE_TOP, ABM_GETTASKBARPOS, APPBARDATA, SHAppBarMessage,
-    };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, FindWindowExW,
         FindWindowW, GW_CHILD, GetMessageW, GetParent, GetWindow, GetWindowRect, HWND_TOP,
         IDC_ARROW, IsChild, IsWindow, LoadCursorW, MA_NOACTIVATE, MSG, PostMessageW,
-        RegisterClassExW, RegisterWindowMessageW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-        SWP_SHOWWINDOW, SendMessageW, SetTimer, SetWindowPos, TranslateMessage, ULW_ALPHA,
-        UpdateLayeredWindow, WM_APP, WM_DISPLAYCHANGE, WM_LBUTTONDOWN, WM_LBUTTONUP,
+        RegisterClassExW, RegisterWindowMessageW, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOSIZE, SWP_SHOWWINDOW, SendMessageW, SetTimer, SetWindowPos, TranslateMessage,
+        ULW_ALPHA, UpdateLayeredWindow, WM_APP, WM_DISPLAYCHANGE, WM_LBUTTONDOWN, WM_LBUTTONUP,
         WM_MOUSEACTIVATE, WM_NCDESTROY, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW,
-        WS_CHILD, WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-        WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE, WindowFromPoint,
+        WS_CHILD, WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOPARENTNOTIFY,
+        WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE, WindowFromPoint,
     };
 
     use windows::Win32::System::Com::{
-        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+        CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+        CoUninitialize,
     };
     use windows::Win32::UI::Accessibility::{
         CUIAutomation, IUIAutomation, IUIAutomation2, IUIAutomationCacheRequest,
@@ -766,6 +765,7 @@ mod platform {
     };
 
     const WM_APP_FRAME: u32 = WM_APP + 1;
+    const WM_APP_TASKBAR_CHANGED: u32 = WM_APP + 2;
     const SYNC_TIMER: usize = 1;
     const SYNC_INTERVAL_MS: u32 = 1000;
     const GAP_POINTS: f64 = 4.0;
@@ -783,9 +783,7 @@ mod platform {
     /// UI Automation id of every notification-area icon button; [`SLOT_NAME`] tells the app's apart.
     const SLOT_AUTOMATION_ID: &str = "NotifyItemIcon";
     const AUTOMATION_TIMEOUT_MS: u32 = 1000;
-    /// How long a notification area read earlier stands in for reads that fail once the taskbar's own
-    /// geometry has changed; while that geometry holds, the last read stands in for as long as reads
-    /// keep failing.
+    /// Maximum age of a cached notification-area layout from the current display generation.
     const LAYOUT_GRACE: Duration = Duration::from_secs(10);
     /// Passes in a row without the widened button before the strip leaves it, so a button being laid
     /// out again never makes the strip jump out and back.
@@ -883,6 +881,7 @@ mod platform {
     /// coordinates, and the info the popup renders against.
     struct Taskbar {
         hwnd: HWND,
+        origin: (i32, i32),
         notify_left: i32,
         width: i32,
         height: i32,
@@ -912,19 +911,25 @@ mod platform {
         }
     }
 
-    fn read_edge() -> TaskbarEdge {
-        let mut data: APPBARDATA = unsafe { std::mem::zeroed() };
-        data.cbSize = std::mem::size_of::<APPBARDATA>() as u32;
-        let found = unsafe { SHAppBarMessage(ABM_GETTASKBARPOS, &mut data) };
-        if found == 0 {
+    fn read_edge(hwnd: HWND, rect: &RECT) -> TaskbarEdge {
+        let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+        let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        if monitor.is_null() || unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
             return TaskbarEdge::Bottom;
         }
-        match data.uEdge {
-            ABE_TOP => TaskbarEdge::Top,
-            ABE_LEFT => TaskbarEdge::Left,
-            ABE_RIGHT => TaskbarEdge::Right,
-            ABE_BOTTOM => TaskbarEdge::Bottom,
-            _ => TaskbarEdge::Bottom,
+        if rect.right - rect.left >= rect.bottom - rect.top {
+            if (rect.top - info.rcMonitor.top).abs() < (rect.bottom - info.rcMonitor.bottom).abs() {
+                TaskbarEdge::Top
+            } else {
+                TaskbarEdge::Bottom
+            }
+        } else if (rect.left - info.rcMonitor.left).abs()
+            < (rect.right - info.rcMonitor.right).abs()
+        {
+            TaskbarEdge::Left
+        } else {
+            TaskbarEdge::Right
         }
     }
 
@@ -942,7 +947,7 @@ mod platform {
         let height = rect.bottom - rect.top;
         let dpi = unsafe { GetDpiForWindow(hwnd) };
         let scale = if dpi == 0 { 1.0 } else { f64::from(dpi) / 96.0 };
-        let edge = read_edge();
+        let edge = read_edge(hwnd, &rect);
         let notify_class = wide("TrayNotifyWnd");
         let notify = unsafe {
             FindWindowExW(
@@ -974,6 +979,7 @@ mod platform {
         };
         Some(Taskbar {
             hwnd,
+            origin: (rect.left, rect.top),
             notify_left,
             width,
             height,
@@ -1100,26 +1106,132 @@ mod platform {
         slot: Option<RECT>,
     }
 
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct LayoutKey {
+        taskbar: isize,
+        origin: (i32, i32),
+        geometry: (i32, i32, i32),
+        scale: u64,
+        generation: u64,
+    }
+
+    impl LayoutKey {
+        fn new(taskbar: &Taskbar, generation: u64) -> Self {
+            Self {
+                taskbar: taskbar.hwnd as isize,
+                origin: taskbar.origin,
+                geometry: (taskbar.notify_left, taskbar.width, taskbar.height),
+                scale: taskbar.info.scale.to_bits(),
+                generation,
+            }
+        }
+    }
+
+    struct LayoutResult {
+        key: LayoutKey,
+        layout: Option<Layout>,
+        read: Instant,
+    }
+
+    #[derive(Default)]
+    struct LayoutMailbox {
+        request: Option<LayoutKey>,
+        result: Option<LayoutResult>,
+    }
+
+    struct LayoutReader {
+        mailbox: Arc<Mutex<LayoutMailbox>>,
+        wake: mpsc::SyncSender<()>,
+        stopped: Arc<AtomicBool>,
+    }
+
+    impl LayoutReader {
+        fn start() -> Self {
+            let mailbox = Arc::new(Mutex::new(LayoutMailbox::default()));
+            let stopped = Arc::new(AtomicBool::new(false));
+            let (wake, events) = mpsc::sync_channel(1);
+            let worker_mailbox = mailbox.clone();
+            let worker_stopped = stopped.clone();
+            if let Err(error) = std::thread::Builder::new()
+                .name("taskbar-layout".into())
+                .spawn(move || {
+                    if unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_err() {
+                        tracing::warn!("taskbar layout COM initialization failed");
+                        return;
+                    }
+                    {
+                        let automation = create_automation();
+                        if automation.is_none() {
+                            tracing::warn!("taskbar layout UI Automation is unavailable");
+                        }
+                        while events.recv().is_ok() && !worker_stopped.load(Ordering::Acquire) {
+                            let key = worker_mailbox
+                                .lock()
+                                .ok()
+                                .and_then(|mut mailbox| mailbox.request.take());
+                            let Some(key) = key else { continue };
+                            let layout = automation.as_ref().and_then(|automation| {
+                                read_layout(automation, key.taskbar as HWND)
+                            });
+                            if let Ok(mut mailbox) = worker_mailbox.lock() {
+                                mailbox.result = Some(LayoutResult {
+                                    key,
+                                    layout,
+                                    read: Instant::now(),
+                                });
+                            }
+                        }
+                    }
+                    unsafe { CoUninitialize() };
+                })
+            {
+                tracing::warn!("taskbar layout reader failed to start: {error}");
+            }
+            Self {
+                mailbox,
+                wake,
+                stopped,
+            }
+        }
+
+        fn poll(&self, key: LayoutKey) -> Option<LayoutResult> {
+            let result = self.mailbox.try_lock().ok().and_then(|mut mailbox| {
+                mailbox.request = Some(key);
+                mailbox.result.take().filter(|result| result.key == key)
+            });
+            let _ = self.wake.try_send(());
+            result
+        }
+    }
+
+    impl Drop for LayoutReader {
+        fn drop(&mut self) {
+            self.stopped.store(true, Ordering::Release);
+            let _ = self.wake.try_send(());
+        }
+    }
+
     /// Reads the notification area's island. The Windows 11 tray is XAML without windows of its
     /// own, so its visible place comes from UI Automation; `TrayNotifyWnd` only marks where a stock
     /// taskbar draws it.
     struct Islands {
-        automation: Option<Automation>,
-        unavailable: bool,
+        reader: LayoutReader,
+        generation: u64,
+        key: Option<LayoutKey>,
         sample: Option<ColorSample>,
-        /// The last layout read, when, and the taskbar geometry it was read against
-        /// (`notify_left`, width, height).
-        last: Option<(Layout, Instant, (i32, i32, i32))>,
+        /// The last layout read, when, and the taskbar/display generation it was read against.
+        last: Option<(Layout, Instant, LayoutKey)>,
         /// How far the island reaches above and below the tray buttons, as last read from a frame
         /// centered on them.
         reach: Option<(i32, i32)>,
     }
 
     impl Islands {
-        const fn new() -> Self {
+        fn new() -> Self {
             Self {
-                automation: None,
-                unavailable: false,
+                reader: LayoutReader::start(),
+                generation: 0,
+                key: None,
                 sample: None,
                 last: None,
                 reach: None,
@@ -1135,96 +1247,85 @@ mod platform {
 
         /// Forget everything read from a taskbar that Explorer has since replaced.
         fn forget(&mut self) {
+            self.generation = self.generation.wrapping_add(1);
+            self.key = None;
             self.last = None;
             self.reach = None;
             self.distrust_fill();
         }
 
-        fn automation(&mut self) -> Option<&Automation> {
-            if self.automation.is_none() && !self.unavailable {
-                self.automation = create_automation();
-                if self.automation.is_none() {
-                    self.unavailable = true;
-                    tracing::warn!(
-                        "UI Automation is unavailable; the taskbar strip stays beside the notification area"
-                    );
-                }
-            }
-            self.automation.as_ref()
-        }
-
-        /// The notification area now, or the one read last when this read fails (UI Automation calls
-        /// into a busy Explorer time out now and then): for as long as the taskbar's geometry is the
-        /// one that read saw, otherwise for at most `LAYOUT_GRACE`. Failed reads therefore never move
-        /// the strip onto the notification area's buttons.
         fn layout(&mut self, taskbar: &Taskbar) -> Option<Layout> {
-            let geometry = (taskbar.notify_left, taskbar.width, taskbar.height);
-            match self.read_layout(taskbar.hwnd) {
-                Some(layout) => {
-                    self.last = Some((layout, Instant::now(), geometry));
-                    Some(layout)
+            let key = LayoutKey::new(taskbar, self.generation);
+            if self.key != Some(key) {
+                self.key = Some(key);
+                self.last = None;
+                self.reach = None;
+            }
+            if let Some(result) = self.reader.poll(key)
+                && let Some(layout) = result.layout
+            {
+                self.last = Some((layout, result.read, result.key));
+            }
+            self.last
+                .filter(|(_, read, seen)| *seen == key && read.elapsed() < LAYOUT_GRACE)
+                .map(|(layout, _, _)| layout)
+        }
+    }
+
+    fn read_layout(automation: &Automation, taskbar: HWND) -> Option<Layout> {
+        let site = xaml_site(taskbar)?;
+        let mut tray: Option<RECT> = None;
+        let mut frame = None;
+        let mut slot = None;
+        unsafe {
+            let root = automation
+                .client
+                .ElementFromHandle(windows::Win32::Foundation::HWND(site))
+                .ok()?;
+            let children = root
+                .FindAllBuildCache(TreeScope_Children, &automation.all, &automation.cache)
+                .ok()?;
+            for index in 0..children.Length().ok()? {
+                let Ok(child) = children.GetElement(index) else {
+                    continue;
+                };
+                let (Ok(class), Ok(bounds)) =
+                    (child.CachedClassName(), child.CachedBoundingRectangle())
+                else {
+                    continue;
+                };
+                if bounds.right <= bounds.left || bounds.bottom <= bounds.top {
+                    continue;
                 }
-                None => self
-                    .last
-                    .filter(|(_, read, seen)| *seen == geometry || read.elapsed() < LAYOUT_GRACE)
-                    .map(|(layout, _, _)| layout),
+                let rect = RECT {
+                    left: bounds.left,
+                    top: bounds.top,
+                    right: bounds.right,
+                    bottom: bounds.bottom,
+                };
+                let class = class.to_string();
+                if class.starts_with(TRAY_CLASS_PREFIX) {
+                    tray = Some(tray.map_or(rect, |tray| union(tray, rect)));
+                    let is_slot = child
+                        .CachedAutomationId()
+                        .is_ok_and(|id| id == SLOT_AUTOMATION_ID)
+                        && child.CachedName().is_ok_and(|name| name == SLOT_NAME);
+                    if is_slot && slot.is_none() {
+                        slot = Some(rect);
+                    }
+                } else if class == TASKBAR_FRAME_CLASS {
+                    frame = Some(rect);
+                }
             }
         }
+        Some(Layout {
+            tray: tray?,
+            frame,
+            slot,
+        })
+    }
 
-        fn read_layout(&mut self, taskbar: HWND) -> Option<Layout> {
-            let site = xaml_site(taskbar)?;
-            let automation = self.automation()?;
-            let mut tray: Option<RECT> = None;
-            let mut frame = None;
-            let mut slot = None;
-            unsafe {
-                let root = automation
-                    .client
-                    .ElementFromHandle(windows::Win32::Foundation::HWND(site))
-                    .ok()?;
-                let children = root
-                    .FindAllBuildCache(TreeScope_Children, &automation.all, &automation.cache)
-                    .ok()?;
-                for index in 0..children.Length().ok()? {
-                    let Ok(child) = children.GetElement(index) else {
-                        continue;
-                    };
-                    let (Ok(class), Ok(bounds)) =
-                        (child.CachedClassName(), child.CachedBoundingRectangle())
-                    else {
-                        continue;
-                    };
-                    if bounds.right <= bounds.left || bounds.bottom <= bounds.top {
-                        continue;
-                    }
-                    let rect = RECT {
-                        left: bounds.left,
-                        top: bounds.top,
-                        right: bounds.right,
-                        bottom: bounds.bottom,
-                    };
-                    let class = class.to_string();
-                    if class.starts_with(TRAY_CLASS_PREFIX) {
-                        tray = Some(tray.map_or(rect, |tray| union(tray, rect)));
-                        let is_slot = child
-                            .CachedAutomationId()
-                            .is_ok_and(|id| id == SLOT_AUTOMATION_ID)
-                            && child.CachedName().is_ok_and(|name| name == SLOT_NAME);
-                        if is_slot && slot.is_none() {
-                            slot = Some(rect);
-                        }
-                    } else if class == TASKBAR_FRAME_CLASS {
-                        frame = Some(rect);
-                    }
-                }
-            }
-            Some(Layout {
-                tray: tray?,
-                frame,
-                slot,
-            })
-        }
-
+    impl Islands {
         /// The island's fill at `at`. Readings are taken only where the taskbar itself shows and
         /// never while the popup's shadow reaches the taskbar (`popup_open`); a reading that differs
         /// from the fill in use replaces it once the next reading agrees (see [`Fill::read`]), so a
@@ -1330,7 +1431,6 @@ mod platform {
         app: AppHandle<R>,
         shared: Shared,
         on_cover: CoverHandler,
-        taskbar_created: u32,
         window: Option<Window>,
         bitmap: Option<Bitmap>,
         /// The current frame composed for its place; `None` while it sits as sent, beside a stock
@@ -1356,11 +1456,33 @@ mod platform {
         static STATE: RefCell<Option<Box<dyn StripThread>>> = const { RefCell::new(None) };
         static CLICK: RefCell<Option<(ClickHandler, Dispatch)>> = const { RefCell::new(None) };
         static PRESSED: Cell<Option<Instant>> = const { Cell::new(None) };
+        static TASKBAR_CREATED: Cell<u32> = const { Cell::new(0) };
+        static TASKBAR_CHANGE: RefCell<PendingTaskbarChange> = const { RefCell::new(PendingTaskbarChange(None)) };
+    }
+
+    struct PendingTaskbarChange(Option<bool>);
+
+    impl PendingTaskbarChange {
+        fn push(&mut self, restarted: bool) -> bool {
+            let post = self.0.is_none();
+            self.0 = Some(self.0.unwrap_or(false) || restarted);
+            post
+        }
+
+        fn take(&mut self) -> Option<bool> {
+            self.0.take()
+        }
+    }
+
+    fn queue_taskbar_change(hwnd: HWND, restarted: bool) {
+        let post = TASKBAR_CHANGE.with(|change| change.borrow_mut().push(restarted));
+        if post && unsafe { PostMessageW(hwnd, WM_APP_TASKBAR_CHANGED, 0, 0) } == 0 {
+            TASKBAR_CHANGE.with(|change| change.borrow_mut().take());
+        }
     }
 
     /// Object-safe view of the thread state, so the window procedures need no runtime generic.
     trait StripThread {
-        fn taskbar_created(&self) -> u32;
         fn apply_pending(&mut self);
         fn sync(&mut self);
         /// Re-read the taskbar after a theme or display change, or (`restarted`) after Explorer
@@ -1370,10 +1492,6 @@ mod platform {
     }
 
     impl<R: Runtime> StripThread for State<R> {
-        fn taskbar_created(&self) -> u32 {
-            self.taskbar_created
-        }
-
         fn apply_pending(&mut self) {
             let update = self
                 .shared
@@ -1390,11 +1508,11 @@ mod platform {
         }
 
         fn taskbar_changed(&mut self, restarted: bool) {
+            self.islands.forget();
+            self.slot = None;
+            self.slot_misses = 0;
             if restarted {
-                self.islands.forget();
                 self.slot_wanted = None;
-            } else {
-                self.islands.distrust_fill();
             }
             self.sync();
         }
@@ -1455,7 +1573,13 @@ mod platform {
             let gap = (GAP_POINTS * scale).round() as i32;
             let padding = (FRAME_PADDING_POINTS * scale).round() as u32;
             let popup_open = self.shared.popup.load(Ordering::Acquire);
+            let previous_key = self.islands.key;
             let layout = self.islands.layout(taskbar);
+            if self.islands.key != previous_key {
+                self.slot = None;
+                self.slot_misses = 0;
+                self.slot_request = None;
+            }
             let button = layout
                 .and_then(|layout| layout.slot)
                 .map(|slot| to_client(taskbar.hwnd, slot))
@@ -1538,7 +1662,7 @@ mod platform {
                         placement.1,
                         placement.2,
                         placement.3,
-                        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                        SWP_ASYNCWINDOWPOS | SWP_NOACTIVATE | SWP_SHOWWINDOW,
                     )
                 };
                 self.placed = Some(placement);
@@ -1551,7 +1675,7 @@ mod platform {
                         0,
                         0,
                         0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                        SWP_ASYNCWINDOWPOS | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
                     )
                 };
             }
@@ -1666,7 +1790,7 @@ mod platform {
         let title = wide("Quota Control");
         let strip = unsafe {
             CreateWindowExW(
-                WS_EX_LAYERED | WS_EX_NOACTIVATE,
+                WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_NOPARENTNOTIFY,
                 class.as_ptr(),
                 title.as_ptr(),
                 WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
@@ -1871,12 +1995,7 @@ mod platform {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
-        let mut taskbar_created = 0;
-        STATE.with(|cell| {
-            if let Ok(state) = cell.try_borrow() {
-                taskbar_created = state.as_ref().map_or(0, |state| state.taskbar_created());
-            }
-        });
+        let taskbar_created = TASKBAR_CREATED.with(Cell::get);
         match message {
             WM_APP_FRAME => {
                 with_state(|state| state.apply_pending());
@@ -1887,11 +2006,17 @@ mod platform {
                 0
             }
             WM_SETTINGCHANGE | WM_DISPLAYCHANGE => {
-                with_state(|state| state.taskbar_changed(false));
-                unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+                queue_taskbar_change(hwnd, false);
+                0
             }
             _ if taskbar_created != 0 && message == taskbar_created => {
-                with_state(|state| state.taskbar_changed(true));
+                queue_taskbar_change(hwnd, true);
+                0
+            }
+            WM_APP_TASKBAR_CHANGED => {
+                if let Some(restarted) = TASKBAR_CHANGE.with(|change| change.borrow_mut().take()) {
+                    with_state(|state| state.taskbar_changed(restarted));
+                }
                 0
             }
             _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
@@ -1905,6 +2030,7 @@ mod platform {
         lparam: LPARAM,
     ) -> LRESULT {
         match message {
+            WM_SETTINGCHANGE | WM_DISPLAYCHANGE => 0,
             WM_MOUSEACTIVATE => MA_NOACTIVATE as LRESULT,
             WM_LBUTTONDOWN => {
                 PRESSED.with(|pressed| pressed.set(Some(Instant::now())));
@@ -1936,7 +2062,6 @@ mod platform {
         on_cover: CoverHandler,
         shared: Shared,
     ) {
-        let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
         unsafe {
             let controls = INITCOMMONCONTROLSEX {
                 dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
@@ -1978,6 +2103,7 @@ mod platform {
         }
         let created = wide("TaskbarCreated");
         let taskbar_created = unsafe { RegisterWindowMessageW(created.as_ptr()) };
+        TASKBAR_CREATED.with(|created| created.set(taskbar_created));
         let dispatcher = app.clone();
         CLICK.with(|cell| {
             *cell.borrow_mut() = Some((
@@ -1995,7 +2121,6 @@ mod platform {
                 app,
                 shared,
                 on_cover,
-                taskbar_created,
                 window: None,
                 bitmap: None,
                 composed: None,
@@ -2021,6 +2146,171 @@ mod platform {
                 TranslateMessage(&message);
                 DispatchMessageW(&message);
             }
+        }
+    }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn reader() -> (LayoutReader, mpsc::Receiver<()>) {
+            let (wake, events) = mpsc::sync_channel(1);
+            (
+                LayoutReader {
+                    mailbox: Arc::new(Mutex::new(LayoutMailbox::default())),
+                    wake,
+                    stopped: Arc::new(AtomicBool::new(false)),
+                },
+                events,
+            )
+        }
+
+        fn taskbar() -> Taskbar {
+            Taskbar {
+                hwnd: 1_isize as HWND,
+                origin: (0, 880),
+                notify_left: 1000,
+                width: 1470,
+                height: 43,
+                info: TaskbarInfo {
+                    supported: true,
+                    height: 43,
+                    scale: 1.0,
+                    theme: TaskbarTheme::Dark,
+                    edge: TaskbarEdge::Bottom,
+                },
+            }
+        }
+
+        fn layout() -> Layout {
+            Layout {
+                tray: RECT {
+                    left: 1000,
+                    top: 880,
+                    right: 1470,
+                    bottom: 923,
+                },
+                frame: None,
+                slot: None,
+            }
+        }
+
+        #[test]
+        fn layout_poll_never_waits_for_a_busy_mailbox() {
+            let (reader, _events) = reader();
+            let guard = reader.mailbox.lock().unwrap();
+            let started = Instant::now();
+            assert!(reader.poll(LayoutKey::new(&taskbar(), 0)).is_none());
+            assert!(started.elapsed() < Duration::from_millis(250));
+            drop(guard);
+        }
+
+        #[test]
+        fn pending_layout_requests_keep_only_the_latest_display() {
+            let (reader, events) = reader();
+            let mut current = taskbar();
+            for width in 1000..2000 {
+                current.width = width;
+                assert!(reader.poll(LayoutKey::new(&current, 0)).is_none());
+            }
+            assert_eq!(
+                reader.mailbox.lock().unwrap().request,
+                Some(LayoutKey::new(&current, 0))
+            );
+            assert!(events.try_recv().is_ok());
+            assert!(events.try_recv().is_err());
+        }
+
+        #[test]
+        fn layout_poll_remains_responsive_during_a_stalled_provider() {
+            let (reader, events) = reader();
+            let mailbox = reader.mailbox.clone();
+            let (entered, ready) = mpsc::channel();
+            let (release, blocked) = mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                events.recv().unwrap();
+                let request = mailbox.lock().unwrap().request.take().unwrap();
+                entered.send(()).unwrap();
+                blocked.recv().unwrap();
+                mailbox.lock().unwrap().result = Some(LayoutResult {
+                    key: request,
+                    layout: Some(layout()),
+                    read: Instant::now(),
+                });
+            });
+            let key = LayoutKey::new(&taskbar(), 0);
+            reader.poll(key);
+            ready.recv_timeout(Duration::from_secs(5)).unwrap();
+            let started = Instant::now();
+            for _ in 0..100 {
+                assert!(reader.poll(key).is_none());
+            }
+            let elapsed = started.elapsed();
+            release.send(()).unwrap();
+            worker.join().unwrap();
+            assert!(elapsed < Duration::from_millis(250));
+            assert!(reader.poll(key).unwrap().layout.is_some());
+        }
+
+        #[test]
+        fn layouts_from_replaced_handles_displays_or_generations_are_discarded() {
+            let (reader, _events) = reader();
+            let old = LayoutKey::new(&taskbar(), 0);
+            let mut variants = vec![LayoutKey {
+                generation: 1,
+                ..old
+            }];
+            let mut changed = taskbar();
+            changed.hwnd = 2_isize as HWND;
+            variants.push(LayoutKey::new(&changed, 0));
+            changed = taskbar();
+            changed.origin.1 = 1037;
+            variants.push(LayoutKey::new(&changed, 0));
+            changed = taskbar();
+            changed.width = 1920;
+            variants.push(LayoutKey::new(&changed, 0));
+            changed = taskbar();
+            changed.info.scale = 1.5;
+            variants.push(LayoutKey::new(&changed, 0));
+            for key in variants {
+                reader.mailbox.lock().unwrap().result = Some(LayoutResult {
+                    key: old,
+                    layout: Some(layout()),
+                    read: Instant::now(),
+                });
+                assert!(reader.poll(key).is_none());
+            }
+        }
+
+        #[test]
+        fn cached_layout_is_invalidated_even_when_restart_reuses_the_handle() {
+            let (reader, _events) = reader();
+            let key = LayoutKey::new(&taskbar(), 0);
+            let mut islands = Islands {
+                reader,
+                generation: 0,
+                key: Some(key),
+                sample: None,
+                last: Some((layout(), Instant::now(), key)),
+                reach: None,
+            };
+            assert!(islands.layout(&taskbar()).is_some());
+            islands.forget();
+            assert!(islands.layout(&taskbar()).is_none());
+        }
+
+        #[test]
+        fn broadcast_bursts_coalesce_without_losing_an_explorer_restart() {
+            let mut pending = PendingTaskbarChange(None);
+            assert!(pending.push(false));
+            for _ in 0..100 {
+                assert!(!pending.push(false));
+            }
+            assert!(!pending.push(true));
+            assert!(!pending.push(false));
+            assert_eq!(pending.take(), Some(true));
+            assert_eq!(pending.take(), None);
+            assert!(pending.push(false));
+            assert_eq!(pending.take(), Some(false));
         }
     }
 }
