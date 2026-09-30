@@ -210,6 +210,18 @@ export function offeredRows<Row extends { data: WidgetData }>(
   return { always: always.filter(hasData), onDemand: onDemand.filter(hasData) };
 }
 
+/** How many banked resets the row reports, or 0 for any other row: the count under which the popup
+ * offers "Dùng 1 lượt". */
+export function availableResets(data: WidgetData): number {
+  if (!data.showsResetExpiries || !data.hasData) return 0;
+  return data.values.find((value) => value.kind === "count")?.number ?? 0;
+}
+
+/** The first of `dates` still ahead of `now`: the reset credit a redemption spends. */
+export function soonestExpiry(dates: readonly Date[], now: Date): Date | null {
+  return dates.reduce<Date | null>((best, date) => (date.getTime() > now.getTime() && (best === null || date < best) ? date : best), null);
+}
+
 export function isBounded(data: WidgetData): boolean {
   return data.limit !== null;
 }

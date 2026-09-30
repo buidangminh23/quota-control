@@ -320,6 +320,10 @@ private struct QuotaMetricRow: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                if let redeem = metric.redeem {
+                    WidgetRedeemButton(metric: metric, redeem: redeem, now: now)
+                        .padding(.top, 1)
+                }
             }
         }
     }
@@ -542,6 +546,9 @@ private struct CompactAccount: View {
             }
             ForEach(metrics) { metric in
                 line(metric)
+                if headed, let redeem = metric.redeem {
+                    WidgetRedeemButton(metric: metric, redeem: redeem, now: now)
+                }
             }
         }
     }

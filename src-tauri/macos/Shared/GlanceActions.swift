@@ -73,3 +73,70 @@ enum GlanceActionRequest: Equatable {
         try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
     }
 }
+
+/// The popup's "Dùng 1 lượt" under a connected Codex account's reset credits (`GlanceRedeem` in
+/// `src/model/glance.ts`): the account, the button's words and its confirmation's, as the popup
+/// builds them.
+struct GlanceRedeem: Decodable, Equatable {
+    var providerId: String
+    /// `Dùng 1 lượt`.
+    var redeem: String
+    /// `Đang dùng…`, while the reset is being spent.
+    var redeeming: String
+    /// The confirmation's title.
+    var title: String
+    /// The confirmation's words without an expiry.
+    var message: String
+    /// The confirmation's words with `{at}` where the soonest credit's expiry goes.
+    var messageAt: String?
+    /// When the soonest credit still ahead expires.
+    var expiresAt: Date?
+    /// How `{at}` words `expiresAt` at the moment the confirmation is asked.
+    var expiry: GlanceDayWords?
+    /// `Xác nhận`.
+    var confirm: String
+    /// `Hủy`.
+    var cancel: String
+
+    var request: GlanceActionRequest { .redeemLimitReset(providerId: providerId) }
+
+    /// The words the button reads in `phase`: `Dùng 1 lượt`, or `Đang dùng…` while the reset it asked
+    /// for is being spent.
+    func buttonTitle(_ phase: GlanceRedeemPhase) -> String {
+        phase == .redeeming ? redeeming : redeem
+    }
+
+    /// The confirmation's words as the popup builds them when it is asked at `now`: naming the
+    /// soonest credit's expiry while it is ahead.
+    func confirmMessage(now: Date, locale: Locale, calendar: Calendar = .current) -> String {
+        guard let messageAt, let expiresAt, expiresAt > now, let expiry else { return message }
+        return messageAt.replacingOccurrences(
+            of: GlanceResetRow.momentPlaceholder,
+            with: expiry.label(expiresAt, now: now, locale: locale, calendar: calendar)
+        )
+    }
+}
+
+/// Where a redemption button stands: ready, asking "Xác nhận" or "Hủy" in its place, or saying
+/// `Đang dùng…` while the request it sent has not changed the account's count yet.
+enum GlanceRedeemPhase: Equatable {
+    case ready
+    case confirming
+    case redeeming
+}
+
+extension GlanceDocument {
+    /// The row carrying `providerId`'s redemption button, on the island or the widget.
+    func redeemRow(providerId: String) -> GlanceMetric? {
+        (providers + widget.providers)
+            .first { $0.id == providerId }?
+            .metrics.first { $0.redeem?.providerId == providerId }
+    }
+
+    /// The reading of the row carrying `request`'s button (its count of resets), to tell when the
+    /// app's readings have caught up with a press; `nil` for any other request.
+    func redeemReading(for request: GlanceActionRequest) -> String? {
+        guard case let .redeemLimitReset(providerId) = request else { return nil }
+        return redeemRow(providerId: providerId)?.headline
+    }
+}

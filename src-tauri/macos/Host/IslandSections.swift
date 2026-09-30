@@ -138,6 +138,10 @@ struct IslandDetails: View {
     var resetFolds = GlanceResetFolds(foldsLists: true)
     /// A click on a fold of the reset view; the measuring copy leaves it out.
     var onResetFold: ((GlanceResetFold) -> Void)?
+    /// Where each account's "Dùng 1 lượt" stands, so the open island is measured with its confirmation.
+    var redeems = IslandRedeemState()
+    /// A press on a "Dùng 1 lượt", "Hủy" or "Xác nhận"; the measuring copy leaves it out.
+    var onRedeem: ((IslandRedeemStep, GlanceRedeem) -> Void)?
 
     var body: some View {
         let plan = IslandPlan.make(document, now: now, selected: selected)
@@ -196,7 +200,10 @@ struct IslandDetails: View {
     private func content(_ section: GlanceView, named: Bool) -> some View {
         switch section {
         case .quota:
-            IslandQuotaSection(document: document, now: now, budget: budget, availableWidth: max(1, availableWidth - 40))
+            IslandQuotaSection(
+                document: document, now: now, budget: budget, availableWidth: max(1, availableWidth - 40),
+                redeems: redeems, onRedeem: onRedeem
+            )
         case .resets:
             if let resets = document.resets {
                 IslandResetsSection(
@@ -321,6 +328,8 @@ struct IslandQuotaSection: View {
     let now: Date
     let budget: IslandBudget
     var availableWidth: CGFloat = 340
+    var redeems = IslandRedeemState()
+    var onRedeem: ((IslandRedeemStep, GlanceRedeem) -> Void)?
 
     var body: some View {
         let document = self.document.reading(at: now)
@@ -330,7 +339,7 @@ struct IslandQuotaSection: View {
         let restores = document.island.shows.resets && document.labels.restoresAt != nil && !document.resetWording.exact
         VStack(alignment: .leading, spacing: 10) {
             if shown.count > 1 && availableWidth >= 620 {
-                let split = Self.balancedSplit(shown, perAccount: perAccount, shows: document.island.shows, restores: restores, now: now)
+                let split = Self.balancedSplit(shown, perAccount: perAccount, shows: document.island.shows, restores: restores, redeems: redeems, now: now)
                 HStack(alignment: .top, spacing: 18) {
                     column(Array(shown[..<split]), document: document, perAccount: perAccount)
                     column(Array(shown[split...]), document: document, perAccount: perAccount)
@@ -352,7 +361,7 @@ struct IslandQuotaSection: View {
     private func column(_ providers: [GlanceProvider], document: GlanceDocument, perAccount: Int) -> some View {
         VStack(alignment: .leading, spacing: 13) {
             ForEach(providers) { provider in
-                IslandAccount(provider: provider, document: document, now: now, perAccount: perAccount)
+                IslandAccount(provider: provider, document: document, now: now, perAccount: perAccount, redeems: redeems, onRedeem: onRedeem)
             }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -361,8 +370,11 @@ struct IslandQuotaSection: View {
     /// Where the second column starts: keeps the accounts in reading order, top to bottom and
     /// left to right, with the two columns as close in height as the accounts allow. `restores`: a
     /// limit counting down has the line with the moment it comes back under it.
-    static func balancedSplit(_ providers: [GlanceProvider], perAccount: Int, shows: GlanceShows, restores: Bool = false, now: Date) -> Int {
-        let weights = providers.map { weight($0, perAccount: perAccount, shows: shows, restores: restores, now: now) }
+    static func balancedSplit(
+        _ providers: [GlanceProvider], perAccount: Int, shows: GlanceShows, restores: Bool = false,
+        redeems: IslandRedeemState = IslandRedeemState(), now: Date
+    ) -> Int {
+        let weights = providers.map { weight($0, perAccount: perAccount, shows: shows, restores: restores, redeems: redeems, now: now) }
         let total = weights.reduce(0, +)
         var best = (index: 1, tallest: CGFloat.infinity)
         var left: CGFloat = 0
@@ -379,7 +391,7 @@ struct IslandQuotaSection: View {
     /// The rough height of one account, in lines: the plan period's corner takes the email's line
     /// when there is none; a limit's headline shares its line with the reset countdown, and the
     /// moment it comes back takes a smaller line under them.
-    private static func weight(_ provider: GlanceProvider, perAccount: Int, shows: GlanceShows, restores: Bool, now: Date) -> CGFloat {
+    private static func weight(_ provider: GlanceProvider, perAccount: Int, shows: GlanceShows, restores: Bool, redeems: IslandRedeemState, now: Date) -> CGFloat {
         var lines: CGFloat = 1.3
         if (shows.account && provider.account != nil) || provider.term != nil { lines += 0.9 }
         if let row = provider.resetRow(at: now) { lines += row.note == nil ? 2.1 : 3 }
@@ -388,6 +400,7 @@ struct IslandQuotaSection: View {
             lines += 1.2
             if metric.fraction != nil { lines += 1.5 }
             if restores, metric.resetsAt != nil { lines += 0.8 }
+            if metric.redeem != nil { lines += redeems.phase(for: metric, now: now) == .confirming ? 8 : 1.9 }
         }
         if provider.metrics.count > perAccount { lines += 1 }
         return lines + 0.9
@@ -401,6 +414,8 @@ struct IslandAccount: View {
     let document: GlanceDocument
     let now: Date
     let perAccount: Int
+    var redeems = IslandRedeemState()
+    var onRedeem: ((IslandRedeemStep, GlanceRedeem) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -412,7 +427,10 @@ struct IslandAccount: View {
                 GlanceNoticeRow(text: provider.notice ?? document.labels.noData, onDark: true, size: 11)
             }
             ForEach(provider.metrics.prefix(perAccount)) { metric in
-                IslandMetricRow(metric: metric, document: document, now: now, showsReset: document.island.shows.resets)
+                IslandMetricRow(
+                    metric: metric, document: document, now: now, showsReset: document.island.shows.resets,
+                    redeemPhase: redeems.phase(for: metric, now: now), onRedeem: onRedeem
+                )
             }
             if provider.metrics.count > perAccount {
                 IslandMoreLine(text: "+\(provider.metrics.count - perAccount)")
@@ -524,6 +542,8 @@ struct IslandMetricRow: View {
     let document: GlanceDocument
     let now: Date
     var showsReset = true
+    var redeemPhase: GlanceRedeemPhase = .ready
+    var onRedeem: ((IslandRedeemStep, GlanceRedeem) -> Void)?
 
     var body: some View {
         if let fraction = metric.fraction {
@@ -562,10 +582,15 @@ struct IslandMetricRow: View {
                 }
             }
         } else {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                title
-                Spacer(minLength: 4)
-                GlanceValueWithDot(metric: metric, now: now, onDark: true) { headline }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    title
+                    Spacer(minLength: 4)
+                    GlanceValueWithDot(metric: metric, now: now, onDark: true) { headline }
+                }
+                if let redeem = metric.redeem {
+                    IslandRedeemControl(redeem: redeem, phase: redeemPhase, now: now, locale: document.resolvedLocale, onStep: onRedeem)
+                }
             }
         }
     }
@@ -722,5 +747,80 @@ struct IslandAlertView: View {
             .padding(.top, 10)
             .padding(.bottom, 16)
         }
+    }
+}
+
+/// A press on the island's "Dùng 1 lượt" or on the confirmation it asks for.
+enum IslandRedeemStep {
+    case press
+    case confirm
+    case cancel
+}
+
+/// Where the island's "Dùng 1 lượt" buttons stand: the one asking "Xác nhận" or "Hủy", with the
+/// count its account read when it was pressed, and the ones whose request went to the app, until
+/// that account's count changes or `sentLifetime` passes.
+struct IslandRedeemState: Equatable {
+    struct Mark: Equatable {
+        var reading: String
+        var until: Date?
+    }
+
+    static let sentLifetime: TimeInterval = 30
+
+    var confirming: [String: Mark] = [:]
+    var sent: [String: Mark] = [:]
+
+    /// Where `metric`'s button stands at `now`: `Đang dùng…` while its request is on its way and the
+    /// count has not changed, the confirmation while it was pressed at this count, else ready.
+    func phase(for metric: GlanceMetric, now: Date) -> GlanceRedeemPhase {
+        guard let redeem = metric.redeem else { return .ready }
+        if let mark = sent[redeem.providerId], mark.reading == metric.headline, (mark.until ?? .distantFuture) > now {
+            return .redeeming
+        }
+        if confirming[redeem.providerId]?.reading == metric.headline { return .confirming }
+        return .ready
+    }
+
+    /// The marks still standing for `document`: a mark goes once its account's count changed, its
+    /// button went or its time ran out.
+    func pruned(for document: GlanceDocument?, now: Date) -> IslandRedeemState {
+        let current = { (providerId: String) in document?.redeemRow(providerId: providerId)?.headline }
+        return IslandRedeemState(
+            confirming: confirming.filter { current($0.key) == $0.value.reading },
+            sent: sent.filter { current($0.key) == $0.value.reading && ($0.value.until ?? .distantFuture) > now }
+        )
+    }
+}
+
+/// The popup's "Dùng 1 lượt" under a Codex account's reset credits, on the island: the small bordered
+/// button right-aligned under the row, which a press turns into the popup's confirmation in its
+/// place, "Hủy" beside "Xác nhận" in red; after "Xác nhận" the button reads `Đang dùng…`, disabled.
+struct IslandRedeemControl: View {
+    let redeem: GlanceRedeem
+    let phase: GlanceRedeemPhase
+    let now: Date
+    let locale: Locale
+    let onStep: ((IslandRedeemStep, GlanceRedeem) -> Void)?
+
+    var body: some View {
+        Group {
+            if phase == .confirming {
+                GlanceConfirmCard(title: redeem.title, message: redeem.confirmMessage(now: now, locale: locale)) {
+                    Button(redeem.cancel) { onStep?(.cancel, redeem) }
+                        .buttonStyle(GlanceButtonStyle(tone: .bordered, wide: true))
+                    Button(redeem.confirm) { onStep?(.confirm, redeem) }
+                        .buttonStyle(GlanceButtonStyle(tone: .destructive, wide: true))
+                }
+                .frame(maxWidth: .infinity)
+            } else {
+                GlanceRowAction {
+                    Button(redeem.buttonTitle(phase)) { onStep?(.press, redeem) }
+                        .buttonStyle(GlanceButtonStyle(tone: .bordered, small: true))
+                        .disabled(phase == .redeeming)
+                }
+            }
+        }
+        .environment(\.colorScheme, .dark)
     }
 }

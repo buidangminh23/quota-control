@@ -825,6 +825,8 @@ struct GlanceMetric: Decodable, Equatable, Identifiable {
     var pace: GlancePace? = nil
     /// The reading once `resetsAt` has passed.
     var after: GlanceAfterReset? = nil
+    /// The popup's "Dùng 1 lượt" under a connected Codex account's reset credits.
+    var redeem: GlanceRedeem? = nil
     /// The note on the title line, worked out when the metric is read at a moment
     /// (`reading(at:pacing:)`); never decoded.
     var note: GlancePaceNote? = nil
@@ -832,7 +834,7 @@ struct GlanceMetric: Decodable, Equatable, Identifiable {
     var tick: Double? = nil
 
     fileprivate enum CodingKeys: String, CodingKey {
-        case id, label, value, headline, fraction, severity, resetsAt, detail, countdown, expiresAt, period, pace, after
+        case id, label, value, headline, fraction, severity, resetsAt, detail, countdown, expiresAt, period, pace, after, redeem
     }
 
     /// `value`, or the countdown's words at `now`, its span as short as `GlanceFormat.shortSpan`.
@@ -859,6 +861,7 @@ extension GlanceMetric {
         period = try? container.decodeIfPresent(String.self, forKey: .period)
         pace = try? container.decodeIfPresent(GlancePace.self, forKey: .pace)
         after = try? container.decodeIfPresent(GlanceAfterReset.self, forKey: .after)
+        redeem = try? container.decodeIfPresent(GlanceRedeem.self, forKey: .redeem)
     }
 }
 

@@ -76,10 +76,13 @@ private struct GlanceButtonBody: View {
 }
 
 /// The popup's confirmation dialog (`DialogCard`), drawn in place of the button that asked for it:
-/// the title, the words when there is room, then the two buttons side by side, cancel first.
+/// the title, the words when there is room, then the two buttons side by side, cancel first, or one
+/// over the other where side by side they would cut their words short. `compact` trims the margins
+/// for a small widget.
 struct GlanceConfirmCard<Actions: View>: View {
     let title: String
     let message: String?
+    var compact = false
     @ViewBuilder var actions: Actions
     @Environment(\.colorScheme) private var colorScheme
 
@@ -96,16 +99,34 @@ struct GlanceConfirmCard<Actions: View>: View {
                     .lineSpacing(2)
                     .foregroundStyle(palette.secondary)
             }
-            HStack(spacing: 8) {
-                actions
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    actions
+                }
+                VStack(spacing: 6) {
+                    actions
+                }
             }
-            .padding(.top, 6)
+            .padding(.top, compact ? 2 : 6)
         }
         .multilineTextAlignment(.center)
         .fixedSize(horizontal: false, vertical: true)
-        .padding(EdgeInsets(top: 16, leading: 16, bottom: 14, trailing: 16))
+        .padding(compact ? EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10) : EdgeInsets(top: 16, leading: 16, bottom: 14, trailing: 16))
         .frame(maxWidth: 272)
         .background(shape.fill(palette.menu))
         .overlay(shape.strokeBorder(palette.menuBorder, lineWidth: 0.5))
+    }
+}
+
+/// A button under its row, right-aligned, as the popup's `.uc-row-action` places it.
+struct GlanceRowAction<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
+            content
+        }
+        .frame(maxWidth: .infinity)
     }
 }
