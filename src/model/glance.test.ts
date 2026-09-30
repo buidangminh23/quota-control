@@ -358,8 +358,9 @@ describe("special wings", () => {
     expect(wingIds(glance({ wings: ["quota:next", null] }).island.wings)).toEqual(["codex@52d0|codex@52d0.session", "claude@7c1e|claude@7c1e.session"]);
   });
 
-  it("shows the announced free reset's countdown, then the 24-hour chance once it has passed", () => {
-    const wing = glance({ resets: TRACKER, wings: ["codex-resets:next", null] }).island.wings[0]!;
+  it("reads the Codex card's Reset free row word for word while it shows, then the 24-hour chance", () => {
+    const next = (resets: GlanceResets) => glance({ resets, wings: ["codex-resets:next", null] }).island.wings[0]!;
+    const wing = next(TRACKER);
     expect(wing).toMatchObject({ id: CODEX_RESETS_PROVIDER_ID, name: "Reset Codex", brand: "codex", color: "#10A37F" });
     expect(wing.metrics[0]).toEqual({
       id: "codex-resets:next",
@@ -370,12 +371,24 @@ describe("special wings", () => {
       severity: "normal",
       countdown: { at: TRACKER.upcoming!.countdown!.at, text: "sau {d}", after: "chờ xác nhận" },
     });
-    const passed = { ...TRACKER, upcoming: { ...TRACKER.upcoming!, countdown: { at: new Date(FETCHED - 60_000).toISOString(), text: "sau {d}" } } };
-    const fallback = glance({ resets: passed, wings: ["codex-resets:next", null] }).island.wings[0]!.metrics[0]!;
-    expect(fallback).toMatchObject({ id: "codex-resets:next", label: "24 giờ tới", value: "22%", fraction: 0.22, severity: "normal" });
-    expect(fallback.countdown).toBeUndefined();
+    const at = TRACKER.upcoming!.countdown!.at;
+    const estimate = { ...TRACKER, upcoming: { ...TRACKER.upcoming!, countdown: { at, text: "sau ~{d}", after: "chờ xác nhận" } } };
+    expect(next(estimate).metrics[0]!.countdown).toEqual({ at, text: "sau ~{d}", after: "chờ xác nhận" });
+    const watch = { ...TRACKER, upcoming: { title: "Có thể reset", tone: "notice" as const, countdown: { at, text: "trong {d} tới" }, caption: "65% · trước 13:00 · CN 27/09 · GMT+7", hideAt: at, chancePercent: 65 } };
+    expect(next(watch).metrics[0]).toMatchObject({ label: "Có thể reset", countdown: { at, text: "trong {d} tới" } });
+
+    const due = new Date(FETCHED - 60_000).toISOString();
+    const awaiting = { ...TRACKER, upcoming: { ...TRACKER.upcoming!, countdown: { at: due, text: "sau {d}", after: "chờ xác nhận" } } };
+    expect(next(awaiting).metrics[0]).toMatchObject({ label: "Reset free", countdown: { at: due, text: "sau {d}", after: "chờ xác nhận" } });
     const untimed = { ...TRACKER, upcoming: { title: "Reset free", tone: "positive" as const, value: "chưa rõ giờ", caption: "Tuần sau giờ Mỹ", hideAt: TRACKER.upcoming!.hideAt } };
-    expect(glance({ resets: untimed, wings: ["codex-resets:next", null] }).island.wings[0]!.metrics[0]!.value).toBe("22%");
+    expect(next(untimed).metrics[0]).toEqual({ id: "codex-resets:next", label: "Reset free", value: "chưa rõ giờ", headline: "Tuần sau giờ Mỹ", fraction: null, severity: "normal" });
+
+    const gone = { ...TRACKER, upcoming: { ...awaiting.upcoming, hideAt: due } };
+    for (const resets of [gone, { ...TRACKER, upcoming: undefined }]) {
+      const fallback = next(resets).metrics[0]!;
+      expect(fallback).toMatchObject({ id: "codex-resets:next", label: "24 giờ tới", value: "22%", fraction: 0.22, severity: "normal" });
+      expect(fallback.countdown).toBeUndefined();
+    }
   });
 
   it("reads each forecast horizon as a whole-percent meter", () => {
@@ -390,7 +403,7 @@ describe("special wings", () => {
   it("counts the time since the last reset", () => {
     const metric = glance({ resets: TRACKER, wings: [null, "codex-resets:since"] }).island.wings[1]!.metrics[0]!;
     expect(metric).toMatchObject({ id: "codex-resets:since", label: "Chưa reset", value: "1:17 · T6 25/09", fraction: null, severity: "normal" });
-    expect(metric.countdown).toEqual({ at: TRACKER.latest!.at, text: "đã {d}", since: true });
+    expect(metric.countdown).toEqual({ at: TRACKER.latest!.at, text: "{d} trước", since: true });
   });
 
   it("behaves like an automatic slot when the tracker has nothing for it", () => {
@@ -423,7 +436,7 @@ describe("special wings", () => {
     expect(wings.map((wing) => wing.brand)).toEqual(["claude", "claude"]);
     expect(wings[0]!.metrics[0]).toEqual({ id: "claude-resets:chance-7", label: "7 ngày tới", value: "49%", headline: "49% · 7 ngày tới", fraction: 0.49, severity: "normal" });
     expect(wings[1]!.metrics[0]).toMatchObject({ id: "claude-resets:since", label: "Chưa reset", value: "23:44 · T3 22/09" });
-    expect(wings[1]!.metrics[0]!.countdown).toEqual({ at: CLAUDE_TRACKER.latest!.at, text: "đã {d}", since: true });
+    expect(wings[1]!.metrics[0]!.countdown).toEqual({ at: CLAUDE_TRACKER.latest!.at, text: "{d} trước", since: true });
     const codexOnly = wingIds(glance({ resets: TRACKER, wings: ["claude-resets:chance-1", "claude-resets:since"] }).island.wings);
     expect(codexOnly).toEqual(wingIds(glance().island.wings));
     const claudeOnly = wingIds(glance({ claudeResets: CLAUDE_TRACKER, wings: ["codex-resets:chance-1", "codex-resets:since"] }).island.wings);
@@ -452,10 +465,14 @@ describe("a document for someone who never chose Claude", () => {
       wings: ["quota:next", "codex-resets:chance-7"],
     },
   });
-  /** SHA-256 of the documents 0.3.16 (`be761f5`) built from these same inputs. */
+  /**
+   * SHA-256 of the documents built from these same inputs: 0.3.16's (`be761f5`), except the wings
+   * scenario's, which moved on purpose when its two reset wings took the popup's words (`chưa rõ
+   * giờ` from the Codex card's Reset free row, `{d} trước` like the Reset tab's `3 ngày trước`).
+   */
   const RELEASED: Readonly<Record<string, string>> = {
     defaults: "27f79bf299e37eeefc370b5c7c50f50479639888e0cc999596faaa04ec00652f",
-    wings: "e1d39d984056f8e5571c619d2146b07637743d83ce6fe62050e215cd3d53f1fa",
+    wings: "0489e18e2770310403306dc8a7dae5b8b6fbddeb0e205d3dbe9242fdd63176d1",
     tuned: "d319d2b1be43d61562cff513331df6d8124f0c2c50107cf27a7267073fd52973",
   };
   const digest = (document: object) => createHash("sha256").update(JSON.stringify(document)).digest("hex");
@@ -472,7 +489,7 @@ describe("a document for someone who never chose Claude", () => {
     return copy;
   };
 
-  it("stays byte for byte what 0.3.16 sent apart from the quoted announcement, even with a Claude tracker at hand", () => {
+  it("stays byte for byte what was pinned apart from the quoted announcement, even with a Claude tracker at hand", () => {
     const tracker = claude();
     expect(tracker).not.toBeNull();
     for (const [name, options] of Object.entries(scenarios())) {

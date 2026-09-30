@@ -533,7 +533,7 @@ export const vi: Messages = {
     upcoming: "Sắp đặt lại",
     upcomingEmpty: "Chưa có hạn mức nào có giờ đặt lại.",
     wingIn: (span) => `sau ${span}`,
-    wingSince: (span) => `đã ${span}`,
+    wingSince: (span) => `${span} trước`,
     calendarMonth: (month) => `Th${month + 1}`,
     sinceReset: "Chưa reset",
     tabs: { quota: "Hạn mức", resets: "Reset Codex", upcoming: "Sắp đặt lại" },

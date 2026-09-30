@@ -403,7 +403,7 @@ export interface GlanceMessages {
   tabs: Record<IslandView, string>;
   /** A wing counting down to a moment, `span` being the time left: `sau 2 giờ`, `in 2h`. */
   wingIn(span: string): string;
-  /** A wing counting the time since a moment: `đã 2 ngày`, `2d ago`. */
+  /** A wing counting the time since a moment, worded like the Reset tab's `3 ngày trước`: `2 ngày trước`, `2d ago`. */
   wingSince(span: string): string;
   /** A month on the reset calendar of the island and widgets, 0 for January: `Th9`, `Sep`; worded
    * apart from the weekday names beside it (`T2`…`CN`). */

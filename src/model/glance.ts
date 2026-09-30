@@ -120,8 +120,8 @@ export interface GlanceIslandSections {
 /**
  * Wing choices that are not one metric of one account. `quota:next` counts down to the soonest
  * limit reset among the island's accounts; the `codex-resets:` ones read the Codex free-reset
- * tracker: the announced reset's countdown (or, without one, the 24-hour chance), a chance over 1, 3
- * or 7 days, or the time since the last reset. The `claude-resets:` ones read the Claude tracker the
+ * tracker: the Codex card's "Reset free" row (or, without one, the 24-hour chance), a chance over
+ * 1, 3 or 7 days, or the time since the last reset. The `claude-resets:` ones read the Claude tracker the
  * same way, its `next` counting down to the deadline of a banked reset that can still be applied.
  */
 export const SPECIAL_WINGS = [
@@ -653,14 +653,15 @@ export const CLAUDE_RESETS_PROVIDER_ID = "claude-resets";
 /**
  * A wing that is not one picked metric, or `null` when it has nothing to show (the slot then fills
  * automatically). `quota:next` is the island's account whose limit comes back first, counting down
- * to it; the reset wings read their tracker as a provider of their own. Codex's `next` counts down to
- * an announced reset; Claude's, which announces none ahead, to a banked reset's deadline.
+ * to it; the reset wings read their tracker as a provider of their own. Codex's `next` reads the
+ * Codex card's "Reset free" row word for word while the row shows (`sau ~2 giờ`, `trong 5 giờ
+ * tới`, then `chờ xác nhận`, or `chưa rõ giờ` without a time); Claude's, which announces none
+ * ahead, counts down to a banked reset's deadline. Without either, `next` reads the 24-hour chance.
  */
 function specialWing(wing: SpecialWing, providers: readonly GlanceProvider[], input: GlanceInput): GlanceProvider | null {
   if (wing === "quota:next") return soonestReset(providers, input.now, input.language);
   const [trackerId, reading] = wing.split(":") as [string, "next" | "chance-1" | "chance-3" | "chance-7" | "since"];
-  const claude = trackerId === CLAUDE_RESETS_PROVIDER_ID;
-  const resets = claude ? input.claudeResets : input.resets;
+  const resets = trackerId === CLAUDE_RESETS_PROVIDER_ID ? input.claudeResets : input.resets;
   if (!resets) return null;
   const text = messagesFor(input.language).glance;
   const tracker = (metric: GlanceMetric): GlanceProvider => {
@@ -677,13 +678,13 @@ function specialWing(wing: SpecialWing, providers: readonly GlanceProvider[], in
   switch (reading) {
     case "next": {
       const upcoming = resets.upcoming;
-      const countdown = upcoming?.countdown;
-      if (upcoming && countdown && Date.parse(countdown.at) > input.now.getTime()) {
-        const moving: GlanceCountdown = { at: countdown.at, text: claude ? countdown.text : text.wingIn(COUNTDOWN_SPAN) };
-        if (countdown.after !== undefined) moving.after = countdown.after;
-        return tracker({ id: wing, label: upcoming.title, value: upcoming.title, headline: upcoming.caption, fraction: null, severity: "normal", countdown: moving });
-      }
-      return chance(1);
+      if (!upcoming || Date.parse(upcoming.hideAt) <= input.now.getTime()) return chance(1);
+      const countdown = upcoming.countdown;
+      const row = (value: string): GlanceMetric => ({ id: wing, label: upcoming.title, value, headline: upcoming.caption, fraction: null, severity: "normal" });
+      if (!countdown) return tracker(row(upcoming.value ?? upcoming.title));
+      const moving: GlanceCountdown = { at: countdown.at, text: countdown.text };
+      if (countdown.after !== undefined) moving.after = countdown.after;
+      return tracker({ ...row(upcoming.title), countdown: moving });
     }
     case "chance-1":
       return chance(1);
