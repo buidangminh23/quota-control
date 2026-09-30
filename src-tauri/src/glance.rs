@@ -33,14 +33,18 @@ const FRESHNESS_RELOAD: std::time::Duration = std::time::Duration::from_secs(15 
 pub const REQUESTS_FOLDER: &str = "requests";
 /// A request older than this is dropped unread: a reset is spent right after the user confirmed
 /// it, never minutes later because the app happened to start then.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const REQUEST_LIFETIME_SECONDS: i64 = 120;
 /// A request's own clock may run a little ahead of the app's.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const REQUEST_CLOCK_SKEW_SECONDS: i64 = 5;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const MAX_REQUEST_BYTES: u64 = 4096;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const REQUEST_POLL: std::time::Duration = std::time::Duration::from_secs(1);
 /// What the island and the widgets may ask of the popup; `src/glance/glanceActions.ts` checks the
 /// rest of each request before doing anything.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const ACTION_KINDS: &[&str] = &["redeemLimitReset", "markBankedReset", "openResets"];
 
 #[derive(Default)]
@@ -149,6 +153,7 @@ impl Glance {
 
 /// A button's request from the island or a widget, as the popup expects it, or `None` for anything
 /// else.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn action(value: Value) -> Option<Value> {
     let kind = value.get("kind")?.as_str()?;
     (value.is_object() && ACTION_KINDS.contains(&kind)).then_some(value)
@@ -156,6 +161,7 @@ pub fn action(value: Value) -> Option<Value> {
 
 /// Hand a request to the popup. Opening the Reset tab also shows the popup, as the popup's own rows
 /// do when pressed.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn relay_action(app: &AppHandle, action: Value) {
     if action.get("kind").and_then(Value::as_str) == Some("openResets")
         && let Err(error) = crate::show_popup(app)
@@ -170,6 +176,7 @@ pub fn relay_action(app: &AppHandle, action: Value) {
 /// Take the widgets' requests out of `folder`: each file is read once and removed, and only a fresh
 /// request of a known kind comes back. Files a widget is still writing (their names start with a
 /// dot) are left for the next pass, unless the widget stopped before finishing one long ago.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn take_requests(folder: &Path, now: DateTime<Utc>) -> Vec<Value> {
     let Ok(entries) = std::fs::read_dir(folder) else {
         return Vec::new();
