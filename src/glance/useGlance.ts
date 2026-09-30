@@ -16,6 +16,7 @@ import { buildGlance, isClaudeResetsWing, isSpecialWing, type GlanceWingChoice }
 import { buildClaudeGlanceResets } from "@/model/glanceClaudeResets";
 import { buildGlanceResets, parseResetFeeds } from "@/model/glanceResets";
 import { parseClaudeResets } from "@/model/insights/claudeResets";
+import { resetTrackerOutdated } from "@/model/insights/resets";
 import { brandOf, glanceGroups } from "@/model/layout";
 import { cardIdentity } from "@/model/providerText";
 import { widgetDataFor } from "@/model/widgetData";
@@ -70,7 +71,14 @@ export function useGlance(): void {
   const statusBody = tracking ? (statusFeed?.body ?? null) : null;
   const historyBody = showResetsTab ? (historyFeed?.body ?? null) : null;
   const feeds = useMemo(() => parseResetFeeds(statusBody, historyBody), [statusBody, historyBody]);
-  const stale = tracking && Boolean(statusFeed?.error || statusError || (showResetsTab && (historyFeed?.error || historyError)));
+  const stale =
+    tracking &&
+    resetTrackerOutdated({
+      status: feeds.status,
+      statusStale: Boolean(statusFeed?.stale || statusError),
+      historyBody,
+      historyStale: showResetsTab && Boolean(historyFeed?.stale || historyError),
+    });
   const resets = useMemo(
     () => (tracking ? buildGlanceResets({ feeds, stale, now, language: display.language, timeFormat, theme }) : null),
     [tracking, feeds, stale, now, display.language, timeFormat, theme],
@@ -83,7 +91,7 @@ export function useGlance(): void {
   }, [claudeTracking]);
   const claudeBody = claudeTracking ? (claudeFeed?.body ?? null) : null;
   const claudeParsed = useMemo(() => parseClaudeResets(claudeBody), [claudeBody]);
-  const claudeStale = Boolean(claudeFeed?.error || claudeError);
+  const claudeStale = Boolean(claudeFeed?.stale || claudeError);
   const claudeResets = useMemo(
     () =>
       claudeParsed

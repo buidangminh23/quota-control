@@ -112,7 +112,7 @@ export function FeedStatus({
 }) {
   const now = useNow();
   const refreshing = useInsights((state) => names.some((name) => state.refreshing[name] === true));
-  const at = shown?.error ? shown.fetchedAt : (shown?.checkedAt ?? shown?.fetchedAt);
+  const at = shown?.error ? (shown.verifiedAt ?? shown.fetchedAt) : (shown?.checkedAt ?? shown?.fetchedAt);
   const ago = agoText(at, now, language);
   const recent = at ? now.getTime() - new Date(at).getTime() < MINUTE_MS : false;
   return (

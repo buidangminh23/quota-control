@@ -211,7 +211,7 @@ export function ClaudeResets() {
     <>
       {!loaded ? <p className="uc-empty">{text.loading}</p> : null}
       {empty ? <p className="uc-insight-error">{text.failed(error ?? "")}</p> : null}
-      {feeds.claudeResets?.error && presentation ? <p className="uc-insight-note">{text.staleNote}</p> : null}
+      {feeds.claudeResets?.stale && presentation ? <p className="uc-insight-note">{text.staleNote}</p> : null}
       {presentation?.notices.map((notice) => (
         <p key={notice} className="uc-insight-note">
           {notice}

@@ -78,8 +78,10 @@ export interface PublicFeedSnapshot {
   fetchedAt: string | null;
   /** When the core last asked the source, successful or not (ISO). */
   checkedAt: string | null;
+  /** When the source last confirmed `body`, by sending it or by answering that it had not changed (ISO). */
+  verifiedAt: string | null;
   /** Why the latest attempt failed, while the cached body is still shown. */
   error: string | null;
-  /** The body is older than its refresh interval or the last attempt failed. */
+  /** The source has failed for three refresh intervals since it last confirmed `body`, so the body may be out of date. */
   stale: boolean;
 }

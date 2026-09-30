@@ -5,6 +5,7 @@ import { setBackend } from "@/lib/backend";
 import type { AppInfo } from "@/lib/types";
 import type { PublicFeedName, PublicFeedSnapshot } from "@/lib/insightsTypes";
 import { MockBackend } from "@/lib/mockBackend";
+import { FEED_FIXTURES } from "@/lib/insightsFeedFixtures";
 import type { GlanceDocument } from "@/model/glance";
 import { resetInsights } from "@/state/insights";
 import { updateSettings, useApp } from "@/state/store";
@@ -20,6 +21,8 @@ class MacBackend extends MockBackend {
   readonly feedsAsked: PublicFeedName[] = [];
   /** The Claude feed's last refresh failed, so the saved copy is served with its error. */
   claudeFeedFails = false;
+  /** What the core reports about a feed on top of its saved copy: a failure, and whether it lasted. */
+  readonly feedStates: Partial<Record<PublicFeedName, Partial<PublicFeedSnapshot>>> = {};
 
   override async appInfo(): Promise<AppInfo> {
     return { ...(await super.appInfo()), platform: "macos" };
@@ -32,7 +35,8 @@ class MacBackend extends MockBackend {
   override async publicFeed(name: PublicFeedName): Promise<PublicFeedSnapshot> {
     this.feedsAsked.push(name);
     const snapshot = await super.publicFeed(name);
-    return name === "claudeResets" && this.claudeFeedFails ? { ...snapshot, error: "offline", stale: true } : snapshot;
+    const failed = name === "claudeResets" && this.claudeFeedFails ? { ...snapshot, error: "offline", stale: true } : snapshot;
+    return { ...failed, ...this.feedStates[name] };
   }
 
   get latest(): GlanceDocument | undefined {
@@ -122,6 +126,49 @@ describe("the glance document the popup sends", () => {
     });
     await waitFor(() => expect(api.latest?.claudeResets?.brand).toBe("claude"));
     expect(api.latest!.claudeResets!.stale).toBe(insightsFor("vi").staleNote);
+  });
+
+  it("keeps the saved-copy note off the Codex tracker while the status still names the list's newest reset", async () => {
+    const api = await start({}, (backend) => {
+      backend.feedStates.codexResets = { error: "error sending request", stale: true };
+    });
+    await settle();
+    await waitFor(() => expect(api.latest?.resets?.brand).toBe("codex"));
+    expect(api.latest!.resets!.stale).toBeUndefined();
+  });
+
+  it("puts the saved-copy note on the Codex tracker once the status names a reset the saved list lacks", async () => {
+    const api = await start({}, (backend) => {
+      backend.feedStates.codexResets = { error: "error sending request", stale: true };
+      backend.feedStates.codexResetStatus = { body: FEED_FIXTURES.codexResetStatus.replaceAll("2102463847714247142", "2103911959544610829") };
+    });
+    await waitFor(() => expect(api.latest?.resets?.stale).toBe(insightsFor("vi").staleNote));
+  });
+
+  it("keeps the saved-copy note off the Codex tracker after a single failed check of its status", async () => {
+    const api = await start({}, (backend) => {
+      backend.feedStates.codexResetStatus = { error: "HTTP 503", stale: false };
+    });
+    await settle();
+    await waitFor(() => expect(api.latest?.resets?.brand).toBe("codex"));
+    expect(api.latest!.resets!.stale).toBeUndefined();
+  });
+
+  it("puts the saved-copy note on the Codex tracker once its status has been failing for a while", async () => {
+    const api = await start({}, (backend) => {
+      backend.feedStates.codexResetStatus = { error: "HTTP 503", stale: true };
+    });
+    await waitFor(() => expect(api.latest?.resets?.stale).toBe(insightsFor("vi").staleNote));
+  });
+
+  it("clears the saved-copy note once the core reports the feed recovered", async () => {
+    const api = await start({}, (backend) => {
+      backend.feedStates.codexResetStatus = { error: "HTTP 503", stale: true };
+    });
+    await waitFor(() => expect(api.latest?.resets?.stale).toBe(insightsFor("vi").staleNote));
+    delete api.feedStates.codexResetStatus;
+    act(() => api.announceFeed("codexResetStatus"));
+    await waitFor(() => expect(api.latest?.resets?.stale).toBeUndefined());
   });
 
   it("drops the Claude tracker once the Reset tab and Claude notifications are both turned off", async () => {

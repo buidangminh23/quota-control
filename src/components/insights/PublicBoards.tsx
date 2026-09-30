@@ -35,7 +35,7 @@ function FeedState({ snapshot, text }: { snapshot: PublicFeedSnapshot | undefine
   const error = useInsights((state) => (snapshot ? state.feedErrors[snapshot.name] : undefined));
   if (!snapshot) return <p className="uc-empty">{text.loading}</p>;
   if (!snapshot.body) return <p className="uc-insight-error">{text.failed(snapshot.error ?? error ?? "")}</p>;
-  if (snapshot.error) return <p className="uc-insight-note">{text.staleNote}</p>;
+  if (snapshot.stale) return <p className="uc-insight-note">{text.staleNote}</p>;
   return null;
 }
 

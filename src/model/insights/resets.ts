@@ -150,6 +150,25 @@ export function parseResets(body: string | null | undefined, extra: readonly (Co
   return [...byId.values()].sort((a, b) => b.announcedAt.getTime() - a.announcedAt.getTime());
 }
 
+/**
+ * Whether the Codex tracker may show resets that are out of date, which is when it carries the
+ * saved-copy note. The status is out of date once its source has failed for a while (`stale`). The
+ * saved list only matters while the status names a reset the list lacks: a list that could not be
+ * refreshed, while the status still names the list's newest reset, has missed nothing.
+ */
+export function resetTrackerOutdated(input: {
+  status: ResetStatus | null;
+  statusStale: boolean;
+  historyBody: string | null | undefined;
+  historyStale: boolean;
+}): boolean {
+  if (input.statusStale) return true;
+  if (!input.historyStale) return false;
+  if (!input.status) return true;
+  const latest = input.status.latest;
+  return latest !== null && !parseResets(input.historyBody).some((reset) => reset.id === latest.id);
+}
+
 const EXCERPT_LENGTH = 160;
 
 /** The post's words without its links, on one line and cut to a notification's length. */

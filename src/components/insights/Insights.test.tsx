@@ -149,7 +149,7 @@ describe("Benchmark tab", () => {
     const downloaded = new Date(Date.now() - 3 * 3_600_000).toISOString();
     act(() =>
       useInsights.setState({
-        feeds: { ...useInsights.getState().feeds, epochScores: { ...snapshot, fetchedAt: downloaded, checkedAt: new Date().toISOString(), error: "timed out", stale: true } },
+        feeds: { ...useInsights.getState().feeds, epochScores: { ...snapshot, fetchedAt: downloaded, checkedAt: new Date().toISOString(), verifiedAt: downloaded, error: "timed out", stale: true } },
       }),
     );
     expect(screen.getByText("Lần tải gần nhất bị lỗi, đang hiện bản đã lưu.")).toBeInTheDocument();
@@ -208,6 +208,51 @@ describe("Reset tab", () => {
     expect(screen.getAllByText("Lượt để dành").length).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: "Mở bài trên X" }).length).toBeGreaterThan(0);
     expect(screen.getByText(/Dữ liệu từ Codex Resets/)).toBeInTheDocument();
+  });
+});
+
+describe("the saved-copy note on the Reset tab", () => {
+  const NOTE = "Lần tải gần nhất bị lỗi, đang hiện bản đã lưu.";
+
+  function failFeed(name: "codexResetStatus" | "codexResets", stale: boolean, body?: string) {
+    const snapshot = useInsights.getState().feeds[name]!;
+    act(() =>
+      useInsights.setState({
+        feeds: { ...useInsights.getState().feeds, [name]: { ...snapshot, ...(body ? { body } : {}), error: "error sending request", stale } },
+      }),
+    );
+  }
+
+  it("stays off while the list could not be refreshed but the status still names its newest reset", async () => {
+    await renderApp();
+    openTab("Reset");
+    await screen.findByText("Đã hẹn reset");
+    failFeed("codexResets", true);
+    expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
+  });
+
+  it("shows once the status names a reset the saved list lacks", async () => {
+    await renderApp();
+    openTab("Reset");
+    await screen.findByText("Đã hẹn reset");
+    failFeed("codexResets", true);
+    const status = useInsights.getState().feeds.codexResetStatus!;
+    act(() =>
+      useInsights.setState({
+        feeds: { ...useInsights.getState().feeds, codexResetStatus: { ...status, body: status.body!.replaceAll("2102463847714247142", "2103911959544610829") } },
+      }),
+    );
+    expect(screen.getByText(NOTE)).toBeInTheDocument();
+  });
+
+  it("stays off after one failed check of the status and shows once it has kept failing", async () => {
+    await renderApp();
+    openTab("Reset");
+    await screen.findByText("Đã hẹn reset");
+    failFeed("codexResetStatus", false);
+    expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
+    failFeed("codexResetStatus", true);
+    expect(screen.getByText(NOTE)).toBeInTheDocument();
   });
 });
 

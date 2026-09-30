@@ -438,7 +438,8 @@ export class MockBackend implements Backend {
 
   async publicFeed(name: PublicFeedName): Promise<PublicFeedSnapshot> {
     const fetchedAt = new Date(Date.now() - 2 * 3_600_000).toISOString();
-    return { name, body: FEED_FIXTURES[name], fetchedAt, checkedAt: this.feedChecks.get(name) ?? fetchedAt, error: null, stale: false };
+    const checkedAt = this.feedChecks.get(name) ?? fetchedAt;
+    return { name, body: FEED_FIXTURES[name], fetchedAt, checkedAt, verifiedAt: checkedAt, error: null, stale: false };
   }
 
   async refreshPublicFeed(name: PublicFeedName): Promise<PublicFeedSnapshot> {
@@ -450,6 +451,11 @@ export class MockBackend implements Backend {
   onPublicFeedChanged(listener: (name: PublicFeedName) => void): Unsubscribe {
     this.feedListeners.add(listener);
     return () => this.feedListeners.delete(listener);
+  }
+
+  /** What the core does after each background check of a feed. */
+  announceFeed(name: PublicFeedName): void {
+    for (const listener of this.feedListeners) listener(name);
   }
 
   async quit(): Promise<void> {}

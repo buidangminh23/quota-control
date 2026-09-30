@@ -3,7 +3,7 @@ import { compareCandidates, compareRows, searchCandidates, type CompareInput } f
 import { parseCsv } from "./csv";
 import { benchmarkBoards, benchmarkLabel, benchmarkUrl, BENCHMARKS, parseEpochBenchmarks, parseEpochScores } from "./epoch";
 import { EMPTY_COUNTS, modelQuality } from "./quality";
-import { activeWatch, announcementPattern, currentWait, forecastResets, parseResets, parseResetStatus, resetCalendar, resetStats, xUrl, type CodexReset } from "./resets";
+import { activeWatch, announcementPattern, currentWait, forecastResets, parseResets, parseResetStatus, resetCalendar, resetStats, resetTrackerOutdated, xUrl, type CodexReset, type ResetStatus } from "./resets";
 
 describe("parseCsv", () => {
   it("reads quoted fields with commas, quotes and line breaks, CRLF and a byte-order mark", () => {
@@ -183,6 +183,28 @@ describe("Codex resets", () => {
     expect(xUrl("http://x.com/a")).toBeNull();
     expect(xUrl("https://user:pw@x.com/a")).toBeNull();
     expect(xUrl("https://twitter.com/a")).toBe("https://twitter.com/a");
+  });
+
+  it("marks the tracker out of date only when what it shows may be", () => {
+    const naming = (id: string | null) =>
+      parseResetStatus(
+        JSON.stringify({
+          data: {
+            latest_reset: id ? { id, reset_type: "regular", announced_at: "2026-09-26T18:17:54.000Z", text: "Reset.", source: { type: "x_post", author: "thsottiaux", url: `https://x.com/thsottiaux/status/${id}` } } : null,
+            stats: { total: 3 },
+          },
+        }),
+      );
+    const outdated = (status: ResetStatus | null, statusStale: boolean, historyStale: boolean) => resetTrackerOutdated({ status, statusStale, historyBody: RESETS, historyStale });
+    expect(outdated(naming("3"), false, false)).toBe(false);
+    expect(outdated(naming("3"), false, true)).toBe(false);
+    expect(outdated(naming("4"), false, true)).toBe(true);
+    expect(outdated(naming("4"), false, false)).toBe(false);
+    expect(outdated(naming("3"), true, false)).toBe(true);
+    expect(outdated(naming(null), false, true)).toBe(false);
+    expect(outdated(null, false, true)).toBe(true);
+    expect(outdated(null, false, false)).toBe(false);
+    expect(resetTrackerOutdated({ status: naming("3"), statusStale: false, historyBody: null, historyStale: true })).toBe(true);
   });
 
   it("reads the status with an announced reset and a watch that expires", () => {
