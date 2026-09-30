@@ -248,9 +248,10 @@ struct OverviewLayout: View {
                     HiddenCount(count: all.count - 1)
                 }
                 if let next = all.first {
-                    Text("\(next.provider.name) · \(Text(next.at, style: .relative))")
+                    Text("\(accountName(next.provider, in: document.widget.providers)) · \(next.metric.label) · \(Text(next.at, style: .relative))")
                         .font(.system(size: WidgetScale.caption, weight: .medium))
                         .lineLimit(2)
+                        .truncationMode(.middle)
                 } else {
                     Text(UpcomingText.empty(document))
                         .font(.system(size: WidgetScale.caption))

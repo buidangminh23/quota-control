@@ -64,8 +64,8 @@ enum UpcomingText {
 }
 
 /// The next limits to come back across the widget's accounts, soonest first, as many as fit: the
-/// account and limit, its reading now, a live countdown and the clock time. Every limit gets its own
-/// row when all of them fit; otherwise limits of one account due together share one.
+/// account and limit, its reading now, a live countdown and the clock time with its day. Every limit
+/// gets its own row when all of them fit; otherwise limits of one account due together share one.
 struct UpcomingList: View {
     let document: GlanceDocument
     let now: Date
@@ -86,13 +86,14 @@ struct UpcomingList: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
             let count = max(1, columns)
-            let wide = columnWidth(width, count: count) >= 340
+            let column = columnWidth(width, count: count)
+            let fit = UpcomingRowFit(wide: column >= 340, roomy: column >= 240)
             ViewThatFits(in: .vertical) {
                 if groups.count < limits.count {
-                    planned(UpcomingGroup.single(limits), shown: limits.count, columns: count, wide: wide, beyond: beyond)
+                    planned(UpcomingGroup.single(limits), shown: limits.count, columns: count, fit: fit, beyond: beyond)
                 }
                 ForEach(Array(stride(from: groups.count, through: 1, by: -1)), id: \.self) { shown in
-                    planned(groups, shown: shown, columns: count, wide: wide, beyond: beyond)
+                    planned(groups, shown: shown, columns: count, fit: fit, beyond: beyond)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -100,16 +101,16 @@ struct UpcomingList: View {
     }
 
     /// `beyond`: limits past the count Settings allow, counted with the ones that did not fit.
-    private func planned(_ groups: [UpcomingGroup], shown: Int, columns: Int, wide: Bool, beyond: Int) -> some View {
+    private func planned(_ groups: [UpcomingGroup], shown: Int, columns: Int, fit: UpcomingRowFit, beyond: Int) -> some View {
         let visible = Array(groups.prefix(shown))
         let perColumn = (visible.count + columns - 1) / columns
         let hidden = groups.dropFirst(shown).reduce(0) { $0 + $1.metrics.count } + beyond
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: WidgetScale.columnSpacing) {
                 ForEach(0..<columns, id: \.self) { column in
-                    VStack(alignment: .leading, spacing: wide ? 7 : 6) {
+                    VStack(alignment: .leading, spacing: fit.wide ? 7 : 6) {
                         ForEach(visible.dropFirst(column * perColumn).prefix(perColumn)) { group in
-                            UpcomingRow(group: group, document: document, now: now, wide: wide)
+                            UpcomingRow(group: group, document: document, now: now, fit: fit)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -123,12 +124,20 @@ struct UpcomingList: View {
     }
 }
 
+/// How much a row of the limits coming back holds in its column.
+private struct UpcomingRowFit {
+    /// Everything on one line.
+    let wide: Bool
+    /// The row's headline (`Còn 42%`) in place of the short reading (`42%`).
+    let roomy: Bool
+}
+
 /// One limit (or several of one account due together) coming back.
 private struct UpcomingRow: View {
     let group: UpcomingGroup
     let document: GlanceDocument
     let now: Date
-    let wide: Bool
+    let fit: UpcomingRowFit
 
     private var metric: GlanceMetric { group.metrics[0] }
 
@@ -137,7 +146,7 @@ private struct UpcomingRow: View {
     }
 
     var body: some View {
-        if wide {
+        if fit.wide {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 mark
                 Text(title)
@@ -167,6 +176,13 @@ private struct UpcomingRow: View {
                         Spacer(minLength: 4)
                         clock
                     }
+                    if let time = ResetClock.timeToday(group.at, now: now, document: document) {
+                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                            countdown
+                            Spacer(minLength: 4)
+                            clockText(time)
+                        }
+                    }
                     countdown
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -181,9 +197,10 @@ private struct UpcomingRow: View {
             .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
     }
 
-    /// The reading in the text color, as the popup's rows read it.
+    /// The reading in the text color, as the popup's rows read it: the row's headline where the line
+    /// has room (`Còn 42%`), the short reading otherwise (`42%`).
     private var reading: some View {
-        Text(metric.value)
+        Text(fit.roomy ? metric.headline : metric.value)
             .font(.system(size: WidgetScale.caption, weight: .semibold))
             .monospacedDigit()
             .foregroundStyle(.primary)
@@ -200,7 +217,11 @@ private struct UpcomingRow: View {
     }
 
     private var clock: some View {
-        Text(ResetClock.text(group.at, now: now, document: document))
+        clockText(ResetClock.text(group.at, now: now, document: document))
+    }
+
+    private func clockText(_ text: String) -> some View {
+        Text(text)
             .font(.system(size: WidgetScale.caption))
             .monospacedDigit()
             .foregroundStyle(.secondary)

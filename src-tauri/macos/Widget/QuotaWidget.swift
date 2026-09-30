@@ -116,12 +116,15 @@ struct GlanceTimeline: TimelineProvider {
     }
 
     /// The moments after `now` when something drawn changes on its own, soonest first: a limit
-    /// comes back, a countdown of the reset tracker the widget chose ends or its row goes away, an
-    /// account's plan period counts down or its day turns into today, or the readings turn stale.
+    /// comes back or the day of its reset time turns, a countdown of the reset tracker the widget
+    /// chose ends or its row goes away, an account's reset row counts down, goes or names another
+    /// day, a reset credit's dot changes color, an account's plan period counts down or its day
+    /// turns into today, or the readings turn stale.
     static func moments(_ document: GlanceDocument?, after now: Date) -> [Date] {
         guard let document else { return [] }
         var moments = Set(GlanceUpcomingLimit.list(document.widget.providers, now: now).map(\.at))
         moments.formUnion(document.forWidget.resetMoments(after: now))
+        moments.formUnion(document.accountMoments(document.widget.providers, after: now))
         moments.formUnion(document.widget.providers.compactMap(\.term).flatMap { $0.changes(after: now) })
         let stale = document.generatedAt.addingTimeInterval(GlanceStaleness.after)
         if stale > now {

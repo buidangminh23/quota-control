@@ -27,12 +27,14 @@ struct GlanceDocument: Decodable, Equatable {
     /// The Claude reset tracker, sent while the island or the widget chose it; absent otherwise, and
     /// while the Reset tab and Claude reset notifications are both off.
     var claudeResets: GlanceResets?
+    /// The pictures before the accounts' reset rows, as data URLs by lowercase handle.
+    var avatars: [String: String]? = nil
     var alert: GlanceAlert?
 
     static let supportedVersion = 1
 
     private enum CodingKeys: String, CodingKey {
-        case version, generatedAt, locale, hour12, theme, labels, providers, island, widget, resets, claudeResets, alert
+        case version, generatedAt, locale, hour12, theme, labels, providers, island, widget, resets, claudeResets, avatars, alert
     }
 
     init(
@@ -77,6 +79,7 @@ struct GlanceDocument: Decodable, Equatable {
             ?? GlanceWidgetContent(providers: providers, shows: .all, empty: labels.empty)
         resets = try? container.decodeIfPresent(GlanceResets.self, forKey: .resets)
         claudeResets = try? container.decodeIfPresent(GlanceResets.self, forKey: .claudeResets)
+        avatars = try? container.decodeIfPresent([String: String].self, forKey: .avatars)
         alert = try container.decodeIfPresent(GlanceAlert.self, forKey: .alert)
     }
 
@@ -226,9 +229,12 @@ struct GlanceLabels: Decodable, Equatable {
     /// The plan-period corner's words, sent while an account the island or the widget lists has a
     /// plan period.
     var planTerm: GlancePlanTermWords?
+    /// A reset's clock time with its day, for the reset rows and the limits coming back; a document
+    /// from before them names the clock time alone.
+    var days: GlanceDayWords?
 
     private enum CodingKeys: String, CodingKey {
-        case title, empty, updated, resetsIn, resetting, open, notRunning, noData, more, units, resetsOff, upcoming, upcomingEmpty, tabs, claudeResetsTab, claudeResetsOff, planTerm
+        case title, empty, updated, resetsIn, resetting, open, notRunning, noData, more, units, resetsOff, upcoming, upcomingEmpty, tabs, claudeResetsTab, claudeResetsOff, planTerm, days
     }
 
     init(
@@ -248,7 +254,8 @@ struct GlanceLabels: Decodable, Equatable {
         tabs: GlanceTabLabels = .fallback,
         claudeResetsTab: String? = nil,
         claudeResetsOff: String? = nil,
-        planTerm: GlancePlanTermWords? = nil
+        planTerm: GlancePlanTermWords? = nil,
+        days: GlanceDayWords? = nil
     ) {
         self.title = title
         self.empty = empty
@@ -267,6 +274,7 @@ struct GlanceLabels: Decodable, Equatable {
         self.claudeResetsTab = claudeResetsTab
         self.claudeResetsOff = claudeResetsOff
         self.planTerm = planTerm
+        self.days = days
     }
 
     init(from decoder: Decoder) throws {
@@ -288,6 +296,7 @@ struct GlanceLabels: Decodable, Equatable {
         claudeResetsTab = try? container.decodeIfPresent(String.self, forKey: .claudeResetsTab)
         claudeResetsOff = try? container.decodeIfPresent(String.self, forKey: .claudeResetsOff)
         planTerm = try? container.decodeIfPresent(GlancePlanTermWords.self, forKey: .planTerm)
+        days = try? container.decodeIfPresent(GlanceDayWords.self, forKey: .days)
     }
 }
 
@@ -559,8 +568,22 @@ struct GlanceProvider: Equatable, Identifiable {
     var lightColor: String? = nil
     var mark: GlanceMark?
     var metrics: [GlanceMetric]
+    /// The row the popup's card starts with: Codex's free reset, or Claude's banked reset for this
+    /// account's plan.
+    var resetRow: GlanceResetRow? = nil
 
     var tint: Color { Color(glanceHex: color) ?? .white }
+
+    /// The reset row while it is still shown at `now`.
+    func resetRow(at now: Date) -> GlanceResetRow? {
+        resetRow.flatMap { $0.shows(at: now) ? $0 : nil }
+    }
+
+    /// The rows a layout deals out for this account at `now`: its reset row and its metrics, or one
+    /// for the line saying why it has none.
+    func rowCount(at now: Date) -> Int {
+        (resetRow(at: now) == nil ? 0 : 1) + max(metrics.count, 1)
+    }
 
     /// Whether the popup draws this mark in its brand color: a brand with a color and a mark (or
     /// its official color logo, which keeps its own colors).
@@ -580,7 +603,7 @@ struct GlanceProvider: Equatable, Identifiable {
 
 extension GlanceProvider: Decodable {
     private enum CodingKeys: String, CodingKey {
-        case id, name, account, plan, term, outdated, problem, notice, brand, color, lightColor, mark, metrics
+        case id, name, account, plan, term, outdated, problem, notice, brand, color, lightColor, mark, metrics, resetRow
     }
 
     /// Keys added after the first release are read leniently, so one malformed key never loses the
@@ -600,6 +623,7 @@ extension GlanceProvider: Decodable {
         lightColor = try? container.decodeIfPresent(String.self, forKey: .lightColor)
         mark = try container.decodeIfPresent(GlanceMark.self, forKey: .mark)
         metrics = try container.decode([GlanceMetric].self, forKey: .metrics)
+        resetRow = try? container.decodeIfPresent(GlanceResetRow.self, forKey: .resetRow)
     }
 }
 
@@ -756,6 +780,11 @@ struct GlanceMetric: Decodable, Equatable, Identifiable {
     var detail: String?
     /// A value that moves with the clock, drawn in place of `value` (island wings).
     var countdown: GlanceCountdown?
+    /// When the soonest of the row's reset credits expires, for the dot before its value.
+    var expiresAt: Date? = nil
+    /// The limit window's short name (`5h`, `week`) the menu bar strip labels a reading with; sent
+    /// on the readings beside the notch.
+    var period: String? = nil
 
     /// `value`, or the countdown's words at `now`, its span as short as `GlanceFormat.shortSpan`.
     func liveValue(now: Date, units: GlanceUnits) -> String {

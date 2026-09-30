@@ -31,17 +31,6 @@ extension GlanceResets {
     var markTint: Color { color.uppercased() == "#FFFFFF" ? .primary : tint }
 }
 
-extension GlanceCountdown {
-    /// The words with the span drawn as text WidgetKit keeps counting by itself, or the words for a
-    /// countdown that has already passed. The timeline adds an entry at `at`, so the switch happens
-    /// on time.
-    func live(now: Date, units: GlanceUnits) -> Text {
-        if passed(now) { return Text(text(now: now, units: units)) }
-        let (before, after) = parts
-        return Text("\(before)\(Text(at, style: .relative))\(after)")
-    }
-}
-
 extension GlanceUpcomingReset {
     /// The announced reset's reading (its live countdown or fixed value) at `now`.
     func liveValue(now: Date, units: GlanceUnits) -> Text {
@@ -62,20 +51,6 @@ extension GlanceUpcomingReset {
         case .notice: return .orange
         }
     }
-}
-
-/// Whether another of `providers` carries the same heading as `provider`, so its email has to say
-/// which account it is.
-func sharesHeading(_ provider: GlanceProvider, in providers: [GlanceProvider]) -> Bool {
-    providers.contains { $0.id != provider.id && $0.name == provider.name }
-}
-
-/// `provider`'s heading, with its email when another account shares the heading.
-func accountName(_ provider: GlanceProvider, in providers: [GlanceProvider]) -> String {
-    if sharesHeading(provider, in: providers), let account = provider.account {
-        return "\(provider.name) (\(account))"
-    }
-    return provider.name
 }
 
 /// A capsule meter in any color, for readings that are not a limit's pace (reset chances).
@@ -238,18 +213,18 @@ struct WidgetMessage: View {
     }
 }
 
-/// When a limit comes back, for a list of upcoming resets: the clock time, with the day and month
-/// when it is not today.
+/// When a limit comes back, for a list of upcoming resets: the clock time with its day, as the
+/// popup names the moment a limit comes back (`13:05 · hôm nay`, `13:05 · T2 05/10`).
 enum ResetClock {
     static func text(_ date: Date, now: Date, document: GlanceDocument) -> String {
-        let locale = document.resolvedLocale
-        let time = GlanceFormat.time(date, locale: locale, hour12: document.hour12)
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.locale = locale
-        if calendar.isDate(date, inSameDayAs: now) { return time }
-        let formatter = DateFormatter()
-        formatter.locale = locale
-        formatter.setLocalizedDateFormatFromTemplate("dM")
-        return "\(formatter.string(from: date)) \(time)"
+        document.dayLabel(date, now: now)
+    }
+
+    /// The clock time alone, for a row without room for its day: only for a moment still today,
+    /// which the time names without doubt.
+    static func timeToday(_ date: Date, now: Date, document: GlanceDocument) -> String? {
+        guard GlanceDays.between(now, date) <= 0 else { return nil }
+        guard let days = document.labels.days else { return GlanceFormat.time(date, locale: document.resolvedLocale, hour12: document.hour12) }
+        return GlanceDays.format(date, pattern: days.time, locale: document.resolvedLocale, calendar: .current)
     }
 }

@@ -278,7 +278,7 @@ struct IslandQuotaSection: View {
         let perAccount = budget.perAccount
         VStack(alignment: .leading, spacing: 10) {
             if shown.count > 1 && availableWidth >= 620 {
-                let split = Self.balancedSplit(shown, perAccount: perAccount, shows: document.island.shows)
+                let split = Self.balancedSplit(shown, perAccount: perAccount, shows: document.island.shows, now: now)
                 HStack(alignment: .top, spacing: 18) {
                     column(Array(shown[..<split]), perAccount: perAccount)
                     column(Array(shown[split...]), perAccount: perAccount)
@@ -308,8 +308,8 @@ struct IslandQuotaSection: View {
 
     /// Where the second column starts: keeps the accounts in reading order, top to bottom and
     /// left to right, with the two columns as close in height as the accounts allow.
-    static func balancedSplit(_ providers: [GlanceProvider], perAccount: Int, shows: GlanceShows) -> Int {
-        let weights = providers.map { weight($0, perAccount: perAccount, shows: shows) }
+    static func balancedSplit(_ providers: [GlanceProvider], perAccount: Int, shows: GlanceShows, now: Date) -> Int {
+        let weights = providers.map { weight($0, perAccount: perAccount, shows: shows, now: now) }
         let total = weights.reduce(0, +)
         var best = (index: 1, tallest: CGFloat.infinity)
         var left: CGFloat = 0
@@ -324,22 +324,23 @@ struct IslandQuotaSection: View {
     }
 
     /// The rough height of one account, in lines: the plan period's corner takes the email's line
-    /// when there is none.
-    private static func weight(_ provider: GlanceProvider, perAccount: Int, shows: GlanceShows) -> CGFloat {
+    /// when there is none; a limit's headline shares its line with the reset countdown.
+    private static func weight(_ provider: GlanceProvider, perAccount: Int, shows: GlanceShows, now: Date) -> CGFloat {
         var lines: CGFloat = 1.3
         if (shows.account && provider.account != nil) || provider.term != nil { lines += 0.9 }
+        if let row = provider.resetRow(at: now) { lines += row.note == nil ? 2.1 : 3 }
         if provider.metrics.isEmpty { return lines + 1.2 }
         for metric in provider.metrics.prefix(perAccount) {
             lines += 1.2
-            if metric.fraction != nil { lines += 0.5 }
-            if shows.resets && (metric.resetsAt != nil || metric.detail != nil) { lines += 1 }
+            if metric.fraction != nil { lines += 1.5 }
         }
         if provider.metrics.count > perAccount { lines += 1 }
         return lines + 0.9
     }
 }
 
-/// One account: its header and its first readings, with a `+N` for the readings left out.
+/// One account: its header, the row its card starts with, and its first readings, with a `+N` for
+/// the readings left out.
 struct IslandAccount: View {
     let provider: GlanceProvider
     let document: GlanceDocument
@@ -347,8 +348,11 @@ struct IslandAccount: View {
     let perAccount: Int
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 9) {
             IslandAccountHeader(provider: provider, shows: document.island.shows, words: document.labels.planTerm, now: now)
+            if let row = provider.resetRow(at: now) {
+                IslandResetRow(row: row, document: document, now: now)
+            }
             if provider.metrics.isEmpty {
                 GlanceNoticeRow(text: provider.notice ?? document.labels.noData, onDark: true, size: 11)
             }
@@ -358,6 +362,30 @@ struct IslandAccount: View {
             if provider.metrics.count > perAccount {
                 IslandMoreLine(text: "+\(provider.metrics.count - perAccount)")
             }
+        }
+    }
+}
+
+/// The row a Codex or Claude account starts with, on the island: hovering it shows the post and how
+/// its time was read, and while the popup's row opens the Reset tab, pressing it opens the popup on
+/// that tracker's Reset tab.
+struct IslandResetRow: View {
+    let row: GlanceResetRow
+    let document: GlanceDocument
+    let now: Date
+
+    var body: some View {
+        let content = GlanceResetRowView(row: row, document: document, now: now, sizes: .island, onDark: true)
+        if row.opens == true {
+            Button {
+                IslandActions.shared.send(.openResets(row.tracker))
+            } label: {
+                content.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(row.details)
+        } else {
+            content.help(row.details)
         }
     }
 }
@@ -430,8 +458,10 @@ struct IslandAccountHeader: View {
     }
 }
 
-/// One reading as the popup's row reads it: its title in bold and its headline in the text color
-/// over the meter, which alone carries the pace color, and when it comes back beneath.
+/// One reading as the popup's row reads it. A limit: its title in bold over the meter, which alone
+/// carries the pace color, then its headline in the text color with when it comes back on the right
+/// in the secondary color. A metric without a limit: its title with its value on the right, after the
+/// expiry dot of a reset credit.
 struct IslandMetricRow: View {
     let metric: GlanceMetric
     let labels: GlanceLabels
@@ -439,30 +469,46 @@ struct IslandMetricRow: View {
     var showsReset = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(metric.label)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.white)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Spacer(minLength: 4)
-                Text(metric.headline)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.white)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .layoutPriority(1)
-            }
-            if let fraction = metric.fraction {
+        if let fraction = metric.fraction {
+            VStack(alignment: .leading, spacing: 4) {
+                title
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 GlanceMeter(fraction: fraction, severity: metric.severity, onDark: true, height: 4)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    headline
+                    if showsReset, metric.resetsAt != nil || metric.detail != nil {
+                        Spacer(minLength: 8)
+                        GlanceResetText(metric: metric, labels: labels, now: now)
+                            .font(.system(size: 12))
+                            .foregroundStyle(IslandInk.caption)
+                            .truncationMode(.tail)
+                    }
+                }
             }
-            if showsReset, metric.resetsAt != nil || metric.detail != nil {
-                GlanceResetText(metric: metric, labels: labels, now: now)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(IslandInk.caption)
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                title
+                Spacer(minLength: 4)
+                GlanceValueWithDot(metric: metric, now: now, onDark: true) { headline }
             }
         }
+    }
+
+    private var title: some View {
+        Text(metric.label)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(Color.white)
+            .lineLimit(1)
+            .truncationMode(.tail)
+    }
+
+    private var headline: some View {
+        Text(metric.headline)
+            .font(.system(size: 12))
+            .foregroundStyle(Color.white)
+            .monospacedDigit()
+            .lineLimit(1)
+            .fixedSize()
     }
 }
 
@@ -499,8 +545,10 @@ struct IslandResetsSection: View {
 
 // MARK: Upcoming limits
 
-/// The next limits to come back across the island's accounts, soonest first: the account's mark,
-/// its name and the reading, the time left and the clock time.
+/// The next limits to come back across the island's accounts, soonest first, each as the popup's
+/// card reads it: the account's mark, its name (with its email when another account shares it) and
+/// the limit, the headline on the right; under them when it comes back and the clock time with its
+/// day.
 struct IslandUpcomingSection: View {
     let document: GlanceDocument
     let now: Date
@@ -508,7 +556,7 @@ struct IslandUpcomingSection: View {
 
     var body: some View {
         let limits = Array(GlanceUpcomingLimit.list(document.providers, now: now).prefix(max(count, 1)))
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 8) {
             if !document.labels.upcoming.isEmpty {
                 Text(document.labels.upcoming)
                     .font(.system(size: 11, weight: .medium))
@@ -522,29 +570,39 @@ struct IslandUpcomingSection: View {
     }
 
     private func row(_ limit: GlanceUpcomingLimit) -> some View {
-        HStack(spacing: 7) {
-            ProviderMark(mark: limit.provider.mark, brand: limit.provider.brand)
-                .foregroundStyle(limit.provider.islandMarkColor)
-                .frame(width: 12, height: 12)
-            Text("\(limit.provider.name) · \(limit.metric.label)")
-                .font(.system(size: 11.5))
-                .foregroundStyle(Color.white.opacity(0.88))
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer(minLength: 8)
-            Text(GlanceFormat.span(from: now, to: limit.at, units: document.labels.units))
-                .font(.system(size: 11.5, weight: .semibold))
-                .foregroundStyle(Color.white)
-                .monospacedDigit()
-                .lineLimit(1)
-                .layoutPriority(1)
-            Text(GlanceFormat.time(limit.at, locale: document.resolvedLocale, hour12: document.hour12))
-                .font(.system(size: 10.5))
-                .foregroundStyle(IslandInk.caption)
-                .monospacedDigit()
-                .lineLimit(1)
-                .frame(minWidth: 36, alignment: .trailing)
-                .layoutPriority(1)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                ProviderMark(mark: limit.provider.mark, brand: limit.provider.brand)
+                    .foregroundStyle(limit.provider.islandMarkColor)
+                    .frame(width: 12, height: 12)
+                    .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
+                Text("\(accountName(limit.provider, in: document.providers)) · \(limit.metric.label)")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Color.white.opacity(0.88))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 8)
+                Text(limit.metric.headline)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(Color.white)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("\(document.labels.resetsIn) \(GlanceFormat.span(from: now, to: limit.at, units: document.labels.units))")
+                    .foregroundStyle(IslandInk.label)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 8)
+                Text(document.dayLabel(limit.at, now: now))
+                    .foregroundStyle(IslandInk.caption)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            .font(.system(size: 10.5))
+            .monospacedDigit()
+            .padding(.leading, 19)
         }
     }
 }

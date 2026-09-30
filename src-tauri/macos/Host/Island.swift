@@ -861,14 +861,24 @@ struct IslandWingPiece: View {
     }
 
     /// The value in the pace color only where no ring or bar beside it carries that color, as the
-    /// popup's rows leave it to their meter.
+    /// popup's rows leave it to their meter, after the limit window's name (`5h`, `week`) as the menu
+    /// bar strip labels it.
     private var value: some View {
-        Text(slot.metric.liveValue(now: now, units: units))
-            .font(.system(size: 12.5, weight: .semibold))
-            .monospacedDigit()
-            .foregroundStyle(fraction == nil ? GlancePalette.text(slot.metric.severity, onDark: true) : Color.white)
-            .lineLimit(1)
-            .minimumScaleFactor(0.7)
-            .contentTransition(.numericText())
+        HStack(alignment: .firstTextBaseline, spacing: 3.5) {
+            if let period = slot.metric.period {
+                Text(period)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.85))
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            Text(slot.metric.liveValue(now: now, units: units))
+                .font(.system(size: 12.5, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(fraction == nil ? GlancePalette.text(slot.metric.severity, onDark: true) : Color.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .contentTransition(.numericText())
+        }
     }
 }
