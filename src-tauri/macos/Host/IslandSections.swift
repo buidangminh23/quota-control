@@ -107,6 +107,10 @@ struct IslandDetails: View {
     var selected: GlanceView?
     var availableWidth: CGFloat = IslandGeometry.expandedWidth
     var viewportHeight: CGFloat?
+    /// The reset view's folds, open or closed; the history folds after its first rows, as in the tab.
+    var resetFolds = GlanceResetFolds(foldsHistory: true)
+    /// A click on a fold of the reset view; the measuring copy leaves it out.
+    var onResetFold: ((GlanceResetFold) -> Void)?
 
     var body: some View {
         let plan = IslandPlan.make(document, now: now, selected: selected)
@@ -167,7 +171,11 @@ struct IslandDetails: View {
             IslandQuotaSection(document: document, now: now, budget: budget, availableWidth: max(1, availableWidth - 40))
         case .resets:
             if let resets = document.resets {
-                IslandResetsSection(resets: resets, labels: document.labels, now: now, budget: budget, availableWidth: max(1, availableWidth - 40 - NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)))
+                IslandResetsSection(
+                    resets: resets, labels: document.labels, now: now, budget: budget,
+                    availableWidth: max(1, availableWidth - 40 - NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)),
+                    folds: resetFolds, onFold: onResetFold
+                )
             }
         case .upcoming:
             IslandUpcomingSection(document: document, now: now, count: budget.upcoming(limit: document.island.upcomingLimit))
@@ -449,10 +457,12 @@ struct IslandResetsSection: View {
     let now: Date
     let budget: IslandBudget
     var availableWidth: CGFloat = 340
+    var folds = GlanceResetFolds(foldsHistory: true)
+    var onFold: ((GlanceResetFold) -> Void)?
 
     var body: some View {
         let scheme = resets.theme == "dark" ? ColorScheme.dark : resets.theme == "light" ? .light : systemScheme
-        GlanceResetContent(resets: resets, units: labels.units, now: now, availableWidth: max(1, availableWidth - 16))
+        GlanceResetContent(resets: resets, units: labels.units, now: now, availableWidth: max(1, availableWidth - 16), folds: folds, onFold: onFold)
             .padding(8)
             .background(GlanceResetPalette(scheme: scheme).background)
             .clipShape(RoundedRectangle(cornerRadius: 14))

@@ -246,6 +246,28 @@ struct ChangeResetWidgetPage: AppIntent {
     }
 }
 
+/// Opens or closes a part of a reset widget the Reset tab folds ("How it is computed"), as a click
+/// on it does in the tab.
+struct ToggleResetWidgetFold: AppIntent {
+    static var title: LocalizedStringResource = "Open or close a reset section"
+    static var openAppWhenRun: Bool = false
+
+    @Parameter(title: "Widget") var key: String
+    @Parameter(title: "Open") var open: Bool
+
+    init() {}
+    init(key: String, open: Bool) {
+        self.key = key
+        self.open = open
+    }
+
+    func perform() async throws -> some IntentResult {
+        UserDefaults.standard.set(open, forKey: key)
+        WidgetCenter.shared.reloadAllTimelines()
+        return .result()
+    }
+}
+
 struct ResetWidgetPager: View {
     let document: GlanceDocument
     let resets: GlanceResets
@@ -258,11 +280,13 @@ struct ResetWidgetPager: View {
 
     var body: some View {
         let height = max(40, size.height - 46)
-        let cards = GlanceResetCards.make(resets: resets, units: document.labels.units, now: now)
-        let fragments = ResetWidgetPagination.pages(cards, width: size.width, height: height)
-        let pages = ResetWidgetPagination.spreads(fragments, width: size.width, height: height)
         let tracker = document.widget.resetsProvider == .codex ? "" : ".\(document.widget.resetsProvider.rawValue)"
         let key = "reset-page.\(namespace)\(tracker).\(family.rawValue)"
+        let foldKey = { (fold: GlanceResetFold) in "reset-\(fold.rawValue).\(namespace)\(tracker).\(family.rawValue)" }
+        let folds = GlanceResetFolds(methodOpen: UserDefaults.standard.bool(forKey: foldKey(.method)))
+        let cards = GlanceResetCards.make(resets: resets, units: document.labels.units, now: now, folds: folds)
+        let fragments = ResetWidgetPagination.pages(cards, width: size.width, height: height)
+        let pages = ResetWidgetPagination.spreads(fragments, width: size.width, height: height)
         let initial = initialCard.flatMap { id in pages.firstIndex(where: { $0.contains(where: { $0.id.hasPrefix(id + "|") || $0.id == id }) }) }.map { prefixPages.count + $0 } ?? 0
         let stored = UserDefaults.standard.object(forKey: key) == nil ? initial : UserDefaults.standard.integer(forKey: key)
         let count = prefixPages.count + pages.count
@@ -278,6 +302,9 @@ struct ResetWidgetPager: View {
                             GlanceResetCardView(card: card, availableWidth: size.width)
                         }
                     }
+                    .environment(\.glanceResetFoldAction, GlanceResetFoldAction { fold, open, label in
+                        AnyView(Button(intent: ToggleResetWidgetFold(key: foldKey(fold), open: !open)) { label }.buttonStyle(.plain))
+                    })
                 }
             }
             .frame(width: size.width, height: height, alignment: .topLeading)
@@ -335,7 +362,7 @@ struct ResetWidgetSections {
         var previousGroup: String?
         for (page, ids) in pageIDs.enumerated() {
             for id in ids {
-                let group = id.hasPrefix("history-") ? "history" : String(id.split(separator: "|")[0])
+                let group = String(id.split(separator: "|")[0])
                 if group != previousGroup && starts.last != page { starts.append(page) }
                 previousGroup = group
             }
@@ -371,18 +398,25 @@ enum ResetWidgetPagination {
                 }
             }
             if !needsPartition && fits(card, width: width, height: height) { result.append(card); continue }
-            var current = GlanceResetCardData(id: card.id + "|0", title: card.title, accent: card.accent, elements: [])
+            var current = GlanceResetCardData(id: card.id + "|0", title: card.title, accent: card.accent, look: card.look, elements: [])
             var part = 0
             var continuation = card
             continuation.title = ""
+            var hairline = false
             for element in card.elements {
                 for piece in pieces(element, card: continuation, width: width, height: height) {
+                    if case .divider = piece {
+                        hairline = !current.elements.isEmpty
+                        continue
+                    }
                     var candidate = current
+                    if hairline { candidate.elements.append(.divider) }
                     candidate.elements.append(piece)
+                    hairline = false
                     if !fits(candidate, width: width, height: height) && (!current.elements.isEmpty || !current.title.isEmpty) {
                         result.append(current)
                         part += 1
-                        current = GlanceResetCardData(id: card.id + "|\(part)", title: "", accent: card.accent, elements: [piece])
+                        current = GlanceResetCardData(id: card.id + "|\(part)", title: "", accent: card.accent, look: card.look, elements: [piece])
                     } else {
                         current = candidate
                     }
@@ -462,12 +496,14 @@ enum ResetWidgetPagination {
         case let .legend(legend):
             return [legend.regular, legend.banked, legend.today].map { .text($0, .secondary) }
         case let .rhythm(title, buckets):
-            return [.text(title, .secondary)] + buckets.flatMap { pieces(.stat($0.label, String($0.count)), card: card, width: width, height: height) }
+            return [.text(title, .secondary)] + buckets.filter { $0.count > 0 }.flatMap { pieces(.stat($0.label, String($0.count)), card: card, width: width, height: height) }
         case let .stat(label, value):
             return pieces(.text(label, .secondary), card: card, width: width, height: height)
                 + pieces(.text(value, .heading), card: card, width: width, height: height)
         case let .message(lines):
             return messagePieces(lines, card: card, width: width, height: height)
+        case let .row(lines):
+            return lines.flatMap { pieces($0, card: card, width: width, height: height) }
         default:
             return [element]
         }

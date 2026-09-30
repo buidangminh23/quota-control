@@ -210,6 +210,17 @@ final class IslandController {
         relayout(animated: true)
     }
 
+    /// A click on a fold of the reset view (the history's "Xem thêm N", "Cách tính") opens or
+    /// closes it, and the open island grows or shrinks to fit.
+    func toggleResetFold(_ fold: GlanceResetFold) {
+        guard model.mode == .expanded else { return }
+        pendingCollapse?.cancel()
+        withAnimation(Self.spring) {
+            model.resetFolds.toggle(fold)
+        }
+        relayout(animated: true)
+    }
+
     private func expand() {
         guard !popupVisible, let geometry = currentGeometry() else { return }
         alertTimer?.cancel()
@@ -432,6 +443,8 @@ final class IslandModel: ObservableObject {
     @Published var wingContent: CGFloat = 0
     /// The tab last clicked on the open island; it stays picked while the island closes and opens.
     @Published var selectedTab: GlanceView?
+    /// The reset view's folds as last clicked, kept here so the open island is measured with them.
+    @Published var resetFolds = GlanceResetFolds(foldsHistory: true)
     /// Where the open island's tabs sit, in the panel's top-left coordinates.
     var tabFrames: [GlanceView: CGRect] = [:]
     var footerFrame: CGRect = .zero
@@ -498,7 +511,7 @@ final class IslandModel: ObservableObject {
         let width = min(preferred, max(1, geometry.screenFrame.width - IslandGeometry.shadowMargin * 2))
         let view = IslandDetails(
             document: document, now: now, topInset: geometry.detailsInset,
-            budget: .full, selected: selectedTab, availableWidth: width
+            budget: .full, selected: selectedTab, availableWidth: width, resetFolds: resetFolds
         )
         .frame(width: width)
         .fixedSize(horizontal: false, vertical: true)
@@ -714,7 +727,9 @@ struct IslandRootView: View {
                 IslandDetails(
                     document: document, now: context.date, topInset: geometry.detailsInset,
                     budget: model.budget, selected: model.selectedTab,
-                    availableWidth: model.expandedSize.width, viewportHeight: model.expandedSize.height
+                    availableWidth: model.expandedSize.width, viewportHeight: model.expandedSize.height,
+                    resetFolds: model.resetFolds,
+                    onResetFold: { fold in IslandController.shared.toggleResetFold(fold) }
                 )
             }
             .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))

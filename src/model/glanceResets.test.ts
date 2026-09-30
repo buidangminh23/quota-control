@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setSystemTimeZone } from "@/model/timeZone";
 import { insightsFor } from "@/i18n/insights";
@@ -338,6 +340,23 @@ describe("English", () => {
     expect(resets.forecast.map((chance) => chance.label)).toEqual(["next 24 hours", "next 3 days", "next 7 days"]);
     expect(resets.calendar?.weekdays).toEqual(["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]);
     expect(resets.calendar?.legend).toEqual({ regular: "Reset", banked: "Banked", today: "Today" });
+  });
+});
+
+describe("the words the island's and widgets' reset cards add", () => {
+  const swift = readFileSync(resolve(process.cwd(), "src-tauri/macos/Shared/GlanceViews.swift"), "utf8");
+  const start = swift.indexOf("struct GlanceResetWords");
+  const words = swift.slice(start, swift.indexOf("\n}\n", start));
+
+  it("are the Reset tab's own, in either language", () => {
+    expect(start).toBeGreaterThan(-1);
+    for (const language of ["vi", "en"] as const) {
+      const text = insightsFor(language);
+      const showMore = text.showMore as unknown as (count: string) => string;
+      for (const phrase of [text.openPost, showMore("\\(count)"), text.showLess]) {
+        expect(words, `${language}: ${phrase}`).toContain(`"${phrase}"`);
+      }
+    }
   });
 });
 
