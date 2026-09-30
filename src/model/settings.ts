@@ -33,9 +33,13 @@ export const RESET_PROVIDERS: readonly ResetProvider[] = ["codex", "claude"];
 export type SurfaceResetProvider = "app" | ResetProvider;
 export const SURFACE_RESET_PROVIDERS: readonly SurfaceResetProvider[] = ["app", "codex", "claude"];
 
-/** The tracker a surface shows now: its own choice, or the Reset tab's while it follows the app. */
-export function surfaceResetProvider(surface: SurfaceResetProvider, app: ResetProvider): ResetProvider {
-  return surface === "app" ? app : surface;
+/**
+ * The tracker a surface shows now: its own choice, or the Reset tab's while it follows the app.
+ * With the Reset tab hidden there is no switch to follow, so it shows Codex, as before the choice.
+ */
+export function surfaceResetProvider(surface: SurfaceResetProvider, app: { resetsProvider: ResetProvider; showResetsTab: boolean }): ResetProvider {
+  if (surface !== "app") return surface;
+  return app.showResetsTab ? app.resetsProvider : "codex";
 }
 /** More banked resets than this marked as applied are forgotten, oldest first. */
 const MAX_USED_BANKED_RESETS = 50;

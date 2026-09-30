@@ -128,10 +128,13 @@ describe("glance surfaces", () => {
       expect(parseSettings({ island: { resetsProvider: value }, widget: { resetsProvider: value } }).widget.resetsProvider).toBe("app");
     }
     expect(parseSettings({ resetsProvider: "claude" }).island.resetsProvider).toBe("app");
-    expect(surfaceResetProvider("app", "claude")).toBe("claude");
-    expect(surfaceResetProvider("app", "codex")).toBe("codex");
-    expect(surfaceResetProvider("codex", "claude")).toBe("codex");
-    expect(surfaceResetProvider("claude", "codex")).toBe("claude");
+    const tab = (resetsProvider: "codex" | "claude", showResetsTab = true) => ({ resetsProvider, showResetsTab });
+    expect(surfaceResetProvider("app", tab("claude"))).toBe("claude");
+    expect(surfaceResetProvider("app", tab("codex"))).toBe("codex");
+    expect(surfaceResetProvider("app", tab("claude", false))).toBe("codex");
+    expect(surfaceResetProvider("codex", tab("claude"))).toBe("codex");
+    expect(surfaceResetProvider("claude", tab("codex"))).toBe("claude");
+    expect(surfaceResetProvider("claude", tab("codex", false))).toBe("claude");
   });
 });
 

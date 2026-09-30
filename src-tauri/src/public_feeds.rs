@@ -182,6 +182,8 @@ pub struct PublicFeeds {
     /// The feeds this run has asked for. A failure saved by an earlier run does not hold back the
     /// first attempt of this one: the network it failed on may be back.
     tried: Mutex<HashSet<FeedName>>,
+    /// Whether each feed was stale when the popup was last told about it.
+    announced: Mutex<HashMap<FeedName, bool>>,
 }
 
 impl PublicFeeds {
@@ -193,6 +195,7 @@ impl PublicFeeds {
                     .ok()
                     .and_then(|bytes| serde_json::from_slice::<StoredFeed>(&bytes).ok())
                     .filter(|stored| stored.body.as_deref().is_none_or(|body| valid(*name, body)))
+                    .map(confirmed_by_last_check)
                     .unwrap_or_default();
                 (*name, stored)
             })
@@ -203,6 +206,7 @@ impl PublicFeeds {
             clock: Arc::new(Utc::now),
             feeds: Mutex::new(feeds),
             tried: Mutex::new(HashSet::new()),
+            announced: Mutex::new(HashMap::new()),
         }
     }
 
@@ -282,7 +286,9 @@ impl PublicFeeds {
                 next.error = None;
             }
             Err(failure) => {
-                next.retry_after = failure.held_until(now);
+                next.retry_after = failure
+                    .held_until(now)
+                    .or_else(|| failure.asked_to_wait().then(|| now + name.retry()));
                 next.error = Some(failure.message);
             }
         }
@@ -295,6 +301,32 @@ impl PublicFeeds {
         }
         self.feeds.lock().await.insert(name, next.clone());
         (snapshot(name, next, (self.clock)()), changed)
+    }
+
+    /// One pass of the background loop: check each wanted feed that is due, and name the feeds
+    /// the popup should read again. That is every feed just checked, a failure and the recovery
+    /// from it included, and every feed whose staleness changed since the popup was last told,
+    /// which a hold of up to hours (`Retry-After`) would otherwise keep from it.
+    pub async fn tick(&self, wanted: impl Fn(FeedName) -> bool) -> Vec<FeedName> {
+        let mut announce = Vec::new();
+        for name in FeedName::ALL {
+            if !wanted(name) {
+                continue;
+            }
+            let stale = if self.due(name).await {
+                announce.push(name);
+                self.refresh(name, false).await.0.stale
+            } else {
+                let stale = self.snapshot(name).await.stale;
+                let told = self.announced.lock().await.get(&name).copied();
+                if told.is_some_and(|told| told != stale) {
+                    announce.push(name);
+                }
+                stale
+            };
+            self.announced.lock().await.insert(name, stale);
+        }
+        announce
     }
 
     async fn fetch(
@@ -677,6 +709,19 @@ fn valid(name: FeedName, body: &str) -> bool {
     }
 }
 
+/// A cache saved before `verified_at` was kept: its last check confirmed the body unless it
+/// failed, since a check that got `304` moved only `checked_at`.
+fn confirmed_by_last_check(mut stored: StoredFeed) -> StoredFeed {
+    if stored.verified_at.is_none() {
+        stored.verified_at = if stored.error.is_none() {
+            stored.checked_at.or(stored.fetched_at)
+        } else {
+            stored.fetched_at
+        };
+    }
+    stored
+}
+
 fn snapshot(name: FeedName, stored: StoredFeed, now: DateTime<Utc>) -> FeedSnapshot {
     let verified_at = stored.verified_at.or(stored.fetched_at);
     let stale = stored.error.is_some()
@@ -1003,6 +1048,110 @@ mod tests {
         assert!(!after.due(FeedName::CodexResetStatus).await);
         seconds.store(3600, Ordering::SeqCst);
         assert!(after.due(FeedName::CodexResetStatus).await);
+    }
+
+    #[tokio::test]
+    async fn a_tick_announces_every_check_and_a_feed_that_turns_stale_while_held() {
+        let root = tempfile::tempdir().unwrap();
+        let seconds = Arc::new(AtomicI64::new(0));
+        let url = FeedName::CodexResetStatus.url();
+        let http = Script::new(vec![
+            (url, ok(STATUS, Some("\"v1\""))),
+            (url, status(503)),
+            (url, status(304)),
+            (url, status_with(429, "retry-after", "3600")),
+        ]);
+        let store = feeds(root.path(), http, seconds.clone());
+        let status_only = |name: FeedName| name == FeedName::CodexResetStatus;
+        assert_eq!(store.tick(status_only).await, vec![FeedName::CodexResetStatus]);
+        seconds.store(60, Ordering::SeqCst);
+        assert!(store.tick(status_only).await.is_empty());
+        seconds.store(300, Ordering::SeqCst);
+        assert_eq!(store.tick(status_only).await, vec![FeedName::CodexResetStatus]);
+        assert!(store.snapshot(FeedName::CodexResetStatus).await.error.is_some());
+        seconds.store(600, Ordering::SeqCst);
+        assert_eq!(store.tick(status_only).await, vec![FeedName::CodexResetStatus]);
+        assert!(store.snapshot(FeedName::CodexResetStatus).await.error.is_none());
+
+        seconds.store(900, Ordering::SeqCst);
+        assert_eq!(store.tick(status_only).await, vec![FeedName::CodexResetStatus]);
+        let held = store.snapshot(FeedName::CodexResetStatus).await;
+        assert!(held.error.is_some() && !held.stale);
+        seconds.store(1400, Ordering::SeqCst);
+        assert!(store.tick(status_only).await.is_empty());
+        seconds.store(1500, Ordering::SeqCst);
+        assert_eq!(store.tick(status_only).await, vec![FeedName::CodexResetStatus]);
+        assert!(store.snapshot(FeedName::CodexResetStatus).await.stale);
+        seconds.store(1800, Ordering::SeqCst);
+        assert!(store.tick(status_only).await.is_empty());
+        assert!(store.tick(|_| false).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_rate_limit_without_retry_after_still_holds_the_next_run() {
+        let root = tempfile::tempdir().unwrap();
+        let seconds = Arc::new(AtomicI64::new(0));
+        let url = FeedName::CodexResets.url();
+        let http = Script::new(vec![(url, status(429))]);
+        let before = feeds(root.path(), http.clone(), seconds.clone());
+        before.refresh(FeedName::CodexResets, false).await;
+        seconds.store(60, Ordering::SeqCst);
+        let after = feeds(root.path(), http.clone(), seconds.clone());
+        assert!(!after.due(FeedName::CodexResets).await);
+        seconds.store(30 * 60, Ordering::SeqCst);
+        assert!(after.due(FeedName::CodexResets).await);
+    }
+
+    #[tokio::test]
+    async fn a_cache_from_before_verified_at_counts_its_last_good_check() {
+        let root = tempfile::tempdir().unwrap();
+        let at = |offset: i64| {
+            DateTime::from_timestamp(1_790_400_000 + offset, 0)
+                .unwrap()
+                .to_rfc3339()
+        };
+        let old = serde_json::json!({
+            "etag": "\"p1\"",
+            "body": page(&["1"], None),
+            "fetchedAt": at(-3 * 86_400),
+            "checkedAt": at(-600),
+            "error": null,
+            "retryAfter": null,
+        });
+        std::fs::write(
+            root.path().join(FeedName::CodexResets.file()),
+            serde_json::to_vec(&old).unwrap(),
+        )
+        .unwrap();
+        let url = FeedName::CodexResets.url();
+        let http = Script::new(vec![(url, Err(HttpError::Transport("offline".into())))]);
+        let store = feeds(root.path(), http, Arc::new(AtomicI64::new(0)));
+        assert_eq!(
+            store.snapshot(FeedName::CodexResets).await.verified_at,
+            Some(at(-600))
+        );
+        let (failed, _) = store.refresh(FeedName::CodexResets, false).await;
+        assert!(failed.error.is_some() && !failed.stale);
+
+        let failing = serde_json::json!({
+            "body": page(&["1"], None),
+            "fetchedAt": at(-3 * 86_400),
+            "checkedAt": at(-600),
+            "error": "HTTP 503",
+        });
+        std::fs::write(
+            root.path().join(FeedName::CodexResets.file()),
+            serde_json::to_vec(&failing).unwrap(),
+        )
+        .unwrap();
+        let reopened = feeds(
+            root.path(),
+            Script::new(Vec::<(String, _)>::new()),
+            Arc::new(AtomicI64::new(0)),
+        );
+        let snapshot = reopened.snapshot(FeedName::CodexResets).await;
+        assert_eq!(snapshot.verified_at, Some(at(-3 * 86_400)));
+        assert!(snapshot.stale);
     }
 
     #[tokio::test]

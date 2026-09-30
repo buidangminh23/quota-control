@@ -8,7 +8,7 @@ import { insightsFor } from "@/i18n/insights";
 import { buildResetPresentation } from "@/model/glanceResets";
 import { forecastSkill } from "@/model/insights/claudeResets";
 import { reliabilityText } from "@/model/insights/claudePresentation";
-import { parseResets, parseResetStatus, resetTrackerOutdated } from "@/model/insights/resets";
+import { feedOutdated, parseResets, parseResetStatus, resetTrackerOutdated } from "@/model/insights/resets";
 import { SOURCE_COLORS } from "@/model/palette";
 import { RESET_PROVIDERS, type ResetProvider } from "@/model/settings";
 import { dayNumber } from "@/model/timeZone";
@@ -41,9 +41,9 @@ function CodexResets() {
   const empty = loaded && !feeds.codexResetStatus?.body && !feeds.codexResets?.body;
   const stale = resetTrackerOutdated({
     status,
-    statusStale: Boolean(feeds.codexResetStatus?.stale),
+    statusStale: feedOutdated(feeds.codexResetStatus),
     historyBody: feeds.codexResets?.body,
-    historyStale: Boolean(feeds.codexResets?.stale),
+    historyStale: feedOutdated(feeds.codexResets),
   });
   const error = FEEDS.map((name) => feeds[name]?.error ?? errors[name]).find(Boolean);
 

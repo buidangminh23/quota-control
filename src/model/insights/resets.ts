@@ -151,6 +151,14 @@ export function parseResets(body: string | null | undefined, extra: readonly (Co
 }
 
 /**
+ * Whether a feed may leave the screen out of date: the core found its saved copy stale, it could
+ * not be read at all, or it is failing without ever having been read.
+ */
+export function feedOutdated(feed: { body: string | null; error: string | null; stale: boolean } | undefined, readError?: string): boolean {
+  return Boolean(readError) || Boolean(feed?.stale) || Boolean(feed?.error && !feed.body);
+}
+
+/**
  * Whether the Codex tracker may show resets that are out of date, which is when it carries the
  * saved-copy note. The status is out of date once its source has failed for a while (`stale`). The
  * saved list only matters while the status names a reset the list lacks: a list that could not be

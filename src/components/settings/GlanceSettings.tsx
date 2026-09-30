@@ -294,8 +294,7 @@ function ResetEditor({
   text: SettingsMessages;
   language: Language;
 }) {
-  const app = useSettings().resetsProvider;
-  const provider = surfaceResetProvider(value.resetsProvider, app);
+  const provider = surfaceResetProvider(value.resetsProvider, useSettings());
   const parts = value.resetParts;
   const trackerOff = useTrackerOff(provider);
   const insights = insightsFor(language);
@@ -356,7 +355,7 @@ function ViewEditors({
 }) {
   const [open, setOpen] = useState<IslandView | null>(views[0] ?? null);
   const quotaSummary = useQuotaSummary(value, text);
-  const provider = surfaceResetProvider(value.resetsProvider, useSettings().resetsProvider);
+  const provider = surfaceResetProvider(value.resetsProvider, useSettings());
   const resetsOn = RESET_PARTS.filter((part) => value.resetParts[part]).length;
   const summary = (view: IslandView): string => {
     if (view === "quota") return quotaSummary;
@@ -455,7 +454,7 @@ export function IslandSection() {
 
           <SubHeading>{text.glanceGroup("open")}</SubHeading>
           <ChipRow label={text.glanceTabs("island")} note={text.glanceTabsNote("island")}>
-            <TabChips tabs={island.tabs} provider={surfaceResetProvider(island.resetsProvider, settings.resetsProvider)} onChange={(tabs) => patchIsland({ tabs })} text={text} />
+            <TabChips tabs={island.tabs} provider={surfaceResetProvider(island.resetsProvider, settings)} onChange={(tabs) => patchIsland({ tabs })} text={text} />
           </ChipRow>
           {island.tabs.length > 1 ? (
             <Row label={text.islandLayout} note={text.islandLayoutNote(island.layout)}>
@@ -488,7 +487,7 @@ export function WidgetSection() {
       </Row>
       <p className="uc-settings-note">{text.desktopWidgetKindsNote}</p>
       <ChipRow label={text.glanceTabs("widget")} note={text.glanceTabsNote("widget")}>
-        <TabChips tabs={widget.tabs} provider={surfaceResetProvider(widget.resetsProvider, settings.resetsProvider)} onChange={(tabs) => patchWidget({ tabs })} text={text} />
+        <TabChips tabs={widget.tabs} provider={surfaceResetProvider(widget.resetsProvider, settings)} onChange={(tabs) => patchWidget({ tabs })} text={text} />
       </ChipRow>
       <SubHeading>{text.glanceGroup("content")}</SubHeading>
       <ViewEditors views={ISLAND_VIEWS} value={widget} onChange={patchWidget} scope={text.glanceWidgetScope} text={text} language={settings.language} />

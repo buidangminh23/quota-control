@@ -3,7 +3,7 @@ import { compareCandidates, compareRows, searchCandidates, type CompareInput } f
 import { parseCsv } from "./csv";
 import { benchmarkBoards, benchmarkLabel, benchmarkUrl, BENCHMARKS, parseEpochBenchmarks, parseEpochScores } from "./epoch";
 import { EMPTY_COUNTS, modelQuality } from "./quality";
-import { activeWatch, announcementPattern, currentWait, forecastResets, parseResets, parseResetStatus, resetCalendar, resetStats, resetTrackerOutdated, xUrl, type CodexReset, type ResetStatus } from "./resets";
+import { activeWatch, announcementPattern, currentWait, forecastResets, parseResets, parseResetStatus, resetCalendar, resetStats, feedOutdated, resetTrackerOutdated, xUrl, type CodexReset, type ResetStatus } from "./resets";
 
 describe("parseCsv", () => {
   it("reads quoted fields with commas, quotes and line breaks, CRLF and a byte-order mark", () => {
@@ -205,6 +205,17 @@ describe("Codex resets", () => {
     expect(outdated(null, false, true)).toBe(true);
     expect(outdated(null, false, false)).toBe(false);
     expect(resetTrackerOutdated({ status: naming("3"), statusStale: false, historyBody: null, historyStale: true })).toBe(true);
+  });
+
+  it("counts a feed as out of date while it is stale, unreadable, or failing without a saved copy", () => {
+    const feed = (body: string | null, error: string | null, stale: boolean) => ({ body, error, stale });
+    expect(feedOutdated(undefined)).toBe(false);
+    expect(feedOutdated(undefined, "backend down")).toBe(true);
+    expect(feedOutdated(feed("{}", null, false))).toBe(false);
+    expect(feedOutdated(feed("{}", "HTTP 503", false))).toBe(false);
+    expect(feedOutdated(feed("{}", "HTTP 503", true))).toBe(true);
+    expect(feedOutdated(feed(null, "HTTP 500", false))).toBe(true);
+    expect(feedOutdated(feed(null, null, false))).toBe(false);
   });
 
   it("reads the status with an announced reset and a watch that expires", () => {

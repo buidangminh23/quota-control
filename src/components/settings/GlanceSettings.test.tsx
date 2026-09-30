@@ -89,6 +89,15 @@ describe("whose reset tracker the island and the widgets show", () => {
     expect(useApp.getState().settings.island.resetsProvider).toBe("app");
   });
 
+  it("names the followed tracker Codex while the Reset tab is hidden, and Claude again once it is shown", async () => {
+    await openSettings();
+    act(() => updateSettings({ resetsProvider: "claude", showResetsTab: false }));
+    const island = section("Dynamic Island");
+    expect(within(island).getByRole("checkbox", { name: "Reset Codex" })).toBeChecked();
+    act(() => updateSettings({ showResetsTab: true }));
+    expect(within(island).getByRole("checkbox", { name: "Reset Claude" })).toBeChecked();
+  });
+
   it("lets the island show Claude's resets and renames its reset view, leaving the widgets on Codex", async () => {
     const api = await openSettings();
     const island = section("Dynamic Island");

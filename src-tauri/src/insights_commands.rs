@@ -1,9 +1,9 @@
 //! The Benchmark and Reset tabs' data: quality counted from this machine's Claude Code and Codex
 //! transcripts, and the public feeds (Codex and Claude resets, Epoch AI, Arena, 3D Arena). Both
 //! refresh in the background and tell the popup, which asks for the data it shows. A feed is
-//! announced after every check, not only when its body changed, so a failure and the recovery from
-//! it reach the screen too. Background work follows the popup's settings: nothing is scanned or
-//! fetched for a tab that is turned off.
+//! announced after every check and whenever it turns stale or fresh (`PublicFeeds::tick`), not only
+//! when its body changed, so a failure and the recovery from it reach the screen too. Background
+//! work follows the popup's settings: nothing is scanned or fetched for a tab that is turned off.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -121,11 +121,7 @@ impl InsightsService {
         let handle = app.clone();
         tauri::async_runtime::spawn(async move {
             loop {
-                for name in FeedName::ALL {
-                    if !feed_wanted(&handle, name) || !feeds.due(name).await {
-                        continue;
-                    }
-                    feeds.refresh(name, false).await;
+                for name in feeds.tick(|name| feed_wanted(&handle, name)).await {
                     let _ = handle.emit_to("popup", "public-feed-changed", name);
                 }
                 tokio::time::sleep(FEED_TICK).await;

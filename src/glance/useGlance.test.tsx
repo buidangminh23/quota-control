@@ -109,6 +109,28 @@ describe("the glance document the popup sends", () => {
     expect("resetsProvider" in api.latest!.widget).toBe(false);
   });
 
+  it("keeps a surface that follows the Reset tab on Codex while that tab is hidden, as before the choice", async () => {
+    const api = await start({ resetsProvider: "claude", showResetsTab: false, notifyClaudeResets: false, notifyCodexResets: true });
+    await settle();
+    await waitFor(() => expect(api.latest?.resets?.brand).toBe("codex"));
+    const document = api.latest!;
+    expect("resetsProvider" in document.island).toBe(false);
+    expect("resetsProvider" in document.widget).toBe(false);
+    expect("claudeResets" in document).toBe(false);
+    expect("claudeResetsTab" in document.labels).toBe(false);
+    expect(api.feedsAsked).not.toContain("claudeResets");
+    act(() => updateSettings({ showResetsTab: true }));
+    await waitFor(() => expect(api.latest?.island.resetsProvider).toBe("claude"));
+    expect(api.latest!.widget.resetsProvider).toBe("claude");
+  });
+
+  it("puts the saved-copy note on the Codex tracker while its status has never been read", async () => {
+    const api = await start({}, (backend) => {
+      backend.feedStates.codexResetStatus = { body: null, error: "HTTP 500", stale: false };
+    });
+    await waitFor(() => expect(api.latest?.resets?.stale).toBe(insightsFor("vi").staleNote));
+  });
+
   it("follows Claude reset notifications alone when the Reset tab is off", async () => {
     const api = await start({ widget: { resetsProvider: "claude" }, showResetsTab: false, notifyClaudeResets: true });
     await waitFor(() => expect(api.latest?.claudeResets?.brand).toBe("claude"));

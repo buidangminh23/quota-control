@@ -16,7 +16,7 @@ import { buildGlance, isClaudeResetsWing, isSpecialWing, type GlanceWingChoice }
 import { buildClaudeGlanceResets } from "@/model/glanceClaudeResets";
 import { buildGlanceResets, parseResetFeeds } from "@/model/glanceResets";
 import { parseClaudeResets } from "@/model/insights/claudeResets";
-import { resetTrackerOutdated } from "@/model/insights/resets";
+import { feedOutdated, resetTrackerOutdated } from "@/model/insights/resets";
 import { brandOf, glanceGroups } from "@/model/layout";
 import { surfaceResetProvider } from "@/model/settings";
 import { cardIdentity } from "@/model/providerText";
@@ -40,12 +40,18 @@ export function useGlance(): void {
   const islandEnabled = useApp((state) => state.settings.dynamicIsland);
   const islandChoice = useApp((state) => state.settings.island);
   const widgetChoice = useApp((state) => state.settings.widget);
-  const appTracker = useApp((state) => state.settings.resetsProvider);
-  const island = useMemo(() => ({ ...islandChoice, resetsProvider: surfaceResetProvider(islandChoice.resetsProvider, appTracker) }), [islandChoice, appTracker]);
-  const widget = useMemo(() => ({ ...widgetChoice, resetsProvider: surfaceResetProvider(widgetChoice.resetsProvider, appTracker) }), [widgetChoice, appTracker]);
+  const resetsProvider = useApp((state) => state.settings.resetsProvider);
+  const showResetsTab = useApp((state) => state.settings.showResetsTab);
+  const island = useMemo(
+    () => ({ ...islandChoice, resetsProvider: surfaceResetProvider(islandChoice.resetsProvider, { resetsProvider, showResetsTab }) }),
+    [islandChoice, resetsProvider, showResetsTab],
+  );
+  const widget = useMemo(
+    () => ({ ...widgetChoice, resetsProvider: surfaceResetProvider(widgetChoice.resetsProvider, { resetsProvider, showResetsTab }) }),
+    [widgetChoice, resetsProvider, showResetsTab],
+  );
   const timeFormat = useApp((state) => state.settings.timeFormat);
   const theme = useApp((state) => state.settings.theme);
-  const showResetsTab = useApp((state) => state.settings.showResetsTab);
   const notifyCodexResets = useApp((state) => state.settings.notifyCodexResets);
   const notifyClaudeResets = useApp((state) => state.settings.notifyClaudeResets);
   const usedBankedResets = useApp((state) => state.settings.usedBankedResets);
@@ -79,9 +85,9 @@ export function useGlance(): void {
     tracking &&
     resetTrackerOutdated({
       status: feeds.status,
-      statusStale: Boolean(statusFeed?.stale || statusError),
+      statusStale: feedOutdated(statusFeed, statusError),
       historyBody,
-      historyStale: showResetsTab && Boolean(historyFeed?.stale || historyError),
+      historyStale: showResetsTab && feedOutdated(historyFeed, historyError),
     });
   const resets = useMemo(
     () => (tracking ? buildGlanceResets({ feeds, stale, now, language: display.language, timeFormat, theme }) : null),
