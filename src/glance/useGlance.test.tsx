@@ -7,6 +7,10 @@ import type { PublicFeedName, PublicFeedSnapshot } from "@/lib/insightsTypes";
 import { MockBackend } from "@/lib/mockBackend";
 import { FEED_FIXTURES } from "@/lib/insightsFeedFixtures";
 import type { GlanceDocument } from "@/model/glance";
+import { parseResetFeeds } from "@/model/glanceResets";
+import { buildClaudePresentation, dailyReliability } from "@/model/insights/claudePresentation";
+import { parseClaudeResets } from "@/model/insights/claudeResets";
+import { parseResets } from "@/model/insights/resets";
 import { setProviderOpen } from "@/model/layout";
 import { resetInsights } from "@/state/insights";
 import { updateLayout, updateSettings, useApp } from "@/state/store";
@@ -125,6 +129,67 @@ describe("the glance document the popup sends", () => {
     expect(api.latest!.widget.resetsProvider).toBe("claude");
   });
 
+  it("keeps the Codex tracker to what its status says while the Reset tab is hidden and reset notifications are on", async () => {
+    const api = await start({ showResetsTab: false, notifyCodexResets: true });
+    await settle();
+    await waitFor(() => expect(api.latest?.resets?.brand).toBe("codex"));
+    const resets = api.latest!.resets!;
+    expect(resets.latest?.at).toBe("2026-09-22T18:23:37.000Z");
+    expect(resets.presentation?.latest?.at).toBe("2026-09-22T18:23:37.000Z");
+    expect(resets.presentation?.statuses.map((card) => card.kind)).toEqual(["scheduled"]);
+    expect(resets.presentation?.forecast.chances).toEqual([]);
+    expect(resets.presentation?.forecast.unavailable).toBeUndefined();
+    expect(resets.presentation?.stats).toEqual([]);
+    expect(resets.presentation?.history).toEqual([]);
+    expect(resets.calendar).toBeUndefined();
+    expect(resets.rhythm).toBeUndefined();
+    expect(api.feedsAsked).not.toContain("codexResets");
+  });
+
+  it("says the Codex feeds could not be loaded, in the Reset tab's words, while neither has a copy", async () => {
+    const api = await start({}, (backend) => {
+      backend.feedStates.codexResetStatus = { body: null, error: "HTTP 500" };
+      backend.feedStates.codexResets = { body: null, error: "HTTP 502" };
+    });
+    await waitFor(() => expect(api.latest?.resetsPending).toEqual({ text: "Chưa tải được: HTTP 500", failed: true }));
+    expect("resets" in api.latest!).toBe(false);
+    expect(api.latest!.labels.resetsOff).toBe("Bật tab Reset hoặc thông báo reset trong Quota Control để xem dự báo.");
+  });
+
+  it("says the Claude feed could not be loaded in place of its tracker, for the surface showing it", async () => {
+    const api = await start({ island: { resetsProvider: "claude" }, notifyClaudeResets: false }, (backend) => {
+      backend.feedStates.claudeResets = { body: null, error: "offline" };
+    });
+    await waitFor(() => expect(api.latest?.claudeResetsPending).toEqual({ text: "Chưa tải được: offline", failed: true }));
+    expect("claudeResets" in api.latest!).toBe(false);
+    expect(api.latest!.resets?.brand).toBe("codex");
+    expect("resetsPending" in api.latest!).toBe(false);
+  });
+
+  it("dates each tracker's copy the way the Reset tab's line above its source does", async () => {
+    const checked = "2026-09-30T01:02:03.000Z";
+    const verified = "2026-09-29T22:00:00.000Z";
+    const api = await start({ island: { resetsProvider: "claude" }, notifyClaudeResets: false }, (backend) => {
+      backend.feedStates.codexResetStatus = { checkedAt: checked };
+      backend.feedStates.claudeResets = { error: "offline", verifiedAt: verified };
+    });
+    await waitFor(() => expect(api.latest?.claudeResets?.presentation?.fetched?.at).toBe(verified));
+    expect(api.latest!.resets!.presentation!.fetched).toEqual({ at: checked, text: "Tải {d} trước", since: true, recent: "Vừa tải" });
+  });
+
+  it("carries the Reset tab's self-check under the Codex chances once the history is long enough to try", async () => {
+    const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+    const post = (id: string, days: number) => ({ id, reset_type: "regular", announced_at: ago(days), text: `Codex reset ${id}.`, source: { type: "x_post", author: "thsottiaux", url: `https://x.com/thsottiaux/status/${id}` } });
+    const history = [...Array.from({ length: 8 }, (_, index) => post(`1${index}`, 300 - index * 25)), ...Array.from({ length: 33 }, (_, index) => post(`2${index + 10}`, 100 - index * 3))];
+    const body = JSON.stringify({ data: history.reverse(), pagination: { has_more: false, next_cursor: null }, meta: { api_version: "v1" } });
+    const api = await start({}, (backend) => {
+      backend.feedStates.codexResets = { body };
+    });
+    await waitFor(() => expect(api.latest?.resets?.presentation?.forecast.reliability).toMatch(/^Thử lại trên \d+ ngày đã qua/));
+    const feeds = parseResetFeeds(FEED_FIXTURES.codexResetStatus, body);
+    expect(api.latest!.resets!.presentation!.forecast.reliability).toBe(dailyReliability(feeds.resets, new Date(), "vi"));
+  });
+
   it("puts the saved-copy note on the Codex tracker while its status has never been read", async () => {
     const api = await start({}, (backend) => {
       backend.feedStates.codexResetStatus = { body: null, error: "HTTP 500", stale: false };
@@ -237,6 +302,40 @@ describe("the glance document the popup sends", () => {
     expect(api.latest!.island.shows.plan).toBe(true);
     expect(api.latest!.providers.find((provider) => provider.id === "codex@52d0")?.term).toMatchObject({ on: expect.any(String) });
     expect(api.latest!.labels.planTerm?.until).toBe("tới {d}");
+  });
+
+  it("sets the Claude tracker against the Codex history alone, as the Reset tab's comparison does", async () => {
+    const newer = FEED_FIXTURES.codexResetStatus.replaceAll("2102463847714247142", "2103911959544610829");
+    const api = await start({ island: { resetsProvider: "claude" }, notifyClaudeResets: false }, (backend) => {
+      backend.feedStates.codexResetStatus = { body: newer };
+    });
+    await waitFor(() => expect(api.latest?.claudeResets?.presentation?.compare).toBeDefined());
+    const compare = api.latest!.claudeResets!.presentation!.compare!;
+    const popup = buildClaudePresentation({ feed: parseClaudeResets(FEED_FIXTURES.claudeResets)!, codex: parseResets(FEED_FIXTURES.codexResets), plans: [], used: [], now: new Date(), language: "vi", timeFormat: "auto" }).compare!;
+    expect(compare.rows[0]).toEqual(popup.rows[0]);
+    expect(compare.months.map((month) => month.codex)).toEqual(popup.months.map((month) => month.codex));
+    expect(compare.columns).toMatchObject({ claude: { name: "Claude", color: "#DE7356" }, codex: { name: "Codex", color: "#10A37F" } });
+  });
+
+  it("leaves the comparison out while the Reset tab has not loaded the Codex history", async () => {
+    const api = await start({ island: { resetsProvider: "claude" }, showResetsTab: false, notifyClaudeResets: true });
+    await waitFor(() => expect(api.latest?.claudeResets?.brand).toBe("claude"));
+    expect(api.latest!.claudeResets!.presentation!.changes?.length).toBeGreaterThan(0);
+    expect("compare" in api.latest!.claudeResets!.presentation!).toBe(false);
+    expect(api.feedsAsked).not.toContain("codexResets");
+  });
+
+  it("moves a wing that follows the Reset tab with the tab's Codex | Claude switch", async () => {
+    const api = await start({ island: { wings: ["resets:chance-1", ""] }, notifyClaudeResets: false });
+    await waitFor(() => expect(api.latest?.island.wings[0]?.id).toBe("codex-resets"));
+    expect(api.latest!.island.wings[0]).toMatchObject({ brand: "codex", metrics: [{ id: "codex-resets:chance-1" }] });
+    act(() => updateSettings({ resetsProvider: "claude" }));
+    await waitFor(() => expect(api.latest?.island.wings[0]?.id).toBe("claude-resets"));
+    expect(api.latest!.island.wings[0]).toMatchObject({ brand: "claude", metrics: [{ id: "claude-resets:chance-1" }] });
+    const settings = useApp.getState().settings;
+    act(() => updateSettings({ island: { ...settings.island, resetsProvider: "codex" }, widget: { ...settings.widget, resetsProvider: "codex" } }));
+    await waitFor(() => expect("claudeResets" in api.latest!).toBe(false));
+    expect(api.latest!.island.wings[0]?.id).toBe("claude-resets");
   });
 
   it("loads the Claude tracker for a Claude wing without copying it into the document", async () => {

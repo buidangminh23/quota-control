@@ -30,9 +30,14 @@ struct GlanceDocument: Decodable, Equatable {
     /// The Codex free-reset tracker; absent while the Reset tab and reset notifications are both off.
     /// In a surface's copy (`forIsland`, `forWidget`) it is the tracker that surface chose.
     var resets: GlanceResets?
+    /// What a reset view says in place of the Codex tracker while it is on but has nothing yet; in a
+    /// surface's copy, for the tracker that surface chose.
+    var resetsPending: GlanceResetsPending?
     /// The Claude reset tracker, sent while the island or the widget chose it; absent otherwise, and
     /// while the Reset tab and Claude reset notifications are both off.
     var claudeResets: GlanceResets?
+    /// `resetsPending` for the Claude tracker.
+    var claudeResetsPending: GlanceResetsPending?
     /// The pictures before the accounts' reset rows, as data URLs by lowercase handle.
     var avatars: [String: String]? = nil
     var alert: GlanceAlert?
@@ -40,7 +45,7 @@ struct GlanceDocument: Decodable, Equatable {
     static let supportedVersion = 1
 
     private enum CodingKeys: String, CodingKey {
-        case version, generatedAt, locale, hour12, theme, resetDisplay, alwaysShowPacing, displayMode, labels, providers, island, widget, resets, claudeResets, avatars, alert
+        case version, generatedAt, locale, hour12, theme, resetDisplay, alwaysShowPacing, displayMode, labels, providers, island, widget, resets, resetsPending, claudeResets, claudeResetsPending, avatars, alert
     }
 
     init(
@@ -54,7 +59,9 @@ struct GlanceDocument: Decodable, Equatable {
         island: GlanceIsland,
         widget: GlanceWidgetContent,
         resets: GlanceResets? = nil,
+        resetsPending: GlanceResetsPending? = nil,
         claudeResets: GlanceResets? = nil,
+        claudeResetsPending: GlanceResetsPending? = nil,
         alert: GlanceAlert?
     ) {
         self.version = version
@@ -67,7 +74,9 @@ struct GlanceDocument: Decodable, Equatable {
         self.island = island
         self.widget = widget
         self.resets = resets
+        self.resetsPending = resetsPending
         self.claudeResets = claudeResets
+        self.claudeResetsPending = claudeResetsPending
         self.alert = alert
     }
 
@@ -87,7 +96,9 @@ struct GlanceDocument: Decodable, Equatable {
         widget = try container.decodeIfPresent(GlanceWidgetContent.self, forKey: .widget)
             ?? GlanceWidgetContent(providers: providers, shows: .all, empty: labels.empty)
         resets = try? container.decodeIfPresent(GlanceResets.self, forKey: .resets)
+        resetsPending = try? container.decodeIfPresent(GlanceResetsPending.self, forKey: .resetsPending)
         claudeResets = try? container.decodeIfPresent(GlanceResets.self, forKey: .claudeResets)
+        claudeResetsPending = try? container.decodeIfPresent(GlanceResetsPending.self, forKey: .claudeResetsPending)
         avatars = try? container.decodeIfPresent([String: String].self, forKey: .avatars)
         alert = try container.decodeIfPresent(GlanceAlert.self, forKey: .alert)
     }
@@ -152,7 +163,7 @@ struct GlanceDocument: Decodable, Equatable {
     }
 
     /// The document with `resets` as `provider`'s tracker showing only `parts`; for Claude the reset
-    /// view is named after the Claude tracker and, while it is off, says what turns it on.
+    /// view is named after the Claude tracker and, while it has nothing, says why in its own words.
     private func showing(_ provider: GlanceResetsProvider, parts: GlanceResetParts) -> GlanceDocument {
         var copy = self
         switch provider {
@@ -160,6 +171,7 @@ struct GlanceDocument: Decodable, Equatable {
             copy.resets = resets?.showing(parts)
         case .claude:
             copy.resets = claudeResets?.showing(parts)
+            copy.resetsPending = claudeResetsPending
             copy.labels.tabs.resets = claudeResetsTitle
             if let off = labels.claudeResetsOff { copy.labels.resetsOff = off }
         }
@@ -851,12 +863,13 @@ extension GlanceMetric {
 
 /// Words around a moving span of time (see `GlanceCountdown` in `src/model/glance.ts`): `text` with
 /// `{d}` replaced by the time left until `at`, or gone by since it when `since`; once a countdown
-/// has passed, `after`.
+/// has passed, `after`; a `since` one reads `recent` while under a minute has gone by.
 struct GlanceCountdown: Decodable, Equatable {
     var at: Date
     var text: String
     var since: Bool?
     var after: String?
+    var recent: String? = nil
 
     static let placeholder = "{d}"
 
@@ -864,6 +877,7 @@ struct GlanceCountdown: Decodable, Equatable {
 
     func text(now: Date, units: GlanceUnits, short: Bool = false) -> String {
         if passed(now), let after { return after }
+        if since == true, let recent, now.timeIntervalSince(at) < 60 { return recent }
         let from = since == true ? at : now
         let to = since == true ? now : at
         let span = short
@@ -905,6 +919,9 @@ struct GlanceResets: Decodable, Equatable {
 
     var tint: Color { Color(glanceHex: color) ?? .white }
 
+    /// The tracker's mark color, the text color when the brand is white.
+    var markTint: Color { color.uppercased() == "#FFFFFF" ? .primary : tint }
+
     /// The announced reset while it is still to be shown at `now`.
     func upcoming(at now: Date) -> GlanceUpcomingReset? {
         guard let upcoming, upcoming.hideAt > now else { return nil }
@@ -933,6 +950,7 @@ struct GlanceResets: Decodable, Equatable {
             copy.forecastNote = ""
             copy.presentation?.forecast.chances = []
             copy.presentation?.forecast.sampleNote = nil
+            copy.presentation?.forecast.reliability = nil
             copy.presentation?.forecast.disclaimer = nil
             copy.presentation?.forecast.unavailable = nil
         }
@@ -947,6 +965,14 @@ struct GlanceResets: Decodable, Equatable {
         if !parts.rhythm { copy.rhythm = nil }
         return copy
     }
+}
+
+/// The Reset tab's own line for a tracker that is on but has nothing yet (see `GlanceResetsPending`
+/// in `src/model/glance.ts`): still loading, or could not load.
+struct GlanceResetsPending: Decodable, Equatable {
+    var text: String
+    /// The feeds could not be loaded, which the Reset tab says in the notice color.
+    var failed: Bool?
 }
 
 struct GlanceResetAuthor: Decodable, Equatable {
@@ -968,7 +994,9 @@ struct GlanceResetLatestPresentation: Decodable, Equatable {
     /// Said when no post announced it: the site recorded the reset itself.
     var observed: String? = nil
 
-    func ago(now: Date, locale: String) -> String {
+    /// How long ago `at` was at `now`, as the Reset tab's latest reset words it (`resetAgoText`):
+    /// in whole minutes, hours or days.
+    static func ago(since at: Date, now: Date, locale: String) -> String {
         let minutes = max(1, Int(floor(now.timeIntervalSince(at) / 60)))
         let hours = minutes / 60
         let formatter = RelativeDateTimeFormatter()
@@ -999,17 +1027,18 @@ struct GlanceResetStatusCard: Decodable, Equatable, Identifiable {
     /// while it is drawn with it.
     var sameAsLatest: Bool? = nil
 
-    func metadata(now: Date, units: GlanceUnits) -> [String] {
-        guard kind == "scheduled", let announced, let scheduledMeta else { return meta }
-        return [announced.text(now: now, units: units) + " · " + scheduledMeta]
+    /// The card's meta lines: a scheduled card's first one says, as time passes, how long ago the
+    /// reset was announced; the others stay as the popup wrote them.
+    func liveMetadata(units: GlanceUnits) -> [GlanceResetElement] {
+        guard kind == "scheduled", let announced, let scheduledMeta else { return meta.map { .text($0, .secondary) } }
+        return [.live(.countdownThen(announced, units, scheduledMeta), .secondary)]
     }
 
-    func due(now: Date, units: GlanceUnits) -> String? {
-        guard let dueCountdown else { return due }
-        if dueCountdown.at <= now, let overdueCountdown {
-            return overdueCountdown.text(now: now, units: units)
-        }
-        return dueCountdown.text(now: now, units: units)
+    /// The time left to the card's stated time (or deadline), then how long it is past it, in
+    /// `style`: a meta line's, or the big accent line a banked reset's time left is.
+    func liveDue(units: GlanceUnits, style: GlanceResetTextStyle = .secondary) -> GlanceResetElement? {
+        guard let dueCountdown else { return due.map { .text($0, style) } }
+        return .live(.dueThenOverdue(dueCountdown, overdueCountdown, units), style)
     }
 }
 
@@ -1028,6 +1057,9 @@ struct GlanceResetForecastPresentation: Decodable, Equatable {
     var waitFraction: Double?
     var median: String?
     var sampleNote: String?
+    /// How the estimate would have done on this history (`Thử lại trên 60 ngày…`), as the Reset tab
+    /// says it under the chances; absent while the history is too short to try.
+    var reliability: String? = nil
     var disclaimer: String?
     var unavailable: String?
 }
@@ -1052,12 +1084,78 @@ struct GlanceResetHistoryItem: Decodable, Equatable, Identifiable {
     var provisional: String? = nil
 }
 
+/// A limit change (Claude): a row of the list the Reset tab keeps apart from the history, since it
+/// reset nothing.
+struct GlanceResetChangeItem: Decodable, Equatable, Identifiable {
+    var id: String
+    var when: String
+    var excerpt: String
+    var author: GlanceResetAuthor?
+    var url: String?
+    /// Who the change covered.
+    var scope: String?
+    /// `Chưa kiểm chứng` / `Not reviewed`, while the site has not reviewed the entry.
+    var provisional: String?
+}
+
+/// Claude against Codex over the time both were tracked, the last card of the Reset tab's Claude
+/// view (see `GlanceResetCompare` in src/model/glance.ts).
+struct GlanceResetCompare: Decodable, Equatable {
+    var title: String
+    /// `Tính các lần reset sau …`, the note under the months.
+    var since: String
+    var columns: Columns?
+    var rows: [Row]
+    var monthsTitle: String
+    var months: [Month]
+
+    /// One side's column heading: the tracker's name beside its mark, in its brand color.
+    struct Column: Decodable, Equatable {
+        var name: String
+        var color: String
+        var mark: GlanceMark?
+
+        var tint: Color { Color(glanceHex: color) ?? .primary }
+    }
+
+    struct Columns: Decodable, Equatable {
+        var claude: Column
+        var codex: Column
+    }
+
+    struct Row: Decodable, Equatable {
+        var label: String
+        var claude: String
+        var codex: String
+    }
+
+    struct Month: Decodable, Equatable {
+        var label: String
+        var claude: Int
+        var codex: Int
+        /// What VoiceOver reads for the month: `T9: Claude 3, Codex 2`.
+        var summary: String
+    }
+
+    /// The column headings, named and colored like the Reset tab's when an older document has none.
+    var heads: Columns {
+        columns ?? Columns(claude: Column(name: "Claude", color: "#DE7356"), codex: Column(name: "Codex", color: "#10A37F"))
+    }
+
+    /// The most resets either side had in a month, which the tallest bar stands for.
+    var busiestMonth: Int {
+        max(1, months.flatMap { [$0.claude, $0.codex] }.max() ?? 0)
+    }
+}
+
 struct GlanceResetPresentation: Decodable, Equatable {
     var locale: String
     var authorAvatar: String
     /// The one author `authorAvatar` pictures (Claude: `@ClaudeDevs`); absent, it pictures every
     /// author (Codex).
     var avatarHandle: String? = nil
+    /// Lines above the cards (Claude): the site is behind, or only its published copy could be read.
+    var notices: [String]? = nil
     var latest: GlanceResetLatestPresentation?
     var statuses: [GlanceResetStatusCard]
     var quietTitle: String? = nil
@@ -1066,7 +1164,16 @@ struct GlanceResetPresentation: Decodable, Equatable {
     var stats: [GlanceResetStat]
     var historyTitle: String
     var history: [GlanceResetHistoryItem]
+    /// The limit changes (Claude), under their heading, each row's badge word, then the note under them.
+    var changesTitle: String? = nil
+    var changeBadge: String? = nil
+    var changes: [GlanceResetChangeItem]? = nil
+    var changesNote: String? = nil
+    /// Claude against Codex (Claude), once the Codex history is at hand.
+    var compare: GlanceResetCompare? = nil
     var patternNote: String
+    /// When the copy shown was read (`Tải 5 phút trước`), the line above the source.
+    var fetched: GlanceCountdown? = nil
     var source: String
     var methodTitle: String
     var method: [String]
@@ -1172,6 +1279,13 @@ struct GlanceResetLegend: Decodable, Equatable {
     var regular: String
     var banked: String
     var today: String
+
+    /// The key's entries, in the order the calendar lists them.
+    enum Item: CaseIterable {
+        case regular
+        case banked
+        case today
+    }
 }
 
 struct GlanceResetRhythm: Decodable, Equatable {

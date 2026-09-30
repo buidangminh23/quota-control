@@ -9,8 +9,20 @@ import { PROVIDER_MARKS } from "@/assets/providerMarks";
 import resetAvatar from "@/assets/thsottiaux.webp?inline";
 import type { Language } from "@/i18n";
 import { insightsFor, type InsightsMessages } from "@/i18n/insights";
+import type { PublicFeedSnapshot } from "@/lib/insightsTypes";
 import { compactDuration, shortTime, timeOnDayLabel, type TimeFormat } from "./format";
-import type { GlanceCountdown, GlanceResetAuthor, GlanceResetCalendar, GlanceResetLatestPresentation, GlanceResetPresentation, GlanceResetRhythm, GlanceResets, GlanceResetStatusCard, GlanceUpcomingReset } from "./glance";
+import type {
+  GlanceCountdown,
+  GlanceResetAuthor,
+  GlanceResetCalendar,
+  GlanceResetLatestPresentation,
+  GlanceResetPresentation,
+  GlanceResetRhythm,
+  GlanceResets,
+  GlanceResetsPending,
+  GlanceResetStatusCard,
+  GlanceUpcomingReset,
+} from "./glance";
 import {
   announcementPattern,
   activeWatch,
@@ -58,6 +70,42 @@ export interface GlanceResetsInput {
   now: Date;
   language: Language;
   timeFormat: TimeFormat;
+  /**
+   * The forecast's self-check (`dailyReliability`), shown under the chances while there are any.
+   * The caller works it out once a day, since trying the whole history again is the slow part.
+   */
+  reliability?: string;
+  /**
+   * Whether the list of past resets is loaded, which it is while the Reset tab is on. Without it
+   * the popup shows none of what the history gives, so the tracker keeps what the status says
+   * (the latest reset and an announced one) and leaves out the chances, the wait, the calendar,
+   * the rhythm, the statistics and the history rather than work them out from a single reset.
+   */
+  withHistory?: boolean;
+  /** When the copy shown was read (`feedShownAt`), for the line the Reset tab shows above its source. */
+  fetchedAt?: string | null;
+}
+
+/**
+ * The Reset tab's line saying when its copy was read (`Tải 5 phút trước`, `Vừa tải` within the
+ * first minute), as a moment Swift counts from; nothing for a time that cannot be read.
+ */
+export function fetchedLine(at: string | null | undefined, text: InsightsMessages): GlanceCountdown | undefined {
+  const time = at ? Date.parse(at) : Number.NaN;
+  if (!Number.isFinite(time)) return undefined;
+  return { at: new Date(time).toISOString(), text: text.fetchedAgo(COUNTDOWN_SPAN), since: true, recent: text.justNow };
+}
+
+/**
+ * What the Reset tab says in place of a tracker it has nothing of yet, for the island and the
+ * widgets to say the same: `Đang tải…` until each feed the tracker reads has answered, then
+ * `Chưa tải được: …` with the first feed's error, which the tab draws in the notice color.
+ */
+export function trackerPending(feeds: readonly { snapshot: PublicFeedSnapshot | undefined; error?: string }[], language: Language): GlanceResetsPending {
+  const text = insightsFor(language);
+  if (feeds.some((feed) => feed.snapshot === undefined)) return { text: text.loading };
+  const error = feeds.map((feed) => feed.snapshot?.error ?? feed.error).find(Boolean);
+  return { text: text.failed(error ?? ""), failed: true };
 }
 
 export function resetAgoText(date: Date, now: Date, language: Language): string {
@@ -117,6 +165,7 @@ export function buildResetPresentation(input: Omit<GlanceResetsInput, "stale">):
     [text.statLongest, stats.longestGap ? `${days(stats.longestGap.days)} · ${text.gapRange(shortDate(stats.longestGap.from, now, language), shortDate(stats.longestGap.to, now, language))}` : "—"],
   ];
   const moment = latest ? timeOnDayLabel(latest.announcedAt, now, timeFormat, language, false) : "";
+  const fetched = fetchedLine(input.fetchedAt, text);
   return {
     locale: language === "vi" ? "vi-VN" : "en-US",
     authorAvatar: resetAvatar,
@@ -130,6 +179,7 @@ export function buildResetPresentation(input: Omit<GlanceResetsInput, "stale">):
       waitFraction: wait?.shorterShare,
       median: wait ? (wait.medianMark > now ? text.medianMark : text.medianMarkPassed)(text.days(numberText(language, wait.medianGapDays, 1)), `${shortTime(wait.medianMark, timeFormat, language)} ${shortDate(wait.medianMark, now, language)}`) : undefined,
       sampleNote: forecast ? text.forecastNote(numberText(language, forecast.resets)) : undefined,
+      reliability: forecast ? input.reliability : undefined,
       disclaimer: forecast ? text.forecastDisclaimer : undefined,
       unavailable: forecast || feeds.resets.length === 0 ? undefined : text.forecastUnavailable,
     },
@@ -138,6 +188,7 @@ export function buildResetPresentation(input: Omit<GlanceResetsInput, "stale">):
     historyTitle: text.historyTitle,
     history: feeds.resets.map((reset) => ({ id: reset.id, kind: reset.kind, kindLabel: text.kind(reset.kind), when: when(reset.announcedAt), excerpt: excerpt(reset.text, 220), author: author(reset.source), url: reset.source.url ?? undefined, observed: reset.source.kind === "observed" ? text.observed : undefined })),
     patternNote: text.patternNote(numberText(language, announcementPattern(feeds.resets).total)),
+    ...(fetched ? { fetched } : {}),
     source: text.resetsSource,
     methodTitle: text.methodTitle,
     method: [...text.resetsMethod],
@@ -167,6 +218,8 @@ export function buildGlanceResets(input: GlanceResetsInput): GlanceResets | null
   const { feeds, now, language, timeFormat } = input;
   if (!feeds.status && feeds.resets.length === 0) return null;
   const text = insightsFor(language);
+  const withHistory = input.withHistory !== false;
+  const presentation = buildResetPresentation(input);
   const resets: GlanceResets = {
     title: text.glanceTitle,
     source: text.glanceSource,
@@ -174,8 +227,8 @@ export function buildGlanceResets(input: GlanceResetsInput): GlanceResets | null
     color: SOURCE_COLORS.codex,
     forecastTitle: text.glanceChanceTitle,
     forecast: [],
-    forecastNote: text.forecastUnavailable,
-    presentation: buildResetPresentation(input),
+    forecastNote: withHistory ? text.forecastUnavailable : "",
+    presentation: withHistory ? presentation : withoutHistory(presentation),
     theme: input.theme,
   };
   const mark = PROVIDER_MARKS[BRAND];
@@ -184,8 +237,17 @@ export function buildGlanceResets(input: GlanceResetsInput): GlanceResets | null
 
   const next = upcomingReset(feeds.status, now);
   if (next) resets.upcoming = upcomingOf(next, now, timeFormat, language, text);
-  addHistory(resets, feeds.resets, now, language, timeFormat);
+  if (withHistory) addHistory(resets, feeds.resets, now, language, timeFormat);
+  else addLatest(resets, feeds.resets[0], now, language, timeFormat);
   return resets;
+}
+
+/**
+ * The Reset tab's cards without what only the history gives: the latest reset and the status
+ * cards stay, the chances and the words under them, the statistics and the history go.
+ */
+function withoutHistory(presentation: GlanceResetPresentation): GlanceResetPresentation {
+  return { ...presentation, forecast: { title: presentation.forecast.title, chances: [] }, stats: [], history: [], patternNote: "" };
 }
 
 /**
@@ -195,18 +257,7 @@ export function buildGlanceResets(input: GlanceResetsInput): GlanceResets | null
  */
 export function addHistory(resets: GlanceResets, history: readonly CodexReset[], now: Date, language: Language, timeFormat: TimeFormat): void {
   const text = insightsFor(language);
-  const latest = history[0];
-  if (latest) {
-    const at = latest.announcedAt.toISOString();
-    resets.latest = {
-      at,
-      kind: latest.kind,
-      label: text.latestTitle,
-      kindLabel: text.kind(latest.kind),
-      since: { at, text: text.glanceSinceLast(COUNTDOWN_SPAN), since: true },
-      when: timeOnDayLabel(latest.announcedAt, now, timeFormat, language, false),
-    };
-  }
+  addLatest(resets, history[0], now, language, timeFormat);
 
   const forecast = forecastResets(history, now);
   if (forecast) {
@@ -225,6 +276,21 @@ export function addHistory(resets: GlanceResets, history: readonly CodexReset[],
     resets.calendar = calendarOf(history, now, text);
     resets.rhythm = rhythmOf(history, text);
   }
+}
+
+/** The newest reset and the time since it, which the status alone also gives. */
+function addLatest(resets: GlanceResets, latest: CodexReset | undefined, now: Date, language: Language, timeFormat: TimeFormat): void {
+  if (!latest) return;
+  const text = insightsFor(language);
+  const at = latest.announcedAt.toISOString();
+  resets.latest = {
+    at,
+    kind: latest.kind,
+    label: text.latestTitle,
+    kindLabel: text.kind(latest.kind),
+    since: { at, text: text.glanceSinceLast(COUNTDOWN_SPAN), since: true },
+    when: timeOnDayLabel(latest.announcedAt, now, timeFormat, language, false),
+  };
 }
 
 /**

@@ -11,10 +11,17 @@ extension GlanceView {
         case .upcoming: return !GlanceUpcomingLimit.list(document.providers, now: now).isEmpty
         }
     }
+
+    /// Whether the view says, as the popup's tab does, that its data is on its way or could not
+    /// load: the reset view while its tracker is on but has nothing yet.
+    func isPending(in document: GlanceDocument) -> Bool {
+        self == .resets && document.resets == nil && document.resetsPending != nil
+    }
 }
 
 /// What the open island draws: behind a tab bar, the one tab picked (the first with something to
-/// show until one is clicked), in full; stacked, every chosen view that has something to show.
+/// show until one is clicked), in full; stacked, every chosen view that has something to show or
+/// says why it has nothing yet.
 struct IslandPlan: Equatable {
     /// The tab bar, empty when there is none.
     var tabs: [GlanceView]
@@ -30,12 +37,12 @@ struct IslandPlan: Equatable {
                 ?? chosen[0]
             return IslandPlan(tabs: chosen, sections: [active], selected: active)
         }
-        return IslandPlan(tabs: [], sections: chosen.filter { $0.hasContent(in: document, now: now) }, selected: nil)
+        return IslandPlan(tabs: [], sections: chosen.filter { $0.hasContent(in: document, now: now) || $0.isPending(in: document) }, selected: nil)
     }
 
     /// Whether the open island has anything at all to show.
     static func hasContent(_ document: GlanceDocument, now: Date) -> Bool {
-        document.island.tabs.contains { $0.hasContent(in: document, now: now) }
+        document.island.tabs.contains { $0.hasContent(in: document, now: now) || $0.isPending(in: document) }
     }
 }
 
@@ -107,13 +114,18 @@ struct IslandDetails: View {
     var selected: GlanceView?
     var availableWidth: CGFloat = IslandGeometry.expandedWidth
     var viewportHeight: CGFloat?
+    /// The reset view's folds, open or closed; the history and the limit changes fold after their
+    /// first rows, as in the tab.
+    var resetFolds = GlanceResetFolds(foldsLists: true)
+    /// A click on a fold of the reset view; the measuring copy leaves it out.
+    var onResetFold: ((GlanceResetFold) -> Void)?
 
     var body: some View {
         let plan = IslandPlan.make(document, now: now, selected: selected)
         VStack(alignment: .leading, spacing: 0) {
             Color.clear.frame(height: topInset)
             if let active = plan.selected, !plan.tabs.isEmpty {
-                IslandTabBar(tabs: plan.tabs, selected: active, labels: document.labels.tabs)
+                IslandTabBar(tabs: plan.tabs, selected: active, labels: document.labels.tabs, resets: document.resets)
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
                     .padding(.bottom, 4)
@@ -149,7 +161,7 @@ struct IslandDetails: View {
                         .padding(.vertical, 12)
                 }
                 if section.hasContent(in: document, now: now) {
-                    content(section)
+                    content(section, named: plan.tabs.isEmpty)
                         .padding(.horizontal, 20)
                         .padding(.top, index == 0 ? 10 : 0)
                 } else {
@@ -160,39 +172,46 @@ struct IslandDetails: View {
         .padding(.bottom, 2)
     }
 
+    /// A view's content; `named`, the reset view names its tracker itself, as no tab bar does.
     @ViewBuilder
-    private func content(_ section: GlanceView) -> some View {
+    private func content(_ section: GlanceView, named: Bool) -> some View {
         switch section {
         case .quota:
             IslandQuotaSection(document: document, now: now, budget: budget, availableWidth: max(1, availableWidth - 40))
         case .resets:
             if let resets = document.resets {
-                IslandResetsSection(resets: resets, labels: document.labels, now: now, budget: budget, availableWidth: max(1, availableWidth - 40 - NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)))
+                IslandResetsSection(
+                    resets: resets, labels: document.labels, now: now, budget: budget,
+                    availableWidth: max(1, availableWidth - 40 - NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)),
+                    folds: resetFolds, onFold: onResetFold, showsHeading: named
+                )
             }
         case .upcoming:
             IslandUpcomingSection(document: document, now: now, count: budget.upcoming(limit: document.island.upcomingLimit))
         }
     }
 
-    private func emptyLine(_ text: String) -> some View {
-        Text(text)
+    private func emptyLine(_ line: (text: String, failed: Bool)) -> some View {
+        Text(line.text)
             .font(.system(size: 12))
-            .foregroundStyle(IslandInk.label)
+            .foregroundStyle(line.failed ? IslandInk.warning : IslandInk.label)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 20)
             .padding(.top, 10)
     }
 
-    /// Why a view (or, `nil`, the whole island) has nothing to show.
-    private func emptyText(_ section: GlanceView?) -> String {
+    /// Why a view (or, `nil`, the whole island) has nothing to show; the reset view says what the
+    /// Reset tab says while its tracker loads, in the notice color once it could not load.
+    private func emptyText(_ section: GlanceView?) -> (text: String, failed: Bool) {
         let fallback = document.island.empty ?? document.labels.empty
         switch section ?? (document.island.tabs.count == 1 ? document.island.tabs[0] : nil) {
         case .resets:
-            return document.labels.resetsOff.isEmpty ? fallback : document.labels.resetsOff
+            if let pending = document.resetsPending { return (pending.text, pending.failed == true) }
+            return (document.labels.resetsOff.isEmpty ? fallback : document.labels.resetsOff, false)
         case .upcoming:
-            return document.labels.upcomingEmpty.isEmpty ? fallback : document.labels.upcomingEmpty
+            return (document.labels.upcomingEmpty.isEmpty ? fallback : document.labels.upcomingEmpty, false)
         case .quota, .none:
-            return fallback
+            return (fallback, false)
         }
     }
 
@@ -222,38 +241,48 @@ struct IslandDetails: View {
     }
 }
 
-/// The open island's tabs as a segmented bar; the picked one lit. A click lands through the
-/// island's own click handling, which finds the tab by the frames reported here.
+/// The open island's tabs as a segmented bar; the picked one lit, the reset tab led by its
+/// tracker's mark as the Reset tab's switch shows it. A click lands through the island's own click
+/// handling, which finds the tab by the frames reported here.
 struct IslandTabBar: View {
     let tabs: [GlanceView]
     let selected: GlanceView
     let labels: GlanceTabLabels
+    /// The tracker the reset tab shows, whose mark leads its name.
+    var resets: GlanceResets? = nil
 
     var body: some View {
         HStack(spacing: 2) {
             ForEach(tabs, id: \.self) { tab in
                 let on = tab == selected
-                Text(labels.name(tab))
-                    .font(.system(size: 11.5, weight: on ? .semibold : .medium))
-                    .foregroundStyle(on ? Color.white : IslandInk.caption)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-                    .padding(.horizontal, 8)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 24)
-                    .background(
-                        Capsule()
-                            .fill(Color.white.opacity(on ? 0.17 : 0))
-                    )
-                    .contentShape(Capsule())
-                    .background(
-                        GeometryReader { proxy in
-                            Color.clear.preference(
-                                key: IslandTabFrames.self,
-                                value: [tab: proxy.frame(in: .named(IslandTabFrames.space))]
-                            )
-                        }
-                    )
+                HStack(spacing: 4) {
+                    if tab == .resets, let resets {
+                        ProviderMark(mark: resets.mark)
+                            .foregroundStyle(resets.tint)
+                            .frame(width: 11, height: 11)
+                    }
+                    Text(labels.name(tab))
+                        .font(.system(size: 11.5, weight: on ? .semibold : .medium))
+                        .foregroundStyle(on ? Color.white : IslandInk.caption)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                }
+                .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity)
+                .frame(height: 24)
+                .background(
+                    Capsule()
+                        .fill(Color.white.opacity(on ? 0.17 : 0))
+                )
+                .contentShape(Capsule())
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: IslandTabFrames.self,
+                            value: [tab: proxy.frame(in: .named(IslandTabFrames.space))]
+                        )
+                    }
+                )
             }
         }
         .padding(3)
@@ -561,10 +590,14 @@ struct IslandResetsSection: View {
     let now: Date
     let budget: IslandBudget
     var availableWidth: CGFloat = 340
+    var folds = GlanceResetFolds(foldsLists: true)
+    var onFold: ((GlanceResetFold) -> Void)?
+    /// Names the tracker above the cards, for an island without a tab bar to name it.
+    var showsHeading = false
 
     var body: some View {
         let scheme = resets.theme == "dark" ? ColorScheme.dark : resets.theme == "light" ? .light : systemScheme
-        GlanceResetContent(resets: resets, units: labels.units, now: now, availableWidth: max(1, availableWidth - 16))
+        GlanceResetContent(resets: resets, units: labels.units, now: now, availableWidth: max(1, availableWidth - 16), folds: folds, onFold: onFold, showsHeading: showsHeading)
             .padding(8)
             .background(GlanceResetPalette(scheme: scheme).background)
             .clipShape(RoundedRectangle(cornerRadius: 14))

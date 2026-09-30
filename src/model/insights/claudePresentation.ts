@@ -8,8 +8,9 @@
 import type { Language } from "@/i18n";
 import { insightsFor, type ClaudeResetMessages, type CompareRow, type InsightsMessages } from "@/i18n/insights";
 import { compactDuration, shortTime, timeOnDayLabel, type TimeFormat } from "../format";
-import type { GlanceResetAuthor, GlanceResetHistoryItem, GlanceResetPresentation, GlanceResetStatusCard } from "../glance";
+import type { GlanceResetAuthor, GlanceResetChangeItem, GlanceResetCompare, GlanceResetHistoryItem, GlanceResetPresentation, GlanceResetStatusCard } from "../glance";
 import { buildResetPresentation, POST_EXCERPT_LENGTH } from "../glanceResets";
+import { deviceTimeZone, startOfDayIn } from "../timeZone";
 import {
   compareTrackers,
   concerns,
@@ -47,23 +48,9 @@ export interface ClaudeBankedCard extends GlanceResetStatusCard {
   how: string;
 }
 
-export interface ClaudeChangeItem {
-  id: string;
-  when: string;
-  excerpt: string;
-  author: GlanceResetAuthor;
-  url?: string;
-  scope?: string;
-  provisional?: string;
-}
+export type ClaudeChangeItem = GlanceResetChangeItem;
 
-export interface ComparePresentation {
-  title: string;
-  since: string;
-  rows: { label: string; claude: string; codex: string }[];
-  monthsTitle: string;
-  months: { label: string; claude: number; codex: number; summary: string }[];
-}
+export type ComparePresentation = GlanceResetCompare;
 
 export interface ClaudePresentation extends GlanceResetPresentation {
   /** Lines above the cards: the site is behind, or its published copy is shown. */
@@ -124,6 +111,15 @@ export function reliabilityText(skill: ForecastSkill | null, language: Language,
   return text.forecastReliability(skill.verdict, percentText(language, Math.abs(skill.skill), 0), numberText(language, skill.days), numberText(language, skill.resets));
 }
 
+/**
+ * The self-check as it stood at the start of today on the device's calendar. The Reset tab, the
+ * island and the widgets each work it out on their own; trying the history up to the same moment
+ * makes them say the same thing all day, whenever each was drawn, and the line moves once a day.
+ */
+export function dailyReliability(resets: readonly CodexReset[], now: Date, language: Language, text: InsightsMessages = insightsFor(language)): string | undefined {
+  return reliabilityText(forecastSkill(resets, startOfDayIn(now, deviceTimeZone())), language, text);
+}
+
 function compareOf(feed: ClaudeResetFeed, codex: readonly CodexReset[], now: Date, language: Language, text: InsightsMessages): ComparePresentation | undefined {
   const comparison = compareTrackers(feed.resets, codex, now);
   if (!comparison) return undefined;
@@ -161,7 +157,7 @@ export function buildClaudePresentation(input: ClaudePresentationInput): ClaudeP
   const { feed, plans, now, language, timeFormat } = input;
   const text = insightsFor(language);
   const claude = text.claude;
-  const base = buildResetPresentation({ feeds: { status: null, resets: feed.resets }, now, language, timeFormat });
+  const base = buildResetPresentation({ feeds: { status: null, resets: feed.resets }, now, language, timeFormat, reliability: dailyReliability(feed.resets, now, language, text) });
   const when = (date: Date) => `${shortTime(date, timeFormat, language)} ${dateText(date, language)}`;
   const span = (from: Date, to: Date) => compactDuration(Math.max(60, (to.getTime() - from.getTime()) / 1000), language) ?? "";
   const ago = (date: Date) => claude.ago(text.days(numberText(language, (now.getTime() - date.getTime()) / DAY_MS, 1)), shortDate(date, now, language));
@@ -224,11 +220,7 @@ export function buildClaudePresentation(input: ClaudePresentationInput): ClaudeP
     latest: base.latest && latest ? { ...base.latest, meta: latestMeta.join(" · "), author: authorOf(latest.account), notes: latestNotes } : undefined,
     statuses: banked.some((card) => !card.used) ? [] : base.statuses,
     banked,
-    forecast: {
-      ...base.forecast,
-      disclaimer: base.forecast.disclaimer ? claude.forecastDisclaimer : undefined,
-      reliability: base.forecast.chances.length > 0 ? reliabilityText(forecastSkill(feed.resets, now), language, text) : undefined,
-    },
+    forecast: { ...base.forecast, disclaimer: base.forecast.disclaimer ? claude.forecastDisclaimer : undefined },
     stats: [...base.stats, ...extraStats],
     history,
     source: claude.source,

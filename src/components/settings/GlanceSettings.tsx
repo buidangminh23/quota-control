@@ -357,7 +357,7 @@ function ViewEditors({
   views: readonly IslandView[];
   value: GlanceSurfaceSettings;
   onChange: (patch: Partial<GlanceSurfaceSettings>) => void;
-  scope?: (view: IslandView, provider: ResetProvider) => string;
+  scope?: (view: IslandView) => string;
   text: SettingsMessages;
   language: Language;
 }) {
@@ -374,7 +374,7 @@ function ViewEditors({
     <div className="uc-disclosures">
       {views.map((view) => (
         <Disclosure key={view} title={text.glanceTabName(view, provider)} summary={summary(view)} open={open === view} onToggle={() => setOpen(open === view ? null : view)}>
-          {scope ? <p className="uc-settings-note is-flush">{scope(view, provider)}</p> : null}
+          {scope ? <p className="uc-settings-note is-flush">{scope(view)}</p> : null}
           {view === "quota" ? <QuotaEditor value={value} onChange={onChange} shows={{ value, onChange }} followsCards text={text} language={language} /> : null}
           {view === "resets" ? <ResetEditor value={value} onChange={onChange} text={text} language={language} /> : null}
           {view === "upcoming" ? <UpcomingEditor limit={value.upcomingLimit} onChange={(upcomingLimit) => onChange({ upcomingLimit })} text={text} /> : null}

@@ -7,6 +7,7 @@ import {
   buildGlance,
   CLAUDE_RESETS_PROVIDER_ID,
   CODEX_RESETS_PROVIDER_ID,
+  followedWing,
   glanceMetric,
   glancePaceWords,
   glancePlanTerm,
@@ -21,19 +22,21 @@ import {
   type GlancePlanTermWords,
   type GlanceResetRow,
   type GlanceResets,
+  type GlanceResetsPending,
   type GlanceWingChoice,
 } from "./glance";
 import { resetAbsoluteLabel, restoreLabel, shortTime, timeOnDayLabel } from "./format";
 import { buildClaudeGlanceResets } from "./glanceClaudeResets";
 import { claudeResetRow, codexResetRow } from "./glanceResetRows";
 import { buildGlanceResets, parseResetFeeds } from "./glanceResets";
+import { dailyReliability } from "./insights/claudePresentation";
 import { parseClaudeResets } from "./insights/claudeResets";
 import { parseResetStatus } from "./insights/resets";
 import { glanceGroups, reconcileLayout } from "./layout";
 import { boundedTrailingText, meterSeverity, meterState } from "./meterState";
 import { barKind, platformKey } from "./platform";
 import { cardIdentity, providerBrand } from "./providerText";
-import { DEFAULT_SETTINGS, type GlanceContent, type IslandSettings, type ThemeSetting } from "./settings";
+import { DEFAULT_SETTINGS, type GlanceContent, type IslandSettings, type ResetProvider, type ThemeSetting } from "./settings";
 import { planTermLines } from "./planTermLines";
 import { makeWidget, NOW, resetsAt, WEEK_SECONDS } from "./testHelpers";
 import { calendarDaysBetween, setSystemTimeZone } from "./timeZone";
@@ -58,7 +61,10 @@ interface Options {
   wings?: [GlanceWingChoice, GlanceWingChoice];
   hour12?: boolean | null;
   resets?: GlanceResets | null;
+  resetsPending?: GlanceResetsPending | null;
   claudeResets?: GlanceResets | null;
+  claudeResetsPending?: GlanceResetsPending | null;
+  resetsTab?: ResetProvider;
   markArt?: Readonly<Record<string, string>>;
   theme?: ThemeSetting;
   now?: Date;
@@ -78,7 +84,10 @@ function glance({
   wings = [null, null],
   hour12 = null,
   resets = null,
+  resetsPending,
   claudeResets,
+  claudeResetsPending,
+  resetsTab,
   markArt,
   theme = "system",
   now = NOW_GLANCE,
@@ -111,7 +120,10 @@ function glance({
     appName: "Quota Control",
     alert,
     resets,
+    resetsPending,
     claudeResets,
+    claudeResetsPending,
+    ...(resetsTab ? { resetsTab } : {}),
     markArt,
     now,
   });
@@ -705,7 +717,7 @@ describe("the Claude reset tracker", () => {
 
   it("tells the Claude wings apart from every other wing", () => {
     expect(["claude-resets:next", "claude-resets:chance-1", "claude-resets:chance-3", "claude-resets:chance-7", "claude-resets:since"].every(isClaudeResetsWing)).toBe(true);
-    expect(["", "quota:next", "codex-resets:next", "claude-resets:soon", "claude@7c1e.session", "claude-resets"].some(isClaudeResetsWing)).toBe(false);
+    expect(["", "quota:next", "codex-resets:next", "claude-resets:soon", "claude@7c1e.session", "claude-resets", "resets:next"].some(isClaudeResetsWing)).toBe(false);
   });
 });
 
@@ -746,6 +758,18 @@ describe("island sections and labels", () => {
     expect(glance({ resets: TRACKER }).resets).toBe(TRACKER);
   });
 
+  it("says what the Reset tab says in place of a tracker that is on but has nothing yet", () => {
+    const loading = { text: "Đang tải…" };
+    const failed = { text: "Chưa tải được: HTTP 500", failed: true };
+    expect(glance({ resetsPending: loading }).resetsPending).toBe(loading);
+    expect("resetsPending" in glance({ resets: TRACKER, resetsPending: loading })).toBe(false);
+    expect("resetsPending" in glance()).toBe(false);
+    const claude = glance({ island: { resetsProvider: "claude" }, resets: TRACKER, claudeResetsPending: failed });
+    expect(claude.claudeResetsPending).toBe(failed);
+    expect(claude.labels.resetsOff).toBe("Bật tab Reset hoặc thông báo reset trong Quota Control để xem dự báo.");
+    expect("claudeResetsPending" in glance({ island: { resetsProvider: "claude" }, claudeResets: CLAUDE_TRACKER, claudeResetsPending: failed })).toBe(false);
+    expect("claudeResetsPending" in glance({ wings: ["claude-resets:next", null], claudeResetsPending: failed })).toBe(false);
+  });
 });
 
 describe("special wings", () => {
@@ -772,8 +796,9 @@ describe("special wings", () => {
     expect(wingIds(glance({ wings: ["quota:next", null] }).island.wings)).toEqual(["codex@52d0|codex@52d0.session", "claude@7c1e|claude@7c1e.session"]);
   });
 
-  it("shows the announced free reset's countdown, then the 24-hour chance once it has passed", () => {
-    const wing = glance({ resets: TRACKER, wings: ["codex-resets:next", null] }).island.wings[0]!;
+  it("reads the Codex card's Reset free row word for word while it shows, then the 24-hour chance", () => {
+    const next = (resets: GlanceResets) => glance({ resets, wings: ["codex-resets:next", null] }).island.wings[0]!;
+    const wing = next(TRACKER);
     expect(wing).toMatchObject({ id: CODEX_RESETS_PROVIDER_ID, name: "Reset Codex", brand: "codex", color: "#10A37F" });
     expect(wing.metrics[0]).toEqual({
       id: "codex-resets:next",
@@ -784,12 +809,24 @@ describe("special wings", () => {
       severity: "normal",
       countdown: { at: TRACKER.upcoming!.countdown!.at, text: "sau {d}", after: "chờ xác nhận" },
     });
-    const passed = { ...TRACKER, upcoming: { ...TRACKER.upcoming!, countdown: { at: new Date(FETCHED - 60_000).toISOString(), text: "sau {d}" } } };
-    const fallback = glance({ resets: passed, wings: ["codex-resets:next", null] }).island.wings[0]!.metrics[0]!;
-    expect(fallback).toMatchObject({ id: "codex-resets:next", label: "24 giờ tới", value: "22%", fraction: 0.22, severity: "normal" });
-    expect(fallback.countdown).toBeUndefined();
+    const at = TRACKER.upcoming!.countdown!.at;
+    const estimate = { ...TRACKER, upcoming: { ...TRACKER.upcoming!, countdown: { at, text: "sau ~{d}", after: "chờ xác nhận" } } };
+    expect(next(estimate).metrics[0]!.countdown).toEqual({ at, text: "sau ~{d}", after: "chờ xác nhận" });
+    const watch = { ...TRACKER, upcoming: { title: "Có thể reset", tone: "notice" as const, countdown: { at, text: "trong {d} tới" }, caption: "65% · trước 13:00 · CN 27/09 · GMT+7", hideAt: at, chancePercent: 65 } };
+    expect(next(watch).metrics[0]).toMatchObject({ label: "Có thể reset", countdown: { at, text: "trong {d} tới" } });
+
+    const due = new Date(FETCHED - 60_000).toISOString();
+    const awaiting = { ...TRACKER, upcoming: { ...TRACKER.upcoming!, countdown: { at: due, text: "sau {d}", after: "chờ xác nhận" } } };
+    expect(next(awaiting).metrics[0]).toMatchObject({ label: "Reset free", countdown: { at: due, text: "sau {d}", after: "chờ xác nhận" } });
     const untimed = { ...TRACKER, upcoming: { title: "Reset free", tone: "positive" as const, value: "chưa rõ giờ", caption: "Tuần sau giờ Mỹ", hideAt: TRACKER.upcoming!.hideAt } };
-    expect(glance({ resets: untimed, wings: ["codex-resets:next", null] }).island.wings[0]!.metrics[0]!.value).toBe("22%");
+    expect(next(untimed).metrics[0]).toEqual({ id: "codex-resets:next", label: "Reset free", value: "chưa rõ giờ", headline: "Tuần sau giờ Mỹ", fraction: null, severity: "normal" });
+
+    const gone = { ...TRACKER, upcoming: { ...awaiting.upcoming, hideAt: due } };
+    for (const resets of [gone, { ...TRACKER, upcoming: undefined }]) {
+      const fallback = next(resets).metrics[0]!;
+      expect(fallback).toMatchObject({ id: "codex-resets:next", label: "24 giờ tới", value: "22%", fraction: 0.22, severity: "normal" });
+      expect(fallback.countdown).toBeUndefined();
+    }
   });
 
   it("reads each forecast horizon as a whole-percent meter", () => {
@@ -804,7 +841,7 @@ describe("special wings", () => {
   it("counts the time since the last reset", () => {
     const metric = glance({ resets: TRACKER, wings: [null, "codex-resets:since"] }).island.wings[1]!.metrics[0]!;
     expect(metric).toMatchObject({ id: "codex-resets:since", label: "Chưa reset", value: "1:17 · T6 25/09", fraction: null, severity: "normal" });
-    expect(metric.countdown).toEqual({ at: TRACKER.latest!.at, text: "đã {d}", since: true });
+    expect(metric.countdown).toEqual({ at: TRACKER.latest!.at, text: "{d} trước", since: true });
   });
 
   it("behaves like an automatic slot when the tracker has nothing for it", () => {
@@ -837,11 +874,39 @@ describe("special wings", () => {
     expect(wings.map((wing) => wing.brand)).toEqual(["claude", "claude"]);
     expect(wings[0]!.metrics[0]).toEqual({ id: "claude-resets:chance-7", label: "7 ngày tới", value: "49%", headline: "49% · 7 ngày tới", fraction: 0.49, severity: "normal" });
     expect(wings[1]!.metrics[0]).toMatchObject({ id: "claude-resets:since", label: "Chưa reset", value: "23:44 · T3 22/09" });
-    expect(wings[1]!.metrics[0]!.countdown).toEqual({ at: CLAUDE_TRACKER.latest!.at, text: "đã {d}", since: true });
+    expect(wings[1]!.metrics[0]!.countdown).toEqual({ at: CLAUDE_TRACKER.latest!.at, text: "{d} trước", since: true });
     const codexOnly = wingIds(glance({ resets: TRACKER, wings: ["claude-resets:chance-1", "claude-resets:since"] }).island.wings);
     expect(codexOnly).toEqual(wingIds(glance().island.wings));
     const claudeOnly = wingIds(glance({ claudeResets: CLAUDE_TRACKER, wings: ["codex-resets:chance-1", "codex-resets:since"] }).island.wings);
     expect(claudeOnly).toEqual(wingIds(glance().island.wings));
+  });
+
+  it("reads a wing that follows the Reset tab from whichever tracker that tab shows", () => {
+    const follow: [GlanceWingChoice, GlanceWingChoice] = ["resets:chance-1", "resets:since"];
+    const both = { resets: TRACKER, claudeResets: CLAUDE_TRACKER, wings: follow };
+    const codex = glance(both).island.wings;
+    expect(codex).toEqual(glance({ ...both, wings: ["codex-resets:chance-1", "codex-resets:since"] }).island.wings);
+    expect(codex.map((wing) => wing.brand)).toEqual(["codex", "codex"]);
+    expect(glance({ ...both, resetsTab: "codex" }).island.wings).toEqual(codex);
+    const claude = glance({ ...both, resetsTab: "claude" });
+    expect(claude.island.wings).toEqual(glance({ ...both, wings: ["claude-resets:chance-1", "claude-resets:since"] }).island.wings);
+    expect(claude.island.wings.map((wing) => wing.brand)).toEqual(["claude", "claude"]);
+    expect(claude.island.wings[0]!.metrics[0]).toMatchObject({ id: "claude-resets:chance-1", value: "9%" });
+    expect("claudeResets" in claude).toBe(false);
+    const next = glance({ ...both, wings: ["resets:next", null], resetsTab: "claude" }).island.wings[0]!;
+    expect(next).toMatchObject({ id: CLAUDE_RESETS_PROVIDER_ID, metrics: [{ id: "claude-resets:next", countdown: { at: DEADLINE, text: "còn {d}" } }] });
+    expect(wingIds(glance({ resets: TRACKER, wings: follow, resetsTab: "claude" }).island.wings)).toEqual(wingIds(glance().island.wings));
+  });
+
+  it("maps only the wings that follow the Reset tab, keeping every saved id as it was", () => {
+    expect(followedWing("resets:next", "claude")).toBe("claude-resets:next");
+    expect(followedWing("resets:chance-7", "claude")).toBe("claude-resets:chance-7");
+    expect(followedWing("resets:since", "codex")).toBe("codex-resets:since");
+    expect(followedWing("resets:chance-3", "codex")).toBe("codex-resets:chance-3");
+    for (const id of ["", "quota:next", "codex-resets:next", "claude-resets:chance-7", "resets:soon", "resets", "claude@7c1e.session"]) {
+      expect(followedWing(id, "claude"), id).toBe(id);
+      expect(followedWing(id, "codex"), id).toBe(id);
+    }
   });
 });
 
@@ -849,8 +914,10 @@ describe("a document for someone who never chose Claude", () => {
   beforeEach(() => setSystemTimeZone("Asia/Saigon"));
   afterEach(() => setSystemTimeZone(null));
 
-  const codex = (language: "vi" | "en") =>
-    buildGlanceResets({ feeds: parseResetFeeds(FEED_FIXTURES.codexResetStatus, FEED_FIXTURES.codexResets), stale: false, now: NOW_GLANCE, language, timeFormat: "auto", theme: "system" });
+  const codex = (language: "vi" | "en") => {
+    const feeds = parseResetFeeds(FEED_FIXTURES.codexResetStatus, FEED_FIXTURES.codexResets);
+    return buildGlanceResets({ feeds, stale: false, now: NOW_GLANCE, language, timeFormat: "auto", theme: "system", reliability: dailyReliability(feeds.resets, NOW_GLANCE, language), fetchedAt: new Date(FETCHED).toISOString() });
+  };
   const claude = () =>
     buildClaudeGlanceResets({ feed: parseClaudeResets(FEED_FIXTURES.claudeResets)!, accounts: ["max", null], used: [], stale: false, now: NOW_GLANCE, language: "vi", timeFormat: "auto", theme: "system" });
   /** The rows the popup's Codex and Claude cards start with, with every tracking setting at its default. */
@@ -885,26 +952,29 @@ describe("a document for someone who never chose Claude", () => {
     },
   });
   /**
-   * SHA-256 of the documents built from these same inputs, without the quoted announcement: what
-   * 0.3.16 (`be761f5`) built, apart from what the island and the widgets have since taken over from
-   * the popup's cards. The account header: the plan period (`term` on the accounts that have one,
-   * `labels.planTerm`), the plan the island now shows by default (`island.shows.plan`) and the rows'
-   * `Không có dữ liệu` (`labels.noData`). The cards' rows: the free reset and banked reset rows the
-   * Codex and Claude accounts start with (`resetRow`, with their pictures in `avatars`), the
-   * collapsed Codex card leaving its Spark and Credits rows behind the show-more button, the reset
-   * credits' expiry (`expiresAt`), the window's name beside the notch (`period` on the wings) and
-   * the words for a clock time and its day (`labels.days`). The rows' moving words: what a limit's
-   * pace note and tick are worked out from (`pace`, with the notes' words in `labels.pace`), the
-   * reading it rolls over to at its reset (`after`), and the countdown's last five minutes and the
-   * line under it (`labels.resetsSoon`, `labels.restoresAt`).
+   * SHA-256 of the documents built from these same inputs, without the quoted announcement and the
+   * fetch time: what 0.3.16 (`be761f5`) built, apart from what the island and the widgets have since
+   * taken over from the popup's cards. The account header: the plan period (`term` on the accounts
+   * that have one, `labels.planTerm`), the plan the island now shows by default (`island.shows.plan`)
+   * and the rows' `Không có dữ liệu` (`labels.noData`). The cards' rows: the free reset and banked
+   * reset rows the Codex and Claude accounts start with (`resetRow`, with their pictures in
+   * `avatars`), the collapsed Codex card leaving its Spark and Credits rows behind the show-more
+   * button, the reset credits' expiry (`expiresAt`), the window's name beside the notch (`period` on
+   * the wings) and the words for a clock time and its day (`labels.days`). The rows' moving words:
+   * what a limit's pace note and tick are worked out from (`pace`, with the notes' words in
+   * `labels.pace`), the reading it rolls over to at its reset (`after`), and the countdown's last
+   * five minutes and the line under it (`labels.resetsSoon`, `labels.restoresAt`). The wings
+   * scenario's two reset wings also took the popup's words (`chưa rõ giờ` from the Codex card's
+   * Reset free row, `{d} trước` like the Reset tab's `3 ngày trước`).
    */
   const PINNED: Readonly<Record<string, string>> = {
     defaults: "1e09a838741208e0fc1fb92bd7fb5f0be54bf1ad0540897f5ab384d32d664a0b",
-    wings: "e556c00ae425f971c0512d3d545fe6f81eb7d58c7e7ae213d14d28a0a78bd8b2",
+    wings: "dde757320720f1382f160bd090d1cfb442cc78455d69003ed9302c1abe11cae5",
     tuned: "181777f9585540c18086e8554ed4455a2fc4288e59ca49fe6c3c4a03150418bc",
   };
   const digest = (document: object) => createHash("sha256").update(JSON.stringify(document)).digest("hex");
-  /** The document without the one thing added since: the announcement the latest reset's card quotes. */
+  /** The document without what was added to it since: the announcement the latest reset's card
+   * quotes, and when the tracker's feed was read. */
   const unquoted = (document: ReturnType<typeof glance>) => {
     const copy = JSON.parse(JSON.stringify(document)) as ReturnType<typeof glance>;
     const latest = copy.resets?.presentation?.latest;
@@ -914,15 +984,17 @@ describe("a document for someone who never chose Claude", () => {
       delete latest.url;
       delete latest.observed;
     }
+    delete copy.resets?.presentation?.fetched;
     return copy;
   };
 
-  it("stays byte for byte what 0.3.16 sent apart from the quoted announcement and what it took over from the popup's cards, even with a Claude tracker at hand", () => {
+  it("stays byte for byte what 0.3.16 sent apart from the quoted announcement, the fetch time and what it took over from the popup, even with a Claude tracker at hand", () => {
     const tracker = claude();
     expect(tracker).not.toBeNull();
     for (const [name, options] of Object.entries(scenarios())) {
       const document = glance(options);
       expect(document.resets?.presentation?.latest, name).toMatchObject({ excerpt: expect.stringMatching(/^GPT-6 Sol and Luna are out\./), url: "https://x.com/thsottiaux/status/2102463847714247142" });
+      expect(document.resets?.presentation?.fetched?.at, name).toBe(new Date(FETCHED).toISOString());
       expect(digest(unquoted(document)), name).toBe(PINNED[name]);
       expect(digest(unquoted(glance({ ...options, claudeResets: tracker }))), name).toBe(PINNED[name]);
     }

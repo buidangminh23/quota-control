@@ -238,11 +238,8 @@ export interface SettingsMessages {
   /** The chips choosing the views: the island's tabs, the Overview widget's parts. */
   glanceTabs(surface: "island" | "widget"): string;
   glanceTabsNote(surface: "island" | "widget"): string;
-  /**
-   * What each view's editor changes on the widgets. The reset widgets keep their Codex names in the
-   * widget gallery, so with Claude chosen the reset view's note says they show Claude's resets.
-   */
-  glanceWidgetScope(view: IslandView, provider: ResetProvider): string;
+  /** What each view's editor changes on the widgets, naming them as the widget gallery does. */
+  glanceWidgetScope(view: IslandView): string;
   /** The editor of a view that is switched off on the island. */
   glanceTabOff: string;
   /** Quick ways to fill the metric list; `dashboard` and `starred` keep following the popup. */
@@ -276,7 +273,8 @@ export interface SettingsMessages {
   islandStyleOption(style: IslandStyle): string;
   islandWing(side: "left" | "right"): string;
   islandWingAuto: string;
-  /** A wing choice that is not one metric: the soonest limit reset or a Codex or Claude reset reading. */
+  /** A wing choice that is not one metric: the soonest limit reset, or a reset reading of Codex,
+   * Claude or whichever the Reset tab shows. */
   islandWingSpecial(wing: SpecialWing): string;
   islandLayout: string;
   islandLayoutOption(layout: IslandLayout): string;
@@ -420,7 +418,7 @@ export interface GlanceMessages {
   tabs: Record<IslandView, string>;
   /** A wing counting down to a moment, `span` being the time left: `sau 2 giờ`, `in 2h`. */
   wingIn(span: string): string;
-  /** A wing counting the time since a moment: `đã 2 ngày`, `2d ago`. */
+  /** A wing counting the time since a moment, worded like the Reset tab's `3 ngày trước`: `2 ngày trước`, `2d ago`. */
   wingSince(span: string): string;
   /** A month on the reset calendar of the island and widgets, 0 for January: `Th9`, `Sep`; worded
    * apart from the weekday names beside it (`T2`…`CN`). */

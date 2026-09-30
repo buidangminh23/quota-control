@@ -94,14 +94,14 @@ struct GlanceTimeline: TimelineProvider {
 
     /// How often the widget looks again on its own; the app also reloads it whenever readings change.
     private static let refresh: TimeInterval = 15 * 60
-    /// How far ahead the limits' moving words (their countdowns and exact times in the popup's
-    /// words, their pace notes) get entries of their own, one a minute at most: a little past
-    /// `refresh`, when the widget looks again. Every entry is drawn ahead of time, so the span stays
-    /// short.
+    /// How far ahead the moving words (the limits' countdowns and exact times in the popup's words,
+    /// their pace notes, and the reset tracker's how long ago and how long left) get entries of
+    /// their own, one a minute at most: a little past `refresh`, when the widget looks again. Every
+    /// entry is drawn ahead of time, so the span stays short.
     private static let tickSpan: TimeInterval = 20 * 60
-    /// Enough entries for a plan period's last hour, whose count steps every minute, to stay right
-    /// until the next look; entries cost no reload.
-    private static let momentEntries = 20
+    /// Enough entries for a minute-by-minute `tickSpan` plus the moments between; entries cost no
+    /// reload.
+    private static let momentEntries = 40
 
     func placeholder(in context: Context) -> GlanceEntry {
         GlanceEntry(date: Date(), document: .sample)
@@ -123,20 +123,27 @@ struct GlanceTimeline: TimelineProvider {
     }
 
     /// The moments after `now` when something drawn changes on its own, soonest first: a limit
-    /// comes back or the day of its reset time turns, a countdown of the reset tracker the widget
-    /// chose ends or its row goes away, an account's reset row counts down, goes or names another
-    /// day, a reset credit's dot changes color, an account's plan period counts down or its day
-    /// turns into today, or the readings turn stale; and on a widget drawing the limits, each minute
-    /// their words move over the next `tickSpan`: a countdown steps or says `Sắp đặt lại`, a pace
-    /// note's figure or verdict changes.
+    /// comes back or the readings turn stale; on a widget drawing the limits, the day of a reset
+    /// time turns, an account's reset row counts down, goes or names another day, a reset credit's
+    /// dot changes color, an account's plan period counts down or its day turns into today, and each
+    /// minute the limits' words move over the next `tickSpan` (a countdown steps or says `Sắp đặt
+    /// lại`, a pace note's figure or verdict changes); on a widget drawing the reset tracker it
+    /// chose, a countdown of the tracker ends, a row goes away, or a word moving with the clock
+    /// changes.
     static func moments(_ document: GlanceDocument?, after now: Date, style: QuotaWidgetStyle) -> [Date] {
         guard let document else { return [] }
         var moments = Set(GlanceUpcomingLimit.list(document.widget.providers, now: now).map(\.at))
-        moments.formUnion(document.forWidget.resetMoments(after: now))
-        moments.formUnion(document.accountMoments(document.widget.providers, after: now))
-        moments.formUnion(document.widget.providers.compactMap(\.term).flatMap { $0.changes(after: now) })
         if style.drawsLimits(document) {
+            moments.formUnion(document.accountMoments(document.widget.providers, after: now))
+            moments.formUnion(document.widget.providers.compactMap(\.term).flatMap { $0.changes(after: now) })
             moments.formUnion(document.rowTicks(document.widget.providers, after: now, until: now.addingTimeInterval(tickSpan)))
+        }
+        if style.drawsResets(document) {
+            let widget = document.forWidget
+            moments.formUnion(widget.resetMoments(after: now))
+            if let resets = widget.resets {
+                moments.formUnion(GlanceResetCards.ticks(resets: resets, units: widget.labels.units, after: now, until: now.addingTimeInterval(tickSpan)))
+            }
         }
         let stale = document.generatedAt.addingTimeInterval(GlanceStaleness.after)
         if stale > now {
@@ -154,6 +161,16 @@ extension QuotaWidgetStyle {
         case .details, .rings, .compact, .upcoming: return true
         case .overview: return document.widget.has(.quota) || document.widget.has(.upcoming)
         case .codexResets, .resetCalendar: return false
+        }
+    }
+
+    /// Whether the style draws the reset tracker: the reset widgets always, the Overview when
+    /// Settings gave it the reset part.
+    func drawsResets(_ document: GlanceDocument) -> Bool {
+        switch self {
+        case .codexResets, .resetCalendar: return true
+        case .overview: return document.widget.has(.resets)
+        case .details, .rings, .compact, .upcoming: return false
         }
     }
 }
@@ -188,10 +205,14 @@ enum GlanceStore {
 }
 
 enum WidgetText {
-    static var vietnamese: Bool {
-        Locale.preferredLanguages.first?.hasPrefix("vi") ?? false
-    }
+    /// Whether the widgets word what they say themselves (their names and descriptions in the
+    /// gallery, the preview, the words before the app first runs) in Vietnamese: in the app's
+    /// language, as the last document it wrote says, else in the Mac's.
+    static let vietnamese: Bool = GlanceStore.load()?.isVietnamese ?? (Locale.preferredLanguages.first?.hasPrefix("vi") ?? false)
 
+    /// A widget's name in the gallery. The reset widgets show whichever tracker Settings chose, so
+    /// they are named after the popup's Reset tab, not after Codex; their kind strings keep the
+    /// Codex names they were placed under.
     static func name(_ style: QuotaWidgetStyle) -> String {
         switch style {
         case .details: return vietnamese ? "Chi tiết" : "Details"
@@ -199,8 +220,8 @@ enum WidgetText {
         case .compact: return vietnamese ? "Gọn" : "Compact"
         case .overview: return vietnamese ? "Tổng quan" : "Overview"
         case .upcoming: return vietnamese ? "Sắp đặt lại" : "Coming Back"
-        case .codexResets: return vietnamese ? "Reset Codex" : "Codex Resets"
-        case .resetCalendar: return vietnamese ? "Lịch reset Codex" : "Codex Reset Calendar"
+        case .codexResets: return vietnamese ? "Reset" : "Resets"
+        case .resetCalendar: return vietnamese ? "Lịch reset" : "Reset Calendar"
         }
     }
 
@@ -216,25 +237,33 @@ enum WidgetText {
             return vietnamese ? "Mỗi chỉ số một dòng, xem được nhiều tài khoản nhất." : "One line per metric, the most accounts at once."
         case .overview:
             return vietnamese
-                ? "Hạn mức các tài khoản cùng dự báo reset Codex và các hạn mức sắp đặt lại."
-                : "Your limits beside the Codex reset forecast and the limits coming back next."
+                ? "Hạn mức các tài khoản cùng dự báo reset của Codex hoặc Claude và các hạn mức sắp đặt lại."
+                : "Your limits beside the Codex or Claude reset forecast and the limits coming back next."
         case .upcoming:
             return vietnamese
                 ? "Các hạn mức sắp được đặt lại, sớm nhất lên trước, kèm giờ đặt lại."
                 : "The limits coming back next, soonest first, with their reset times."
         case .codexResets:
             return vietnamese
-                ? "Theo dõi reset miễn phí của Codex: giờ reset đã báo, khả năng có reset và lần reset gần nhất."
-                : "The Codex free-reset tracker: announced resets, the chance of one and the last one."
+                ? "Reset của Codex hoặc Claude như tab Reset: lần reset gần nhất, reset đã báo và khả năng có reset."
+                : "Codex or Claude resets as in the Reset tab: the latest reset, announced ones and the chance of one."
         case .resetCalendar:
             return vietnamese
-                ? "Lịch 20 tuần reset Codex và nhịp reset theo thứ, theo giờ."
-                : "Twenty weeks of Codex resets and their rhythm by weekday and hour."
+                ? "Lịch reset 20 tuần qua của Codex hoặc Claude và thói quen thông báo theo thứ, theo giờ."
+                : "Codex or Claude resets in the last 20 weeks and when announcements land, by weekday and hour."
         }
     }
 
     static var notRunning: String {
         vietnamese ? "Mở Quota Control để hiện hạn mức ở đây." : "Open Quota Control to show your limits here."
+    }
+
+    /// What a reset widget says in place of the tracker the widget chose: the Reset tab's own line
+    /// while the tracker is on but has nothing yet (`failed` once it could not load), else what
+    /// turns the tracker on.
+    static func resetsMessage(_ document: GlanceDocument) -> (text: String, failed: Bool) {
+        if let pending = document.resetsPending { return (pending.text, pending.failed == true) }
+        return (resetsOff(document), false)
     }
 
     /// What a reset widget says while the tracker the widget chose is off.
@@ -339,7 +368,8 @@ struct GlanceWidgetView: View {
             if let resets = document.resets {
                 CodexResetsLayout(document: document, resets: resets, family: family, now: now, size: size)
             } else {
-                WidgetMessage(text: WidgetText.resetsOff(document), symbol: "arrow.counterclockwise.circle")
+                let message = WidgetText.resetsMessage(document)
+                WidgetMessage(text: message.text, symbol: "arrow.counterclockwise.circle", failed: message.failed)
             }
         case .resetCalendar:
             if let resets = document.resets, let calendar = resets.calendar {
@@ -347,7 +377,8 @@ struct GlanceWidgetView: View {
             } else if let resets = document.resets {
                 CodexResetsLayout(document: document, resets: resets, family: family, now: now, size: size)
             } else {
-                WidgetMessage(text: WidgetText.resetsOff(document), symbol: "calendar")
+                let message = WidgetText.resetsMessage(document)
+                WidgetMessage(text: message.text, symbol: "calendar", failed: message.failed)
             }
         }
     }
@@ -355,7 +386,7 @@ struct GlanceWidgetView: View {
 
 extension GlanceDocument {
     /// What the widget gallery shows before the app has written any readings: two accounts and a
-    /// reset tracker with its chances, calendar and rhythm, worded in the Mac's language.
+    /// reset tracker with its chances, calendar and rhythm, worded like the gallery (`WidgetText`).
     static var sample: GlanceDocument {
         let vietnamese = WidgetText.vietnamese
         let now = Date()

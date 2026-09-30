@@ -26,11 +26,6 @@ enum WidgetScale {
     static let moreHeight: CGFloat = 14
 }
 
-extension GlanceResets {
-    /// The tracker's mark color, the text color when the brand is white.
-    var markTint: Color { color.uppercased() == "#FFFFFF" ? .primary : tint }
-}
-
 extension GlanceUpcomingReset {
     /// The announced reset's reading (its live countdown or fixed value) at `now`.
     func liveValue(now: Date, units: GlanceUnits) -> Text {
@@ -224,10 +219,13 @@ enum GlanceStaleness {
     static let after: TimeInterval = 20 * 60
 }
 
-/// A centered symbol and sentence for a widget with nothing to draw.
+/// A centered symbol and sentence for a widget with nothing to draw; a sentence saying something
+/// could not load reads in the notice color, as the popup says it.
 struct WidgetMessage: View {
     let text: String
     var symbol = "gauge.with.dots.needle.33percent"
+    var failed = false
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(spacing: 8) {
@@ -237,7 +235,7 @@ struct WidgetMessage: View {
             Text(text)
                 .font(.system(size: 11))
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(failed ? GlanceResetPalette(scheme: colorScheme).noticeText : Color.secondary)
                 .lineLimit(4)
                 .fixedSize(horizontal: false, vertical: true)
         }

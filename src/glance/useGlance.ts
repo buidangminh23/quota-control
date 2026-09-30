@@ -4,25 +4,31 @@
  * glance document, which goes to the core only when it changed. Each surface lists what its Settings
  * choose (the Hạn mức cards, the starred metrics or a hand-picked set). The Codex free-reset
  * tracker rides along while the Reset tab or reset notifications are on, loading the feeds they
- * need; the Claude tracker only while a surface or a wing reads it and the Reset tab or Claude reset
- * notifications are on. Each Codex and Claude account starts with the row its popup card starts
- * with, which follows the same settings whichever tracker a surface shows. The hidden popup keeps
- * running, so all of it stays live while it is closed. Elsewhere the core has no glance and this
- * does nothing.
+ * need: with the notifications alone that is the status, so the tracker keeps the latest and the
+ * announced reset and none of what the history gives, which the popup then shows nowhere either.
+ * The Claude tracker rides along only while a surface or a wing reads it and the Reset tab or
+ * Claude reset notifications are on, with the Codex history for its comparison while the Reset tab
+ * has that loaded; a `resets:` wing reads whichever tracker the Reset tab shows. A tracker that is
+ * on but has nothing yet sends the Reset tab's own line instead (loading, or could not load). Each
+ * Codex and Claude account starts with the row its popup card starts with, which follows the same
+ * settings whichever tracker a surface shows. The hidden popup keeps running, so all of it stays
+ * live while it is closed. Elsewhere the core has no glance and this does nothing.
  */
 import { useEffect, useMemo, useRef } from "react";
 import { messagesFor } from "@/i18n";
 import { backend } from "@/lib/backend";
 import type { Provider, WidgetDescriptor } from "@/lib/types";
-import { buildGlance, isClaudeResetsWing, isSpecialWing, type GlanceResetRow, type GlanceWingChoice } from "@/model/glance";
+import { buildGlance, followedWing, isClaudeResetsWing, isSpecialWing, type GlanceResetRow, type GlanceWingChoice } from "@/model/glance";
 import { buildClaudeGlanceResets } from "@/model/glanceClaudeResets";
-import { buildGlanceResets, parseResetFeeds } from "@/model/glanceResets";
+import { buildGlanceResets, parseResetFeeds, trackerPending } from "@/model/glanceResets";
 import { claudeResetRow, codexResetRow } from "@/model/glanceResetRows";
+import { dailyReliability } from "@/model/insights/claudePresentation";
 import { parseClaudeResets } from "@/model/insights/claudeResets";
-import { feedOutdated, resetTrackerOutdated } from "@/model/insights/resets";
+import { feedOutdated, feedShownAt, parseResets, resetTrackerOutdated } from "@/model/insights/resets";
 import { brandOf, glanceGroups, isLocalHistoryCard } from "@/model/layout";
 import { surfaceResetProvider } from "@/model/settings";
 import { cardIdentity, providerBrand } from "@/model/providerText";
+import { dayNumber } from "@/model/timeZone";
 import { widgetDataFor } from "@/model/widgetData";
 import { useClaudeAccountPlans } from "@/state/claudePlans";
 import { useDisplay, useIsEnabled, useWallClock } from "@/state/hooks";
@@ -47,6 +53,7 @@ export function useGlance(): void {
   const widgetChoice = useApp((state) => state.settings.widget);
   const resetsProvider = useApp((state) => state.settings.resetsProvider);
   const showResetsTab = useApp((state) => state.settings.showResetsTab);
+  const resetsTab = surfaceResetProvider("app", { resetsProvider, showResetsTab });
   const island = useMemo(
     () => ({ ...islandChoice, resetsProvider: surfaceResetProvider(islandChoice.resetsProvider, { resetsProvider, showResetsTab }) }),
     [islandChoice, resetsProvider, showResetsTab],
@@ -94,12 +101,26 @@ export function useGlance(): void {
       historyBody,
       historyStale: showResetsTab && feedOutdated(historyFeed, historyError),
     });
+  const today = dayNumber(now);
+  const reliability = useMemo(
+    () => (tracking && showResetsTab ? dailyReliability(feeds.resets, now, display.language) : undefined),
+    [tracking, showResetsTab, feeds, today, display.language],
+  );
+  const fetchedAt = tracking ? feedShownAt(statusFeed) : null;
   const resets = useMemo(
-    () => (tracking ? buildGlanceResets({ feeds, stale, now, language: display.language, timeFormat, theme }) : null),
-    [tracking, feeds, stale, now, display.language, timeFormat, theme],
+    () => (tracking ? buildGlanceResets({ feeds, stale, now, language: display.language, timeFormat, theme, reliability, withHistory: showResetsTab, fetchedAt }) : null),
+    [tracking, feeds, stale, now, display.language, timeFormat, theme, reliability, showResetsTab, fetchedAt],
+  );
+  const resetsPending = useMemo(
+    () =>
+      tracking && !resets
+        ? trackerPending([{ snapshot: statusFeed, error: statusError }, ...(showResetsTab ? [{ snapshot: historyFeed, error: historyError }] : [])], display.language)
+        : null,
+    [tracking, resets, statusFeed, statusError, showResetsTab, historyFeed, historyError, display.language],
   );
 
-  const claudeRead = island.resetsProvider === "claude" || widget.resetsProvider === "claude" || island.wings.some(isClaudeResetsWing);
+  const claudeRead =
+    island.resetsProvider === "claude" || widget.resetsProvider === "claude" || island.wings.some((id) => isClaudeResetsWing(followedWing(id, resetsTab)));
   const claudeFollowed = showResetsTab || notifyClaudeResets;
   const claudeCards = (claudeAccounts?.length ?? 0) > 0;
   const claudeTracking = supported && claudeFollowed && (claudeRead || claudeCards);
@@ -109,12 +130,29 @@ export function useGlance(): void {
   const claudeBody = claudeTracking ? (claudeFeed?.body ?? null) : null;
   const claudeParsed = useMemo(() => parseClaudeResets(claudeBody), [claudeBody]);
   const claudeStale = Boolean(claudeFeed?.stale || claudeError);
+  const claudeFetchedAt = claudeTracking ? feedShownAt(claudeFeed) : null;
+  const codexHistory = useMemo(() => parseResets(historyBody), [historyBody]);
   const claudeResets = useMemo(
     () =>
       claudeParsed && claudeRead
-        ? buildClaudeGlanceResets({ feed: claudeParsed, accounts: claudeAccounts ?? [], used: usedBankedResets, stale: claudeStale, now, language: display.language, timeFormat, theme })
+        ? buildClaudeGlanceResets({
+            feed: claudeParsed,
+            accounts: claudeAccounts ?? [],
+            used: usedBankedResets,
+            stale: claudeStale,
+            fetchedAt: claudeFetchedAt,
+            codex: codexHistory,
+            now,
+            language: display.language,
+            timeFormat,
+            theme,
+          })
         : null,
-    [claudeParsed, claudeRead, claudeAccounts, usedBankedResets, claudeStale, now, display.language, timeFormat, theme],
+    [claudeParsed, claudeRead, claudeAccounts, usedBankedResets, claudeStale, claudeFetchedAt, codexHistory, now, display.language, timeFormat, theme],
+  );
+  const claudeResetsPending = useMemo(
+    () => (claudeTracking && claudeRead && !claudeResets ? trackerPending([{ snapshot: claudeFeed, error: claudeError }], display.language) : null),
+    [claudeTracking, claudeRead, claudeResets, claudeFeed, claudeError, display.language],
   );
 
   const codexRow = useMemo(
@@ -172,11 +210,14 @@ export function useGlance(): void {
       appName: info?.name ?? messagesFor(display.language).chrome.appName,
       alert,
       resets,
+      resetsPending,
       claudeResets,
+      claudeResetsPending,
+      resetsTab,
       markArt,
       now,
     });
-  }, [supported, layout, catalog, isEnabled, engine, display, info, islandEnabled, island, widget, timeFormat, theme, alert, resets, claudeResets, resetRowFor, markArt, now]);
+  }, [supported, layout, catalog, isEnabled, engine, display, info, islandEnabled, island, widget, timeFormat, theme, alert, resets, resetsPending, claudeResets, claudeResetsPending, resetsTab, resetRowFor, markArt, now]);
 
   useEffect(() => {
     if (!ready || !document) return;

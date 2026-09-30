@@ -10,6 +10,7 @@
  * an announced reset (`scheduled`) or the site's own watch is shown beside it, never folded into it.
  */
 
+import type { PublicFeedSnapshot } from "@/lib/insightsTypes";
 import { dayNumber, deviceTimeZone, instantOnDay, zonedParts } from "@/model/timeZone";
 
 export type ResetKind = "regular" | "banked";
@@ -156,6 +157,16 @@ export function parseResets(body: string | null | undefined, extra: readonly (Co
  */
 export function feedOutdated(feed: { body: string | null; error: string | null; stale: boolean } | undefined, readError?: string): boolean {
   return Boolean(readError) || Boolean(feed?.stale) || Boolean(feed?.error && !feed.body);
+}
+
+/**
+ * When the copy a view shows was read, as the line under the Reset and Benchmark tabs' cards
+ * dates it: the last check, or after a failed one the last download the source confirmed, since
+ * that copy is what is still shown.
+ */
+export function feedShownAt(feed: Pick<PublicFeedSnapshot, "error" | "fetchedAt" | "checkedAt" | "verifiedAt"> | undefined): string | null {
+  if (!feed) return null;
+  return feed.error ? (feed.verifiedAt ?? feed.fetchedAt) : (feed.checkedAt ?? feed.fetchedAt);
 }
 
 /**

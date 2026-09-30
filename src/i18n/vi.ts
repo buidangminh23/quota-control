@@ -328,7 +328,7 @@ export const vi: Messages = {
     desktopWidgetNote:
       "Bấm chuột phải lên màn hình nền, chọn Sửa tiện ích rồi tìm Quota Control. Có ba kiểu: Chi tiết (thanh mức dùng và giờ đặt lại), Vòng tròn (đồng hồ phần trăm) và Gọn (mỗi chỉ số một dòng), mỗi kiểu có bốn cỡ.",
     desktopWidgetKindsNote:
-      "Muốn tách riêng thì thêm widget Reset Codex, Lịch reset Codex hoặc Sắp đặt lại; muốn gộp chung thì thêm widget Tổng quan và chọn các phần nó ghép ở ngay bên dưới.",
+      "Muốn tách riêng thì thêm widget Reset, Lịch reset hoặc Sắp đặt lại; muốn gộp chung thì thêm widget Tổng quan và chọn các phần nó ghép ở ngay bên dưới.",
     glanceGroup: (group) => ({ closed: "Khi thu gọn", open: "Khi mở rộng", behavior: "Cách hoạt động", content: "Nội dung" })[group],
     glanceTabName: (view, provider) => ({ quota: "Hạn mức", resets: `Reset ${RESET_OWNERS[provider]}`, upcoming: "Sắp đặt lại" })[view],
     glanceTabs: (surface) => (surface === "island" ? "Các tab hiện khi mở" : "Widget Tổng quan gồm"),
@@ -336,13 +336,10 @@ export const vi: Messages = {
       surface === "island"
         ? "Bấm để bật hoặc tắt tab, luôn giữ ít nhất một tab. Mỗi tab tuỳ chỉnh riêng ở danh sách bên dưới."
         : "Chọn những phần ghép trong widget Tổng quan. Các widget riêng lẻ luôn theo tuỳ chỉnh của từng phần bên dưới.",
-    glanceWidgetScope: (view, provider) =>
+    glanceWidgetScope: (view) =>
       ({
         quota: "Áp dụng cho widget Chi tiết, Vòng tròn, Gọn và Tổng quan.",
-        resets:
-          provider === "claude"
-            ? "Áp dụng cho widget Reset Codex, Lịch reset Codex và Tổng quan; cả ba sẽ hiện reset của Claude."
-            : "Áp dụng cho widget Reset Codex, Lịch reset Codex và Tổng quan.",
+        resets: "Áp dụng cho widget Reset, Lịch reset và Tổng quan.",
         upcoming: "Áp dụng cho widget Sắp đặt lại và Tổng quan.",
       })[view],
     glanceTabOff: "Tab đang tắt",
@@ -389,6 +386,11 @@ export const vi: Messages = {
     islandWingSpecial: (wing) =>
       ({
         "quota:next": "Hạn mức đặt lại sớm nhất",
+        "resets:next": "Như tab Reset · Reset free sắp tới hoặc hạn dùng lượt để dành",
+        "resets:chance-1": "Như tab Reset · Khả năng 24 giờ tới",
+        "resets:chance-3": "Như tab Reset · Khả năng 3 ngày tới",
+        "resets:chance-7": "Như tab Reset · Khả năng 7 ngày tới",
+        "resets:since": "Như tab Reset · Thời gian chưa reset",
         "codex-resets:next": "Reset Codex · Reset free sắp tới",
         "codex-resets:chance-1": "Reset Codex · Khả năng 24 giờ tới",
         "codex-resets:chance-3": "Reset Codex · Khả năng 3 ngày tới",
@@ -538,7 +540,7 @@ export const vi: Messages = {
     upcoming: "Sắp đặt lại",
     upcomingEmpty: "Chưa có hạn mức nào có giờ đặt lại.",
     wingIn: (span) => `sau ${span}`,
-    wingSince: (span) => `đã ${span}`,
+    wingSince: (span) => `${span} trước`,
     calendarMonth: (month) => `Th${month + 1}`,
     sinceReset: "Chưa reset",
     tabs: { quota: "Hạn mức", resets: "Reset Codex", upcoming: "Sắp đặt lại" },

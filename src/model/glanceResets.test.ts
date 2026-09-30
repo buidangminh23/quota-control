@@ -1,8 +1,10 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setSystemTimeZone } from "@/model/timeZone";
 import { insightsFor } from "@/i18n/insights";
 import type { GlanceResets } from "./glance";
-import { addHistory, buildGlanceResets, buildResetPresentation, parseResetFeeds, POST_EXCERPT_LENGTH, resetAgoText, type GlanceResetsInput, type ResetFeeds } from "./glanceResets";
+import { addHistory, buildGlanceResets, buildResetPresentation, parseResetFeeds, POST_EXCERPT_LENGTH, resetAgoText, trackerPending, type GlanceResetsInput, type ResetFeeds } from "./glanceResets";
 
 /** Friday 25/09/2026 10:00 in Vietnam. */
 const NOW = new Date("2026-09-25T03:00:00Z");
@@ -142,6 +144,27 @@ describe("buildGlanceResets", () => {
     expect(legacy(new Date(LATER.getTime() + 60_000))).toBe(legacy(LATER));
   });
 
+  it("keeps what the status says, and nothing the history would give, while the history is not loaded", () => {
+    const feeds = parseResetFeeds(status(scheduled("Resetting at the time below", "2026-09-28T01:00:00Z"), null, post("1", "regular", "2026-09-24T18:17:54Z")), null);
+    const bare = build(feeds, { now: LATER, withHistory: false, reliability: "Thử lại trên 60 ngày đã qua." })!;
+    expect(bare.latest?.at).toBe("2026-09-24T18:17:54.000Z");
+    expect(bare.upcoming?.countdown?.at).toBe("2026-09-28T01:00:00.000Z");
+    expect(bare.presentation?.latest).toMatchObject({ at: "2026-09-24T18:17:54.000Z", excerpt: "reset 1" });
+    expect(bare.presentation?.statuses.map((card) => card.kind)).toEqual(["scheduled"]);
+    expect(bare.presentation?.forecast).toEqual({ title: insightsFor("vi").forecastTitle, chances: [] });
+    expect(bare.presentation?.stats).toEqual([]);
+    expect(bare.presentation?.history).toEqual([]);
+    expect(bare.presentation?.patternNote).toBe("");
+    expect(bare.forecast).toEqual([]);
+    expect(bare.forecastNote).toBe("");
+    for (const key of ["calendar", "rhythm", "wait", "median"] as const) expect(bare[key], key).toBeUndefined();
+
+    const loaded = build(feeds, { now: LATER })!;
+    expect(loaded.calendar?.cells.replace(/[^rb]/g, "")).toBe("r");
+    expect(loaded.presentation?.history).toHaveLength(1);
+    expect(loaded.presentation?.forecast.unavailable).toBe(insightsFor("vi").forecastUnavailable);
+  });
+
   it("marks a tracker whose feed could not be refreshed", () => {
     expect(build(parseResetFeeds(status(), HISTORY), { stale: true })!.stale).toBe("Lần tải gần nhất bị lỗi, đang hiện bản đã lưu.");
   });
@@ -212,6 +235,29 @@ describe("shared Reset tab presentation", () => {
     expect(result.stats).toHaveLength(6);
     expect(result.history).toHaveLength(5);
     expect(result.method).toEqual(text.resetsMethod);
+  });
+
+  it("puts the Reset tab's self-check under the chances, and only while there are chances", () => {
+    const line = "Thử lại trên 60 ngày đã qua (14 lần reset): cách ước tính này chỉ ngang mức trung bình của lịch sử, nên chỉ để tham khảo.";
+    const forecast = build(parseResetFeeds(status(), HISTORY), { reliability: line })!.presentation!.forecast;
+    expect(forecast.chances).toHaveLength(3);
+    expect(forecast.reliability).toBe(line);
+    expect(Object.keys(forecast).indexOf("reliability")).toBe(Object.keys(forecast).indexOf("sampleNote") + 1);
+    expect("reliability" in JSON.parse(JSON.stringify(build(parseResetFeeds(status(), HISTORY))!.presentation!.forecast))).toBe(false);
+    const statusOnly = build(parseResetFeeds(status(null, WATCH), null), { reliability: line })!.presentation!.forecast;
+    expect(statusOnly.chances).toEqual([]);
+    expect(statusOnly.reliability).toBeUndefined();
+  });
+
+  it("says above the source when the copy shown was read, as a moment counted from, like the Reset tab", () => {
+    const feeds = parseResetFeeds(status(), HISTORY);
+    const fetched = buildResetPresentation({ feeds, now: LATER, language: "vi", timeFormat: "24h", fetchedAt: "2026-09-26T23:55:00.123456789+00:00" }).fetched;
+    expect(fetched).toEqual({ at: "2026-09-26T23:55:00.123Z", text: "Tải {d} trước", since: true, recent: "Vừa tải" });
+    const english = build(feeds, { now: LATER, language: "en", fetchedAt: "2026-09-26T23:55:00Z" })!.presentation!;
+    expect(english.fetched).toEqual({ at: "2026-09-26T23:55:00.000Z", text: "Fetched {d} ago", since: true, recent: "Just fetched" });
+    expect(Object.keys(english).indexOf("fetched")).toBe(Object.keys(english).indexOf("source") - 1);
+    expect("fetched" in present(feeds)).toBe(false);
+    expect("fetched" in buildResetPresentation({ feeds, now: LATER, language: "vi", timeFormat: "24h", fetchedAt: "not a time" })).toBe(false);
   });
 
   it("keeps observed resets anonymous and handles no-history state without fabricated cards", () => {
@@ -326,6 +372,36 @@ describe("English", () => {
     expect(resets.forecast.map((chance) => chance.label)).toEqual(["next 24 hours", "next 3 days", "next 7 days"]);
     expect(resets.calendar?.weekdays).toEqual(["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]);
     expect(resets.calendar?.legend).toEqual({ regular: "Reset", banked: "Banked", today: "Today" });
+  });
+});
+
+describe("the words the island's and widgets' reset cards add", () => {
+  const swift = readFileSync(resolve(process.cwd(), "src-tauri/macos/Shared/GlanceViews.swift"), "utf8");
+  const start = swift.indexOf("struct GlanceResetWords");
+  const words = swift.slice(start, swift.indexOf("\n}\n", start));
+
+  it("are the Reset tab's own, in either language", () => {
+    expect(start).toBeGreaterThan(-1);
+    for (const language of ["vi", "en"] as const) {
+      const text = insightsFor(language);
+      const showMore = text.showMore as unknown as (count: string) => string;
+      for (const phrase of [text.openPost, showMore("\\(count)"), text.showLess]) {
+        expect(words, `${language}: ${phrase}`).toContain(`"${phrase}"`);
+      }
+    }
+  });
+});
+
+describe("trackerPending", () => {
+  const snapshot = (body: string | null, error: string | null = null) => ({ name: "codexResetStatus" as const, body, fetchedAt: null, checkedAt: null, verifiedAt: null, error, stale: false });
+
+  it("says what the Reset tab says in place of a tracker it has nothing of yet", () => {
+    const vi = insightsFor("vi");
+    expect(trackerPending([{ snapshot: snapshot(null) }, { snapshot: undefined }], "vi")).toEqual({ text: vi.loading });
+    expect(trackerPending([{ snapshot: undefined, error: "offline" }], "vi")).toEqual({ text: vi.loading });
+    expect(trackerPending([{ snapshot: snapshot(null) }, { snapshot: snapshot(null, "HTTP 500") }], "vi")).toEqual({ text: "Chưa tải được: HTTP 500", failed: true });
+    expect(trackerPending([{ snapshot: snapshot(null), error: "ipc" }, { snapshot: snapshot(null, "HTTP 500") }], "vi")).toEqual({ text: "Chưa tải được: ipc", failed: true });
+    expect(trackerPending([{ snapshot: snapshot(null) }], "en")).toEqual({ text: "Could not load the data.", failed: true });
   });
 });
 

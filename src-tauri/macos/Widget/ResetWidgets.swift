@@ -246,6 +246,28 @@ struct ChangeResetWidgetPage: AppIntent {
     }
 }
 
+/// Opens or closes a part of a reset widget the Reset tab folds ("How it is computed"), as a click
+/// on it does in the tab.
+struct ToggleResetWidgetFold: AppIntent {
+    static var title: LocalizedStringResource = "Open or close a reset section"
+    static var openAppWhenRun: Bool = false
+
+    @Parameter(title: "Widget") var key: String
+    @Parameter(title: "Open") var open: Bool
+
+    init() {}
+    init(key: String, open: Bool) {
+        self.key = key
+        self.open = open
+    }
+
+    func perform() async throws -> some IntentResult {
+        UserDefaults.standard.set(open, forKey: key)
+        WidgetCenter.shared.reloadAllTimelines()
+        return .result()
+    }
+}
+
 struct ResetWidgetPager: View {
     let document: GlanceDocument
     let resets: GlanceResets
@@ -258,11 +280,16 @@ struct ResetWidgetPager: View {
 
     var body: some View {
         let height = max(40, size.height - 46)
-        let cards = GlanceResetCards.make(resets: resets, units: document.labels.units, now: now)
-        let fragments = ResetWidgetPagination.pages(cards, width: size.width, height: height)
-        let pages = ResetWidgetPagination.spreads(fragments, width: size.width, height: height)
         let tracker = document.widget.resetsProvider == .codex ? "" : ".\(document.widget.resetsProvider.rawValue)"
         let key = "reset-page.\(namespace)\(tracker).\(family.rawValue)"
+        let foldKey = { (fold: GlanceResetFold) in "reset-\(fold.rawValue).\(namespace)\(tracker).\(family.rawValue)" }
+        let folds = GlanceResetFolds(methodOpen: UserDefaults.standard.bool(forKey: foldKey(.method)))
+        let cards = GlanceResetCards.make(resets: resets, units: document.labels.units, now: now, folds: folds)
+        let roomy = family == .systemLarge || family == .systemExtraLarge
+        let headed: Set<String> = roomy ? Set([cards.first?.id, initialCard].compactMap { $0 }) : []
+        let heading = roomy ? ResetWidgetPagination.headingSpace(resets, width: size.width) : 0
+        let fragments = ResetWidgetPagination.pages(cards, width: size.width, height: height, heading: heading, headed: headed)
+        let pages = ResetWidgetPagination.spreads(fragments, width: size.width, height: height, heading: heading, headed: headed)
         let initial = initialCard.flatMap { id in pages.firstIndex(where: { $0.contains(where: { $0.id.hasPrefix(id + "|") || $0.id == id }) }) }.map { prefixPages.count + $0 } ?? 0
         let stored = UserDefaults.standard.object(forKey: key) == nil ? initial : UserDefaults.standard.integer(forKey: key)
         let count = prefixPages.count + pages.count
@@ -273,11 +300,19 @@ struct ResetWidgetPager: View {
                 if index < prefixPages.count {
                     prefixPages[index]
                 } else if index - prefixPages.count < pages.count {
+                    let page = pages[index - prefixPages.count]
                     VStack(alignment: .leading, spacing: 8) {
-                        ForEach(pages[index - prefixPages.count]) { card in
+                        if let first = page.first, ResetWidgetPagination.opens(first, headed) {
+                            ResetsHeader(resets: resets)
+                        }
+                        ForEach(page) { card in
                             GlanceResetCardView(card: card, availableWidth: size.width)
                         }
                     }
+                    .environment(\.glanceResetFoldAction, GlanceResetFoldAction { fold, open, label in
+                        AnyView(Button(intent: ToggleResetWidgetFold(key: foldKey(fold), open: !open)) { label }.buttonStyle(.plain))
+                    })
+                    .environment(\.glanceResetNow, now)
                 }
             }
             .frame(width: size.width, height: height, alignment: .topLeading)
@@ -313,8 +348,40 @@ struct ResetWidgetPager: View {
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .frame(height: 22)
-            UpdatedFooter(document: document, now: now)
+            HStack(alignment: .bottom, spacing: 6) {
+                UpdatedFooter(document: document, now: now)
+                if !roomy && index >= prefixPages.count {
+                    Spacer(minLength: 4)
+                    ResetsFooterName(resets: resets, showsTitle: family != .systemSmall)
+                }
+            }
         }
+    }
+}
+
+/// The tracker's mark and name beside the update time: how a small or medium widget, whose pages
+/// have no room for the heading a large one opens with, says whose resets it shows on every page.
+/// A small widget keeps the mark alone, so the update time is not cut.
+struct ResetsFooterName: View {
+    let resets: GlanceResets
+    var showsTitle = true
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ProviderMark(mark: resets.mark)
+                .foregroundStyle(resets.markTint)
+                .frame(width: 9, height: 9)
+            if showsTitle {
+                Text(resets.title)
+                    .font(.system(size: WidgetScale.footnote, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(resets.title)
+        .frame(height: WidgetScale.footerHeight - 4, alignment: .bottom)
+        .padding(.top, 4)
     }
 }
 
@@ -335,7 +402,7 @@ struct ResetWidgetSections {
         var previousGroup: String?
         for (page, ids) in pageIDs.enumerated() {
             for id in ids {
-                let group = id.hasPrefix("history-") ? "history" : String(id.split(separator: "|")[0])
+                let group = String(id.split(separator: "|")[0])
                 if group != previousGroup && starts.last != page { starts.append(page) }
                 previousGroup = group
             }
@@ -357,38 +424,63 @@ enum ResetWidgetPagination {
     private static var cache: [String: [GlanceResetCardData]] = [:]
     private static var keys: [String] = []
     private static var spreadCache: [String: [[GlanceResetCardData]]] = [:]
+    private static var headingCache: [String: CGFloat] = [:]
 
-    static func pages(_ cards: [GlanceResetCardData], width: CGFloat, height: CGFloat) -> [GlanceResetCardData] {
-        let key = "\(width)|\(height)|\(String(reflecting: cards).hashValue)"
+    /// The cards cut into fragments that each fit a page `height` high; the `headed` ones, whose
+    /// page opens with the tracker's heading, into fragments that leave it `heading` of room.
+    static func pages(_ cards: [GlanceResetCardData], width: CGFloat, height pageHeight: CGFloat, heading: CGFloat = 0, headed: Set<String> = []) -> [GlanceResetCardData] {
+        let key = "\(width)|\(pageHeight)|\(heading)|\(headed.sorted())|\(String(reflecting: cards).hashValue)"
         if let saved = cache[key] { return saved }
         var result: [GlanceResetCardData] = []
         for card in cards {
+            let height = headed.contains(card.id) ? pageHeight - heading : pageHeight
             let needsPartition = card.elements.contains { element in
                 switch element {
                 case let .chances(chances): return width < 250 && chances.count > 1
                 case let .calendar(_, weeks, _): return CGFloat(weeks.count) * 9 > width - 46
+                case let .compareMonths(_, months, _, _): return months.count > monthsPerPiece(width: width)
                 default: return false
                 }
             }
             if !needsPartition && fits(card, width: width, height: height) { result.append(card); continue }
-            var current = GlanceResetCardData(id: card.id + "|0", title: card.title, accent: card.accent, elements: [])
+            var current = GlanceResetCardData(id: card.id + "|0", title: card.title, accent: card.accent, look: card.look, elements: [])
             var part = 0
             var continuation = card
             continuation.title = ""
+            var hairline = false
             for element in card.elements {
                 for piece in pieces(element, card: continuation, width: width, height: height) {
+                    if case .divider = piece {
+                        hairline = !current.elements.isEmpty
+                        continue
+                    }
                     var candidate = current
+                    if hairline { candidate.elements.append(.divider) }
                     candidate.elements.append(piece)
+                    hairline = false
                     if !fits(candidate, width: width, height: height) && (!current.elements.isEmpty || !current.title.isEmpty) {
                         result.append(current)
                         part += 1
-                        current = GlanceResetCardData(id: card.id + "|\(part)", title: "", accent: card.accent, elements: [piece])
+                        current = GlanceResetCardData(id: card.id + "|\(part)", title: "", accent: card.accent, look: card.look, elements: [piece])
                     } else {
                         current = candidate
                     }
                 }
             }
-            if !current.elements.isEmpty { result.append(current) }
+            if !current.elements.isEmpty {
+                if let note = card.note {
+                    var noted = current
+                    noted.note = note
+                    if fits(noted, width: width, height: height) {
+                        current = noted
+                    } else {
+                        result.append(current)
+                        part += 1
+                        current = GlanceResetCardData(id: card.id + "|\(part)", title: "", look: .plain, elements: [.text(note, .secondary)])
+                    }
+                }
+                result.append(current)
+            }
         }
         cache[key] = result
         keys.append(key)
@@ -396,14 +488,39 @@ enum ResetWidgetPagination {
         return result
     }
 
-    static func spreads(_ fragments: [GlanceResetCardData], width: CGFloat, height: CGFloat) -> [[GlanceResetCardData]] {
-        let key = "\(width)|\(height)|\(String(reflecting: fragments).hashValue)"
+    /// Whether `fragment` is where one of the `headed` cards starts, whose page opens with the
+    /// tracker's heading.
+    static func opens(_ fragment: GlanceResetCardData, _ headed: Set<String>) -> Bool {
+        headed.contains { fragment.id == $0 || fragment.id == $0 + "|0" }
+    }
+
+    /// The room the tracker's heading takes at the top of a page, with the gap under it.
+    static func headingSpace(_ resets: GlanceResets, width: CGFloat) -> CGFloat {
+        let key = "\(width)|\(resets.title)"
+        if let saved = headingCache[key] { return saved }
+        let view = ResetsHeader(resets: resets).frame(width: width).fixedSize(horizontal: false, vertical: true)
+        let space = ceil(NSHostingController(rootView: view).sizeThatFits(in: CGSize(width: width, height: 1_000)).height) + 8
+        headingCache[key] = space
+        return space
+    }
+
+    /// The fragments laid onto pages in order, each page as full as it takes. A `headed` card
+    /// starts a page of its own, which opens with the tracker's heading (`heading` high), like the
+    /// top of the Reset tab: the first card, and the card a widget opens on.
+    static func spreads(_ fragments: [GlanceResetCardData], width: CGFloat, height: CGFloat, heading: CGFloat = 0, headed: Set<String> = []) -> [[GlanceResetCardData]] {
+        let key = "\(width)|\(height)|\(heading)|\(headed.sorted())|\(String(reflecting: fragments).hashValue)"
         if let saved = spreadCache[key] { return saved }
         var result: [[GlanceResetCardData]] = []
         var current: [GlanceResetCardData] = []
         var used: CGFloat = 0
         for fragment in fragments {
             let measured = measuredHeight(fragment, width: width)
+            if opens(fragment, headed) {
+                if !current.isEmpty { result.append(current) }
+                current = [fragment]
+                used = heading + measured
+                continue
+            }
             let required = measured + (current.isEmpty ? 0 : 8)
             if !current.isEmpty && used + required > height - 4 {
                 result.append(current)
@@ -441,13 +558,14 @@ enum ResetWidgetPagination {
             if case let .chances(chances) = element, chances.count > 1 && width < 250 {
                 return chances.flatMap { pieces(.chances([$0]), card: card, width: width, height: height) }
             }
+            if case let .compareMonths(compare, months, titled, track) = element, months.count > monthsPerPiece(width: width) {
+                return monthPieces(compare, months: months, titled: titled, track: track, width: width)
+            }
             return [element]
         }
         switch element {
         case let .text(text, style):
             return split(text, card: card, width: width, height: height) { .text($0, style) }
-        case let .badge(text):
-            return split(text, card: card, width: width, height: height) { .badge($0) }
         case let .chances(chances):
             if chances.count > 1 {
                 return chances.flatMap { pieces(.chances([$0]), card: card, width: width, height: height) }
@@ -459,15 +577,32 @@ enum ResetWidgetPagination {
             }
         case let .calendar(calendar, weeks, days):
             return calendarPieces(calendar, weeks: weeks, days: days, card: card, width: width, height: height)
-        case let .legend(legend):
-            return [legend.regular, legend.banked, legend.today].map { .text($0, .secondary) }
+        case let .compareTable(compare, rows):
+            return comparePieces(compare, rows: rows, card: card, width: width, height: height)
+        case let .compareMonths(compare, months, titled, track):
+            for shorter in [24, 18].map(CGFloat.init) where shorter < track {
+                var candidate = card
+                candidate.elements = [.compareMonths(compare, months, titled: titled, track: shorter)]
+                if fits(candidate, width: width, height: height) {
+                    return pieces(.compareMonths(compare, months, titled: titled, track: shorter), card: card, width: width, height: height)
+                }
+            }
+            if titled {
+                return pieces(.text(compare.monthsTitle, .secondary), card: card, width: width, height: height)
+                    + pieces(.compareMonths(compare, months, titled: false, track: track), card: card, width: width, height: height)
+            }
+            return [element]
+        case let .legend(legend, items):
+            return items.map { .legend(legend, [$0]) }
         case let .rhythm(title, buckets):
-            return [.text(title, .secondary)] + buckets.flatMap { pieces(.stat($0.label, String($0.count)), card: card, width: width, height: height) }
+            return [.text(title, .secondary)] + buckets.filter { $0.count > 0 }.flatMap { pieces(.stat($0.label, String($0.count)), card: card, width: width, height: height) }
         case let .stat(label, value):
             return pieces(.text(label, .secondary), card: card, width: width, height: height)
                 + pieces(.text(value, .heading), card: card, width: width, height: height)
         case let .message(lines):
             return messagePieces(lines, card: card, width: width, height: height)
+        case let .row(lines):
+            return lines.flatMap { pieces($0, card: card, width: width, height: height) }
         default:
             return [element]
         }
@@ -546,6 +681,37 @@ enum ResetWidgetPagination {
             best = space + 1
         }
         return best
+    }
+
+    /// How many months of the comparison sit side by side at `width`, each wide enough for its two
+    /// counts, as a column of the Reset tab holds two two-digit counts.
+    static func monthsPerPiece(width: CGFloat) -> Int {
+        max(1, Int((width - 24 + 4) / 26))
+    }
+
+    private static func monthPieces(_ compare: GlanceResetCompare, months: Range<Int>, titled: Bool, track: CGFloat, width: CGFloat) -> [GlanceResetElement] {
+        let count = monthsPerPiece(width: width)
+        return stride(from: months.lowerBound, to: months.upperBound, by: count).map { first in
+            .compareMonths(compare, first..<min(first + count, months.upperBound), titled: titled, track: track)
+        }
+    }
+
+    /// The comparison's table as tables that each fit a page, the columns' headings on every one.
+    private static func comparePieces(_ compare: GlanceResetCompare, rows: Range<Int>, card: GlanceResetCardData, width: CGFloat, height: CGFloat) -> [GlanceResetElement] {
+        var result: [GlanceResetElement] = []
+        var first = rows.lowerBound
+        while first < rows.upperBound {
+            var end = first + 1
+            while end < rows.upperBound {
+                var candidate = card
+                candidate.elements = [.compareTable(compare, first..<(end + 1))]
+                if !fits(candidate, width: width, height: height) { break }
+                end += 1
+            }
+            result.append(.compareTable(compare, first..<end))
+            first = end
+        }
+        return result
     }
 
     private static func calendarPieces(_ calendar: GlanceResetCalendar, weeks: Range<Int>, days: Range<Int>, card: GlanceResetCardData, width: CGFloat, height: CGFloat) -> [GlanceResetElement] {

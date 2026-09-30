@@ -77,8 +77,6 @@ export interface ClaudeResetMessages {
   glanceTitle: string;
   /** The attribution the site asks for, under that title. */
   glanceSource: string;
-  /** How the tracker works, as the island and the widgets tell it: nothing they do not show, no Codex. */
-  glanceMethod: string[];
   /** Where to apply a banked reset, and how to stop the island and the widgets showing it. */
   glanceBankedHow: string;
 }

@@ -3,7 +3,7 @@ import { compareCandidates, compareRows, searchCandidates, type CompareInput } f
 import { parseCsv } from "./csv";
 import { benchmarkBoards, benchmarkLabel, benchmarkUrl, BENCHMARKS, parseEpochBenchmarks, parseEpochScores } from "./epoch";
 import { EMPTY_COUNTS, modelQuality } from "./quality";
-import { activeWatch, announcementPattern, currentWait, forecastResets, parseResets, parseResetStatus, resetCalendar, resetStats, feedOutdated, resetTrackerOutdated, xUrl, type CodexReset, type ResetStatus } from "./resets";
+import { activeWatch, announcementPattern, currentWait, forecastResets, parseResets, parseResetStatus, resetCalendar, resetStats, feedOutdated, feedShownAt, resetTrackerOutdated, xUrl, type CodexReset, type ResetStatus } from "./resets";
 
 describe("parseCsv", () => {
   it("reads quoted fields with commas, quotes and line breaks, CRLF and a byte-order mark", () => {
@@ -216,6 +216,15 @@ describe("Codex resets", () => {
     expect(feedOutdated(feed("{}", "HTTP 503", true))).toBe(true);
     expect(feedOutdated(feed(null, "HTTP 500", false))).toBe(true);
     expect(feedOutdated(feed(null, null, false))).toBe(false);
+  });
+
+  it("dates the copy shown by the last check, or after a failed one by the last download the source confirmed", () => {
+    const times = { fetchedAt: "2026-09-26T01:00:00Z", checkedAt: "2026-09-26T03:00:00Z", verifiedAt: "2026-09-26T02:00:00Z" };
+    expect(feedShownAt(undefined)).toBeNull();
+    expect(feedShownAt({ ...times, error: null })).toBe(times.checkedAt);
+    expect(feedShownAt({ ...times, error: "HTTP 503" })).toBe(times.verifiedAt);
+    expect(feedShownAt({ ...times, verifiedAt: null, error: "HTTP 503" })).toBe(times.fetchedAt);
+    expect(feedShownAt({ ...times, checkedAt: null, error: null })).toBe(times.fetchedAt);
   });
 
   it("reads the status with an announced reset and a watch that expires", () => {
