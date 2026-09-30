@@ -135,13 +135,35 @@ describe("buildGlanceResets", () => {
     ]);
   });
 
-  it("keeps legacy countdown data stable while app presentation may refresh its exact text", () => {
-    const feeds = parseResetFeeds(status(scheduled("Resets coming tomorrow!")), HISTORY);
-    const legacy = (now: Date) => {
-      const { presentation: _presentation, ...data } = build(feeds, { now })!;
-      return JSON.stringify(data);
-    };
-    expect(legacy(new Date(LATER.getTime() + 60_000))).toBe(legacy(LATER));
+  it("stays the same from one minute to the next, cards included, while the Reset tab's own words move", () => {
+    const fresh = new Date("2026-09-24T18:20:00Z");
+    const feeds = parseResetFeeds(status({ ...scheduled("Resets coming tomorrow!", "2026-09-25T01:00:00Z"), announced_at: "2026-09-24T18:19:00Z" }), HISTORY);
+    const at = (minutes: number) => new Date(fresh.getTime() + minutes * 60_000);
+    const document = (now: Date) => JSON.stringify(build(feeds, { now }));
+    for (let minute = 1; minute <= 60; minute += 1) expect(document(at(minute)), `minute ${minute}`).toBe(document(at(minute - 1)));
+    const popup = (now: Date) => buildResetPresentation({ feeds, now, language: "vi", timeFormat: "auto" });
+    expect(popup(at(1)).latest?.ago).not.toBe(popup(at(0)).latest?.ago);
+    expect(popup(at(1)).statuses[0]?.due).not.toBe(popup(at(0)).statuses[0]?.due);
+    expect(popup(at(1)).forecast.chances.map((chance) => chance.fraction)).not.toEqual(popup(at(0)).forecast.chances.map((chance) => chance.fraction));
+  });
+
+  it("leaves the words that move with the clock to the island and the widgets, and keeps the meters to whole percents", () => {
+    const feeds = parseResetFeeds(status({ ...scheduled("Resets coming tomorrow!", "2026-09-25T01:00:00Z"), announced_at: "2026-09-24T18:19:00Z" }), HISTORY);
+    const presentation = build(feeds, { now: new Date("2026-09-24T18:20:00Z") })!.presentation!;
+    expect(presentation.latest).not.toHaveProperty("ago");
+    expect(presentation.latest?.at).toBe("2026-09-24T18:17:54.000Z");
+    const card = presentation.statuses[0]!;
+    expect(card.kind).toBe("scheduled");
+    expect(card.meta).toEqual([card.scheduledMeta]);
+    expect(card).not.toHaveProperty("due");
+    expect(card.announced?.at).toBe("2026-09-24T18:19:00.000Z");
+    expect(card.dueCountdown?.at).toBe("2026-09-25T01:00:00.000Z");
+    for (const chance of presentation.forecast.chances) {
+      expect(chance.fraction * 100).toBeCloseTo(Math.round(chance.fraction * 100), 9);
+      expect(chance.percent).toBe(`${Math.round(chance.fraction * 100)}%`);
+    }
+    const wait = presentation.forecast.waitFraction;
+    if (wait !== undefined) expect(wait * 100).toBeCloseTo(Math.round(wait * 100), 9);
   });
 
   it("keeps what the status says, and nothing the history would give, while the history is not loaded", () => {

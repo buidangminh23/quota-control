@@ -46,6 +46,9 @@ final class IslandController {
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
         ) { _ in MainActor.assumeIsolated { IslandController.shared.relayout() } })
+        observers.append(NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
+        ) { _ in MainActor.assumeIsolated { IslandController.shared.followSystemMotion() } })
         clock = Timer.scheduledTimer(withTimeInterval: Self.tickInterval, repeats: true) { _ in
             MainActor.assumeIsolated { IslandController.shared.relayout(animated: true) }
         }
@@ -64,6 +67,11 @@ final class IslandController {
         if let alert = document.alert, seenAlerts.insert(alert.id).inserted, document.island.enabled, document.island.alerts {
             showAlert(alert)
         }
+    }
+
+    /// Picks up a change to the Mac's Reduce Motion.
+    func followSystemMotion() {
+        model.systemReducesMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     }
 
     func collapse() {
@@ -113,7 +121,7 @@ final class IslandController {
         model.geometry = geometry
         let now = Date()
         if animated && model.mode.isOpen {
-            withAnimation(Self.spring) { model.measure(now: now) }
+            animating { model.measure(now: now) }
         } else {
             model.measure(now: now)
         }
@@ -129,6 +137,16 @@ final class IslandController {
     }
 
     private static let spring = Animation.spring(response: 0.38, dampingFraction: 0.82)
+
+    /// Makes `change` with the island's spring, or at once while Reduce Animations or the Mac's
+    /// Reduce Motion is on, as the popup then stops its transitions.
+    private func animating(_ change: () -> Void) {
+        if model.reducesMotion {
+            change()
+        } else {
+            withAnimation(Self.spring, change)
+        }
+    }
 
     private func frame(for kind: FrameKind, geometry: IslandGeometry) -> NSRect {
         let compact = model.compactSize(for: geometry)
@@ -209,7 +227,7 @@ final class IslandController {
     private func select(_ tab: GlanceView) {
         guard model.selectedTab != tab || model.plan(now: Date())?.selected != tab else { return }
         pendingCollapse?.cancel()
-        withAnimation(Self.spring) {
+        animating {
             model.selectedTab = tab
         }
         relayout(animated: true)
@@ -266,7 +284,7 @@ final class IslandController {
     func toggleResetFold(_ fold: GlanceResetFold) {
         guard model.mode == .expanded else { return }
         pendingCollapse?.cancel()
-        withAnimation(Self.spring) {
+        animating {
             model.resetFolds.toggle(fold)
         }
         relayout(animated: true)
@@ -306,7 +324,7 @@ final class IslandController {
         if mode != .compact {
             panel?.setFrame(frame(for: .canvas, geometry: geometry), display: true)
         }
-        withAnimation(Self.spring) {
+        animating {
             model.mode = mode
         }
         guard mode == .compact else { return }
@@ -322,7 +340,7 @@ final class IslandController {
             }
         }
         pendingShrink = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.settleDelay, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + (model.reducesMotion ? 0 : Self.settleDelay), execute: work)
     }
 
     private func open() {
@@ -500,6 +518,11 @@ final class IslandModel: ObservableObject {
     @Published var selectedTab: GlanceView? = IslandTabMemory.load() {
         didSet { IslandTabMemory.save(selectedTab) }
     }
+    /// The Mac's Reduce Motion, followed as it changes.
+    @Published var systemReducesMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    /// Whether the island draws its changes at once: the popup's Reduce Animations or the Mac's
+    /// Reduce Motion is on.
+    var reducesMotion: Bool { document?.reducesMotion == true || systemReducesMotion }
     /// The reset view's folds as last clicked, kept here so the open island is measured with them.
     @Published var resetFolds = GlanceResetFolds(foldsLists: true)
     /// Where each account's "Dùng 1 lượt" stands, kept here so the open island is measured with it.
@@ -746,6 +769,7 @@ struct IslandRootView: View {
                 model.footerFrame = frame
             }
             .environment(\.locale, document.resolvedLocale)
+            .glanceStill(model.reducesMotion)
         }
     }
 
@@ -779,10 +803,11 @@ struct IslandRootView: View {
                     content: model.wingContent,
                     style: document.island.style,
                     units: document.labels.units,
-                    now: context.date
+                    now: context.date,
+                    still: model.reducesMotion
                 )
             }
-            .transition(.opacity)
+            .transition(model.reducesMotion ? .identity : .opacity)
         case .expanded:
             TimelineView(.periodic(from: .now, by: 30)) { context in
                 IslandDetails(
@@ -795,12 +820,18 @@ struct IslandRootView: View {
                     onRedeem: { step, redeem in IslandController.shared.redeem(step, redeem) }
                 )
             }
-            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+            .transition(opening)
         case let .alert(alert):
             let look = model.look(for: alert)
             IslandAlertView(alert: alert, mark: look.mark, tint: look.tint, topInset: geometry.detailsInset)
-                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+                .transition(opening)
         }
+    }
+
+    /// How the details and an alert come and go: fading in while they grow from the notch, or at
+    /// once while motion is reduced.
+    private var opening: AnyTransition {
+        model.reducesMotion ? .identity : .opacity.combined(with: .scale(scale: 0.96, anchor: .top))
     }
 }
 
@@ -814,6 +845,8 @@ struct IslandWings: View {
     let style: IslandStyle
     let units: GlanceUnits
     let now: Date
+    /// Swaps the numbers at once instead of rolling them, while motion is reduced.
+    var still = false
 
     var body: some View {
         let parts = layout.pieces(hasNotch: geometry.hasNotch)
@@ -863,7 +896,7 @@ struct IslandWings: View {
     @ViewBuilder
     private func piece(_ parts: [IslandWingPiece.Part], at index: Int) -> some View {
         if index < parts.count, let slot = layout.slot(at: index) {
-            IslandWingPiece(slot: slot, part: parts[index], style: style, units: units, now: now)
+            IslandWingPiece(slot: slot, part: parts[index], style: style, units: units, now: now, still: still)
         } else {
             Color.clear.frame(width: 0, height: 0)
         }
@@ -887,6 +920,8 @@ struct IslandWingPiece: View {
     let style: IslandStyle
     let units: GlanceUnits
     let now: Date
+    /// Swaps the value at once instead of rolling its digits, while motion is reduced.
+    var still = false
 
     static let markSize: CGFloat = 14
     static let ringSize: CGFloat = 22
@@ -960,7 +995,7 @@ struct IslandWingPiece: View {
                 .foregroundStyle(fraction == nil ? GlancePalette.text(metric.severity, onDark: true) : Color.white)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-                .contentTransition(.numericText())
+                .contentTransition(still ? .identity : .numericText())
         }
     }
 }

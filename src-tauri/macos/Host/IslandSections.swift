@@ -123,6 +123,85 @@ enum IslandInk {
     static let notice = Color(red: 1.0, green: 0.76, blue: 0.2)
 }
 
+/// Text on the open island's themed panels, in the app's theme as the popup draws it: on the dark
+/// panel the island's own inks, on the light panel the popup's light label, secondary and tertiary.
+struct IslandPanelInk {
+    let dark: Bool
+
+    init(_ scheme: ColorScheme) {
+        dark = scheme == .dark
+    }
+
+    var primary: Color { dark ? Color.white : Color.black.opacity(0.88) }
+    var label: Color { dark ? IslandInk.label : Color.black.opacity(0.62) }
+    var caption: Color { dark ? IslandInk.caption : Color.black.opacity(0.62) }
+    var faint: Color { dark ? IslandInk.faint : Color.black.opacity(0.56) }
+    var warning: Color { dark ? IslandInk.warning : GlanceHeaderInk.warning(dark: false) }
+
+    /// A mark's color on the panel, as the popup picks it for its theme.
+    func mark(_ provider: GlanceProvider) -> Color {
+        dark ? provider.islandMarkColor : provider.markColor(in: .light)
+    }
+}
+
+/// The open island's sizes and spacing, as the popup's Density setting sets them: Compact steps each
+/// down by the popup's compact change (`tokens.css`), keeping small text at the popup's 10-point
+/// caption size.
+struct IslandDensity {
+    var name: CGFloat
+    var mark: CGFloat
+    var plan: CGFloat
+    var label: CGFloat
+    var support: CGFloat
+    var note: CGFloat
+    var caption: CGFloat
+    var meter: CGFloat
+    var quotaGap: CGFloat
+    var accountGap: CGFloat
+    var rowGap: CGFloat
+    var lineGap: CGFloat
+    var upcomingGap: CGFloat
+    var upcomingText: CGFloat
+    var upcomingLine: CGFloat
+    var upcomingMark: CGFloat
+    var panelPadding: CGFloat
+    var sectionGap: CGFloat
+    var cardGap: CGFloat
+    var resetRow: GlanceResetRowSizes
+
+    static let regular = IslandDensity(
+        name: 13, mark: 14, plan: 10.5, label: 12, support: 12, note: 11, caption: 10, meter: 4,
+        quotaGap: 10, accountGap: 13, rowGap: 9, lineGap: 4, upcomingGap: 8, upcomingText: 11.5, upcomingLine: 10.5, upcomingMark: 12,
+        panelPadding: 8, sectionGap: 10, cardGap: 12, resetRow: .island
+    )
+
+    static let compact = IslandDensity(
+        name: 12, mark: 12, plan: 10, label: 11, support: 11, note: 10, caption: 10, meter: 3,
+        quotaGap: 5, accountGap: 7, rowGap: 4, lineGap: 3, upcomingGap: 6, upcomingText: 10.5, upcomingLine: 10, upcomingMark: 11,
+        panelPadding: 6, sectionGap: 6, cardGap: 6, resetRow: .islandCompact
+    )
+
+    static func of(_ document: GlanceDocument) -> IslandDensity {
+        document.isCompact ? .compact : .regular
+    }
+}
+
+/// The open island's sections sit on the popup's page in the app's theme, as the reset view always
+/// has: the popup's white or dark page, its ink, rounded inside the black island.
+struct IslandThemedPanel: ViewModifier {
+    let scheme: ColorScheme
+    let padding: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .padding(padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(GlanceResetPalette(scheme: scheme).background)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .environment(\.colorScheme, scheme)
+    }
+}
+
 /// The open island under the notch: the tab bar and the picked tab, or the chosen views stacked
 /// and separated by thin rules, over the footer.
 struct IslandDetails: View {
@@ -142,6 +221,18 @@ struct IslandDetails: View {
     var redeems = IslandRedeemState()
     /// A press on a "Dùng 1 lượt", "Hủy" or "Xác nhận"; the measuring copy leaves it out.
     var onRedeem: ((IslandRedeemStep, GlanceRedeem) -> Void)?
+    @Environment(\.colorScheme) private var systemScheme
+
+    /// The app's theme, or the Mac's appearance while it follows the Mac, as the popup draws in.
+    private var scheme: ColorScheme { document.forcedScheme ?? systemScheme }
+
+    private var density: IslandDensity { .of(document) }
+
+    /// The width inside a section's panel: the island's side margins and the panel's own padding
+    /// taken off, and the scroller's room while the island scrolls.
+    private var panelWidth: CGFloat {
+        max(1, availableWidth - 40 - density.panelPadding * 2 - NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy))
+    }
 
     var body: some View {
         let plan = IslandPlan.make(document, now: now, selected: selected)
@@ -176,17 +267,11 @@ struct IslandDetails: View {
                 emptyLine(emptyText(nil))
             }
             ForEach(Array(plan.sections.enumerated()), id: \.element) { index, section in
-                if index > 0 {
-                    Rectangle()
-                        .fill(IslandInk.divider)
-                        .frame(height: 1)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 12)
-                }
                 if section.hasContent(in: document, now: now) {
                     content(section, named: plan.tabs.isEmpty)
+                        .modifier(IslandThemedPanel(scheme: scheme, padding: density.panelPadding))
                         .padding(.horizontal, 20)
-                        .padding(.top, index == 0 ? 10 : 0)
+                        .padding(.top, index == 0 ? 10 : density.sectionGap)
                 } else {
                     emptyLine(emptyText(section))
                 }
@@ -201,14 +286,14 @@ struct IslandDetails: View {
         switch section {
         case .quota:
             IslandQuotaSection(
-                document: document, now: now, budget: budget, availableWidth: max(1, availableWidth - 40),
+                document: document, now: now, budget: budget, availableWidth: panelWidth,
                 redeems: redeems, onRedeem: onRedeem
             )
         case .resets:
             if let resets = document.resets {
                 IslandResetsSection(
                     resets: resets, labels: document.labels, now: now, budget: budget,
-                    availableWidth: max(1, availableWidth - 40 - NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)),
+                    availableWidth: panelWidth, spacing: density.cardGap,
                     folds: resetFolds, onFold: onResetFold, showsHeading: named
                 )
             }
@@ -337,7 +422,7 @@ struct IslandQuotaSection: View {
         let shown = Array(all.prefix(budget.maxAccounts ?? all.count))
         let perAccount = budget.perAccount
         let restores = document.island.shows.resets && document.labels.restoresAt != nil && !document.resetWording.exact
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: IslandDensity.of(document).quotaGap) {
             if shown.count > 1 && availableWidth >= 620 {
                 let split = Self.balancedSplit(shown, perAccount: perAccount, shows: document.island.shows, restores: restores, redeems: redeems, now: now)
                 HStack(alignment: .top, spacing: 18) {
@@ -359,7 +444,7 @@ struct IslandQuotaSection: View {
     }
 
     private func column(_ providers: [GlanceProvider], document: GlanceDocument, perAccount: Int) -> some View {
-        VStack(alignment: .leading, spacing: 13) {
+        VStack(alignment: .leading, spacing: IslandDensity.of(document).accountGap) {
             ForEach(providers) { provider in
                 IslandAccount(provider: provider, document: document, now: now, perAccount: perAccount, redeems: redeems, onRedeem: onRedeem)
             }
@@ -416,15 +501,17 @@ struct IslandAccount: View {
     let perAccount: Int
     var redeems = IslandRedeemState()
     var onRedeem: ((IslandRedeemStep, GlanceRedeem) -> Void)?
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            IslandAccountHeader(provider: provider, shows: document.island.shows, words: document.labels.planTerm, now: now)
+        let density = IslandDensity.of(document)
+        VStack(alignment: .leading, spacing: density.rowGap) {
+            IslandAccountHeader(provider: provider, shows: document.island.shows, words: document.labels.planTerm, now: now, density: density)
             if let row = provider.resetRow(at: now) {
                 IslandResetRow(row: row, document: document, now: now)
             }
             if provider.metrics.isEmpty {
-                GlanceNoticeRow(text: provider.notice ?? document.labels.noData, onDark: true, size: 11)
+                GlanceNoticeRow(text: provider.notice ?? document.labels.noData, onDark: scheme == .dark, size: density.note)
             }
             ForEach(provider.metrics.prefix(perAccount)) { metric in
                 IslandMetricRow(
@@ -447,8 +534,10 @@ struct IslandResetRow: View {
     let document: GlanceDocument
     let now: Date
 
+    @Environment(\.colorScheme) private var scheme
+
     var body: some View {
-        let content = GlanceResetRowView(row: row, document: document, now: now, sizes: .island, onDark: true)
+        let content = GlanceResetRowView(row: row, document: document, now: now, sizes: IslandDensity.of(document).resetRow, onDark: scheme == .dark)
         if row.opens == true {
             Button {
                 IslandActions.shared.send(.openResets(row.tracker))
@@ -478,54 +567,57 @@ struct IslandAccountHeader: View {
     /// The plan period's words, sent while an account has one.
     let words: GlancePlanTermWords?
     let now: Date
+    var density = IslandDensity.regular
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
+        let ink = IslandPanelInk(scheme)
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     ProviderMark(mark: provider.mark, brand: provider.brand)
-                        .foregroundStyle(provider.islandMarkColor)
-                        .frame(width: 14, height: 14)
+                        .foregroundStyle(ink.mark(provider))
+                        .frame(width: density.mark, height: density.mark)
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
                         Text(provider.name)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Color.white)
+                            .font(.system(size: density.name, weight: .semibold))
+                            .foregroundStyle(ink.primary)
                             .lineLimit(1)
                             .truncationMode(.tail)
                         if shows.plan, let plan = provider.plan {
                             Text(plan)
-                                .font(.system(size: 10.5))
-                                .foregroundStyle(IslandInk.caption)
+                                .font(.system(size: density.plan))
+                                .foregroundStyle(ink.caption)
                                 .lineLimit(1)
                                 .layoutPriority(1)
                         }
                         if let outdated = provider.outdated {
                             Text(outdated)
-                                .font(.system(size: 10.5))
-                                .foregroundStyle(IslandInk.faint)
+                                .font(.system(size: density.plan))
+                                .foregroundStyle(ink.faint)
                                 .lineLimit(1)
                         }
                     }
                     if let problem = provider.problem {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 10))
-                            .foregroundStyle(IslandInk.warning)
+                            .foregroundStyle(ink.warning)
                             .help(problem)
                             .accessibilityLabel(problem)
                     }
                 }
                 if shows.account, let account = provider.account {
                     Text(account)
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(IslandInk.caption)
+                        .font(.system(size: density.plan))
+                        .foregroundStyle(ink.caption)
                         .lineLimit(1)
                         .truncationMode(.tail)
-                        .padding(.leading, 20)
+                        .padding(.leading, density.mark + 6)
                 }
             }
             if let words, let lines = provider.term?.lines(now: now, words: words) {
                 Spacer(minLength: 6)
-                GlancePlanTermCorner(left: lines.left, day: lines.day, soon: lines.soon, onDark: true, size: 10.5)
+                GlancePlanTermCorner(left: lines.left, day: lines.day, soon: lines.soon, onDark: ink.dark, size: density.plan)
             }
         }
     }
@@ -544,27 +636,31 @@ struct IslandMetricRow: View {
     var showsReset = true
     var redeemPhase: GlanceRedeemPhase = .ready
     var onRedeem: ((IslandRedeemStep, GlanceRedeem) -> Void)?
+    @Environment(\.colorScheme) private var scheme
+
+    private var density: IslandDensity { .of(document) }
+    private var ink: IslandPanelInk { IslandPanelInk(scheme) }
 
     var body: some View {
         if let fraction = metric.fraction {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: density.lineGap) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     title
                     if let note = metric.note {
                         Spacer(minLength: 6)
-                        GlancePaceNoteView(note: note, severity: metric.severity, onDark: true, size: 11)
+                        GlancePaceNoteView(note: note, severity: metric.severity, onDark: ink.dark, size: density.note)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                GlanceMeter(fraction: fraction, severity: metric.severity, onDark: true, height: 4, tick: metric.tick)
+                GlanceMeter(fraction: fraction, severity: metric.severity, onDark: ink.dark, height: density.meter, tick: metric.tick)
                 VStack(alignment: .trailing, spacing: 2) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         headline
                         if let reset = document.resetText(for: metric, now: now, showsReset: showsReset) {
                             Spacer(minLength: 8)
                             Text(reset)
-                                .font(.system(size: 12))
-                                .foregroundStyle(IslandInk.caption)
+                                .font(.system(size: density.support))
+                                .foregroundStyle(ink.caption)
                                 .monospacedDigit()
                                 .lineLimit(1)
                                 .truncationMode(.tail)
@@ -573,8 +669,8 @@ struct IslandMetricRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     if let restore = document.restoreText(for: metric, now: now, showsReset: showsReset) {
                         Text(restore)
-                            .font(.system(size: 10))
-                            .foregroundStyle(IslandInk.faint)
+                            .font(.system(size: density.caption))
+                            .foregroundStyle(ink.faint)
                             .monospacedDigit()
                             .lineLimit(1)
                             .truncationMode(.tail)
@@ -586,7 +682,7 @@ struct IslandMetricRow: View {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     title
                     Spacer(minLength: 4)
-                    GlanceValueWithDot(metric: metric, now: now, onDark: true) { headline }
+                    GlanceValueWithDot(metric: metric, now: now, onDark: ink.dark) { headline }
                 }
                 if let redeem = metric.redeem {
                     IslandRedeemControl(redeem: redeem, phase: redeemPhase, now: now, locale: document.resolvedLocale, onStep: onRedeem)
@@ -597,16 +693,16 @@ struct IslandMetricRow: View {
 
     private var title: some View {
         Text(metric.label)
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(Color.white)
+            .font(.system(size: density.label, weight: .semibold))
+            .foregroundStyle(ink.primary)
             .lineLimit(1)
             .truncationMode(.tail)
     }
 
     private var headline: some View {
         Text(metric.headline)
-            .font(.system(size: 12))
-            .foregroundStyle(Color.white)
+            .font(.system(size: density.label))
+            .foregroundStyle(ink.primary)
             .monospacedDigit()
             .lineLimit(1)
             .fixedSize()
@@ -616,35 +712,33 @@ struct IslandMetricRow: View {
 /// A count of what the island left out: `+2`, `+3 tài khoản khác`.
 struct IslandMoreLine: View {
     let text: String
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         Text(text)
             .font(.system(size: 10.5, weight: .medium))
-            .foregroundStyle(IslandInk.faint)
+            .foregroundStyle(IslandPanelInk(scheme).faint)
             .lineLimit(1)
     }
 }
 
 // MARK: Reset tracker
 
+/// The reset tracker's cards; `IslandDetails` puts them on the themed panel with the other views.
 struct IslandResetsSection: View {
-    @Environment(\.colorScheme) private var systemScheme
     let resets: GlanceResets
     let labels: GlanceLabels
     let now: Date
     let budget: IslandBudget
     var availableWidth: CGFloat = 340
+    var spacing: CGFloat = 12
     var folds = GlanceResetFolds(foldsLists: true)
     var onFold: ((GlanceResetFold) -> Void)?
     /// Names the tracker above the cards, for an island without a tab bar to name it.
     var showsHeading = false
 
     var body: some View {
-        let scheme = resets.theme == "dark" ? ColorScheme.dark : resets.theme == "light" ? .light : systemScheme
-        GlanceResetContent(resets: resets, units: labels.units, now: now, availableWidth: max(1, availableWidth - 16), folds: folds, onFold: onFold, showsHeading: showsHeading)
-            .padding(8)
-            .background(GlanceResetPalette(scheme: scheme).background)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+        GlanceResetContent(resets: resets, units: labels.units, now: now, availableWidth: availableWidth, folds: folds, onFold: onFold, showsHeading: showsHeading, spacing: spacing)
     }
 }
 
@@ -658,15 +752,19 @@ struct IslandUpcomingSection: View {
     let document: GlanceDocument
     let now: Date
     let count: Int
+    @Environment(\.colorScheme) private var scheme
+
+    private var density: IslandDensity { .of(document) }
+    private var ink: IslandPanelInk { IslandPanelInk(scheme) }
 
     var body: some View {
         let wording = document.resetWording
         let limits = Array(GlanceUpcomingLimit.list(document.providers, now: now).prefix(max(count, 1)))
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: density.upcomingGap) {
             if !document.labels.upcoming.isEmpty {
                 Text(document.labels.upcoming)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(IslandInk.label)
+                    .font(.system(size: density.upcomingText - 0.5, weight: .medium))
+                    .foregroundStyle(ink.label)
                     .lineLimit(1)
             }
             ForEach(limits) { limit in
@@ -679,38 +777,38 @@ struct IslandUpcomingSection: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .firstTextBaseline, spacing: 7) {
                 ProviderMark(mark: limit.provider.mark, brand: limit.provider.brand)
-                    .foregroundStyle(limit.provider.islandMarkColor)
-                    .frame(width: 12, height: 12)
+                    .foregroundStyle(ink.mark(limit.provider))
+                    .frame(width: density.upcomingMark, height: density.upcomingMark)
                     .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
                 Text("\(accountName(limit.provider, in: document.providers)) · \(limit.metric.label)")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Color.white.opacity(0.88))
+                    .font(.system(size: density.upcomingText))
+                    .foregroundStyle(ink.dark ? Color.white.opacity(0.88) : Color.black.opacity(0.88))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 8)
                 Text(limit.metric.headline)
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(Color.white)
+                    .font(.system(size: density.upcomingText, weight: .semibold))
+                    .foregroundStyle(ink.primary)
                     .monospacedDigit()
                     .lineLimit(1)
                     .fixedSize()
             }
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(wording.line(limit.at, now: now))
-                    .foregroundStyle(IslandInk.label)
+                    .foregroundStyle(ink.label)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 8)
                 if !wording.exact {
                     Text(document.dayLabel(limit.at, now: now))
-                        .foregroundStyle(IslandInk.caption)
+                        .foregroundStyle(ink.caption)
                         .lineLimit(1)
                         .fixedSize()
                 }
             }
-            .font(.system(size: 10.5))
+            .font(.system(size: density.upcomingLine))
             .monospacedDigit()
-            .padding(.leading, 19)
+            .padding(.leading, density.upcomingMark + 7)
         }
     }
 }
@@ -796,6 +894,7 @@ struct IslandRedeemState: Equatable {
 /// The popup's "Dùng 1 lượt" under a Codex account's reset credits, on the island: the small bordered
 /// button right-aligned under the row, which a press turns into the popup's confirmation in its
 /// place, "Hủy" beside "Xác nhận" in red; after "Xác nhận" the button reads `Đang dùng…`, disabled.
+/// It takes the themed panel's scheme, as the popup's buttons follow the app's theme.
 struct IslandRedeemControl: View {
     let redeem: GlanceRedeem
     let phase: GlanceRedeemPhase
@@ -821,6 +920,5 @@ struct IslandRedeemControl: View {
                 }
             }
         }
-        .environment(\.colorScheme, .dark)
     }
 }

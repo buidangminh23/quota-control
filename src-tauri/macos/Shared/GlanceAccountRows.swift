@@ -222,6 +222,8 @@ struct GlanceResetRowSizes {
 
     /// The open island, a little smaller than its metric rows as in the popup's card.
     static let island = GlanceResetRowSizes(avatar: 14, title: 11.5, value: 11.5, caption: 10)
+    /// The open island in Compact density: the popup's compact step down, never under its caption.
+    static let islandCompact = GlanceResetRowSizes(avatar: 12, title: 10.5, value: 10.5, caption: 10)
 }
 
 /// The row a Codex or Claude account starts with, as the popup's card draws it: the poster's picture

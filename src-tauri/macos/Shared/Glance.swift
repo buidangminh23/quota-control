@@ -16,6 +16,10 @@ struct GlanceDocument: Decodable, Equatable {
     /// Settings → Theme when it is not System (`light` or `dark`): every widget draws in it, as the
     /// whole popup does.
     var theme: String?
+    /// Settings → Reduce Animations, while it is on: the island and widgets stop animating.
+    var reduceMotion: Bool? = nil
+    /// Settings → Density: `compact` for Compact, absent for Default.
+    var density: String? = nil
     /// Settings → Reset Times: `absolute` for Exact Time, absent for Countdown.
     var resetDisplay: String? = nil
     /// Settings → Always Show Pacing, while it is on.
@@ -45,7 +49,7 @@ struct GlanceDocument: Decodable, Equatable {
     static let supportedVersion = 1
 
     private enum CodingKeys: String, CodingKey {
-        case version, generatedAt, locale, hour12, theme, resetDisplay, alwaysShowPacing, displayMode, labels, providers, island, widget, resets, resetsPending, claudeResets, claudeResetsPending, avatars, alert
+        case version, generatedAt, locale, hour12, theme, reduceMotion, density, resetDisplay, alwaysShowPacing, displayMode, labels, providers, island, widget, resets, resetsPending, claudeResets, claudeResetsPending, avatars, alert
     }
 
     init(
@@ -87,6 +91,8 @@ struct GlanceDocument: Decodable, Equatable {
         locale = try container.decode(String.self, forKey: .locale)
         hour12 = try container.decodeIfPresent(Bool.self, forKey: .hour12)
         theme = try? container.decodeIfPresent(String.self, forKey: .theme)
+        reduceMotion = try? container.decodeIfPresent(Bool.self, forKey: .reduceMotion)
+        density = try? container.decodeIfPresent(String.self, forKey: .density)
         resetDisplay = try? container.decodeIfPresent(String.self, forKey: .resetDisplay)
         alwaysShowPacing = try? container.decodeIfPresent(Bool.self, forKey: .alwaysShowPacing)
         displayMode = try? container.decodeIfPresent(String.self, forKey: .displayMode)
@@ -140,6 +146,13 @@ struct GlanceDocument: Decodable, Equatable {
         default: return nil
         }
     }
+
+    /// Whether the popup's Reduce Animations is on; a surface also stops animating for the Mac's own
+    /// Reduce Motion.
+    var reducesMotion: Bool { reduceMotion == true }
+
+    /// Whether the popup is in Compact density, which the open island follows.
+    var isCompact: Bool { density == "compact" }
 
     /// The island's accounts with something to show: readings, or a notice saying why there are none.
     var visibleProviders: [GlanceProvider] {
@@ -985,7 +998,9 @@ struct GlanceResetAuthor: Decodable, Equatable {
 
 struct GlanceResetLatestPresentation: Decodable, Equatable {
     var title: String
-    var ago: String
+    /// The Reset tab's words for how long ago; the app leaves them out, and the cards word them
+    /// from `at` (`ago(since:now:locale:)`) as time passes.
+    var ago: String? = nil
     var at: Date
     var meta: String
     var author: GlanceResetAuthor?

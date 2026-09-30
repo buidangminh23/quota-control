@@ -37,7 +37,7 @@ import { glanceGroups, reconcileLayout } from "./layout";
 import { boundedTrailingText, meterSeverity, meterState } from "./meterState";
 import { barKind, platformKey } from "./platform";
 import { cardIdentity, providerBrand } from "./providerText";
-import { DEFAULT_SETTINGS, type GlanceContent, type IslandSettings, type ResetProvider, type ThemeSetting } from "./settings";
+import { DEFAULT_SETTINGS, type DensitySetting, type GlanceContent, type IslandSettings, type ResetProvider, type ThemeSetting } from "./settings";
 import { planTermLines } from "./planTermLines";
 import { makeWidget, NOW, resetsAt, WEEK_SECONDS } from "./testHelpers";
 import { calendarDaysBetween, setSystemTimeZone } from "./timeZone";
@@ -68,6 +68,8 @@ interface Options {
   resetsTab?: ResetProvider;
   markArt?: Readonly<Record<string, string>>;
   theme?: ThemeSetting;
+  reduceAnimations?: boolean;
+  density?: DensitySetting;
   now?: Date;
   /** The refresh error each provider's runtime carries beside its last good snapshot. */
   errors?: Readonly<Record<string, string>>;
@@ -93,6 +95,8 @@ function glance({
   resetsTab,
   markArt,
   theme = "system",
+  reduceAnimations = DEFAULT_SETTINGS.reduceAnimations,
+  density = DEFAULT_SETTINGS.density,
   now = NOW_GLANCE,
   errors = {},
   openProviders = layout.openProviders,
@@ -121,6 +125,8 @@ function glance({
     language: display.language,
     hour12,
     theme,
+    reduceAnimations,
+    density,
     appName: "Quota Control",
     alert,
     resets,
@@ -705,6 +711,18 @@ describe("the account header", () => {
     expect("lightColor" in plain).toBe(false);
   });
 
+  it("carries Reduce Animations only while it is on, so the island and widgets stop animating as the popup does", () => {
+    expect("reduceMotion" in glance()).toBe(false);
+    expect("reduceMotion" in glance({ reduceAnimations: false })).toBe(false);
+    expect(glance({ reduceAnimations: true }).reduceMotion).toBe(true);
+  });
+
+  it("carries Compact density only while it is picked, so the open island tightens as the popup does", () => {
+    expect("density" in glance()).toBe(false);
+    expect("density" in glance({ density: "regular" })).toBe(false);
+    expect(glance({ density: "compact" }).density).toBe("compact");
+  });
+
   it("carries the app's theme for every widget, and nothing while it follows the Mac", () => {
     expect("theme" in glance()).toBe(false);
     expect(glance({ theme: "dark" }).theme).toBe("dark");
@@ -1060,11 +1078,15 @@ describe("a document for someone who never chose Claude", () => {
    * five minutes and the line under it (`labels.resetsSoon`, `labels.restoresAt`). The wings
    * scenario's two reset wings also took the popup's words (`chưa rõ giờ` from the Codex card's
    * Reset free row, `{d} trước` like the Reset tab's `3 ngày trước`).
+   * The reset cards (`presentation`) also stopped moving each minute: the latest reset's `ago`
+   * is gone (the island and the widgets word it from `at`), a scheduled card keeps only its fixed
+   * meta line (`statuses[].meta`, no `due`), and the meters are rounded to the whole percent they
+   * show (`forecast.chances[].fraction`, `forecast.waitFraction`).
    */
   const PINNED: Readonly<Record<string, string>> = {
-    defaults: "1e09a838741208e0fc1fb92bd7fb5f0be54bf1ad0540897f5ab384d32d664a0b",
-    wings: "dde757320720f1382f160bd090d1cfb442cc78455d69003ed9302c1abe11cae5",
-    tuned: "181777f9585540c18086e8554ed4455a2fc4288e59ca49fe6c3c4a03150418bc",
+    defaults: "9eadcd8a63238ab3ef93c58efa116b5297b47f4dda4f20f3fb47a1cef297cb63",
+    wings: "e2e15cb7d9652811e33f5235dcced660e55f6299ea18f21b4d32654403cfbe4a",
+    tuned: "8618b464fccc3324d33718ea7d8b109de98703a96ee877337b2c02232c15a40c",
   };
   const digest = (document: object) => createHash("sha256").update(JSON.stringify(document)).digest("hex");
   /** The document without what was added to it since: the announcement the latest reset's card
