@@ -4,6 +4,8 @@ import {
   enabledProvidersOf,
   mergeSettingsDocument,
   parseSettings,
+  readsClaudeResets,
+  resetsTabProvider,
   SETTINGS_REVISION,
   surfaceResetProvider,
   taskbarDisplayOf,
@@ -167,6 +169,22 @@ describe("glance surfaces", () => {
     expect(surfaceResetProvider("claude", tab("codex"))).toBe("claude");
     expect(surfaceResetProvider("claude", tab("codex", false))).toBe("claude");
   });
+
+  it("reads Both on either surface, which stays both whatever the Reset tab shows or whether it is hidden", () => {
+    const parsed = parseSettings({ island: { resetsProvider: "both" }, widget: { resetsProvider: "both" } });
+    expect(parsed.island.resetsProvider).toBe("both");
+    expect(parsed.widget.resetsProvider).toBe("both");
+    expect(parseSettings({ island: { resetsProvider: "Both" } }).island.resetsProvider).toBe("app");
+    expect(parseSettings({ resetsProvider: "both" }).resetsProvider).toBe("codex");
+    for (const resetsProvider of ["codex", "claude"] as const) {
+      for (const showResetsTab of [true, false]) expect(surfaceResetProvider("both", { resetsProvider, showResetsTab })).toBe("both");
+    }
+    expect(readsClaudeResets("both")).toBe(true);
+    expect(readsClaudeResets("claude")).toBe(true);
+    expect(readsClaudeResets("codex")).toBe(false);
+    expect(readsClaudeResets("app")).toBe(false);
+    expect(resetsTabProvider({ resetsProvider: "claude", showResetsTab: false })).toBe("codex");
+  });
 });
 
 describe("mergeSettingsDocument", () => {
@@ -211,6 +229,16 @@ describe("mergeSettingsDocument", () => {
     const follows = mergeSettingsDocument(back, { ...parseSettings(back), island: { ...parseSettings(back).island, resetsProvider: "app" } }, new Set()) as { island: Record<string, unknown> };
     expect(follows.island.resetsProvider).toBe("app");
     expect(parseSettings(follows).island.resetsProvider).toBe("app");
+  });
+
+  it("saves Both on the surface that picked it and reads it back", () => {
+    const settings = parseSettings({});
+    const picked = { ...settings, widget: { ...settings.widget, resetsProvider: "both" as const } };
+    const merged = mergeSettingsDocument({}, picked, new Set()) as { island: Record<string, unknown>; widget: Record<string, unknown> };
+    expect(merged.widget.resetsProvider).toBe("both");
+    expect("resetsProvider" in merged.island).toBe(false);
+    expect(parseSettings(merged).widget.resetsProvider).toBe("both");
+    expect(parseSettings(merged).island.resetsProvider).toBe("app");
   });
 });
 

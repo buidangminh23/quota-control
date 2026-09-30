@@ -324,13 +324,13 @@ final class IslandController {
         DispatchQueue.main.asyncAfter(deadline: .now() + max(0, next.timeIntervalSinceNow) + 0.1, execute: work)
     }
 
-    /// A click on a fold of the reset view (a list's "Xem thêm N", "Cách tính") opens or closes
-    /// it, and the open island grows or shrinks to fit.
-    func toggleResetFold(_ fold: GlanceResetFold) {
+    /// A click on a fold of a tracker's reset view (a list's "Xem thêm N", "Cách tính") opens or
+    /// closes it, and the open island grows or shrinks to fit.
+    func toggleResetFold(_ fold: GlanceResetFold, of tracker: GlanceResetsProvider) {
         guard model.mode == .expanded else { return }
         pendingCollapse?.cancel()
         animating {
-            model.resetFolds.toggle(fold)
+            model.resetFolds[tracker].toggle(fold)
         }
         relayout(animated: true)
     }
@@ -572,7 +572,7 @@ final class IslandModel: ObservableObject {
     /// Reduce Motion is on.
     var reducesMotion: Bool { document?.reducesMotion == true || systemReducesMotion }
     /// The reset view's folds as last clicked, kept here so the open island is measured with them.
-    @Published var resetFolds = GlanceResetFolds(foldsLists: true)
+    @Published var resetFolds = IslandResetFolds()
     /// Where each account's "Dùng 1 lượt" stands, kept here so the open island is measured with it.
     @Published var redeems = IslandRedeemState()
     /// Where the banked cards' buttons stand, kept here so the open island is measured with them.
@@ -865,7 +865,7 @@ struct IslandRootView: View {
                     budget: model.budget, selected: model.selectedTab,
                     availableWidth: model.expandedSize.width, viewportHeight: model.expandedSize.height,
                     resetFolds: model.resetFolds,
-                    onResetFold: { fold in IslandController.shared.toggleResetFold(fold) },
+                    onResetFold: { fold, tracker in IslandController.shared.toggleResetFold(fold, of: tracker) },
                     redeems: model.redeems,
                     onRedeem: { step, redeem in IslandController.shared.redeem(step, redeem) },
                     banked: model.banked,

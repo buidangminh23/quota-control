@@ -182,6 +182,35 @@ describe("whose reset tracker the island and the widgets show", () => {
     expect(within(island).queryByText("Reset Claude")).not.toBeInTheDocument();
   });
 
+  it("lets a surface show both trackers, naming its reset view like the Reset tab, until it picks one again", async () => {
+    const api = await openSettings();
+    const island = section("Dynamic Island");
+    const widget = section("Widget màn hình");
+    fireEvent.click(within(widget).getByRole("button", { name: /^Reset Codex/ }));
+    const radios = within(widget).getAllByRole("radio").map((radio) => radio.getAttribute("aria-label") ?? radio.textContent);
+    expect(radios.slice(0, 4)).toEqual(["Như tab Reset", "Codex", "Claude", "Cả hai"]);
+    fireEvent.click(within(widget).getByRole("radio", { name: "Cả hai" }));
+
+    expect(useApp.getState().settings.widget.resetsProvider).toBe("both");
+    expect(useApp.getState().settings.island.resetsProvider).toBe("app");
+    expect(within(widget).getByRole("radio", { name: "Cả hai" })).toBeChecked();
+    expect(within(widget).getByRole("checkbox", { name: "Reset" })).toBeChecked();
+    expect(within(widget).getByRole("button", { name: /^Reset/ })).toHaveAttribute("aria-expanded", "true");
+    expect(within(island).getByRole("checkbox", { name: "Reset Codex" })).toBeChecked();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 5)));
+    const saved = await api.loadDocument<{ widget: { resetsProvider?: string } }>("settings");
+    expect(saved?.widget.resetsProvider).toBe("both");
+
+    act(() => updateSettings({ showResetsTab: false, notifyCodexResets: false, notifyClaudeResets: true }));
+    expect(within(widget).queryByText(/^Chưa có số liệu/)).not.toBeInTheDocument();
+    act(() => updateSettings({ notifyClaudeResets: false }));
+    expect(within(widget).getByText("Chưa có số liệu: bật tab Reset hoặc thông báo khi Codex hoặc Claude reset.")).toBeInTheDocument();
+    expect(within(widget).getByRole("radio", { name: "Cả hai" })).toBeChecked();
+
+    fireEvent.click(within(widget).getByRole("radio", { name: "Claude" }));
+    expect(within(widget).getByRole("checkbox", { name: "Reset Claude" })).toBeChecked();
+  });
+
   it("says a tracker has no data only while the Reset tab and that tracker's notifications are both off", async () => {
     await openSettings();
     const island = section("Dynamic Island");
@@ -240,6 +269,8 @@ describe("whose reset tracker the island and the widgets show", () => {
     fireEvent.click(within(island).getByRole("button", { name: /^Codex Resets/ }));
     expect(within(island).getByText("Resets of")).toBeInTheDocument();
     expect(within(island).getByRole("radio", { name: "As in the Reset tab" })).toBeChecked();
+    fireEvent.click(within(island).getByRole("radio", { name: "Both" }));
+    expect(within(island).getByRole("checkbox", { name: "Resets" })).toBeChecked();
     fireEvent.click(within(island).getByRole("radio", { name: "Claude" }));
     expect(within(island).getByRole("checkbox", { name: "Claude Resets" })).toBeChecked();
     expect(within(island).getByRole("button", { name: /^Claude Resets/ })).toBeInTheDocument();

@@ -144,8 +144,8 @@ struct GlanceTimeline: TimelineProvider {
         }
         if style.drawsResets(document) {
             let widget = document.forWidget
-            moments.formUnion(widget.resetMoments(after: now))
-            if let resets = widget.resets {
+            for resets in widget.shownResets(widget.widget.resetsProvider).compactMap(\.resets) {
+                moments.formUnion(GlanceDocument.resetMoments(of: resets, after: now))
                 moments.formUnion(GlanceResetCards.ticks(resets: resets, units: widget.labels.units, after: now, until: now.addingTimeInterval(tickSpan)))
             }
         }
@@ -276,7 +276,7 @@ enum WidgetText {
     /// while the tracker is on but has nothing yet (`failed` once it could not load), else what
     /// turns the tracker on.
     static func resetsMessage(_ document: GlanceDocument) -> (text: String, failed: Bool) {
-        if let pending = document.resetsPending { return (pending.text, pending.failed == true) }
+        if let pending = document.resetsPendingLine(document.widget.resetsProvider) { return (pending.text, pending.failed == true) }
         return (resetsOff(document), false)
     }
 
@@ -296,6 +296,9 @@ enum WidgetText {
     static func resetsTitle(_ document: GlanceDocument) -> String {
         if document.widget.resetsProvider == .claude {
             return document.resets?.title ?? document.claudeResetsTitle
+        }
+        if document.widget.resetsProvider == .both {
+            return document.labels.tabs.resets
         }
         return document.resets?.title ?? (document.isVietnamese ? "Reset Codex" : "Codex Resets")
     }
@@ -390,17 +393,19 @@ struct GlanceWidgetView: View {
         case .upcoming:
             UpcomingLayout(document: document, family: family, now: now, size: size)
         case .codexResets:
-            if let resets = document.resets {
-                CodexResetsLayout(document: document, resets: resets, family: family, now: now, size: size)
+            let shown = document.shownResets(document.widget.resetsProvider)
+            if shown.contains(where: { $0.resets != nil }) {
+                CodexResetsLayout(document: document, shown: shown, family: family, now: now, size: size)
             } else {
                 let message = WidgetText.resetsMessage(document)
                 WidgetMessage(text: message.text, symbol: "arrow.counterclockwise.circle", failed: message.failed)
             }
         case .resetCalendar:
-            if let resets = document.resets, let calendar = resets.calendar {
-                ResetCalendarLayout(document: document, resets: resets, calendar: calendar, family: family, now: now, size: size)
-            } else if let resets = document.resets {
-                CodexResetsLayout(document: document, resets: resets, family: family, now: now, size: size)
+            let shown = document.shownResets(document.widget.resetsProvider)
+            if shown.contains(where: { $0.resets?.calendar != nil }) {
+                ResetCalendarLayout(document: document, shown: shown, family: family, now: now, size: size)
+            } else if shown.contains(where: { $0.resets != nil }) {
+                CodexResetsLayout(document: document, shown: shown, family: family, now: now, size: size)
             } else {
                 let message = WidgetText.resetsMessage(document)
                 WidgetMessage(text: message.text, symbol: "calendar", failed: message.failed)

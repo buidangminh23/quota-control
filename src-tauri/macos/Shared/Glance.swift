@@ -177,6 +177,8 @@ struct GlanceDocument: Decodable, Equatable {
 
     /// The document with `resets` as `provider`'s tracker showing only `parts`; for Claude the reset
     /// view is named after the Claude tracker and, while it has nothing, says why in its own words.
+    /// With both, `resets` stays the Codex tracker and `claudeResets` the Claude one, each showing
+    /// only `parts`, and the view is named like the Reset tab.
     private func showing(_ provider: GlanceResetsProvider, parts: GlanceResetParts) -> GlanceDocument {
         var copy = self
         switch provider {
@@ -187,8 +189,42 @@ struct GlanceDocument: Decodable, Equatable {
             copy.resetsPending = claudeResetsPending
             copy.labels.tabs.resets = claudeResetsTitle
             if let off = labels.claudeResetsOff { copy.labels.resetsOff = off }
+        case .both:
+            copy.resets = resets?.showing(parts)
+            copy.claudeResets = claudeResets?.showing(parts)
+            copy.labels.tabs.resets = labels.resetsBothTab ?? (isVietnamese ? "Reset" : "Resets")
         }
         return copy
+    }
+
+    /// The trackers a surface's copy (`forIsland`, `forWidget`) draws in its reset view as `choice`
+    /// says: its one tracker while it has one, or with both, the Codex tracker then the Claude one,
+    /// each saying why while it has nothing.
+    func shownResets(_ choice: GlanceResetsProvider) -> [GlanceResetsShown] {
+        guard choice == .both else {
+            return resets.map { [GlanceResetsShown(provider: choice, resets: $0, title: $0.title, message: "")] } ?? []
+        }
+        let codex = GlanceResetsShown(
+            provider: .codex, resets: resets, title: resets?.title ?? (isVietnamese ? "Reset Codex" : "Codex Resets"),
+            message: resetsPending?.text ?? labels.resetsOff, failed: resetsPending?.failed == true
+        )
+        let claude = GlanceResetsShown(
+            provider: .claude, resets: claudeResets, title: claudeResetsTitle,
+            message: claudeResetsPending?.text ?? labels.claudeResetsOff ?? labels.resetsOff, failed: claudeResetsPending?.failed == true
+        )
+        return [codex, claude]
+    }
+
+    /// Whether a surface's copy has a tracker to draw for `choice`: one of the two, with both.
+    func hasResets(_ choice: GlanceResetsProvider) -> Bool {
+        shownResets(choice).contains { $0.resets != nil }
+    }
+
+    /// What a surface's copy says in place of its reset view while `choice` has no tracker to draw:
+    /// the Reset tab's line while one is on its way (`failed` once it could not load), else what
+    /// turns the tracker on; `nil` while nothing says it is on its way.
+    func resetsPendingLine(_ choice: GlanceResetsProvider) -> GlanceResetsPending? {
+        choice == .both ? resetsPending ?? claudeResetsPending : resetsPending
     }
 
     /// The moments after `now` when something drawn from `resets` (in a surface's copy, the tracker
@@ -196,6 +232,11 @@ struct GlanceDocument: Decodable, Equatable {
     /// away, or the last reset's age moves on.
     func resetMoments(after now: Date) -> [Date] {
         guard let resets else { return [] }
+        return Self.resetMoments(of: resets, after: now)
+    }
+
+    /// `resetMoments(after:)` for one tracker.
+    static func resetMoments(of resets: GlanceResets, after now: Date) -> [Date] {
         var moments: [Date] = []
         if let upcoming = resets.upcoming {
             moments += [upcoming.countdown?.at, upcoming.hideAt].compactMap { $0 }
@@ -270,6 +311,9 @@ struct GlanceLabels: Decodable, Equatable {
     /// What that view says while the Claude tracker is off, naming the Claude reset notifications;
     /// sent with `claudeResetsTab`.
     var claudeResetsOff: String?
+    /// The reset view's name on a surface showing both trackers, the popup's name for the Reset tab;
+    /// sent while the island or the widget chose both.
+    var resetsBothTab: String?
     /// The plan-period corner's words, sent while an account the island or the widget lists has a
     /// plan period.
     var planTerm: GlancePlanTermWords?
@@ -278,7 +322,7 @@ struct GlanceLabels: Decodable, Equatable {
     var days: GlanceDayWords?
 
     private enum CodingKeys: String, CodingKey {
-        case title, empty, updated, resetsIn, resetting, resetsSoon, restoresAt, resetAbsolute, pace, open, notRunning, noData, more, units, resetsOff, upcoming, upcomingEmpty, tabs, claudeResetsTab, claudeResetsOff, planTerm, days
+        case title, empty, updated, resetsIn, resetting, resetsSoon, restoresAt, resetAbsolute, pace, open, notRunning, noData, more, units, resetsOff, upcoming, upcomingEmpty, tabs, claudeResetsTab, claudeResetsOff, resetsBothTab, planTerm, days
     }
 
     init(
@@ -343,6 +387,7 @@ struct GlanceLabels: Decodable, Equatable {
         tabs = (try? container.decodeIfPresent(GlanceTabLabels.self, forKey: .tabs)) ?? .fallback
         claudeResetsTab = try? container.decodeIfPresent(String.self, forKey: .claudeResetsTab)
         claudeResetsOff = try? container.decodeIfPresent(String.self, forKey: .claudeResetsOff)
+        resetsBothTab = try? container.decodeIfPresent(String.self, forKey: .resetsBothTab)
         planTerm = try? container.decodeIfPresent(GlancePlanTermWords.self, forKey: .planTerm)
         days = try? container.decodeIfPresent(GlanceDayWords.self, forKey: .days)
     }
@@ -383,6 +428,18 @@ enum IslandArrangement: String, Decodable, Equatable {
 enum GlanceResetsProvider: String, Decodable, Equatable {
     case codex
     case claude
+    /// Both trackers, the Codex one then the Claude one.
+    case both
+}
+
+/// One tracker a surface's reset view shows: the tracker, or while it has nothing yet or is off,
+/// the Reset tab's line saying so (`failed` once it could not load) under the tracker's name.
+struct GlanceResetsShown: Equatable {
+    var provider: GlanceResetsProvider
+    var resets: GlanceResets?
+    var title: String
+    var message: String
+    var failed = false
 }
 
 /// The parts of the reset tracker a surface shows; a part missing from an older document shows.

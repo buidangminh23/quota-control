@@ -3,11 +3,12 @@ import SwiftUI
 
 extension GlanceView {
     /// Whether the view has something to draw at `now`: the quota list needs an account, the
-    /// forecast needs the reset tracker, the upcoming list a limit with a reset time still ahead.
+    /// forecast needs the reset tracker (with both, either one), the upcoming list a limit with a
+    /// reset time still ahead.
     func hasContent(in document: GlanceDocument, now: Date) -> Bool {
         switch self {
         case .quota: return !document.visibleProviders.isEmpty
-        case .resets: return document.resets != nil
+        case .resets: return document.hasResets(document.island.resetsProvider)
         case .upcoming: return !GlanceUpcomingLimit.list(document.providers, now: now).isEmpty
         }
     }
@@ -15,7 +16,22 @@ extension GlanceView {
     /// Whether the view says, as the popup's tab does, that its data is on its way or could not
     /// load: the reset view while its tracker is on but has nothing yet.
     func isPending(in document: GlanceDocument) -> Bool {
-        self == .resets && document.resets == nil && document.resetsPending != nil
+        let choice = document.island.resetsProvider
+        return self == .resets && !document.hasResets(choice) && document.resetsPendingLine(choice) != nil
+    }
+}
+
+/// The reset view's folds as last clicked, one set for each tracker, so a view showing both keeps
+/// each tracker's lists and method as its own clicks left them.
+struct IslandResetFolds: Equatable {
+    var codex = GlanceResetFolds(foldsLists: true)
+    var claude = GlanceResetFolds(foldsLists: true)
+
+    subscript(_ tracker: GlanceResetsProvider) -> GlanceResetFolds {
+        get { tracker == .claude ? claude : codex }
+        set {
+            if tracker == .claude { claude = newValue } else { codex = newValue }
+        }
     }
 }
 
@@ -212,11 +228,11 @@ struct IslandDetails: View {
     var selected: GlanceView?
     var availableWidth: CGFloat = IslandGeometry.expandedWidth
     var viewportHeight: CGFloat?
-    /// The reset view's folds, open or closed; the history and the limit changes fold after their
-    /// first rows, as in the tab.
-    var resetFolds = GlanceResetFolds(foldsLists: true)
-    /// A click on a fold of the reset view; the measuring copy leaves it out.
-    var onResetFold: ((GlanceResetFold) -> Void)?
+    /// The reset view's folds, open or closed, for each tracker; the history and the limit changes
+    /// fold after their first rows, as in the tab.
+    var resetFolds = IslandResetFolds()
+    /// A click on a fold of a tracker's reset view; the measuring copy leaves it out.
+    var onResetFold: ((GlanceResetFold, GlanceResetsProvider) -> Void)?
     /// Where each account's "Dùng 1 lượt" stands, so the open island is measured with its confirmation.
     var redeems = IslandRedeemState()
     /// A press on a "Dùng 1 lượt", "Hủy" or "Xác nhận"; the measuring copy leaves it out.
@@ -243,7 +259,7 @@ struct IslandDetails: View {
         VStack(alignment: .leading, spacing: 0) {
             Color.clear.frame(height: topInset)
             if let active = plan.selected, !plan.tabs.isEmpty {
-                IslandTabBar(tabs: plan.tabs, selected: active, labels: document.labels.tabs, resets: document.resets)
+                IslandTabBar(tabs: plan.tabs, selected: active, labels: document.labels.tabs, resets: document.island.resetsProvider == .both ? nil : document.resets)
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
                     .padding(.bottom, 4)
@@ -294,12 +310,22 @@ struct IslandDetails: View {
                 redeems: redeems, onRedeem: onRedeem
             )
         case .resets:
-            if let resets = document.resets {
-                IslandResetsSection(
-                    resets: resets, labels: document.labels, now: now, budget: budget,
-                    availableWidth: panelWidth, spacing: density.cardGap,
-                    folds: resetFolds, onFold: onResetFold, banked: banked, onBanked: onBanked, showsHeading: named
-                )
+            let choice = document.island.resetsProvider
+            let shown = document.shownResets(choice)
+            VStack(alignment: .leading, spacing: density.cardGap * 2) {
+                ForEach(shown, id: \.provider) { part in
+                    if let resets = part.resets {
+                        let tracker = choice == .both ? part.provider : choice
+                        IslandResetsSection(
+                            resets: resets, labels: document.labels, now: now, budget: budget,
+                            availableWidth: panelWidth, spacing: density.cardGap,
+                            folds: resetFolds[tracker], onFold: onResetFold.map { toggle in { fold in toggle(fold, tracker) } },
+                            banked: banked, onBanked: onBanked, showsHeading: named || shown.count > 1
+                        )
+                    } else {
+                        IslandResetsMissing(part: part, spacing: density.cardGap)
+                    }
+                }
             }
         case .upcoming:
             IslandUpcomingSection(document: document, now: now, count: budget.upcoming(limit: document.island.upcomingLimit))
@@ -321,7 +347,7 @@ struct IslandDetails: View {
         let fallback = document.island.empty ?? document.labels.empty
         switch section ?? (document.island.tabs.count == 1 ? document.island.tabs[0] : nil) {
         case .resets:
-            if let pending = document.resetsPending { return (pending.text, pending.failed == true) }
+            if let pending = document.resetsPendingLine(document.island.resetsProvider) { return (pending.text, pending.failed == true) }
             return (document.labels.resetsOff.isEmpty ? fallback : document.labels.resetsOff, false)
         case .upcoming:
             return (document.labels.upcomingEmpty.isEmpty ? fallback : document.labels.upcomingEmpty, false)
@@ -748,6 +774,28 @@ struct IslandResetsSection: View {
             resets: resets, units: labels.units, now: now, availableWidth: availableWidth, folds: folds, onFold: onFold,
             banked: banked, onBanked: onBanked, showsHeading: showsHeading, spacing: spacing
         )
+    }
+}
+
+/// A tracker of a reset view showing both that has nothing to draw yet: its name, then the Reset
+/// tab's line saying it is on its way, could not load (in the notice color), or is off.
+struct IslandResetsMissing: View {
+    let part: GlanceResetsShown
+    var spacing: CGFloat = 12
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: spacing / 2) {
+            Text(part.title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.primary)
+                .lineLimit(1)
+            Text(part.message)
+                .font(.system(size: 11))
+                .foregroundStyle(part.failed ? GlanceResetPalette(scheme: scheme).noticeText : Color.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

@@ -101,6 +101,21 @@ describe("the glance document the popup sends", () => {
     expect(api.feedsAsked).toContain("claudeResets");
   });
 
+  it("loads both trackers for a surface showing both, and keeps both while the Reset tab is hidden", async () => {
+    const api = await start({ widget: { resetsProvider: "both" }, notifyClaudeResets: false });
+    await waitFor(() => expect(api.latest?.claudeResets?.brand).toBe("claude"));
+    await waitFor(() => expect(api.latest?.resets?.brand).toBe("codex"));
+    const document = api.latest!;
+    expect(document.widget.resetsProvider).toBe("both");
+    expect("resetsProvider" in document.island).toBe(false);
+    expect(document.labels.resetsBothTab).toBe("Reset");
+    expect(api.feedsAsked).toEqual(expect.arrayContaining(["codexResetStatus", "codexResets", "claudeResets"]));
+    act(() => updateSettings({ showResetsTab: false, notifyCodexResets: true, notifyClaudeResets: true }));
+    await waitFor(() => expect(api.latest?.resets?.presentation?.history ?? []).toHaveLength(0));
+    expect(api.latest!.widget.resetsProvider).toBe("both");
+    expect(api.latest!.claudeResets?.brand).toBe("claude");
+  });
+
   it("shows on the island and the widgets whichever tracker the Reset tab shows, until a surface picks its own", async () => {
     const api = await start({ resetsProvider: "claude", notifyClaudeResets: false });
     await waitFor(() => expect(api.latest?.claudeResets?.brand).toBe("claude"));

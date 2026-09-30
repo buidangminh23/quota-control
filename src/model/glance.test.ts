@@ -827,6 +827,25 @@ describe("the Claude reset tracker", () => {
     expect(document.island.wings[0]).toMatchObject({ id: CLAUDE_RESETS_PROVIDER_ID, brand: "claude" });
   });
 
+  it("rides along with the Codex one for a surface showing both, which names its reset view like the Reset tab", () => {
+    const island = glance({ island: { resetsProvider: "both" }, resets: TRACKER, claudeResets: CLAUDE_TRACKER });
+    expect(island.island.resetsProvider).toBe("both");
+    expect(island.widget.resetsProvider).toBeUndefined();
+    expect(island.resets).toBe(TRACKER);
+    expect(island.claudeResets).toBe(CLAUDE_TRACKER);
+    expect(island.labels).toMatchObject({ resetsBothTab: "Reset", claudeResetsTab: "Reset Claude", tabs: { resets: "Reset Codex" } });
+    const widget = glance({ widget: { resetsProvider: "both" }, display: { ...DEFAULT_DISPLAY, language: "en" }, resets: TRACKER, claudeResets: CLAUDE_TRACKER });
+    expect(widget.widget.resetsProvider).toBe("both");
+    expect(widget.island.resetsProvider).toBeUndefined();
+    expect(widget.claudeResets).toBe(CLAUDE_TRACKER);
+    expect(widget.labels).toMatchObject({ resetsBothTab: "Resets", claudeResetsTab: "Claude Resets" });
+    const pending: GlanceResetsPending = { text: "Đang tải…" };
+    expect(glance({ island: { resetsProvider: "both" }, resets: TRACKER, claudeResets: null, claudeResetsPending: pending }).claudeResetsPending).toBe(pending);
+    for (const choice of ["codex", "claude"] as const) {
+      expect("resetsBothTab" in glance({ island: { resetsProvider: choice }, widget: { resetsProvider: choice }, resets: TRACKER, claudeResets: CLAUDE_TRACKER }).labels).toBe(false);
+    }
+  });
+
   it("tells the Claude wings apart from every other wing", () => {
     expect(["claude-resets:next", "claude-resets:chance-1", "claude-resets:chance-3", "claude-resets:chance-7", "claude-resets:since"].every(isClaudeResetsWing)).toBe(true);
     expect(["", "quota:next", "codex-resets:next", "claude-resets:soon", "claude@7c1e.session", "claude-resets", "resets:next"].some(isClaudeResetsWing)).toBe(false);

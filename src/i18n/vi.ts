@@ -1,5 +1,5 @@
 /** Vietnamese catalog — the default language. Numbers follow vi-VN (see `numbers.ts`). */
-import type { ResetProvider } from "@/model/settings";
+import type { ResetProvider, SurfaceResets } from "@/model/settings";
 import { zonedParts } from "@/model/timeZone";
 import type { Messages, RestoreDay, When } from "./messages";
 import { pricesVi, usageVi } from "./usageVi";
@@ -47,6 +47,9 @@ const VERBS = {
 
 /** Whose resets a tracker follows, as its name reads. */
 const RESET_OWNERS: Readonly<Record<ResetProvider, string>> = { codex: "Codex", claude: "Claude" };
+/** The Reset tab's name, which also names a glance surface's reset view while it shows both trackers. */
+const RESETS_TAB = "Reset";
+const resetOwners = (provider: SurfaceResets) => (provider === "both" ? "Codex hoặc Claude" : RESET_OWNERS[provider]);
 
 function lowerFirst(text: string): string {
   return text.charAt(0).toLocaleLowerCase("vi-VN") + text.slice(1);
@@ -166,7 +169,7 @@ export const vi: Messages = {
     noAccountsShort: "Chưa có tài khoản",
     addAccount: "Thêm tài khoản",
     tabsLabel: "Chế độ xem",
-    tab: (key) => ({ quota: "Hạn mức", tokens: "Token", prices: "Bảng giá", benchmark: "Benchmark", resets: "Reset" })[key],
+    tab: (key) => ({ quota: "Hạn mức", tokens: "Token", prices: "Bảng giá", benchmark: "Benchmark", resets: RESETS_TAB })[key],
     openChat: (product) => `Mở ${product} trong ứng dụng`,
     trendRange: (days, first, last) => `${days} ngày, ${first} – ${last}`,
     expiryStatus: (severity) =>
@@ -330,7 +333,7 @@ export const vi: Messages = {
     desktopWidgetKindsNote:
       "Muốn tách riêng thì thêm widget Reset, Lịch reset hoặc Sắp đặt lại; muốn gộp chung thì thêm widget Tổng quan và chọn các phần nó ghép ở ngay bên dưới.",
     glanceGroup: (group) => ({ closed: "Khi thu gọn", open: "Khi mở rộng", behavior: "Cách hoạt động", content: "Nội dung" })[group],
-    glanceTabName: (view, provider) => ({ quota: "Hạn mức", resets: `Reset ${RESET_OWNERS[provider]}`, upcoming: "Sắp đặt lại" })[view],
+    glanceTabName: (view, provider) => ({ quota: "Hạn mức", resets: provider === "both" ? RESETS_TAB : `Reset ${RESET_OWNERS[provider]}`, upcoming: "Sắp đặt lại" })[view],
     glanceTabs: (surface) => (surface === "island" ? "Các tab hiện khi mở" : "Widget Tổng quan gồm"),
     glanceTabsNote: (surface) =>
       surface === "island"
@@ -373,7 +376,7 @@ export const vi: Messages = {
         rhythm: "Nhịp reset",
       })[part],
     resetPartsSummary: (shown, total) => (shown === total ? "Đủ mọi phần" : `${shown}/${total} phần`),
-    resetPartsOff: (provider) => `Chưa có số liệu: bật tab Reset hoặc thông báo khi ${RESET_OWNERS[provider]} reset.`,
+    resetPartsOff: (provider) => `Chưa có số liệu: bật tab Reset hoặc thông báo khi ${resetOwners(provider)} reset.`,
     upcomingLimit: "Hiện tối đa",
     upcomingLimitOption: (limit) => (limit === 0 ? "Tất cả vừa khung" : `${limit} hạn mức`),
     upcomingNote: "Các hạn mức sắp được đặt lại của những tài khoản chọn ở phần Hạn mức, sớm nhất lên đầu.",

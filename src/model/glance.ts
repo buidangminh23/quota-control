@@ -23,7 +23,7 @@ import { boundedTrailingText, isFreshSessionWindow, meterSeverity, meterState, t
 import { SOURCE_COLORS } from "./palette";
 import { PLAN_TERM_SOON_DAYS, planTermEnd } from "./planTerm";
 import { isOutdated } from "./providerText";
-import type { DensitySetting, GlanceContent, GlanceSurfaceSettings, IslandSettings, IslandStyle, IslandView, ResetParts, ResetProvider, ThemeSetting } from "./settings";
+import { readsClaudeResets, type DensitySetting, type GlanceContent, type GlanceSurfaceSettings, type IslandSettings, type IslandStyle, type IslandView, type ResetParts, type ResetProvider, type SurfaceResets, type ThemeSetting } from "./settings";
 import { availableResets, boundedHeadline, fraction, isBounded, menuBarValue, soonestExpiry, unboundedDetail, type DisplayOptions, type WidgetData } from "./widgetData";
 import { rolledOverReading } from "./windowReset";
 
@@ -309,8 +309,9 @@ export interface GlanceIsland {
   resetParts: ResetParts;
   /** The most limits coming back listed; `0` for as many as fit. */
   upcomingLimit: number;
-  /** `claude` when the reset view draws `GlanceDocument.claudeResets`; absent for Codex. */
-  resetsProvider?: ResetProvider;
+  /** `claude` when the reset view draws `GlanceDocument.claudeResets`, `both` when it draws the Codex
+   * tracker then that one; absent for Codex. */
+  resetsProvider?: Exclude<SurfaceResets, "codex">;
 }
 
 /** The parts of the open island, each switched in Settings. */
@@ -388,8 +389,9 @@ export interface GlanceWidget {
   resetParts: ResetParts;
   /** The most limits coming back listed; `0` for as many as fit. */
   upcomingLimit: number;
-  /** `claude` when the reset widgets draw `GlanceDocument.claudeResets`; absent for Codex. */
-  resetsProvider?: ResetProvider;
+  /** `claude` when the reset widgets draw `GlanceDocument.claudeResets`, `both` when they page
+   * through the Codex tracker then that one; absent for Codex. */
+  resetsProvider?: Exclude<SurfaceResets, "codex">;
 }
 
 export interface GlanceDocument {
@@ -456,6 +458,9 @@ export interface GlanceDocument {
     /** What that view says while the Claude tracker is off, naming Claude's notifications; absent
      * otherwise, like `claudeResetsTab`. */
     claudeResetsOff?: string;
+    /** The reset view's name while a surface shows both trackers, the popup's name for the Reset
+     * tab; absent otherwise. */
+    resetsBothTab?: string;
     /** The plan-period corner's words, while an account the island or the widget lists has a term. */
     planTerm?: GlancePlanTermWords;
     /** A reset's clock time with its day, for the reset rows and the limits coming back. */
@@ -473,8 +478,8 @@ export interface GlanceDocument {
    * absent otherwise. */
   resetsPending?: GlanceResetsPending;
   /** The Claude reset tracker (claude-resets.com), for the island or the widget when its Settings
-   * chose it (a wing reading it needs no copy here); absent otherwise, and while the Reset tab and
-   * Claude reset notifications are both off. */
+   * chose it or both trackers (a wing reading it needs no copy here); absent otherwise, and while
+   * the Reset tab and Claude reset notifications are both off. */
   claudeResets?: GlanceResets;
   /** `resetsPending` for the Claude tracker, sent while a surface shows it. */
   claudeResetsPending?: GlanceResetsPending;
@@ -1159,14 +1164,17 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
       upcomingLimit: input.widget.settings.upcomingLimit,
     },
   };
-  const claudeIsland = input.island.settings.resetsProvider === "claude";
-  const claudeWidget = input.widget.settings.resetsProvider === "claude";
-  if (claudeIsland) document.island.resetsProvider = "claude";
-  if (claudeWidget) document.widget.resetsProvider = "claude";
+  const islandResets = input.island.settings.resetsProvider;
+  const widgetResets = input.widget.settings.resetsProvider;
+  const claudeIsland = readsClaudeResets(islandResets);
+  const claudeWidget = readsClaudeResets(widgetResets);
+  if (islandResets === "claude" || islandResets === "both") document.island.resetsProvider = islandResets;
+  if (widgetResets === "claude" || widgetResets === "both") document.widget.resetsProvider = widgetResets;
   if (claudeIsland || claudeWidget) {
     document.labels.claudeResetsTab = insightsFor(input.language).claude.glanceTitle;
     document.labels.claudeResetsOff = text.claudeResetsOff;
   }
+  if (islandResets === "both" || widgetResets === "both") document.labels.resetsBothTab = messages.dashboard.tab("resets");
   if ([...islandProviders, ...widgetProviders].some((entry) => entry.term)) document.labels.planTerm = glancePlanTermWords(input.language);
   if (input.display.resetDisplayMode === "absolute") {
     document.resetDisplay = "absolute";

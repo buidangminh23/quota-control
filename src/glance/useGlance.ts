@@ -26,7 +26,7 @@ import { dailyReliability } from "@/model/insights/claudePresentation";
 import { parseClaudeResets } from "@/model/insights/claudeResets";
 import { feedOutdated, feedShownAt, parseResets, resetTrackerOutdated } from "@/model/insights/resets";
 import { brandOf, glanceGroups, isLocalHistoryCard } from "@/model/layout";
-import { surfaceResetProvider } from "@/model/settings";
+import { readsClaudeResets, resetsTabProvider, surfaceResetProvider } from "@/model/settings";
 import { cardIdentity, providerBrand } from "@/model/providerText";
 import { dayNumber } from "@/model/timeZone";
 import { widgetDataFor } from "@/model/widgetData";
@@ -53,7 +53,7 @@ export function useGlance(): void {
   const widgetChoice = useApp((state) => state.settings.widget);
   const resetsProvider = useApp((state) => state.settings.resetsProvider);
   const showResetsTab = useApp((state) => state.settings.showResetsTab);
-  const resetsTab = surfaceResetProvider("app", { resetsProvider, showResetsTab });
+  const resetsTab = resetsTabProvider({ resetsProvider, showResetsTab });
   const island = useMemo(
     () => ({ ...islandChoice, resetsProvider: surfaceResetProvider(islandChoice.resetsProvider, { resetsProvider, showResetsTab }) }),
     [islandChoice, resetsProvider, showResetsTab],
@@ -122,7 +122,7 @@ export function useGlance(): void {
   );
 
   const claudeRead =
-    island.resetsProvider === "claude" || widget.resetsProvider === "claude" || island.wings.some((id) => isClaudeResetsWing(followedWing(id, resetsTab)));
+    readsClaudeResets(island.resetsProvider) || readsClaudeResets(widget.resetsProvider) || island.wings.some((id) => isClaudeResetsWing(followedWing(id, resetsTab)));
   const claudeFollowed = showResetsTab || notifyClaudeResets;
   const claudeCards = (claudeAccounts?.length ?? 0) > 0;
   const claudeTracking = supported && claudeFollowed && (claudeRead || claudeCards);

@@ -197,13 +197,14 @@ struct ChanceHero: View {
 /// chance of one, how long since the last, and with room the wait so far, the calendar and the rhythm.
 struct CodexResetsLayout: View {
     let document: GlanceDocument
-    let resets: GlanceResets
+    /// The tracker the widget chose, or with both, the Codex one then the Claude one.
+    let shown: [GlanceResetsShown]
     let family: WidgetFamily
     let now: Date
     let size: CGSize
 
     var body: some View {
-        ResetWidgetPager(document: document, resets: resets, family: family, now: now, size: size, namespace: "resets")
+        ResetWidgetPager(document: document, shown: shown, family: family, now: now, size: size, namespace: "resets")
     }
 
 }
@@ -214,14 +215,14 @@ struct CodexResetsLayout: View {
 /// weekday and hour and the last reset.
 struct ResetCalendarLayout: View {
     let document: GlanceDocument
-    let resets: GlanceResets
-    let calendar: GlanceResetCalendar
+    /// The tracker the widget chose, or with both, the Codex one then the Claude one.
+    let shown: [GlanceResetsShown]
     let family: WidgetFamily
     let now: Date
     let size: CGSize
 
     var body: some View {
-        ResetWidgetPager(document: document, resets: resets, family: family, now: now, size: size, namespace: "calendar", initialCard: "calendar")
+        ResetWidgetPager(document: document, shown: shown, family: family, now: now, size: size, namespace: "calendar", initialCard: "calendar")
     }
 
 }
@@ -268,9 +269,36 @@ struct ToggleResetWidgetFold: AppIntent {
     }
 }
 
+/// One tracker of a reset widget's pages: its cards, which with both trackers carry the tracker in
+/// their ids (`card#claude`) so the two never share a page key, a fold or a section, and the key
+/// its "How it is computed" is kept open under.
+struct ResetWidgetPart {
+    let shown: GlanceResetsShown
+    let cards: [GlanceResetCardData]
+    let foldKey: (GlanceResetFold) -> String
+
+    /// The card id a tracker's part gives `id` (`latest`, `calendar`) while the widget shows both.
+    static func id(_ id: String, of provider: GlanceResetsProvider, both: Bool) -> String {
+        both ? "\(id)#\(provider.rawValue)" : id
+    }
+
+    /// The card or fragment `id` came from, without its tracker and its fragment number.
+    static func base(_ id: String) -> String {
+        String(String(id.split(separator: "|", maxSplits: 1).first ?? "").split(separator: "#", maxSplits: 1).first ?? "")
+    }
+
+    /// The tracker a card or fragment of a widget showing both belongs to.
+    static func provider(of id: String) -> GlanceResetsProvider? {
+        let card = String(id.split(separator: "|", maxSplits: 1).first ?? "")
+        guard let mark = card.lastIndex(of: "#") else { return nil }
+        return GlanceResetsProvider(rawValue: String(card[card.index(after: mark)...]))
+    }
+}
+
 struct ResetWidgetPager: View {
     let document: GlanceDocument
-    let resets: GlanceResets
+    /// The tracker the widget chose, or with both, the Codex one then the Claude one.
+    let shown: [GlanceResetsShown]
     let family: WidgetFamily
     let now: Date
     let size: CGSize
@@ -282,16 +310,15 @@ struct ResetWidgetPager: View {
         let height = max(40, size.height - 46)
         let tracker = document.widget.resetsProvider == .codex ? "" : ".\(document.widget.resetsProvider.rawValue)"
         let key = "reset-page.\(namespace)\(tracker).\(family.rawValue)"
-        let foldKey = { (fold: GlanceResetFold) in "reset-\(fold.rawValue).\(namespace)\(tracker).\(family.rawValue)" }
-        let folds = GlanceResetFolds(methodOpen: UserDefaults.standard.bool(forKey: foldKey(.method)))
-        let marks = WidgetPendingAction.bankedMarks(now: now).pruned(for: document, now: now).withoutConfirmation
-        let cards = GlanceResetCards.make(resets: resets, units: document.labels.units, now: now, folds: folds, banked: marks)
+        let parts = self.parts(tracker: tracker)
+        let cards = parts.flatMap(\.cards)
         let roomy = family == .systemLarge || family == .systemExtraLarge
-        let headed: Set<String> = roomy ? Set([cards.first?.id, initialCard].compactMap { $0 }) : []
-        let heading = roomy ? ResetWidgetPagination.headingSpace(resets, width: size.width) : 0
+        let initialID = initialCard.flatMap { id in cards.first { ResetWidgetPart.base($0.id) == id }?.id }
+        let headed: Set<String> = roomy ? Set(parts.compactMap { $0.shown.resets == nil ? nil : $0.cards.first?.id } + [initialID].compactMap { $0 }) : []
+        let heading = roomy ? parts.compactMap(\.shown.resets).map { ResetWidgetPagination.headingSpace($0, width: size.width) }.max() ?? 0 : 0
         let fragments = ResetWidgetPagination.pages(cards, width: size.width, height: height, heading: heading, headed: headed)
         let pages = ResetWidgetPagination.spreads(fragments, width: size.width, height: height, heading: heading, headed: headed)
-        let initial = initialCard.flatMap { id in pages.firstIndex(where: { $0.contains(where: { $0.id.hasPrefix(id + "|") || $0.id == id }) }) }.map { prefixPages.count + $0 } ?? 0
+        let initial = initialID.flatMap { id in pages.firstIndex(where: { $0.contains(where: { $0.id.hasPrefix(id + "|") || $0.id == id }) }) }.map { prefixPages.count + $0 } ?? 0
         let stored = UserDefaults.standard.object(forKey: key) == nil ? initial : UserDefaults.standard.integer(forKey: key)
         let count = prefixPages.count + pages.count
         let index = min(max(0, stored), max(0, count - 1))
@@ -303,16 +330,19 @@ struct ResetWidgetPager: View {
                 } else if index - prefixPages.count < pages.count {
                     let page = pages[index - prefixPages.count]
                     VStack(alignment: .leading, spacing: 8) {
-                        if let first = page.first, ResetWidgetPagination.opens(first, headed) {
+                        if let first = page.first, ResetWidgetPagination.opens(first, headed), let resets = part(of: first, in: parts)?.shown.resets {
                             ResetsHeader(resets: resets)
                         }
                         ForEach(page) { card in
+                            let foldKey = part(of: card, in: parts)?.foldKey
                             GlanceResetCardView(card: card, availableWidth: size.width)
+                                .environment(\.glanceResetFoldAction, foldKey.map { foldKey in
+                                    GlanceResetFoldAction { fold, open, label in
+                                        AnyView(Button(intent: ToggleResetWidgetFold(key: foldKey(fold), open: !open)) { label }.buttonStyle(.plain))
+                                    }
+                                })
                         }
                     }
-                    .environment(\.glanceResetFoldAction, GlanceResetFoldAction { fold, open, label in
-                        AnyView(Button(intent: ToggleResetWidgetFold(key: foldKey(fold), open: !open)) { label }.buttonStyle(.plain))
-                    })
                     .environment(\.glanceResetBankedAction, GlanceResetBankedAction { request, step, title, style in
                         AnyView(Button(intent: PressGlanceAction(request, step: step)) { Text(title) }.buttonStyle(style))
                     })
@@ -354,12 +384,52 @@ struct ResetWidgetPager: View {
             .frame(height: 22)
             HStack(alignment: .bottom, spacing: 6) {
                 UpdatedFooter(document: document, now: now)
-                if !roomy && index >= prefixPages.count {
+                if !roomy && index >= prefixPages.count, let first = pages[safe: index - prefixPages.count]?.first,
+                   let resets = part(of: first, in: parts)?.shown.resets {
                     Spacer(minLength: 4)
                     ResetsFooterName(resets: resets, showsTitle: family != .systemSmall)
                 }
             }
         }
+    }
+
+    /// The widget's trackers with their cards: with both, each tracker's cards named for it, and a
+    /// tracker with nothing yet as the line saying why under its name.
+    private func parts(tracker: String) -> [ResetWidgetPart] {
+        let both = shown.count > 1
+        let marks = WidgetPendingAction.bankedMarks(now: now).pruned(for: document, now: now).withoutConfirmation
+        return shown.map { part in
+            let own = both ? ".\(part.provider.rawValue)" : ""
+            let foldKey = { (fold: GlanceResetFold) in "reset-\(fold.rawValue).\(namespace)\(tracker)\(own).\(family.rawValue)" }
+            guard let resets = part.resets else {
+                let missing = GlanceResetCardData(
+                    id: ResetWidgetPart.id("missing", of: part.provider, both: both), title: "", look: .plain,
+                    elements: [.text(part.title, .heading), .text(part.message, .secondary)]
+                )
+                return ResetWidgetPart(shown: part, cards: [missing], foldKey: foldKey)
+            }
+            let folds = GlanceResetFolds(methodOpen: UserDefaults.standard.bool(forKey: foldKey(.method)))
+            let cards = GlanceResetCards.make(resets: resets, units: document.labels.units, now: now, folds: folds, banked: marks).map { card in
+                GlanceResetCardData(
+                    id: ResetWidgetPart.id(card.id, of: part.provider, both: both), title: card.title,
+                    accent: card.accent, look: card.look, elements: card.elements, note: card.note
+                )
+            }
+            return ResetWidgetPart(shown: part, cards: cards, foldKey: foldKey)
+        }
+    }
+
+    /// The tracker a card or fragment of the widget belongs to.
+    private func part(of card: GlanceResetCardData, in parts: [ResetWidgetPart]) -> ResetWidgetPart? {
+        guard parts.count > 1 else { return parts.first }
+        let provider = ResetWidgetPart.provider(of: card.id)
+        return parts.first { $0.shown.provider == provider }
+    }
+}
+
+extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }
 

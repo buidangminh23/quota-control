@@ -29,17 +29,34 @@ export const DASHBOARD_TABS: readonly DashboardTab[] = ["quota", "tokens", "pric
 /** Whose resets the Reset tab shows. */
 export type ResetProvider = "codex" | "claude";
 export const RESET_PROVIDERS: readonly ResetProvider[] = ["codex", "claude"];
-/** Whose tracker a glance surface shows: the one the Reset tab shows (`app`), or always Codex or Claude. */
-export type SurfaceResetProvider = "app" | ResetProvider;
-export const SURFACE_RESET_PROVIDERS: readonly SurfaceResetProvider[] = ["app", "codex", "claude"];
+/**
+ * Whose tracker a glance surface shows: the one the Reset tab shows (`app`), always Codex or Claude,
+ * or both, Codex's then Claude's (`both`).
+ */
+export type SurfaceResetProvider = "app" | ResetProvider | "both";
+export const SURFACE_RESET_PROVIDERS: readonly SurfaceResetProvider[] = ["app", "codex", "claude", "both"];
+/** What a surface's reset view shows now: one tracker, or both. */
+export type SurfaceResets = ResetProvider | "both";
 
 /**
- * The tracker a surface shows now: its own choice, or the Reset tab's while it follows the app.
- * With the Reset tab hidden there is no switch to follow, so it shows Codex, as before the choice.
+ * The tracker the Reset tab shows. With the tab hidden there is no switch to follow, so it is
+ * Codex, as before the choice.
  */
-export function surfaceResetProvider(surface: SurfaceResetProvider, app: { resetsProvider: ResetProvider; showResetsTab: boolean }): ResetProvider {
-  if (surface !== "app") return surface;
+export function resetsTabProvider(app: { resetsProvider: ResetProvider; showResetsTab: boolean }): ResetProvider {
   return app.showResetsTab ? app.resetsProvider : "codex";
+}
+
+/**
+ * What a surface shows now: its own choice, or the Reset tab's while it follows the app. Both does
+ * not follow the Reset tab, so it stays both while the tab is hidden.
+ */
+export function surfaceResetProvider(surface: SurfaceResetProvider, app: { resetsProvider: ResetProvider; showResetsTab: boolean }): SurfaceResets {
+  return surface === "app" ? resetsTabProvider(app) : surface;
+}
+
+/** Whether a surface showing `choice` draws the Claude tracker. */
+export function readsClaudeResets(choice: SurfaceResetProvider): boolean {
+  return choice === "claude" || choice === "both";
 }
 /** More banked resets than this marked as applied are forgotten, oldest first. */
 const MAX_USED_BANKED_RESETS = 50;
@@ -100,7 +117,7 @@ export interface GlanceSurfaceSettings {
   resetParts: ResetParts;
   /** The most limits coming back listed, one of `UPCOMING_LIMITS`. */
   upcomingLimit: number;
-  /** Whose reset tracker the reset view shows: the Reset tab's (`app`), Codex (codex-resets.com) or Claude (claude-resets.com). */
+  /** Whose reset tracker the reset view shows: the Reset tab's (`app`), Codex (codex-resets.com), Claude (claude-resets.com) or both. */
   resetsProvider: SurfaceResetProvider;
 }
 

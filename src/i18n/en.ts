@@ -1,5 +1,5 @@
 /** English catalog: the upstream OpenUsage copy, adapted for Windows and Linux. */
-import type { ResetProvider } from "@/model/settings";
+import type { ResetProvider, SurfaceResets } from "@/model/settings";
 import { deviceTimeZone } from "@/model/timeZone";
 import type { Messages, RestoreDay, When } from "./messages";
 import { pricesEn, usageEn } from "./usageEn";
@@ -34,6 +34,9 @@ const VERBS = { resets: "Resets", limit: "Limit", resetExpires: "Reset expires" 
 
 /** Whose resets a tracker follows, as its name reads. */
 const RESET_OWNERS: Readonly<Record<ResetProvider, string>> = { codex: "Codex", claude: "Claude" };
+/** The Resets tab's name, which also names a glance surface's reset view while it shows both trackers. */
+const RESETS_TAB = "Resets";
+const resetOwners = (provider: SurfaceResets) => (provider === "both" ? "Codex or Claude" : RESET_OWNERS[provider]);
 
 function lowerFirst(text: string): string {
   return text.charAt(0).toLowerCase() + text.slice(1);
@@ -131,7 +134,7 @@ export const en: Messages = {
     noAccountsShort: "No accounts yet",
     addAccount: "Add Account",
     tabsLabel: "Dashboard view",
-    tab: (key) => ({ quota: "Limits", tokens: "Tokens", prices: "Prices", benchmark: "Benchmark", resets: "Resets" })[key],
+    tab: (key) => ({ quota: "Limits", tokens: "Tokens", prices: "Prices", benchmark: "Benchmark", resets: RESETS_TAB })[key],
     openChat: (product) => `Open ${product} in the App`,
     trendRange: (days, first, last) => `${days} days, ${first} – ${last}`,
     expiryStatus: (severity) =>
@@ -292,7 +295,7 @@ export const en: Messages = {
     desktopWidgetKindsNote:
       "To keep them separate, add the Resets, Reset Calendar or Coming Back widget; to combine them, add Overview and choose the parts it combines right below.",
     glanceGroup: (group) => ({ closed: "Closed", open: "Open", behavior: "Behavior", content: "Content" })[group],
-    glanceTabName: (view, provider) => ({ quota: "Limits", resets: `${RESET_OWNERS[provider]} Resets`, upcoming: "Coming Back" })[view],
+    glanceTabName: (view, provider) => ({ quota: "Limits", resets: provider === "both" ? RESETS_TAB : `${RESET_OWNERS[provider]} Resets`, upcoming: "Coming Back" })[view],
     glanceTabs: (surface) => (surface === "island" ? "Tabs When Open" : "Overview Widget Shows"),
     glanceTabsNote: (surface) =>
       surface === "island"
@@ -335,7 +338,7 @@ export const en: Messages = {
         rhythm: "Reset rhythm",
       })[part],
     resetPartsSummary: (shown, total) => (shown === total ? "Every part" : `${shown}/${total} parts`),
-    resetPartsOff: (provider) => `No data yet: turn on the Resets tab or ${RESET_OWNERS[provider]} reset notifications.`,
+    resetPartsOff: (provider) => `No data yet: turn on the Resets tab or ${resetOwners(provider)} reset notifications.`,
     upcomingLimit: "Show at Most",
     upcomingLimitOption: (limit) => (limit === 0 ? "All that fit" : `${limit} limits`),
     upcomingNote: "The limits coming back next among the accounts chosen under Limits, soonest first.",

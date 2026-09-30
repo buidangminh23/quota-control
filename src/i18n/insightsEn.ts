@@ -261,6 +261,7 @@ export const insightsEn: InsightsMessages = {
   resetProviderLabel: "Resets of",
   resetProvider: (provider) => (provider === "claude" ? "Claude" : "Codex"),
   resetProviderFollow: "As in the Reset tab",
+  resetProviderBoth: "Both",
   forecastReliability: (verdict, percent, days, resets) =>
     verdict === "better"
       ? `Tried again on ${days} past days (${resets} resets): this estimate was ${percent} closer than the plain average.`

@@ -29,6 +29,7 @@ import {
   type ResetPart,
   type ResetProvider,
   type StripSettings,
+  type SurfaceResets,
   type TaskbarDisplay,
 } from "@/model/settings";
 import { descriptorTitle } from "@/model/widgetData";
@@ -126,7 +127,7 @@ function Disclosure({ title, summary, open, onToggle, children }: { title: strin
 }
 
 /** The views as chips, kept in the popup's tab order, the reset view named after `provider`'s tracker; the last one on cannot be switched off. */
-function TabChips({ tabs, provider, onChange, text }: { tabs: readonly IslandView[]; provider: ResetProvider; onChange: (tabs: IslandView[]) => void; text: SettingsMessages }) {
+function TabChips({ tabs, provider, onChange, text }: { tabs: readonly IslandView[]; provider: SurfaceResets; onChange: (tabs: IslandView[]) => void; text: SettingsMessages }) {
   const toggle = (view: IslandView, on: boolean) => {
     const next = ISLAND_VIEWS.filter((candidate) => (candidate === view ? on : tabs.includes(candidate)));
     if (next.length > 0) onChange(next);
@@ -281,10 +282,14 @@ function AccountPicker({
   );
 }
 
-/** Whether a reset tracker has no data: the Reset tab and that tracker's notifications are both off. */
-function useTrackerOff(provider: ResetProvider): boolean {
+/**
+ * Whether a surface's reset view has no data: the Reset tab is off, and so are the notifications of
+ * the tracker it shows (of both trackers, for a view showing both).
+ */
+function useTrackerOff(provider: SurfaceResets): boolean {
   const settings = useSettings();
-  return !settings.showResetsTab && !settings[TRACKER_NOTIFICATIONS[provider]];
+  const trackers: readonly ResetProvider[] = provider === "both" ? ["codex", "claude"] : [provider];
+  return !settings.showResetsTab && trackers.every((tracker) => !settings[TRACKER_NOTIFICATIONS[tracker]]);
 }
 
 /**
@@ -316,7 +321,7 @@ function ResetEditor({
       <ChipRow label={insights.resetProviderLabel}>
         {SURFACE_RESET_PROVIDERS.map((option) => (
           <Chip key={option} kind="radio" checked={value.resetsProvider === option} onChange={() => onChange({ resetsProvider: option })}>
-            {option === "app" ? insights.resetProviderFollow : insights.resetProvider(option)}
+            {option === "app" ? insights.resetProviderFollow : option === "both" ? insights.resetProviderBoth : insights.resetProvider(option)}
           </Chip>
         ))}
       </ChipRow>

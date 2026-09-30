@@ -5,7 +5,7 @@
 import type { ErrorCategory, LimitResetResult, UpdateFailureReason, UpdateFailureStage } from "@/lib/types";
 import type { PlanTermLeft } from "@/model/planTerm";
 import type { SpecialWing } from "@/model/glance";
-import type { GlanceContent, IslandLayout, IslandStyle, IslandView, ResetPart, ResetProvider, TaskbarDisplay } from "@/model/settings";
+import type { GlanceContent, IslandLayout, IslandStyle, IslandView, ResetPart, SurfaceResets, TaskbarDisplay } from "@/model/settings";
 import type { PriceMessages, UsageMessages } from "./usageMessages";
 
 export type DisplayModeKey = "used" | "remaining";
@@ -234,7 +234,7 @@ export interface SettingsMessages {
   /** The small headings that split a glance card: while closed, while open, how it behaves. */
   glanceGroup(group: "closed" | "open" | "behavior" | "content"): string;
   /** A view's name, as the popup's tab reads; the reset view is named after the tracker the surface shows. */
-  glanceTabName(view: IslandView, provider: ResetProvider): string;
+  glanceTabName(view: IslandView, provider: SurfaceResets): string;
   /** The chips choosing the views: the island's tabs, the Overview widget's parts. */
   glanceTabs(surface: "island" | "widget"): string;
   glanceTabsNote(surface: "island" | "widget"): string;
@@ -263,7 +263,7 @@ export interface SettingsMessages {
   resetPart(part: ResetPart): string;
   resetPartsSummary(shown: number, total: number): string;
   /** Neither the Reset tab nor that tracker's notifications is on, so the tracker has no data. */
-  resetPartsOff(provider: ResetProvider): string;
+  resetPartsOff(provider: SurfaceResets): string;
   upcomingLimit: string;
   upcomingLimitOption(limit: number): string;
   upcomingNote: string;
