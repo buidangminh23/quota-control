@@ -208,6 +208,8 @@ enum GlanceResetTextStyle {
     case heading
     /// 20pt bold: a chance.
     case value
+    /// 20pt bold in the accent blue: a banked reset's time left, under who posted it.
+    case timeLeft
 }
 
 /// Words on a reset card that move with the clock, worded when the card is drawn at the moment
@@ -301,6 +303,12 @@ enum GlanceResetElement {
     case stat(String, String)
     /// The post on X, worded like the Reset tab's link to it.
     case link(String, String)
+    /// Claude against Codex as a table: the columns' headings, then these rows, a measure each.
+    case compareTable(GlanceResetCompare, Range<Int>)
+    /// Claude against Codex month by month, these months: each side's count over its bar `track`
+    /// points high at most (the Reset tab's 30, less on a short widget page), under the months'
+    /// title unless a page too short for both put the title above on its own.
+    case compareMonths(GlanceResetCompare, Range<Int>, titled: Bool, track: CGFloat)
     case divider
     /// An announcement quoted in a box, like the message under the Reset tab's latest reset.
     case message([GlanceResetElement])
@@ -329,26 +337,31 @@ struct GlanceResetRowHead {
     var linkLabel: String
 }
 
-/// The parts of the reset cards the Reset tab folds: the history after its first rows, behind
-/// "Xem thêm N", and how the numbers are worked out, behind "Cách tính".
+/// The parts of the reset cards the Reset tab folds: the history and the limit changes after their
+/// first rows, each behind "Xem thêm N", and how the numbers are worked out, behind "Cách tính".
 enum GlanceResetFold: String {
     case history
+    case changes
     case method
 }
 
-/// Which folds a surface draws open. The island folds the history like the Reset tab does; a
-/// widget pages through every row instead, so the history folds only where `foldsHistory` says.
+/// Which folds a surface draws open. The island folds the lists like the Reset tab does; a widget
+/// pages through every row instead, so the lists fold only where `foldsLists` says.
 struct GlanceResetFolds: Equatable {
     /// The history rows the Reset tab lists before its "Xem thêm N" button.
     static let historyPreview = 8
+    /// The limit changes the Reset tab lists before its "Xem thêm N" button.
+    static let changesPreview = 3
 
-    var foldsHistory = false
+    var foldsLists = false
     var historyOpen = false
+    var changesOpen = false
     var methodOpen = false
 
     func isOpen(_ fold: GlanceResetFold) -> Bool {
         switch fold {
         case .history: return historyOpen
+        case .changes: return changesOpen
         case .method: return methodOpen
         }
     }
@@ -356,6 +369,7 @@ struct GlanceResetFolds: Equatable {
     mutating func toggle(_ fold: GlanceResetFold) {
         switch fold {
         case .history: historyOpen.toggle()
+        case .changes: changesOpen.toggle()
         case .method: methodOpen.toggle()
         }
     }
@@ -410,6 +424,9 @@ struct GlanceResetCardData: Identifiable {
     var accent: Color?
     var look: GlanceResetCardLook = .card
     var elements: [GlanceResetElement]
+    /// A line under the card, like the note the Reset tab puts under a group's card (the limit
+    /// changes'); a widget cutting the card into pages keeps it under the last one.
+    var note: String? = nil
 }
 
 struct GlanceResetPalette {
@@ -439,7 +456,7 @@ struct GlanceResetCardView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private var grouped: Bool {
-        ["forecast", "calendar", "rhythm", "stats", "history"].contains { card.id.hasPrefix($0) }
+        ["forecast", "calendar", "rhythm", "stats", "history", "changes", "compare"].contains { card.id.hasPrefix($0) }
     }
 
     var body: some View {
@@ -481,6 +498,11 @@ struct GlanceResetCardView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 8)
+            }
+            if let note = card.note {
+                GlanceResetElementView(element: .text(note, .secondary), availableWidth: max(1, availableWidth - 16))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 8)
             }
         }
         .frame(width: availableWidth, alignment: .leading)
@@ -622,6 +644,13 @@ struct GlanceResetElementView: View {
             .font(.system(size: 11))
         case .divider:
             Rectangle().fill(palette.separator).frame(height: 0.5)
+        case let .compareTable(compare, rows):
+            ViewThatFits(in: .horizontal) {
+                compareGrid(compare, rows: rows)
+                compareStack(compare, rows: rows)
+            }
+        case let .compareMonths(compare, months, titled, track):
+            compareBars(compare, months: months, titled: titled, track: track)
         case let .link(url, label):
             if let destination = Self.web(url) {
                 Link(destination: destination) {
@@ -695,16 +724,24 @@ struct GlanceResetElementView: View {
     }
 
     private func styled(_ text: String, _ style: GlanceResetTextStyle) -> some View {
-        Text(text)
-            .font(.system(size: Self.size(style), weight: style == .value ? .bold : style == .heading ? .semibold : .regular))
-            .foregroundStyle(style == .secondary || style == .rowPost || style == .status ? Color.secondary : Color.primary)
+        (style == .timeLeft ? Text(text).monospacedDigit() : Text(text))
+            .font(.system(size: Self.size(style), weight: style == .value || style == .timeLeft ? .bold : style == .heading ? .semibold : .regular))
+            .foregroundStyle(ink(style))
             .lineLimit(style == .post ? 4 : style == .rowPost ? 3 : nil)
             .fixedSize(horizontal: false, vertical: true)
     }
 
+    private func ink(_ style: GlanceResetTextStyle) -> Color {
+        switch style {
+        case .secondary, .rowPost, .status: return .secondary
+        case .timeLeft: return palette.blue
+        case .body, .post, .heading, .value: return .primary
+        }
+    }
+
     private static func size(_ style: GlanceResetTextStyle) -> CGFloat {
         switch style {
-        case .value: return 20
+        case .value, .timeLeft: return 20
         case .secondary: return 10
         case .body, .post, .rowPost, .heading, .status: return 11
         }
@@ -772,6 +809,150 @@ struct GlanceResetElementView: View {
         }
     }
 
+    /// The comparison as the Reset tab's table: the two columns headed by each tracker's mark and
+    /// name, as wide as their widest value; the measures take the rest of the width and wrap, with
+    /// a hairline between rows. Offered only while each measure keeps some room of its own.
+    private func compareGrid(_ compare: GlanceResetCompare, rows: Range<Int>) -> some View {
+        let heads = compare.heads
+        return Grid(alignment: .trailing, horizontalSpacing: 10, verticalSpacing: 0) {
+            GridRow {
+                Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                compareHead(heads.claude)
+                compareHead(heads.codex)
+            }
+            .padding(.top, 4)
+            .padding(.bottom, 6)
+            ForEach(Array(rows), id: \.self) { index in
+                if index > rows.lowerBound {
+                    Rectangle().fill(palette.separator).frame(height: 0.5)
+                }
+                let row = compare.rows[index]
+                GridRow(alignment: .firstTextBaseline) {
+                    Text(row.label)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(minWidth: 0, idealWidth: 64, maxWidth: .infinity, alignment: .leading)
+                        .gridColumnAlignment(.leading)
+                    compareValue(row.claude)
+                    compareValue(row.codex)
+                }
+                .padding(.vertical, 4)
+            }
+        }
+        .font(.system(size: 11))
+    }
+
+    /// The comparison where the table has no room: each measure over the two values, each value led
+    /// by its tracker's mark, a hairline between measures.
+    private func compareStack(_ compare: GlanceResetCompare, rows: Range<Int>) -> some View {
+        let heads = compare.heads
+        return VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(rows), id: \.self) { index in
+                if index > rows.lowerBound {
+                    Rectangle().fill(palette.separator).frame(height: 0.5)
+                }
+                let row = compare.rows[index]
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.label).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 10) {
+                            compareSide(heads.claude, row.claude)
+                            compareSide(heads.codex, row.codex)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            compareSide(heads.claude, row.claude)
+                            compareSide(heads.codex, row.codex)
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+        .font(.system(size: 11))
+    }
+
+    private func compareHead(_ column: GlanceResetCompare.Column) -> some View {
+        HStack(spacing: 4) {
+            ProviderMark(mark: column.mark)
+                .foregroundStyle(column.tint)
+                .frame(width: 12, height: 12)
+            Text(column.name)
+        }
+        .font(.system(size: 10, weight: .semibold))
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .fixedSize()
+    }
+
+    private func compareValue(_ value: String) -> some View {
+        Text(value).fontWeight(.semibold).monospacedDigit().lineLimit(1).fixedSize()
+    }
+
+    private func compareSide(_ column: GlanceResetCompare.Column, _ value: String) -> some View {
+        HStack(spacing: 4) {
+            ProviderMark(mark: column.mark)
+                .foregroundStyle(column.tint)
+                .frame(width: 10, height: 10)
+            compareValue(value)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(column.name) \(value)")
+    }
+
+    /// The months as the Reset tab draws them: a pair of bars a month in each tracker's color,
+    /// scaled to the busiest month of all, each side's count over its bar (none for an empty one)
+    /// and the month's name under them.
+    private func compareBars(_ compare: GlanceResetCompare, months: Range<Int>, titled: Bool, track: CGFloat) -> some View {
+        let heads = compare.heads
+        let busiest = CGFloat(compare.busiestMonth)
+        let count = { (value: Int) in
+            Text(value > 0 ? "\(value)" : " ")
+                .font(.system(size: 8.5))
+                .monospacedDigit()
+                .foregroundStyle(palette.tertiary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(maxWidth: .infinity)
+        }
+        let bar = { (value: Int, color: Color) in
+            UnevenRoundedRectangle(topLeadingRadius: 2, topTrailingRadius: 2)
+                .fill(color)
+                .frame(height: max(1, track * (CGFloat(value) / busiest * 100).rounded() / 100))
+                .frame(maxWidth: .infinity, maxHeight: track, alignment: .bottom)
+        }
+        return VStack(alignment: .leading, spacing: 4) {
+            if titled {
+                Text(compare.monthsTitle).font(.system(size: 10)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(alignment: .bottom, spacing: 4) {
+                ForEach(Array(months), id: \.self) { index in
+                    let month = compare.months[index]
+                    VStack(spacing: 2) {
+                        HStack(spacing: 2) {
+                            count(month.claude)
+                            count(month.codex)
+                        }
+                        .frame(height: 11)
+                        HStack(alignment: .bottom, spacing: 2) {
+                            bar(month.claude, heads.claude.tint)
+                            bar(month.codex, heads.codex.tint)
+                        }
+                        .frame(height: track)
+                        Text(month.label)
+                            .font(.system(size: 8.5))
+                            .foregroundStyle(palette.tertiary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(compare.monthsTitle): \(months.map { compare.months[$0].summary }.joined(separator: "; "))")
+        }
+    }
+
     @ViewBuilder
     private func rowAuthor(_ head: GlanceResetRowHead) -> some View {
         if let author = head.author {
@@ -834,11 +1015,11 @@ struct GlanceResetElementView: View {
             .fixedSize()
     }
 
-    /// A fold's row: the history's "Xem thêm N" in the accent color, or "Cách tính" with its chevron.
+    /// A fold's row: a list's "Xem thêm N" in the accent color, or "Cách tính" with its chevron.
     @ViewBuilder
     private func foldLabel(_ fold: GlanceResetFold, _ label: String, _ open: Bool) -> some View {
         switch fold {
-        case .history:
+        case .history, .changes:
             Text(label)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(palette.blue)
@@ -960,6 +1141,9 @@ enum GlanceResetCards {
         if let stale = resets.stale {
             add("stale", "", [.text(stale, .secondary)], look: .plain)
         }
+        if let notices = resets.presentation?.notices, !notices.isEmpty {
+            add("notices", "", notices.map { .text($0, .secondary) }, look: .plain)
+        }
         if let presentation = resets.presentation {
             let words = GlanceResetWords(locale: presentation.locale)
             if let latest = presentation.latest {
@@ -980,13 +1164,15 @@ enum GlanceResetCards {
             let quoted = presentation.latest?.excerpt != nil
             for status in presentation.statuses(at: now) {
                 let repeats = quoted && status.sameAsLatest == true
+                let banked = status.kind == "banked"
                 var elements: [GlanceResetElement] = []
                 let metadata = status.liveMetadata(units: units)
                 if status.kind == "watch", metadata.count > 1 { elements.append(metadata[0]) }
                 if let author = status.author, !repeats { elements.append(.author(author, presentation.avatar(for: author))) }
+                if banked, let due = status.liveDue(units: units, style: .timeLeft) { elements.append(due) }
                 if let excerpt = status.excerpt, !repeats { elements.append(.text(excerpt, .post)) }
                 elements += status.kind == "watch" && metadata.count > 1 ? Array(metadata.dropFirst()) : metadata
-                if let due = status.liveDue(units: units) { elements.append(due) }
+                if !banked, let due = status.liveDue(units: units) { elements.append(due) }
                 if let url = status.url { elements.append(.link(url, words.openPost)) }
                 add(status.id, status.title, elements, accent: accent(status.kind))
             }
@@ -1035,6 +1221,16 @@ enum GlanceResetCards {
             if !presentation.history.isEmpty {
                 add("history", presentation.historyTitle, history(presentation, folds: folds, words: words), look: .list(inset: 0))
             }
+            if let changes = presentation.changes, !changes.isEmpty {
+                add("changes", presentation.changesTitle ?? "", self.changes(changes, presentation, folds: folds, words: words), look: .list(inset: 0))
+                if let note = presentation.changesNote, !note.isEmpty { cards[cards.count - 1].note = note }
+            }
+            if let compare = presentation.compare, !compare.rows.isEmpty {
+                var elements: [GlanceResetElement] = [.compareTable(compare, 0..<compare.rows.count)]
+                if !compare.months.isEmpty { elements.append(.compareMonths(compare, 0..<compare.months.count, titled: true, track: 30)) }
+                elements.append(.text(compare.since, .secondary))
+                add("compare", compare.title, elements)
+            }
             if let fetched = presentation.fetched {
                 add("fetched", "", [.live(.countdown(fetched, units), .status)], look: .plain)
             }
@@ -1071,15 +1267,9 @@ enum GlanceResetCards {
     }
 
     /// The Reset tab's history as one list: a row per reset between hairlines, its head line with
-    /// who posted, the kind and when, then its words and notes. Where the history folds, the first
-    /// rows come before a button for the rest, as in the tab.
+    /// who posted, the kind and when, then its words and notes.
     private static func history(_ presentation: GlanceResetPresentation, folds: GlanceResetFolds, words: GlanceResetWords) -> [GlanceResetElement] {
-        let preview = GlanceResetFolds.historyPreview
-        let folding = folds.foldsHistory && presentation.history.count > preview
-        let shown = folding && !folds.historyOpen ? Array(presentation.history.prefix(preview)) : presentation.history
-        var elements: [GlanceResetElement] = []
-        for item in shown {
-            if !elements.isEmpty { elements.append(.divider) }
+        list(presentation.history, fold: .history, preview: GlanceResetFolds.historyPreview, folds: folds, words: words) { item in
             let head = GlanceResetRowHead(
                 author: item.author,
                 avatar: item.author.map { presentation.avatar(for: $0) } ?? "",
@@ -1090,13 +1280,41 @@ enum GlanceResetCards {
                 url: item.url,
                 linkLabel: words.openPost
             )
-            var lines: [GlanceResetElement] = [.rowHead(head), .text(item.excerpt, .rowPost)]
-            lines += [item.scope, item.observed].compactMap { $0 }.map { .text($0, .secondary) }
-            elements.append(.row(lines))
+            return [.rowHead(head), .text(item.excerpt, .rowPost)] + [item.scope, item.observed].compactMap { $0 }.map { .text($0, .secondary) }
+        }
+    }
+
+    /// The Reset tab's limit changes as one list like the history's, each row badged with the
+    /// changes' own word in place of a reset's kind.
+    private static func changes(_ changes: [GlanceResetChangeItem], _ presentation: GlanceResetPresentation, folds: GlanceResetFolds, words: GlanceResetWords) -> [GlanceResetElement] {
+        list(changes, fold: .changes, preview: GlanceResetFolds.changesPreview, folds: folds, words: words) { item in
+            let head = GlanceResetRowHead(
+                author: item.author,
+                avatar: item.author.map { presentation.avatar(for: $0) } ?? "",
+                kind: "change",
+                kindLabel: presentation.changeBadge ?? "",
+                provisional: item.provisional,
+                when: item.when,
+                url: item.url,
+                linkLabel: words.openPost
+            )
+            return [.rowHead(head), .text(item.excerpt, .rowPost)] + [item.scope].compactMap { $0 }.map { .text($0, .secondary) }
+        }
+    }
+
+    /// A list of rows between hairlines. Where the lists fold, the first `preview` rows come before
+    /// a button for the rest, as in the tab.
+    private static func list<Item>(_ items: [Item], fold: GlanceResetFold, preview: Int, folds: GlanceResetFolds, words: GlanceResetWords, row: (Item) -> [GlanceResetElement]) -> [GlanceResetElement] {
+        let folding = folds.foldsLists && items.count > preview
+        let open = folds.isOpen(fold)
+        let shown = folding && !open ? Array(items.prefix(preview)) : items
+        var elements: [GlanceResetElement] = []
+        for item in shown {
+            if !elements.isEmpty { elements.append(.divider) }
+            elements.append(.row(row(item)))
         }
         if folding {
-            let label = folds.historyOpen ? words.showLess : words.showMore(presentation.history.count - preview)
-            elements.append(.fold(.history, label, folds.historyOpen))
+            elements.append(.fold(fold, open ? words.showLess : words.showMore(items.count - preview), open))
         }
         return elements
     }

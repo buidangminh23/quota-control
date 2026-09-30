@@ -794,10 +794,11 @@ struct GlanceResetStatusCard: Decodable, Equatable, Identifiable {
         return [.live(.countdownThen(announced, units, scheduledMeta), .secondary)]
     }
 
-    /// The time left to the card's stated time (or deadline), then how long it is past it.
-    func liveDue(units: GlanceUnits) -> GlanceResetElement? {
-        guard let dueCountdown else { return due.map { .text($0, .secondary) } }
-        return .live(.dueThenOverdue(dueCountdown, overdueCountdown, units), .secondary)
+    /// The time left to the card's stated time (or deadline), then how long it is past it, in
+    /// `style`: a meta line's, or the big accent line a banked reset's time left is.
+    func liveDue(units: GlanceUnits, style: GlanceResetTextStyle = .secondary) -> GlanceResetElement? {
+        guard let dueCountdown else { return due.map { .text($0, style) } }
+        return .live(.dueThenOverdue(dueCountdown, overdueCountdown, units), style)
     }
 }
 
@@ -843,12 +844,78 @@ struct GlanceResetHistoryItem: Decodable, Equatable, Identifiable {
     var provisional: String? = nil
 }
 
+/// A limit change (Claude): a row of the list the Reset tab keeps apart from the history, since it
+/// reset nothing.
+struct GlanceResetChangeItem: Decodable, Equatable, Identifiable {
+    var id: String
+    var when: String
+    var excerpt: String
+    var author: GlanceResetAuthor?
+    var url: String?
+    /// Who the change covered.
+    var scope: String?
+    /// `Chưa kiểm chứng` / `Not reviewed`, while the site has not reviewed the entry.
+    var provisional: String?
+}
+
+/// Claude against Codex over the time both were tracked, the last card of the Reset tab's Claude
+/// view (see `GlanceResetCompare` in src/model/glance.ts).
+struct GlanceResetCompare: Decodable, Equatable {
+    var title: String
+    /// `Tính các lần reset sau …`, the note under the months.
+    var since: String
+    var columns: Columns?
+    var rows: [Row]
+    var monthsTitle: String
+    var months: [Month]
+
+    /// One side's column heading: the tracker's name beside its mark, in its brand color.
+    struct Column: Decodable, Equatable {
+        var name: String
+        var color: String
+        var mark: GlanceMark?
+
+        var tint: Color { Color(glanceHex: color) ?? .primary }
+    }
+
+    struct Columns: Decodable, Equatable {
+        var claude: Column
+        var codex: Column
+    }
+
+    struct Row: Decodable, Equatable {
+        var label: String
+        var claude: String
+        var codex: String
+    }
+
+    struct Month: Decodable, Equatable {
+        var label: String
+        var claude: Int
+        var codex: Int
+        /// What VoiceOver reads for the month: `T9: Claude 3, Codex 2`.
+        var summary: String
+    }
+
+    /// The column headings, named and colored like the Reset tab's when an older document has none.
+    var heads: Columns {
+        columns ?? Columns(claude: Column(name: "Claude", color: "#DE7356"), codex: Column(name: "Codex", color: "#10A37F"))
+    }
+
+    /// The most resets either side had in a month, which the tallest bar stands for.
+    var busiestMonth: Int {
+        max(1, months.flatMap { [$0.claude, $0.codex] }.max() ?? 0)
+    }
+}
+
 struct GlanceResetPresentation: Decodable, Equatable {
     var locale: String
     var authorAvatar: String
     /// The one author `authorAvatar` pictures (Claude: `@ClaudeDevs`); absent, it pictures every
     /// author (Codex).
     var avatarHandle: String? = nil
+    /// Lines above the cards (Claude): the site is behind, or only its published copy could be read.
+    var notices: [String]? = nil
     var latest: GlanceResetLatestPresentation?
     var statuses: [GlanceResetStatusCard]
     var quietTitle: String? = nil
@@ -857,6 +924,13 @@ struct GlanceResetPresentation: Decodable, Equatable {
     var stats: [GlanceResetStat]
     var historyTitle: String
     var history: [GlanceResetHistoryItem]
+    /// The limit changes (Claude), under their heading, each row's badge word, then the note under them.
+    var changesTitle: String? = nil
+    var changeBadge: String? = nil
+    var changes: [GlanceResetChangeItem]? = nil
+    var changesNote: String? = nil
+    /// Claude against Codex (Claude), once the Codex history is at hand.
+    var compare: GlanceResetCompare? = nil
     var patternNote: String
     /// When the copy shown was read (`Tải 5 phút trước`), the line above the source.
     var fetched: GlanceCountdown? = nil

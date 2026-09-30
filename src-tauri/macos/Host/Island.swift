@@ -210,8 +210,8 @@ final class IslandController {
         relayout(animated: true)
     }
 
-    /// A click on a fold of the reset view (the history's "Xem thêm N", "Cách tính") opens or
-    /// closes it, and the open island grows or shrinks to fit.
+    /// A click on a fold of the reset view (a list's "Xem thêm N", "Cách tính") opens or closes
+    /// it, and the open island grows or shrinks to fit.
     func toggleResetFold(_ fold: GlanceResetFold) {
         guard model.mode == .expanded else { return }
         pendingCollapse?.cancel()
@@ -444,7 +444,7 @@ final class IslandModel: ObservableObject {
     /// The tab last clicked on the open island; it stays picked while the island closes and opens.
     @Published var selectedTab: GlanceView?
     /// The reset view's folds as last clicked, kept here so the open island is measured with them.
-    @Published var resetFolds = GlanceResetFolds(foldsHistory: true)
+    @Published var resetFolds = GlanceResetFolds(foldsLists: true)
     /// Where the open island's tabs sit, in the panel's top-left coordinates.
     var tabFrames: [GlanceView: CGRect] = [:]
     var footerFrame: CGRect = .zero

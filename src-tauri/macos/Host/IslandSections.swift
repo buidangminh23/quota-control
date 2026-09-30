@@ -114,8 +114,9 @@ struct IslandDetails: View {
     var selected: GlanceView?
     var availableWidth: CGFloat = IslandGeometry.expandedWidth
     var viewportHeight: CGFloat?
-    /// The reset view's folds, open or closed; the history folds after its first rows, as in the tab.
-    var resetFolds = GlanceResetFolds(foldsHistory: true)
+    /// The reset view's folds, open or closed; the history and the limit changes fold after their
+    /// first rows, as in the tab.
+    var resetFolds = GlanceResetFolds(foldsLists: true)
     /// A click on a fold of the reset view; the measuring copy leaves it out.
     var onResetFold: ((GlanceResetFold) -> Void)?
 
@@ -477,7 +478,7 @@ struct IslandResetsSection: View {
     let now: Date
     let budget: IslandBudget
     var availableWidth: CGFloat = 340
-    var folds = GlanceResetFolds(foldsHistory: true)
+    var folds = GlanceResetFolds(foldsLists: true)
     var onFold: ((GlanceResetFold) -> Void)?
     /// Names the tracker above the cards, for an island without a tab bar to name it.
     var showsHeading = false

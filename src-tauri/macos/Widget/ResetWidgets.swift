@@ -438,6 +438,7 @@ enum ResetWidgetPagination {
                 switch element {
                 case let .chances(chances): return width < 250 && chances.count > 1
                 case let .calendar(_, weeks, _): return CGFloat(weeks.count) * 9 > width - 46
+                case let .compareMonths(_, months, _, _): return months.count > monthsPerPiece(width: width)
                 default: return false
                 }
             }
@@ -466,7 +467,20 @@ enum ResetWidgetPagination {
                     }
                 }
             }
-            if !current.elements.isEmpty { result.append(current) }
+            if !current.elements.isEmpty {
+                if let note = card.note {
+                    var noted = current
+                    noted.note = note
+                    if fits(noted, width: width, height: height) {
+                        current = noted
+                    } else {
+                        result.append(current)
+                        part += 1
+                        current = GlanceResetCardData(id: card.id + "|\(part)", title: "", look: .plain, elements: [.text(note, .secondary)])
+                    }
+                }
+                result.append(current)
+            }
         }
         cache[key] = result
         keys.append(key)
@@ -544,6 +558,9 @@ enum ResetWidgetPagination {
             if case let .chances(chances) = element, chances.count > 1 && width < 250 {
                 return chances.flatMap { pieces(.chances([$0]), card: card, width: width, height: height) }
             }
+            if case let .compareMonths(compare, months, titled, track) = element, months.count > monthsPerPiece(width: width) {
+                return monthPieces(compare, months: months, titled: titled, track: track, width: width)
+            }
             return [element]
         }
         switch element {
@@ -560,6 +577,21 @@ enum ResetWidgetPagination {
             }
         case let .calendar(calendar, weeks, days):
             return calendarPieces(calendar, weeks: weeks, days: days, card: card, width: width, height: height)
+        case let .compareTable(compare, rows):
+            return comparePieces(compare, rows: rows, card: card, width: width, height: height)
+        case let .compareMonths(compare, months, titled, track):
+            for shorter in [24, 18].map(CGFloat.init) where shorter < track {
+                var candidate = card
+                candidate.elements = [.compareMonths(compare, months, titled: titled, track: shorter)]
+                if fits(candidate, width: width, height: height) {
+                    return pieces(.compareMonths(compare, months, titled: titled, track: shorter), card: card, width: width, height: height)
+                }
+            }
+            if titled {
+                return pieces(.text(compare.monthsTitle, .secondary), card: card, width: width, height: height)
+                    + pieces(.compareMonths(compare, months, titled: false, track: track), card: card, width: width, height: height)
+            }
+            return [element]
         case let .legend(legend, items):
             return items.map { .legend(legend, [$0]) }
         case let .rhythm(title, buckets):
@@ -649,6 +681,37 @@ enum ResetWidgetPagination {
             best = space + 1
         }
         return best
+    }
+
+    /// How many months of the comparison sit side by side at `width`, each wide enough for its two
+    /// counts, as a column of the Reset tab holds two two-digit counts.
+    static func monthsPerPiece(width: CGFloat) -> Int {
+        max(1, Int((width - 24 + 4) / 26))
+    }
+
+    private static func monthPieces(_ compare: GlanceResetCompare, months: Range<Int>, titled: Bool, track: CGFloat, width: CGFloat) -> [GlanceResetElement] {
+        let count = monthsPerPiece(width: width)
+        return stride(from: months.lowerBound, to: months.upperBound, by: count).map { first in
+            .compareMonths(compare, first..<min(first + count, months.upperBound), titled: titled, track: track)
+        }
+    }
+
+    /// The comparison's table as tables that each fit a page, the columns' headings on every one.
+    private static func comparePieces(_ compare: GlanceResetCompare, rows: Range<Int>, card: GlanceResetCardData, width: CGFloat, height: CGFloat) -> [GlanceResetElement] {
+        var result: [GlanceResetElement] = []
+        var first = rows.lowerBound
+        while first < rows.upperBound {
+            var end = first + 1
+            while end < rows.upperBound {
+                var candidate = card
+                candidate.elements = [.compareTable(compare, first..<(end + 1))]
+                if !fits(candidate, width: width, height: height) { break }
+                end += 1
+            }
+            result.append(.compareTable(compare, first..<end))
+            first = end
+        }
+        return result
     }
 
     private static func calendarPieces(_ calendar: GlanceResetCalendar, weeks: Range<Int>, days: Range<Int>, card: GlanceResetCardData, width: CGFloat, height: CGFloat) -> [GlanceResetElement] {
