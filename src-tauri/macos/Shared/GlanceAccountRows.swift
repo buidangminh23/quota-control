@@ -161,7 +161,7 @@ struct GlanceResetRow: Decodable, Equatable {
     /// today.
     func changes(after now: Date, calendar: Calendar = .current) -> [Date] {
         var moments = [countdown?.at, hideAt].compactMap { $0 }
-        if let at, GlanceDays.between(now, at, calendar: calendar) <= 2, GlanceDays.between(now, at, calendar: calendar) > 0,
+        if let at, (1...2).contains(GlanceDays.between(now, at, calendar: calendar)),
            let midnight = GlanceDays.nextMidnight(after: now, calendar: calendar) {
             moments.append(midnight)
         }
