@@ -1045,6 +1045,13 @@ struct GlanceResetStatusCard: Decodable, Equatable, Identifiable {
     /// The card is about the latest reset (a Claude banked reset), whose card already quotes the post
     /// while it is drawn with it.
     var sameAsLatest: Bool? = nil
+    /// The banked reset its buttons mark as used or take the mark off (Claude); absent where no
+    /// button could act on it.
+    var resetId: String? = nil
+    /// The user marked the banked reset as used (Claude): the card folds to the line saying so.
+    var used: Bool? = nil
+    /// Where and how to apply the banked reset (Claude), after the card's meta lines.
+    var how: String? = nil
 
     /// The card's meta lines: a scheduled card's first one says, as time passes, how long ago the
     /// reset was announced; the others stay as the popup wrote them.
@@ -1177,6 +1184,8 @@ struct GlanceResetPresentation: Decodable, Equatable {
     var notices: [String]? = nil
     var latest: GlanceResetLatestPresentation?
     var statuses: [GlanceResetStatusCard]
+    /// The words of the banked cards' buttons (Claude), while one of `statuses` is a banked card.
+    var bankedActions: GlanceBankedActions? = nil
     var quietTitle: String? = nil
     var forecast: GlanceResetForecastPresentation
     var statsTitle: String

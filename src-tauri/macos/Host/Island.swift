@@ -22,7 +22,7 @@ final class IslandController {
     private var pendingCollapse: DispatchWorkItem?
     private var pendingShrink: DispatchWorkItem?
     private var alertTimer: DispatchWorkItem?
-    private var redeemTimer: DispatchWorkItem?
+    private var actionTimer: DispatchWorkItem?
     private var seenAlerts: Set<String> = []
     private var hovering = false
     /// While the popup is open under the island, the island stays closed so it never covers it.
@@ -62,6 +62,10 @@ final class IslandController {
         let redeems = model.redeems.pruned(for: document, now: Date())
         if redeems != model.redeems {
             model.redeems = redeems
+        }
+        let banked = model.banked.pruned(for: document, now: Date())
+        if banked != model.banked {
+            model.banked = banked
         }
         relayout(animated: true)
         if let alert = document.alert, seenAlerts.insert(alert.id).inserted, document.island.enabled, document.island.alerts {
@@ -253,30 +257,71 @@ final class IslandController {
             IslandActions.shared.send(redeem.request)
             let until = now.addingTimeInterval(IslandRedeemState.sentLifetime)
             state.sent[redeem.providerId] = IslandRedeemState.Mark(reading: reading, until: until)
-            scheduleRedeemExpiry(until)
         }
-        withAnimation(Self.spring) {
+        animating {
             model.redeems = state
         }
+        scheduleActionExpiry()
         relayout(animated: true)
     }
 
-    /// Puts a button back once its `Đang dùng…` has run its time without the count changing.
-    private func scheduleRedeemExpiry(_ until: Date) {
-        redeemTimer?.cancel()
+    /// A press on a banked card's "Tôi đã dùng rồi", on the confirmation it shows in its place, or on
+    /// "Hoàn tác", as the Reset tab's card takes it: marking asks first and "Hủy" puts the button back;
+    /// "Xác nhận", still asked of a card that reads as it did, and "Hoàn tác" send the request, and the
+    /// card is drawn as asked until the document says so or `GlanceBankedMarks.sentLifetime` passes.
+    /// The island stays open, and grows or shrinks to fit.
+    func bankedAction(_ request: GlanceActionRequest, _ step: GlanceActionStep) {
+        guard model.mode == .expanded, case let .markBankedReset(resetId, wantsUsed) = request,
+              let card = model.document?.bankedCard(resetId: resetId), (card.used == true) != wantsUsed
+        else { return }
+        pendingCollapse?.cancel()
+        let now = Date()
+        let mark = GlanceBankedMarks.Mark(resetId: resetId, used: card.used == true)
+        var state = model.banked.pruned(for: model.document, now: now)
+        switch step {
+        case .press where request.needsConfirmation:
+            state.confirming = mark
+        case .cancel:
+            state.confirming = nil
+        case .press, .confirm:
+            if step == .confirm {
+                guard state.confirming == mark else { break }
+                state.confirming = nil
+            }
+            IslandActions.shared.send(request)
+            state.sent[resetId] = GlanceBankedMarks.Mark(resetId: resetId, used: mark.used, until: now.addingTimeInterval(GlanceBankedMarks.sentLifetime))
+        }
+        animating {
+            model.banked = state
+        }
+        scheduleActionExpiry()
+        relayout(animated: true)
+    }
+
+    /// Puts the buttons back once what they sent has run its time without the document catching up:
+    /// a `Đang dùng…` whose count did not change, a banked card the app has not marked yet.
+    private func scheduleActionExpiry() {
+        actionTimer?.cancel()
+        let untils = model.redeems.sent.values.compactMap(\.until) + model.banked.sent.values.compactMap(\.until)
+        guard let next = untils.min() else { return }
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                let state = self.model.redeems.pruned(for: self.model.document, now: Date())
-                guard state != self.model.redeems else { return }
-                withAnimation(Self.spring) {
-                    self.model.redeems = state
+                let now = Date()
+                let redeems = self.model.redeems.pruned(for: self.model.document, now: now)
+                let banked = self.model.banked.pruned(for: self.model.document, now: now)
+                if redeems != self.model.redeems || banked != self.model.banked {
+                    self.animating {
+                        self.model.redeems = redeems
+                        self.model.banked = banked
+                    }
+                    self.relayout(animated: true)
                 }
-                self.relayout(animated: true)
+                self.scheduleActionExpiry()
             }
         }
-        redeemTimer = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, until.timeIntervalSinceNow) + 0.1, execute: work)
+        actionTimer = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, next.timeIntervalSinceNow) + 0.1, execute: work)
     }
 
     /// A click on a fold of the reset view (a list's "Xem thêm N", "Cách tính") opens or closes
@@ -330,6 +375,9 @@ final class IslandController {
         guard mode == .compact else { return }
         if !model.redeems.confirming.isEmpty {
             model.redeems.confirming = [:]
+        }
+        if model.banked.confirming != nil {
+            model.banked.confirming = nil
         }
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
@@ -527,6 +575,8 @@ final class IslandModel: ObservableObject {
     @Published var resetFolds = GlanceResetFolds(foldsLists: true)
     /// Where each account's "Dùng 1 lượt" stands, kept here so the open island is measured with it.
     @Published var redeems = IslandRedeemState()
+    /// Where the banked cards' buttons stand, kept here so the open island is measured with them.
+    @Published var banked = GlanceBankedMarks()
     /// Where the open island's tabs sit, in the panel's top-left coordinates.
     var tabFrames: [GlanceView: CGRect] = [:]
     var footerFrame: CGRect = .zero
@@ -594,7 +644,7 @@ final class IslandModel: ObservableObject {
         let view = IslandDetails(
             document: document, now: now, topInset: geometry.detailsInset,
             budget: .full, selected: selectedTab, availableWidth: width, resetFolds: resetFolds,
-            redeems: redeems
+            redeems: redeems, banked: banked
         )
         .frame(width: width)
         .fixedSize(horizontal: false, vertical: true)
@@ -817,7 +867,9 @@ struct IslandRootView: View {
                     resetFolds: model.resetFolds,
                     onResetFold: { fold in IslandController.shared.toggleResetFold(fold) },
                     redeems: model.redeems,
-                    onRedeem: { step, redeem in IslandController.shared.redeem(step, redeem) }
+                    onRedeem: { step, redeem in IslandController.shared.redeem(step, redeem) },
+                    banked: model.banked,
+                    onBanked: { request, step in IslandController.shared.bankedAction(request, step) }
                 )
             }
             .transition(opening)

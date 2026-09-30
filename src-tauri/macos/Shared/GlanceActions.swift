@@ -1,5 +1,13 @@
 import Foundation
 
+/// A press on a button of the island or a widget: the first one, or the "Xác nhận" / "Hủy" that
+/// follows it for a request that waits for a confirmation (`GlanceActionRequest.needsConfirmation`).
+enum GlanceActionStep: String {
+    case press
+    case confirm
+    case cancel
+}
+
 /// What a button on the island or a widget asks the app to do. The surface asks the user to confirm
 /// first wherever the popup's own button does; the popup then checks the request and does it with
 /// the code its buttons run (`src/glance/glanceActions.ts`), so a press has the same effect wherever
@@ -125,7 +133,100 @@ enum GlanceRedeemPhase: Equatable {
     case redeeming
 }
 
+/// The words of a Claude banked card's buttons and of the confirmation "Tôi đã dùng rồi" asks for
+/// (`GlanceBankedActions` in `src/model/glance.ts`), as the Reset tab's `BankedCards` words them.
+struct GlanceBankedActions: Decodable, Equatable {
+    /// `Tôi đã dùng rồi`.
+    var markUsed: String
+    /// The confirmation's title.
+    var title: String
+    /// The confirmation's words.
+    var message: String
+    /// `Xác nhận`, filled with the accent color.
+    var confirm: String
+    /// `Hủy`.
+    var cancel: String
+    /// What a card marked as used folds to.
+    var used: String
+    /// `Hoàn tác`, which takes the mark off.
+    var undo: String
+}
+
+/// Where a banked card's buttons stand: ready, asking "Xác nhận" or "Hủy", or sent, drawn as the
+/// user asked (folded after "Xác nhận", open again after "Hoàn tác") until the document says so.
+enum GlanceBankedPhase: Equatable {
+    case ready
+    case confirming
+    case sent
+}
+
+/// The banked cards a surface is acting on (Claude): the one asking for its confirmation, and those
+/// whose request went to the app, each with whether its card read as used when it was pressed. A
+/// mark only counts while the card still reads that way: once the document catches up, or the card
+/// goes, the card is drawn as the document says.
+struct GlanceBankedMarks: Equatable {
+    struct Mark: Equatable {
+        var resetId: String
+        var used: Bool
+        var until: Date? = nil
+    }
+
+    static let sentLifetime: TimeInterval = 30
+
+    var confirming: Mark?
+    var sent: [String: Mark] = [:]
+
+    /// Where the buttons of the card about `resetId`, now reading `used`, stand at `now`.
+    func phase(resetId: String, used: Bool, now: Date) -> GlanceBankedPhase {
+        if let mark = sent[resetId], mark.used == used, (mark.until ?? .distantFuture) > now { return .sent }
+        if let confirming, confirming.resetId == resetId, confirming.used == used { return .confirming }
+        return .ready
+    }
+
+    /// The marks still standing for `document`: a mark goes once its card reads otherwise, is gone,
+    /// or its time ran out.
+    func pruned(for document: GlanceDocument?, now: Date) -> GlanceBankedMarks {
+        let reads = { (mark: Mark) in document?.bankedCard(resetId: mark.resetId).map { ($0.used == true) == mark.used } ?? false }
+        return GlanceBankedMarks(
+            confirming: confirming.flatMap { reads($0) ? $0 : nil },
+            sent: sent.filter { reads($0.value) && ($0.value.until ?? .distantFuture) > now }
+        )
+    }
+
+    /// The marks without the confirmation, for a surface that draws it apart from the card.
+    var withoutConfirmation: GlanceBankedMarks {
+        GlanceBankedMarks(confirming: nil, sent: sent)
+    }
+}
+
 extension GlanceDocument {
+    /// The Claude banked card about `resetId`, in whichever tracker the document carries it.
+    func bankedCard(resetId: String) -> GlanceResetStatusCard? {
+        [resets, claudeResets]
+            .compactMap { $0?.presentation?.statuses }
+            .joined()
+            .first { $0.kind == "banked" && $0.resetId == resetId }
+    }
+
+    /// What a press on `request`'s button is checked against when its confirmation or its request
+    /// lands: the count of resets on a Codex row, whether a banked card reads as used; `nil` where the
+    /// button is gone.
+    func actionReading(for request: GlanceActionRequest) -> String? {
+        switch request {
+        case .redeemLimitReset:
+            return redeemReading(for: request)
+        case let .markBankedReset(resetId, _):
+            return bankedCard(resetId: resetId).map { Self.bankedReading(used: $0.used == true) }
+        case .openResets:
+            return nil
+        }
+    }
+
+    /// A banked card's state as `actionReading(for:)` words it.
+    static func bankedReading(used: Bool) -> String {
+        used ? "used" : "open"
+    }
+
     /// The row carrying `providerId`'s redemption button, on the island or the widget.
     func redeemRow(providerId: String) -> GlanceMetric? {
         (providers + widget.providers)

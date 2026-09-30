@@ -284,7 +284,8 @@ struct ResetWidgetPager: View {
         let key = "reset-page.\(namespace)\(tracker).\(family.rawValue)"
         let foldKey = { (fold: GlanceResetFold) in "reset-\(fold.rawValue).\(namespace)\(tracker).\(family.rawValue)" }
         let folds = GlanceResetFolds(methodOpen: UserDefaults.standard.bool(forKey: foldKey(.method)))
-        let cards = GlanceResetCards.make(resets: resets, units: document.labels.units, now: now, folds: folds)
+        let marks = WidgetPendingAction.bankedMarks(now: now).pruned(for: document, now: now).withoutConfirmation
+        let cards = GlanceResetCards.make(resets: resets, units: document.labels.units, now: now, folds: folds, banked: marks)
         let roomy = family == .systemLarge || family == .systemExtraLarge
         let headed: Set<String> = roomy ? Set([cards.first?.id, initialCard].compactMap { $0 }) : []
         let heading = roomy ? ResetWidgetPagination.headingSpace(resets, width: size.width) : 0
@@ -311,6 +312,9 @@ struct ResetWidgetPager: View {
                     }
                     .environment(\.glanceResetFoldAction, GlanceResetFoldAction { fold, open, label in
                         AnyView(Button(intent: ToggleResetWidgetFold(key: foldKey(fold), open: !open)) { label }.buttonStyle(.plain))
+                    })
+                    .environment(\.glanceResetBankedAction, GlanceResetBankedAction { request, step, title, style in
+                        AnyView(Button(intent: PressGlanceAction(request, step: step)) { Text(title) }.buttonStyle(style))
                     })
                     .environment(\.glanceResetNow, now)
                 }

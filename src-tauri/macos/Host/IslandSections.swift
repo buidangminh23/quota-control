@@ -221,6 +221,10 @@ struct IslandDetails: View {
     var redeems = IslandRedeemState()
     /// A press on a "Dùng 1 lượt", "Hủy" or "Xác nhận"; the measuring copy leaves it out.
     var onRedeem: ((IslandRedeemStep, GlanceRedeem) -> Void)?
+    /// Where the banked cards' buttons stand, so the open island is measured with their confirmation.
+    var banked = GlanceBankedMarks()
+    /// A press on a banked card's button or its confirmation; the measuring copy leaves it out.
+    var onBanked: ((GlanceActionRequest, GlanceActionStep) -> Void)?
     @Environment(\.colorScheme) private var systemScheme
 
     /// The app's theme, or the Mac's appearance while it follows the Mac, as the popup draws in.
@@ -294,7 +298,7 @@ struct IslandDetails: View {
                 IslandResetsSection(
                     resets: resets, labels: document.labels, now: now, budget: budget,
                     availableWidth: panelWidth, spacing: density.cardGap,
-                    folds: resetFolds, onFold: onResetFold, showsHeading: named
+                    folds: resetFolds, onFold: onResetFold, banked: banked, onBanked: onBanked, showsHeading: named
                 )
             }
         case .upcoming:
@@ -734,11 +738,16 @@ struct IslandResetsSection: View {
     var spacing: CGFloat = 12
     var folds = GlanceResetFolds(foldsLists: true)
     var onFold: ((GlanceResetFold) -> Void)?
+    var banked = GlanceBankedMarks()
+    var onBanked: ((GlanceActionRequest, GlanceActionStep) -> Void)?
     /// Names the tracker above the cards, for an island without a tab bar to name it.
     var showsHeading = false
 
     var body: some View {
-        GlanceResetContent(resets: resets, units: labels.units, now: now, availableWidth: availableWidth, folds: folds, onFold: onFold, showsHeading: showsHeading, spacing: spacing)
+        GlanceResetContent(
+            resets: resets, units: labels.units, now: now, availableWidth: availableWidth, folds: folds, onFold: onFold,
+            banked: banked, onBanked: onBanked, showsHeading: showsHeading, spacing: spacing
+        )
     }
 }
 
@@ -849,11 +858,7 @@ struct IslandAlertView: View {
 }
 
 /// A press on the island's "Dùng 1 lượt" or on the confirmation it asks for.
-enum IslandRedeemStep {
-    case press
-    case confirm
-    case cancel
-}
+typealias IslandRedeemStep = GlanceActionStep
 
 /// Where the island's "Dùng 1 lượt" buttons stand: the one asking "Xác nhận" or "Hủy", with the
 /// count its account read when it was pressed, and the ones whose request went to the app, until

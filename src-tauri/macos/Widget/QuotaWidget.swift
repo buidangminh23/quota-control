@@ -351,8 +351,13 @@ struct GlanceWidgetView: View {
         if let document = entry.document {
             layout(document, size: size)
                 .overlay {
-                    if style.drawsAccountRows(document) {
-                        WidgetRedeemConfirmation(document: document.forWidget, now: entry.date)
+                    ZStack {
+                        if style.drawsAccountRows(document) {
+                            WidgetRedeemConfirmation(document: document.forWidget, now: entry.date)
+                        }
+                        if style.drawsResets(document) {
+                            WidgetBankedConfirmation(document: document.forWidget, now: entry.date)
+                        }
                     }
                 }
                 .environment(\.locale, document.resolvedLocale)

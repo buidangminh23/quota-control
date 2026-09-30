@@ -9,10 +9,10 @@
  */
 import { PROVIDER_MARKS } from "@/assets/providerMarks";
 import claudeDevsAvatar from "@/assets/claudedevs.webp?inline";
-import type { Language } from "@/i18n";
+import { messagesFor, type Language } from "@/i18n";
 import { insightsFor, type InsightsMessages } from "@/i18n/insights";
 import { timeOnDayLabel, type TimeFormat } from "./format";
-import type { GlanceCountdown, GlanceResetCompare, GlanceResetCompareColumn, GlanceResetPresentation, GlanceResets, GlanceResetStatusCard, GlanceUpcomingReset } from "./glance";
+import { GLANCE_ACTION_RESET_ID, type GlanceBankedActions, type GlanceCountdown, type GlanceResetCompare, type GlanceResetCompareColumn, type GlanceResetPresentation, type GlanceResets, type GlanceResetStatusCard, type GlanceUpcomingReset } from "./glance";
 import { addHistory, COUNTDOWN_SPAN, fetchedLine, stillPresentation } from "./glanceResets";
 import { CLAUDE_ACCOUNT, concerns, openBanked, type ClaudePlan, type ClaudeReset, type ClaudeResetFeed } from "./insights/claudeResets";
 import { authorOf, buildClaudePresentation, type ClaudeBankedCard, type ClaudePresentation } from "./insights/claudePresentation";
@@ -67,7 +67,7 @@ export function buildClaudeGlanceResets(input: ClaudeGlanceResetsInput): GlanceR
     forecastTitle: text.glanceChanceTitle,
     forecast: [],
     forecastNote: text.forecastUnavailable,
-    presentation: glancePresentation(presentation, pending, language, fetchedLine(input.fetchedAt, text)),
+    presentation: glancePresentation(presentation, language, fetchedLine(input.fetchedAt, text)),
     theme: input.theme,
     site: CLAUDE_RESETS_SITE,
   };
@@ -98,26 +98,27 @@ function upcomingOf(reset: ClaudeReset, now: Date, timeFormat: TimeFormat, langu
 
 /**
  * The Reset tab's Claude view cut down to what the island and the widgets draw: the notices above
- * the cards, its cards in the Codex shape, the banked resets still to apply as status cards
- * counting down to their deadlines, the forecast with its self-check, the limit changes and the
- * comparison with Codex (its columns named and marked), the @ClaudeDevs picture for that account's
- * posts, when the feed was read (`fetched`), the method word for word, and none of what only the
- * popup can do (marking a banked reset as applied). Like the Codex copy (`stillPresentation`), the
- * meters are kept to the whole percent they show and the latest reset's time since is left to
- * Swift, so the document does not change each minute.
+ * the cards, its cards in the Codex shape, the banked cards before the status cards as the tab
+ * lists them (those still to apply counting down to their deadlines, those marked as used to fold
+ * to the line saying so) with the words of their buttons, the forecast with its self-check, the
+ * limit changes and the comparison with Codex (its columns named and marked), the @ClaudeDevs
+ * picture for that account's posts, when the feed was read (`fetched`) and the method word for
+ * word. Like the Codex copy (`stillPresentation`), the meters are kept to the whole percent they
+ * show and the latest reset's time since is left to Swift, so the document does not change each
+ * minute.
  */
-function glancePresentation(presentation: ClaudePresentation, pending: readonly ClaudeReset[], language: Language, fetched: GlanceCountdown | undefined): GlanceResetPresentation {
+function glancePresentation(presentation: ClaudePresentation, language: Language, fetched: GlanceCountdown | undefined): GlanceResetPresentation {
   const insights = insightsFor(language);
   const text = insights.claude;
-  const waiting = new Set(pending.map((reset) => reset.id));
   const left = text.bankedLeft(COUNTDOWN_SPAN);
-  const banked = presentation.banked.filter((card) => waiting.has(card.resetId)).map((card) => bankedStatus(card, text.glanceBankedHow, left));
+  const banked = presentation.banked.map((card) => bankedStatus(card, text.glanceBankedHow, left));
   const reduced: GlanceResetPresentation = {
     locale: presentation.locale,
     authorAvatar: claudeDevsAvatar,
     avatarHandle: authorOf(CLAUDE_ACCOUNT).handle,
     ...(presentation.notices.length > 0 ? { notices: [...presentation.notices] } : {}),
-    statuses: banked.length > 0 ? banked : presentation.statuses,
+    statuses: [...banked, ...presentation.statuses],
+    ...(banked.length > 0 ? { bankedActions: bankedActionsOf(language) } : {}),
     forecast: presentation.forecast,
     statsTitle: presentation.statsTitle,
     stats: presentation.stats,
@@ -154,10 +155,34 @@ function withColumns(compare: GlanceResetCompare, text: InsightsMessages): Glanc
 }
 
 /**
- * A banked card as a status card: where to apply it after its lines, and its time left as a moving
- * countdown in place of the popup's fixed words, so the document does not change as time passes.
+ * A banked card as a status card: its time left as a moving countdown in place of the popup's fixed
+ * words, so the document does not change as time passes, whether the user marked it as used, and
+ * the reset its buttons act on with the popup's words on where to apply it. A reset whose id a
+ * surface's press could not carry (`GLANCE_ACTION_RESET_ID`) gets no buttons, so it keeps the words
+ * that send the user to the Reset tab to mark it (`unmarkable`).
  */
-function bankedStatus(card: ClaudeBankedCard, how: string, left: string): GlanceResetStatusCard {
-  const { resetId: _resetId, used: _used, how: _how, due: _due, ...status } = card;
-  return { ...status, meta: [...card.meta, how], dueCountdown: { at: card.hideAt!, text: left } };
+function bankedStatus(card: ClaudeBankedCard, unmarkable: string, left: string): GlanceResetStatusCard {
+  const { resetId, used, how, due: _due, ...status } = card;
+  const markable = GLANCE_ACTION_RESET_ID.test(resetId);
+  return {
+    ...status,
+    dueCountdown: { at: card.hideAt!, text: left },
+    ...(markable ? { resetId } : {}),
+    ...(used ? { used: true } : {}),
+    how: markable ? how : unmarkable,
+  };
+}
+
+/** The words of the banked cards' buttons and of the confirmation, as the Reset tab's `BankedCards` words them. */
+function bankedActionsOf(language: Language): GlanceBankedActions {
+  const text = insightsFor(language).claude;
+  return {
+    markUsed: text.bankedMarkUsed,
+    title: text.bankedConfirmTitle,
+    message: text.bankedConfirmMessage,
+    confirm: text.bankedConfirm,
+    cancel: messagesFor(language).chrome.cancel,
+    used: text.bankedUsed,
+    undo: text.bankedUndo,
+  };
 }

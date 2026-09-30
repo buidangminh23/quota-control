@@ -557,6 +557,37 @@ export interface GlanceResetStatusCard {
   /** The card is about the latest reset (a Claude banked reset still to apply). While the latest
    * card above it is drawn with the announcement, the card leaves out the author and the excerpt. */
   sameAsLatest?: boolean;
+  /** The banked reset the card is about (Claude), which its buttons mark as used or take the mark
+   * off; a string, since X's ids run past the numbers JSON keeps exact. Absent where no button
+   * could act on it. */
+  resetId?: string;
+  /** The user marked the banked reset as used (Claude): the card folds to the line saying so, with
+   * `Hoàn tác`. */
+  used?: boolean;
+  /** Where and how to apply the banked reset (Claude), the line after the card's meta lines. */
+  how?: string;
+}
+
+/**
+ * The words around the Reset tab's banked cards' buttons (`BankedCards` in `ClaudeResets.tsx`), for
+ * the island and the widgets to say the same: `Tôi đã dùng rồi` and the confirmation it asks for,
+ * then what a card marked as used folds to and the button that takes the mark off.
+ */
+export interface GlanceBankedActions {
+  /** `Tôi đã dùng rồi`. */
+  markUsed: string;
+  /** The confirmation's title: `Đánh dấu đã dùng lượt reset này?`. */
+  title: string;
+  /** The confirmation's words. */
+  message: string;
+  /** `Xác nhận`, filled with the accent color. */
+  confirm: string;
+  /** `Hủy`. */
+  cancel: string;
+  /** What a card marked as used folds to: `Bạn đã đánh dấu lượt này là đã dùng.`. */
+  used: string;
+  /** `Hoàn tác`, which takes the mark off. */
+  undo: string;
 }
 
 /**
@@ -654,6 +685,8 @@ export interface GlanceResetPresentation {
   notices?: string[];
   latest?: GlanceResetLatestPresentation;
   statuses: GlanceResetStatusCard[];
+  /** The words of the banked cards' buttons (Claude), while one of `statuses` is a banked card. */
+  bankedActions?: GlanceBankedActions;
   quietTitle?: string;
   forecast: GlanceResetForecastPresentation;
   statsTitle: string;
@@ -986,6 +1019,9 @@ export function glanceExpiryWords(language: Language, timeFormat: TimeFormat): G
 
 /** An account the island and the widgets may ask to spend a reset of, as `glanceActions` accepts it. */
 export const GLANCE_ACTION_PROVIDER_ID = /^[a-z0-9-]{1,64}@[A-Za-z0-9_-]{1,128}$/;
+
+/** A banked reset the island and the widgets may ask to mark as used, as `glanceActions` accepts it. */
+export const GLANCE_ACTION_RESET_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
  * `GlanceMetric.redeem` for the row `data` of `providerId`, where the popup's card shows "Dùng 1

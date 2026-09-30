@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { messagesFor } from "@/i18n";
 import { insightsFor } from "@/i18n/insights";
 import { FEED_FIXTURES } from "@/lib/insightsFeedFixtures";
 import { timeOnDayLabel } from "./format";
@@ -174,18 +175,48 @@ describe("buildClaudeGlanceResets", () => {
     const text = insightsFor("vi").claude;
     expect(card).toMatchObject({ id: `banked:${BANKED}`, kind: "banked", title: text.bankedTitle, hideAt: DEADLINE, author: { handle: "@ClaudeDevs" } });
     expect(card.dueCountdown).toEqual({ at: DEADLINE, text: "Còn {d}" });
-    expect(card.meta.at(-1)).toBe(text.glanceBankedHow);
+    expect(card).toMatchObject({ resetId: BANKED, how: text.bankedHow });
     expect(card.meta).toContain("Gói Max của bạn: có áp dụng");
     expect(card.meta.some((line) => line.startsWith("Dùng được đến "))).toBe(true);
-    for (const key of ["due", "used", "resetId", "how"]) expect(key in card, key).toBe(false);
+    expect(card.meta).not.toContain(text.bankedHow);
+    for (const key of ["due", "used"]) expect(key in card, key).toBe(false);
     const later = build(FIXTURE, { now: new Date(NOW.getTime() + 5 * HOUR) })!.presentation!.statuses;
     expect(later).toEqual(statuses);
   });
 
-  it("shows the quiet card instead once no banked reset is left to apply", () => {
+  it("keeps a banked card marked as used, folded, above the quiet card, as the Reset tab lists them", () => {
     const presentation = build(FIXTURE, { used: [BANKED] })!.presentation!;
-    expect(presentation.statuses).toEqual([{ id: "quiet", kind: "quiet", title: insightsFor("vi").quietTitle, meta: [] }]);
+    const popup = buildClaudePresentation({ feed: FIXTURE, codex: [], plans: ["max"], accounts: ["max"], used: [BANKED], now: NOW, language: "vi", timeFormat: "24h" });
+    expect(presentation.statuses.map((card) => card.id)).toEqual([...popup.banked, ...popup.statuses].map((card) => card.id));
+    expect(presentation.statuses.map((card) => card.id)).toEqual([`banked:${BANKED}`, "quiet"]);
+    expect(presentation.statuses[0]).toMatchObject({ kind: "banked", resetId: BANKED, used: true, hideAt: DEADLINE, how: insightsFor("vi").claude.bankedHow });
+    expect(presentation.statuses[1]).toEqual({ id: "quiet", kind: "quiet", title: insightsFor("vi").quietTitle, meta: [] });
     expect(presentation.quietTitle).toBe(insightsFor("vi").quietTitle);
+    const open = build()!.presentation!;
+    const { used: _used, ...folded } = presentation.statuses[0]!;
+    expect(folded).toEqual(open.statuses[0]);
+  });
+
+  it("words the banked cards' buttons and their confirmation as the Reset tab's BankedCards does", () => {
+    for (const language of ["vi", "en"] as const) {
+      const text = insightsFor(language).claude;
+      const words = { markUsed: text.bankedMarkUsed, title: text.bankedConfirmTitle, message: text.bankedConfirmMessage, confirm: text.bankedConfirm, cancel: messagesFor(language).chrome.cancel, used: text.bankedUsed, undo: text.bankedUndo };
+      expect(build(FIXTURE, { language })!.presentation!.bankedActions).toEqual(words);
+      expect(build(FIXTURE, { language, used: [BANKED] })!.presentation!.bankedActions).toEqual(words);
+    }
+    expect(build(FIXTURE, { now: new Date(Date.parse(DEADLINE) + 1_000) })!.presentation!).not.toHaveProperty("bankedActions");
+    expect(build(FIXTURE, { accounts: ["free"] })!.presentation!).not.toHaveProperty("bankedActions");
+    expect(build(feedOf([event({ id: "r1" })])).presentation!).not.toHaveProperty("bankedActions");
+  });
+
+  it("leaves the buttons off a banked reset whose id a press could not carry, and keeps the words that send the user to the Reset tab", () => {
+    const feed = feedOf([event({ id: "not an id", date: "2026-09-25T10:00:00Z", resetType: "banked", usableUntil: "2026-11-30T00:00:00Z" })]);
+    const presentation = build(feed)!.presentation!;
+    const card = presentation.statuses[0]!;
+    expect(card).toMatchObject({ id: "banked:not an id", kind: "banked", how: insightsFor("vi").claude.glanceBankedHow });
+    expect("resetId" in card).toBe(false);
+    expect(presentation.bankedActions?.used).toBe(insightsFor("vi").claude.bankedUsed);
+    expect(build(feed)!.upcoming?.hideAt).toBe("2026-11-30T00:00:00.000Z");
   });
 
   it("keeps each chance's meter to the whole percent it shows, so the document holds still minute to minute", () => {

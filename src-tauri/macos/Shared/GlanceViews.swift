@@ -347,6 +347,118 @@ enum GlanceResetElement {
     case source(String, String, String)
     /// A part the Reset tab folds: its words, and whether it is open.
     case fold(GlanceResetFold, String, Bool)
+    /// A Claude banked card's buttons, as the Reset tab ends the card: the post's link and "Tôi đã
+    /// dùng rồi", or on a card marked as used the line saying so and "Hoàn tác".
+    case banked(GlanceBankedControl)
+}
+
+/// What a banked card's buttons say and do: the reset they act on (none where a press could not
+/// carry its id), whether the card is drawn as used, where its buttons stand, its post, and the
+/// Reset tab's words.
+struct GlanceBankedControl: Equatable {
+    var resetId: String?
+    var used: Bool
+    var phase: GlanceBankedPhase
+    var url: String?
+    var openPost: String
+    var words: GlanceBankedActions
+
+    /// What the card's button asks: to mark the reset as used, or to take the mark off.
+    var request: GlanceActionRequest? {
+        resetId.map { .markBankedReset(resetId: $0, used: !used) }
+    }
+}
+
+/// How a surface makes a banked card's buttons act: the island sends from the button, a widget runs
+/// an App Intent. Without one the buttons are drawn and do nothing, as in a measuring copy.
+struct GlanceResetBankedAction {
+    let button: (_ request: GlanceActionRequest, _ step: GlanceActionStep, _ title: String, _ style: GlanceButtonStyle) -> AnyView
+}
+
+private struct GlanceResetBankedActionKey: EnvironmentKey {
+    static let defaultValue: GlanceResetBankedAction? = nil
+}
+
+extension EnvironmentValues {
+    var glanceResetBankedAction: GlanceResetBankedAction? {
+        get { self[GlanceResetBankedActionKey.self] }
+        set { self[GlanceResetBankedActionKey.self] = newValue }
+    }
+}
+
+/// A banked card's end, as the Reset tab's `BankedCards` draws it: the post's link on the left and
+/// the small "Tôi đã dùng rồi" on the right, one over the other where both do not fit; while it asks
+/// for its confirmation, the popup's dialog in the button's place ("Hủy", "Xác nhận" in blue). A
+/// card marked as used is the line saying so with "Hoàn tác" beside it. While a request is on its
+/// way the card shows what was asked and its button waits, disabled.
+struct GlanceBankedControlView: View {
+    let control: GlanceBankedControl
+    let availableWidth: CGFloat
+    @Environment(\.glanceResetBankedAction) private var action
+
+    var body: some View {
+        if control.used {
+            HStack(alignment: .center, spacing: 8) {
+                Text(control.words.used)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if control.resetId != nil {
+                    button(control.words.undo, step: .press, style: GlanceButtonStyle(tone: .bordered, small: true))
+                }
+            }
+        } else if control.phase == .confirming {
+            VStack(alignment: .leading, spacing: 8) {
+                link
+                GlanceConfirmCard(title: control.words.title, message: control.words.message) {
+                    button(control.words.cancel, step: .cancel, style: GlanceButtonStyle(tone: .bordered, wide: true))
+                    button(control.words.confirm, step: .confirm, style: GlanceButtonStyle(tone: .prominent, wide: true))
+                }
+                .frame(maxWidth: .infinity)
+            }
+        } else {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 8) {
+                    link
+                    Spacer(minLength: 0)
+                    markButton
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    link
+                    markButton
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var link: some View {
+        if let url = control.url {
+            GlanceResetElementView(element: .link(url, control.openPost), availableWidth: availableWidth)
+        }
+    }
+
+    @ViewBuilder
+    private var markButton: some View {
+        if control.resetId != nil {
+            button(control.words.markUsed, step: .press, style: GlanceButtonStyle(tone: .bordered, small: true))
+        }
+    }
+
+    @ViewBuilder
+    private func button(_ title: String, step: GlanceActionStep, style: GlanceButtonStyle) -> some View {
+        if let request = control.request {
+            Group {
+                if let action {
+                    action.button(request, step, title, style)
+                } else {
+                    Button(title) {}.buttonStyle(style)
+                }
+            }
+            .disabled(control.phase == .sent)
+        }
+    }
 }
 
 /// The first line of a history row, as the Reset tab draws it.
@@ -445,6 +557,8 @@ enum GlanceResetCardLook {
     case card
     case list(inset: CGFloat)
     case plain
+    /// A card folded to one line, 8 points above and below it like the Reset tab's used banked card.
+    case folded
 }
 
 struct GlanceResetCardData: Identifiable {
@@ -519,6 +633,14 @@ struct GlanceResetCardView: View {
                     }
                 }
                 .padding(.vertical, inset))
+            case .folded:
+                filled(VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(card.elements.enumerated()), id: \.offset) { _, element in
+                        GlanceResetElementView(element: element, availableWidth: max(1, availableWidth - 24))
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8))
             case .plain:
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(Array(card.elements.enumerated()), id: \.offset) { _, element in
@@ -749,6 +871,8 @@ struct GlanceResetElementView: View {
             } else {
                 foldLabel(fold, label, open)
             }
+        case let .banked(control):
+            GlanceBankedControlView(control: control, availableWidth: availableWidth)
         }
     }
 
@@ -1137,6 +1261,10 @@ struct GlanceResetContent: View {
     var folds = GlanceResetFolds()
     /// Opens or closes a fold; without it the folds' rows are drawn and do nothing.
     var onFold: ((GlanceResetFold) -> Void)? = nil
+    /// Where the banked cards' buttons stand (the island's own state).
+    var banked = GlanceBankedMarks()
+    /// A press on a banked card's button or its confirmation; without it they do nothing.
+    var onBanked: ((GlanceActionRequest, GlanceActionStep) -> Void)? = nil
     /// Names the tracker above the cards, where nothing else around the view does.
     var showsHeading = false
     /// The room between the cards: the popup's section gap, tighter in Compact on the island.
@@ -1147,7 +1275,7 @@ struct GlanceResetContent: View {
             if showsHeading {
                 GlanceResetHeading(resets: resets)
             }
-            ForEach(GlanceResetCards.make(resets: resets, units: units, now: now, folds: folds)) { card in
+            ForEach(GlanceResetCards.make(resets: resets, units: units, now: now, folds: folds, banked: banked)) { card in
                 GlanceResetCardView(card: card, availableWidth: availableWidth)
             }
         }
@@ -1157,6 +1285,11 @@ struct GlanceResetContent: View {
                 AnyView(Button { toggle(fold) } label: { label }.buttonStyle(.plain))
             }
         })
+        .environment(\.glanceResetBankedAction, onBanked.map { act in
+            GlanceResetBankedAction { request, step, title, style in
+                AnyView(Button(title) { act(request, step) }.buttonStyle(style))
+            }
+        })
         .environment(\.glanceResetNow, now)
         .environment(\.colorScheme, resets.theme == "dark" ? .dark : resets.theme == "light" ? .light : colorScheme)
     }
@@ -1164,7 +1297,7 @@ struct GlanceResetContent: View {
 
 
 enum GlanceResetCards {
-    static func make(resets: GlanceResets, units: GlanceUnits, now: Date, folds: GlanceResetFolds = GlanceResetFolds()) -> [GlanceResetCardData] {
+    static func make(resets: GlanceResets, units: GlanceUnits, now: Date, folds: GlanceResetFolds = GlanceResetFolds(), banked: GlanceBankedMarks = GlanceBankedMarks()) -> [GlanceResetCardData] {
         var cards: [GlanceResetCardData] = []
         func add(_ id: String, _ title: String, _ elements: [GlanceResetElement], accent: Color? = nil, look: GlanceResetCardLook = .card) {
             cards.append(GlanceResetCardData(id: id, title: title, accent: accent, look: look, elements: elements))
@@ -1193,8 +1326,13 @@ enum GlanceResetCards {
                 add("latest", latest.title, elements)
             }
             let quoted = presentation.latest?.excerpt != nil
-            for status in presentation.statuses(at: now) {
+            for status in shownStatuses(presentation, marks: banked, words: words, now: now) {
                 let repeats = quoted && status.sameAsLatest == true
+                let control = bankedControl(status, presentation, marks: banked, words: words, now: now)
+                if let control, control.used {
+                    add(status.id, "", [.banked(control)], look: .folded)
+                    continue
+                }
                 let banked = status.kind == "banked"
                 var elements: [GlanceResetElement] = []
                 let metadata = status.liveMetadata(units: units)
@@ -1204,7 +1342,12 @@ enum GlanceResetCards {
                 if let excerpt = status.excerpt, !repeats { elements.append(.text(excerpt, .post)) }
                 elements += status.kind == "watch" && metadata.count > 1 ? Array(metadata.dropFirst()) : metadata
                 if !banked, let due = status.liveDue(units: units) { elements.append(due) }
-                if let url = status.url { elements.append(.link(url, words.openPost)) }
+                if let how = status.how { elements.append(.text(how, .secondary)) }
+                if let control {
+                    elements.append(.banked(control))
+                } else if let url = status.url {
+                    elements.append(.link(url, words.openPost))
+                }
                 add(status.id, status.title, elements, accent: accent(status.kind))
             }
             let forecast = presentation.forecast
@@ -1273,6 +1416,34 @@ enum GlanceResetCards {
             }
         }
         return cards
+    }
+
+    /// The status cards as the Reset tab lists them once the cards drawn as the user asked are
+    /// counted: the quiet card only while no banked card is drawn open, as the tab shows it only
+    /// once every banked reset was marked as used.
+    private static func shownStatuses(_ presentation: GlanceResetPresentation, marks: GlanceBankedMarks, words: GlanceResetWords, now: Date) -> [GlanceResetStatusCard] {
+        let statuses = presentation.statuses(at: now)
+        let controls = statuses.compactMap { bankedControl($0, presentation, marks: marks, words: words, now: now) }
+        guard !controls.isEmpty else { return statuses }
+        if controls.contains(where: { !$0.used }) { return statuses.filter { $0.kind != "quiet" } }
+        guard !statuses.contains(where: { $0.kind == "quiet" }), let quietTitle = presentation.quietTitle else { return statuses }
+        return statuses + [GlanceResetStatusCard(id: "quiet", kind: "quiet", title: quietTitle, meta: [])]
+    }
+
+    /// A banked card's buttons, where the document gives their words: drawn as the user asked while
+    /// the request is on its way (`GlanceBankedMarks`), as the document says otherwise.
+    private static func bankedControl(_ status: GlanceResetStatusCard, _ presentation: GlanceResetPresentation, marks: GlanceBankedMarks, words: GlanceResetWords, now: Date) -> GlanceBankedControl? {
+        guard status.kind == "banked", let actions = presentation.bankedActions else { return nil }
+        let used = status.used == true
+        let phase = status.resetId.map { marks.phase(resetId: $0, used: used, now: now) } ?? .ready
+        return GlanceBankedControl(
+            resetId: status.resetId,
+            used: phase == .sent ? !used : used,
+            phase: phase,
+            url: status.url,
+            openPost: words.openPost,
+            words: actions
+        )
     }
 
     /// The moments after `now`, up to `end`, when a moving word on `resets`' cards changes, at most

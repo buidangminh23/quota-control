@@ -5,11 +5,7 @@ import WidgetKit
 
 /// The step a widget button takes: the first press, or the "Xác nhận" / "Hủy" that follows it for a
 /// request that waits for a confirmation (`GlanceActionRequest.needsConfirmation`).
-enum WidgetActionStep: String {
-    case press
-    case confirm
-    case cancel
-}
+typealias WidgetActionStep = GlanceActionStep
 
 /// The widget button waiting for its confirmation, and the one whose request just went to the app.
 /// One confirmation is held at a time and only for `lifetime`: a confirmation the user walked away
@@ -63,6 +59,22 @@ enum WidgetPendingAction {
         if sent(now: now) == key, (sentReading() ?? reading) == reading { return .redeeming }
         if current(now: now) == key, (pendingReading() ?? reading) == reading { return .confirming }
         return .ready
+    }
+
+    /// The banked cards the widget buttons are acting on: the one asking for its confirmation and the
+    /// one whose request went to the app, each with whether its card read as used then.
+    static func bankedMarks(now: Date = Date()) -> GlanceBankedMarks {
+        func mark(_ key: String?, reading: String?, until: String? = nil) -> GlanceBankedMarks.Mark? {
+            let prefix = "markBankedReset:"
+            guard let key, key.hasPrefix(prefix), let reading else { return nil }
+            let at = until.map { Date(timeIntervalSince1970: UserDefaults.standard.double(forKey: $0)) }
+            return GlanceBankedMarks.Mark(resetId: String(key.dropFirst(prefix.count)), used: reading == GlanceDocument.bankedReading(used: true), until: at)
+        }
+        let sent = mark(sent(now: now), reading: sentReading(), until: sentUntilKey)
+        return GlanceBankedMarks(
+            confirming: mark(current(now: now), reading: pendingReading()),
+            sent: sent.map { [$0.resetId: $0] } ?? [:]
+        )
     }
 
     static func hold(_ request: GlanceActionRequest, reading: String? = nil, now: Date = Date()) {
@@ -142,7 +154,7 @@ struct PressGlanceAction: AppIntent {
 
     func perform() async throws -> some IntentResult {
         if let request = GlanceActionRequest(kind: kind, subject: subject, used: used) {
-            let reading = GlanceStore.load()?.redeemReading(for: request)
+            let reading = GlanceStore.load()?.actionReading(for: request)
             Self.apply(request, step: WidgetActionStep(rawValue: step) ?? .press, reading: reading, now: Date())
         }
         WidgetCenter.shared.reloadAllTimelines()
@@ -198,6 +210,49 @@ struct WidgetRedeemButton: View {
             }
             .buttonStyle(GlanceButtonStyle(tone: .bordered, small: true))
             .disabled(phase == .redeeming)
+        }
+    }
+}
+
+/// The Reset tab's confirmation for a pressed "Tôi đã dùng rồi", drawn over the whole widget as the
+/// popup draws its dialog over the popup: the title, the words where they fit, "Hủy" and "Xác nhận"
+/// in blue. A small widget leaves the words out; it never leaves "Hủy" out.
+struct WidgetBankedConfirmation: View {
+    let document: GlanceDocument
+    let now: Date
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        if case let (request, words)? = pending {
+            ZStack {
+                Rectangle()
+                    .fill(GlanceResetPalette(scheme: colorScheme).background.opacity(0.9))
+                    .padding(-40)
+                ViewThatFits(in: .vertical) {
+                    card(request, words, message: words.message)
+                    card(request, words, message: nil)
+                    card(request, words, message: nil, compact: true)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// The card whose "Tôi đã dùng rồi" asks for its confirmation now, while it still reads as it did.
+    private var pending: (request: GlanceActionRequest, words: GlanceBankedActions)? {
+        guard let mark = WidgetPendingAction.bankedMarks(now: now).confirming, !mark.used,
+              let card = document.bankedCard(resetId: mark.resetId), card.used != true,
+              let words = [document.resets, document.claudeResets].compactMap({ $0?.presentation }).first(where: { $0.statuses.contains(card) })?.bankedActions
+        else { return nil }
+        return (.markBankedReset(resetId: mark.resetId, used: true), words)
+    }
+
+    private func card(_ request: GlanceActionRequest, _ words: GlanceBankedActions, message: String?, compact: Bool = false) -> some View {
+        GlanceConfirmCard(title: words.title, message: message, compact: compact) {
+            Button(intent: PressGlanceAction(request, step: .cancel)) { Text(words.cancel) }
+                .buttonStyle(GlanceButtonStyle(tone: .bordered, wide: true))
+            Button(intent: PressGlanceAction(request, step: .confirm)) { Text(words.confirm) }
+                .buttonStyle(GlanceButtonStyle(tone: .prominent, wide: true))
         }
     }
 }
