@@ -406,7 +406,7 @@ struct GlancePaceNoteView: View {
                     .foregroundStyle(GlancePalette.fill(severity, onDark: onDark || colorScheme == .dark))
             }
             Text(note.text)
-                .font(.system(size: size))
+                .font(.glance(size: size))
                 .monospacedDigit()
                 .foregroundStyle(onDark ? AnyShapeStyle(GlanceRowInk.secondary(dark: true)) : AnyShapeStyle(.secondary))
                 .lineLimit(1)

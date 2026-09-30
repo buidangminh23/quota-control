@@ -119,7 +119,7 @@ struct WidgetHeading<Trailing: View>: View {
                     .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 2 }
             }
             Text(title)
-                .font(.system(size: WidgetScale.title, weight: .semibold))
+                .font(.glance(size: WidgetScale.title, weight: .semibold))
                 .lineLimit(1)
                 .layoutPriority(1)
             Spacer(minLength: 4)
@@ -140,7 +140,7 @@ struct SectionLabel: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: WidgetScale.caption, weight: .semibold))
+            .font(.glance(size: WidgetScale.caption, weight: .semibold))
             .foregroundStyle(.secondary)
             .lineLimit(1)
     }
@@ -153,7 +153,7 @@ struct HiddenCount: View {
     var body: some View {
         if count > 0 {
             Text("+\(count)")
-                .font(.system(size: WidgetScale.footnote, weight: .semibold))
+                .font(.glance(size: WidgetScale.footnote, weight: .semibold))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 4)
@@ -170,7 +170,7 @@ struct MoreLine: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: WidgetScale.caption, weight: .medium))
+            .font(.glance(size: WidgetScale.caption, weight: .medium))
             .foregroundStyle(.secondary)
             .lineLimit(1)
             .truncationMode(.tail)
@@ -205,7 +205,7 @@ struct UpdatedFooter: View {
             }
             Text("\(document.labels.updated) \(GlanceFormat.time(document.generatedAt, locale: document.resolvedLocale, hour12: document.hour12))")
         }
-        .font(.system(size: WidgetScale.footnote))
+        .font(.glance(size: WidgetScale.footnote))
         .foregroundStyle(stale ? Color.orange : Color.secondary)
         .lineLimit(1)
         .frame(height: WidgetScale.footerHeight - 4, alignment: .bottomLeading)
@@ -233,7 +233,7 @@ struct WidgetMessage: View {
                 .font(.system(size: 22, weight: .medium))
                 .foregroundStyle(.secondary)
             Text(text)
-                .font(.system(size: 11))
+                .font(.glance(size: 11))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(failed ? GlanceResetPalette(scheme: colorScheme).noticeText : Color.secondary)
                 .lineLimit(4)

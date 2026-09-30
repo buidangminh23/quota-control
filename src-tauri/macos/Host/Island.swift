@@ -1036,13 +1036,13 @@ struct IslandWingPiece: View {
         HStack(alignment: .firstTextBaseline, spacing: 3.5) {
             if let period = metric.period {
                 Text(period)
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.glance(size: 9, weight: .semibold))
                     .foregroundStyle(Color.white.opacity(0.85))
                     .lineLimit(1)
                     .fixedSize()
             }
             Text(metric.liveValue(now: now, units: units))
-                .font(.system(size: 12.5, weight: .semibold))
+                .font(.glance(size: 12.5, weight: .semibold))
                 .monospacedDigit()
                 .foregroundStyle(fraction == nil ? GlancePalette.text(metric.severity, onDark: true) : Color.white)
                 .lineLimit(1)

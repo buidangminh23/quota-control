@@ -31,7 +31,7 @@ struct ProviderMark: View {
                 ZStack {
                     Circle().strokeBorder(lineWidth: max(1, side * 0.094))
                     Text(String(initial).uppercased())
-                        .font(.system(size: max(1, side * 0.62), weight: .bold))
+                        .font(.glance(size: max(1, side * 0.62), weight: .bold))
                         .lineLimit(1)
                         .fixedSize()
                 }

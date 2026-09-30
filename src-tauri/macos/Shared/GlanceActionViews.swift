@@ -46,7 +46,7 @@ private struct GlanceButtonBody: View {
         let palette = GlanceControlPalette(scheme: colorScheme)
         let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
         configuration.label
-            .font(.system(size: small ? 11.5 : 12, weight: .medium))
+            .font(.glance(size: small ? 11.5 : 12, weight: .medium))
             .lineLimit(1)
             .padding(.horizontal, small ? 9 : 10)
             .frame(maxWidth: wide ? .infinity : nil)
@@ -91,11 +91,11 @@ struct GlanceConfirmCard<Actions: View>: View {
         let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
         VStack(spacing: 8) {
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.glance(size: 13, weight: .semibold))
                 .foregroundStyle(palette.label)
             if let message, !message.isEmpty {
                 Text(message)
-                    .font(.system(size: 11.5))
+                    .font(.glance(size: 11.5))
                     .lineSpacing(2)
                     .foregroundStyle(palette.secondary)
             }

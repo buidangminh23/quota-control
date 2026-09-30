@@ -274,7 +274,7 @@ struct GlanceResetRowView: View {
         HStack(spacing: 4) {
             GlanceRowAvatar(handle: row.author, picture: document.avatar(for: row.author), size: sizes.avatar, dark: dark)
             Text(row.title)
-                .font(.system(size: sizes.title, weight: .semibold))
+                .font(.glance(size: sizes.title, weight: .semibold))
                 .foregroundStyle(onDark ? AnyShapeStyle(GlanceRowInk.label(dark: true)) : AnyShapeStyle(.primary))
                 .lineLimit(1)
         }
@@ -282,7 +282,7 @@ struct GlanceResetRowView: View {
 
     private func value(_ lines: (value: String, caption: String, note: String?, awaiting: Bool), dark: Bool) -> some View {
         Text(lines.value)
-            .font(.system(size: sizes.value))
+            .font(.glance(size: sizes.value))
             .monospacedDigit()
             .foregroundStyle(lines.awaiting ? GlanceRowInk.secondary(dark: dark) : GlanceRowInk.tone(row.tone, dark: dark))
             .lineLimit(1)
@@ -290,7 +290,7 @@ struct GlanceResetRowView: View {
 
     private func caption(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: sizes.caption))
+            .font(.glance(size: sizes.caption))
             .monospacedDigit()
             .foregroundStyle(onDark ? AnyShapeStyle(GlanceRowInk.tertiary(dark: true)) : AnyShapeStyle(.secondary))
             .lineLimit(1)
@@ -328,7 +328,7 @@ struct GlanceRowAvatar: View {
                     .scaledToFill()
             } else {
                 Text(initial)
-                    .font(.system(size: (size * 0.55).rounded(), weight: .bold))
+                    .font(.glance(size: (size * 0.55).rounded(), weight: .bold))
                     .foregroundStyle(GlanceRowInk.secondary(dark: dark))
                     .frame(width: size, height: size)
                     .background(GlanceRowInk.quaternary(dark: dark))

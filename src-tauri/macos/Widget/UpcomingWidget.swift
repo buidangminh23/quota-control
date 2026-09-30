@@ -40,7 +40,7 @@ struct UpcomingHeading: View {
                 .font(.system(size: WidgetScale.title, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text(UpcomingText.title(document))
-                .font(.system(size: WidgetScale.title, weight: .semibold))
+                .font(.glance(size: WidgetScale.title, weight: .semibold))
                 .lineLimit(1)
         }
     }
@@ -82,7 +82,7 @@ struct UpcomingList: View {
         let groups = UpcomingGroup.grouped(limits)
         if groups.isEmpty {
             Text(UpcomingText.empty(document))
-                .font(.system(size: WidgetScale.caption))
+                .font(.glance(size: WidgetScale.caption))
                 .foregroundStyle(.secondary)
                 .lineLimit(3)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -156,7 +156,7 @@ private struct UpcomingRow: View {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 mark
                 Text(title)
-                    .font(.system(size: WidgetScale.label))
+                    .font(.glance(size: WidgetScale.label))
                     .lineLimit(1)
                 HiddenCount(count: group.metrics.count - 1)
                 reading
@@ -172,7 +172,7 @@ private struct UpcomingRow: View {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     mark
                     Text(title)
-                        .font(.system(size: WidgetScale.label))
+                        .font(.glance(size: WidgetScale.label))
                         .lineLimit(1)
                     Spacer(minLength: 3)
                     HiddenCount(count: group.metrics.count - 1)
@@ -213,7 +213,7 @@ private struct UpcomingRow: View {
         HStack(alignment: .firstTextBaseline, spacing: 3) {
             ColorlessSeverityMark(severity: metric.severity, size: WidgetScale.caption)
             Text(fit.roomy ? metric.headline : metric.value)
-                .font(.system(size: WidgetScale.caption, weight: .semibold))
+                .font(.glance(size: WidgetScale.caption, weight: .semibold))
                 .monospacedDigit()
                 .foregroundStyle(GlancePalette.text(metric.severity, onDark: colorScheme == .dark))
                 .lineLimit(1)
@@ -226,7 +226,7 @@ private struct UpcomingRow: View {
     /// the words change.
     private var countdown: some View {
         Text(document.resetWording.span(group.at, now: now))
-            .font(.system(size: WidgetScale.caption, weight: .medium))
+            .font(.glance(size: WidgetScale.caption, weight: .medium))
             .monospacedDigit()
             .lineLimit(1)
             .minimumScaleFactor(0.85)
@@ -238,7 +238,7 @@ private struct UpcomingRow: View {
 
     private func clockText(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: WidgetScale.caption))
+            .font(.glance(size: WidgetScale.caption))
             .monospacedDigit()
             .foregroundStyle(.secondary)
             .lineLimit(1)

@@ -15,7 +15,7 @@ struct ResetsHeader: View {
         WidgetHeading(mark: resets.mark, markColor: resets.markTint, title: title ?? resets.title) {
             if showsSource {
                 Text(resets.source)
-                    .font(.system(size: WidgetScale.footnote))
+                    .font(.glance(size: WidgetScale.footnote))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
             }
@@ -32,7 +32,7 @@ struct ResetsStaleLine: View {
             Image(systemName: "exclamationmark.circle")
             Text(text).lineLimit(1)
         }
-        .font(.system(size: WidgetScale.caption))
+        .font(.glance(size: WidgetScale.caption))
         .foregroundStyle(Color.orange)
     }
 }
@@ -57,23 +57,23 @@ struct AnnouncedResetBlock: View {
             HStack(spacing: 4) {
                 Circle().fill(upcoming.toneColor).frame(width: 6, height: 6)
                 Text(title)
-                    .font(.system(size: WidgetScale.caption, weight: .semibold))
+                    .font(.glance(size: WidgetScale.caption, weight: .semibold))
                     .foregroundStyle(upcoming.toneColor)
                     .lineLimit(1)
             }
             upcoming.liveValue(now: now, units: units)
-                .font(.system(size: valueSize, weight: .semibold))
+                .font(.glance(size: valueSize, weight: .semibold))
                 .monospacedDigit()
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
             Text(upcoming.currentCaption(now: now))
-                .font(.system(size: WidgetScale.caption))
+                .font(.glance(size: WidgetScale.caption))
                 .foregroundStyle(.secondary)
                 .lineLimit(captionLines)
                 .fixedSize(horizontal: false, vertical: true)
             if showsNote, let note = upcoming.note {
                 Text(note)
-                    .font(.system(size: WidgetScale.footnote))
+                    .font(.glance(size: WidgetScale.footnote))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
             }
@@ -93,7 +93,7 @@ struct LatestResetBlock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             latest.since.live(now: now, units: units)
-                .font(.system(size: valueSize, weight: .semibold))
+                .font(.glance(size: valueSize, weight: .semibold))
                 .monospacedDigit()
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
@@ -106,7 +106,7 @@ struct LatestResetBlock: View {
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .font(.system(size: WidgetScale.caption))
+                .font(.glance(size: WidgetScale.caption))
                 .foregroundStyle(.secondary)
             }
         }
@@ -134,12 +134,12 @@ struct ChanceBars: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text(chance.label)
-                            .font(.system(size: WidgetScale.label))
+                            .font(.glance(size: WidgetScale.label))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                         Spacer(minLength: 4)
                         Text("\(chance.percent)%")
-                            .font(.system(size: WidgetScale.value, weight: .semibold))
+                            .font(.glance(size: WidgetScale.value, weight: .semibold))
                             .monospacedDigit()
                             .fixedSize()
                     }
@@ -159,17 +159,17 @@ struct ChanceHero: View {
             if let day = resets.chance(days: 1) ?? resets.forecast.first {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text("\(day.percent)%")
-                        .font(.system(size: WidgetScale.hero, weight: .bold, design: .rounded))
+                        .font(.glance(size: WidgetScale.hero, weight: .bold))
                         .monospacedDigit()
                         .foregroundStyle(resets.tint)
                         .fixedSize()
                     Text(day.label)
-                        .font(.system(size: WidgetScale.caption, weight: .medium))
+                        .font(.glance(size: WidgetScale.caption, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
                 Text(resets.forecastTitle)
-                    .font(.system(size: WidgetScale.footnote))
+                    .font(.glance(size: WidgetScale.footnote))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .padding(.bottom, 3)
@@ -184,7 +184,7 @@ struct ChanceHero: View {
                             .monospacedDigit()
                             .fixedSize()
                     }
-                    .font(.system(size: WidgetScale.caption))
+                    .font(.glance(size: WidgetScale.caption))
                 }
             }
         }
@@ -364,7 +364,7 @@ struct ResetWidgetPager: View {
                 .accessibilityLabel(document.isVietnamese ? "Trang trước" : "Previous page")
                 Spacer(minLength: 0)
                 Text("\(sections.page) / \(sections.count)")
-                    .font(.system(size: 10, weight: .medium)).monospacedDigit()
+                    .font(.glance(size: 10, weight: .medium)).monospacedDigit()
                     .accessibilityLabel("\(sections.page) / \(sections.count)")
                 Spacer(minLength: 0)
                 Button(intent: ChangeResetWidgetPage(key: key, page: min(max(0, count - 1), index + 1))) {
@@ -447,7 +447,7 @@ struct ResetsFooterName: View {
                 .frame(width: 9, height: 9)
             if showsTitle {
                 Text(resets.title)
-                    .font(.system(size: WidgetScale.footnote, weight: .medium))
+                    .font(.glance(size: WidgetScale.footnote, weight: .medium))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }

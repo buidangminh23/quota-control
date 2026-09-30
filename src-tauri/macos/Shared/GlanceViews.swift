@@ -110,20 +110,20 @@ struct GlanceProviderHeader: View {
                         .frame(width: size, height: size)
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text(provider.name)
-                            .font(.system(size: size - 1, weight: .semibold))
+                            .font(.glance(size: size - 1, weight: .semibold))
                             .foregroundStyle(Color.primary)
                             .lineLimit(1)
                             .truncationMode(.tail)
                         if shows.plan, let plan = provider.plan {
                             Text(plan)
-                                .font(.system(size: smallSize))
+                                .font(.glance(size: smallSize))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .layoutPriority(1)
                         }
                         if let outdated = provider.outdated {
                             Text(outdated)
-                                .font(.system(size: smallSize))
+                                .font(.glance(size: smallSize))
                                 .foregroundStyle(GlanceResetPalette(scheme: colorScheme).tertiary)
                                 .lineLimit(1)
                         }
@@ -137,7 +137,7 @@ struct GlanceProviderHeader: View {
                 }
                 if shows.account, let account = provider.account {
                     Text(account)
-                        .font(.system(size: smallSize))
+                        .font(.glance(size: smallSize))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -186,10 +186,10 @@ struct GlancePlanTermCorner: View {
     var body: some View {
         VStack(alignment: .trailing, spacing: 1) {
             Text(left)
-                .font(.system(size: size, weight: .medium))
+                .font(.glance(size: size, weight: .medium))
                 .foregroundStyle(ink(dim: onDark ? AnyShapeStyle(Color.white.opacity(0.62)) : AnyShapeStyle(.secondary)))
             Text(day)
-                .font(.system(size: size))
+                .font(.glance(size: size))
                 .foregroundStyle(ink(dim: onDark ? AnyShapeStyle(Color.white.opacity(0.5)) : AnyShapeStyle(GlanceResetPalette(scheme: colorScheme).tertiary)))
         }
         .monospacedDigit()
@@ -211,7 +211,7 @@ struct GlanceNoticeRow: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: size))
+            .font(.glance(size: size))
             .foregroundStyle(onDark ? Color.white.opacity(0.62) : Color.secondary)
             .lineLimit(2)
             .fixedSize(horizontal: false, vertical: true)
@@ -400,7 +400,7 @@ struct GlanceBankedControlView: View {
         if control.used {
             HStack(alignment: .center, spacing: 8) {
                 Text(control.words.used)
-                    .font(.system(size: 10))
+                    .font(.glance(size: 10))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -605,7 +605,7 @@ struct GlanceResetCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if grouped && !card.title.isEmpty {
-                Text(card.title).font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+                Text(card.title).font(.glance(size: 10, weight: .semibold)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 8)
             }
@@ -614,7 +614,7 @@ struct GlanceResetCardView: View {
                 filled(VStack(alignment: .leading, spacing: 8) {
                     if !grouped && !card.title.isEmpty {
                         Text(card.id.hasPrefix("latest") ? card.title.uppercased() : card.title)
-                            .font(.system(size: card.id.hasPrefix("latest") ? 10 : 14, weight: card.id.hasPrefix("latest") ? .semibold : .bold))
+                            .font(.glance(size: card.id.hasPrefix("latest") ? 10 : 14, weight: card.id.hasPrefix("latest") ? .semibold : .bold))
                             .tracking(card.id.hasPrefix("latest") ? 0.6 : 0)
                             .foregroundStyle(card.id.hasPrefix("latest") ? Color.secondary : Color.primary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -698,7 +698,7 @@ struct GlanceResetAvatar: View {
                 Image(nsImage: image).resizable().scaledToFill()
             } else {
                 Text(initial)
-                    .font(.system(size: (size * 0.55).rounded(), weight: .bold))
+                    .font(.glance(size: (size * 0.55).rounded(), weight: .bold))
                     .foregroundStyle(.secondary)
                     .frame(width: size, height: size)
                     .background(palette.quaternary)
@@ -745,14 +745,14 @@ struct GlanceResetElementView: View {
             HStack(spacing: 6) {
                 GlanceResetAvatar(handle: author.handle, picture: avatar, size: 22)
                 Text(author.handle)
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.glance(size: 10, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
         case let .badge(text):
             Text(text.text(at: now))
-                .font(.system(size: 24, weight: .heavy))
+                .font(.glance(size: 24, weight: .heavy))
                 .foregroundStyle(Color(red: 0.11, green: 0.11, blue: 0.12))
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 10).padding(.vertical, 2)
@@ -761,9 +761,9 @@ struct GlanceResetElementView: View {
             HStack(alignment: .top, spacing: 12) {
                 ForEach(chances) { chance in
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(chance.percent).font(.system(size: 20, weight: .bold)).monospacedDigit()
+                        Text(chance.percent).font(.glance(size: 20, weight: .bold)).monospacedDigit()
                         meter(chance.fraction)
-                        Text(chance.label).font(.system(size: 10)).foregroundStyle(.secondary)
+                        Text(chance.label).font(.glance(size: 10)).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -777,7 +777,7 @@ struct GlanceResetElementView: View {
                 HStack(spacing: 10) { legendItems(legend, items) }
                 VStack(alignment: .leading, spacing: 5) { legendItems(legend, items) }
             }
-            .font(.system(size: 10.5)).foregroundStyle(.secondary)
+            .font(.glance(size: 10.5)).foregroundStyle(.secondary)
         case let .rhythm(title, buckets):
             rhythm(title, buckets)
         case let .stat(label, value):
@@ -792,7 +792,7 @@ struct GlanceResetElementView: View {
                     Text(value).fontWeight(.semibold).monospacedDigit().fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .font(.system(size: 11))
+            .font(.glance(size: 11))
         case .divider:
             Rectangle().fill(palette.separator).frame(height: 0.5)
         case let .compareTable(compare, rows):
@@ -806,7 +806,7 @@ struct GlanceResetElementView: View {
             if let destination = Self.web(url) {
                 Link(destination: destination) {
                     HStack(spacing: 3) {
-                        Text(label).font(.system(size: 11, weight: .medium))
+                        Text(label).font(.glance(size: 11, weight: .medium))
                         Image(systemName: "arrow.up.right.square").font(.system(size: 10))
                     }
                     .foregroundStyle(palette.blue)
@@ -878,7 +878,7 @@ struct GlanceResetElementView: View {
 
     private func styled(_ text: String, _ style: GlanceResetTextStyle) -> some View {
         (style == .timeLeft ? Text(text).monospacedDigit() : Text(text))
-            .font(.system(size: Self.size(style), weight: style == .value || style == .timeLeft ? .bold : style == .heading ? .semibold : .regular))
+            .font(.glance(size: Self.size(style), weight: style == .value || style == .timeLeft ? .bold : style == .heading ? .semibold : .regular))
             .foregroundStyle(ink(style))
             .lineLimit(style == .post ? 4 : style == .rowPost ? 3 : nil)
             .fixedSize(horizontal: false, vertical: true)
@@ -908,7 +908,7 @@ struct GlanceResetElementView: View {
     /// The attribution, which like the Reset tab's source line puts its link after the words, or
     /// under them once the words take more than a line.
     private func sourceText(_ text: String) -> some View {
-        Text(text).font(.system(size: 10)).foregroundStyle(palette.tertiary)
+        Text(text).font(.glance(size: 10)).foregroundStyle(palette.tertiary)
     }
 
     @ViewBuilder
@@ -935,13 +935,13 @@ struct GlanceResetElementView: View {
     private func rhythm(_ title: String, _ buckets: [GlanceResetBucket]) -> some View {
         let peak = max(1, buckets.map(\.count).max() ?? 0)
         return VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.system(size: 10)).foregroundStyle(.secondary)
+            Text(title).font(.glance(size: 10)).foregroundStyle(.secondary)
             HStack(alignment: .bottom, spacing: 4) {
                 ForEach(Array(buckets.enumerated()), id: \.offset) { _, bucket in
                     let isPeak = bucket.count == peak
                     VStack(spacing: 2) {
                         Text(bucket.count > 0 ? "\(bucket.count)" : " ")
-                            .font(.system(size: 8.5, weight: isPeak ? .bold : .regular))
+                            .font(.glance(size: 8.5, weight: isPeak ? .bold : .regular))
                             .monospacedDigit()
                             .foregroundStyle(isPeak ? Color.primary : palette.tertiary)
                             .lineLimit(1)
@@ -951,7 +951,7 @@ struct GlanceResetElementView: View {
                             .frame(height: max(1, 30 * CGFloat(bucket.count) / CGFloat(peak)))
                             .frame(height: 30, alignment: .bottom)
                         Text(bucket.label)
-                            .font(.system(size: 8.5))
+                            .font(.glance(size: 8.5))
                             .foregroundStyle(palette.tertiary)
                             .lineLimit(1)
                             .minimumScaleFactor(0.7)
@@ -992,7 +992,7 @@ struct GlanceResetElementView: View {
                 .padding(.vertical, 4)
             }
         }
-        .font(.system(size: 11))
+        .font(.glance(size: 11))
     }
 
     /// The comparison where the table has no room: each measure over the two values, each value led
@@ -1021,7 +1021,7 @@ struct GlanceResetElementView: View {
                 .padding(.vertical, 4)
             }
         }
-        .font(.system(size: 11))
+        .font(.glance(size: 11))
     }
 
     private func compareHead(_ column: GlanceResetCompare.Column) -> some View {
@@ -1031,7 +1031,7 @@ struct GlanceResetElementView: View {
                 .frame(width: 12, height: 12)
             Text(column.name)
         }
-        .font(.system(size: 10, weight: .semibold))
+        .font(.glance(size: 10, weight: .semibold))
         .foregroundStyle(.secondary)
         .lineLimit(1)
         .fixedSize()
@@ -1060,7 +1060,7 @@ struct GlanceResetElementView: View {
         let busiest = CGFloat(compare.busiestMonth)
         let count = { (value: Int) in
             Text(value > 0 ? "\(value)" : " ")
-                .font(.system(size: 8.5))
+                .font(.glance(size: 8.5))
                 .monospacedDigit()
                 .foregroundStyle(palette.tertiary)
                 .lineLimit(1)
@@ -1075,7 +1075,7 @@ struct GlanceResetElementView: View {
         }
         return VStack(alignment: .leading, spacing: 4) {
             if titled {
-                Text(compare.monthsTitle).font(.system(size: 10)).foregroundStyle(.secondary)
+                Text(compare.monthsTitle).font(.glance(size: 10)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(alignment: .bottom, spacing: 4) {
@@ -1093,7 +1093,7 @@ struct GlanceResetElementView: View {
                         }
                         .frame(height: track)
                         Text(month.label)
-                            .font(.system(size: 8.5))
+                            .font(.glance(size: 8.5))
                             .foregroundStyle(palette.tertiary)
                             .lineLimit(1)
                             .minimumScaleFactor(0.7)
@@ -1112,7 +1112,7 @@ struct GlanceResetElementView: View {
             GlanceResetAvatar(handle: author.handle, picture: head.avatar, size: 18)
             if head.avatar.isEmpty || GlanceResetAvatar.image(head.avatar) == nil {
                 Text(author.handle)
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.glance(size: 10, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -1133,7 +1133,7 @@ struct GlanceResetElementView: View {
 
     private func rowTime(_ head: GlanceResetRowHead) -> some View {
         Text(head.when)
-            .font(.system(size: 10))
+            .font(.glance(size: 10))
             .foregroundStyle(.secondary)
             .monospacedDigit()
             .lineLimit(1)
@@ -1159,7 +1159,7 @@ struct GlanceResetElementView: View {
 
     private func chip(_ text: String, fill: Color, ink: Color) -> some View {
         Text(text)
-            .font(.system(size: 9.5, weight: .semibold))
+            .font(.glance(size: 9.5, weight: .semibold))
             .foregroundStyle(ink)
             .lineLimit(1)
             .padding(.horizontal, 5)
@@ -1174,12 +1174,12 @@ struct GlanceResetElementView: View {
         switch fold {
         case .history, .changes:
             Text(label)
-                .font(.system(size: 11, weight: .medium))
+                .font(.glance(size: 11, weight: .medium))
                 .foregroundStyle(palette.blue)
                 .contentShape(Rectangle())
         case .method:
             HStack(spacing: 4) {
-                Text(label).font(.system(size: 10, weight: .semibold))
+                Text(label).font(.glance(size: 10, weight: .semibold))
                 Image(systemName: open ? "chevron.up" : "chevron.down").font(.system(size: 7.5, weight: .bold))
             }
             .foregroundStyle(.secondary)
@@ -1209,7 +1209,7 @@ struct GlanceResetElementView: View {
                 Color.clear.frame(width: 22, height: 11)
                 ForEach(Array(weeks), id: \.self) { week in
                     Text(calendar.months.first(where: { $0.week == week })?.label ?? "")
-                        .font(.system(size: 8.5)).foregroundStyle(.secondary)
+                        .font(.glance(size: 8.5)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: true, vertical: false)
                         .frame(width: pitch, alignment: .leading)
                 }
@@ -1217,7 +1217,7 @@ struct GlanceResetElementView: View {
             ForEach(Array(days), id: \.self) { day in
                 HStack(spacing: 0) {
                     Text(day < calendar.weekdays.count ? calendar.weekdays[day] : "")
-                        .font(.system(size: 8.5)).foregroundStyle(.secondary).frame(width: 22, alignment: .leading)
+                        .font(.glance(size: 8.5)).foregroundStyle(.secondary).frame(width: 22, alignment: .leading)
                     ForEach(Array(weeks), id: \.self) { week in
                         let value = week < rows.count && day < rows[week].count ? rows[week][day] : .future
                         RoundedRectangle(cornerRadius: 2)
@@ -1243,7 +1243,7 @@ struct GlanceResetHeading: View {
                 .foregroundStyle(resets.markTint)
                 .frame(width: 14, height: 14)
             Text(resets.title)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.glance(size: 12, weight: .semibold))
                 .foregroundStyle(Color.primary)
                 .lineLimit(1)
         }

@@ -334,7 +334,7 @@ struct IslandDetails: View {
 
     private func emptyLine(_ line: (text: String, failed: Bool)) -> some View {
         Text(line.text)
-            .font(.system(size: 12))
+            .font(.glance(size: 12))
             .foregroundStyle(line.failed ? IslandInk.warning : IslandInk.label)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 20)
@@ -365,7 +365,7 @@ struct IslandDetails: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
-        .font(.system(size: 10.5))
+        .font(.glance(size: 10.5))
         .foregroundStyle(IslandInk.faint)
         .padding(.horizontal, 20)
         .padding(.top, 14)
@@ -403,7 +403,7 @@ struct IslandTabBar: View {
                             .frame(width: 11, height: 11)
                     }
                     Text(labels.name(tab))
-                        .font(.system(size: 11.5, weight: on ? .semibold : .medium))
+                        .font(.glance(size: 11.5, weight: on ? .semibold : .medium))
                         .foregroundStyle(on ? Color.white : IslandInk.caption)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
@@ -610,20 +610,20 @@ struct IslandAccountHeader: View {
                         .frame(width: density.mark, height: density.mark)
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
                         Text(provider.name)
-                            .font(.system(size: density.name, weight: .semibold))
+                            .font(.glance(size: density.name, weight: .semibold))
                             .foregroundStyle(ink.primary)
                             .lineLimit(1)
                             .truncationMode(.tail)
                         if shows.plan, let plan = provider.plan {
                             Text(plan)
-                                .font(.system(size: density.plan))
+                                .font(.glance(size: density.plan))
                                 .foregroundStyle(ink.caption)
                                 .lineLimit(1)
                                 .layoutPriority(1)
                         }
                         if let outdated = provider.outdated {
                             Text(outdated)
-                                .font(.system(size: density.plan))
+                                .font(.glance(size: density.plan))
                                 .foregroundStyle(ink.faint)
                                 .lineLimit(1)
                         }
@@ -638,7 +638,7 @@ struct IslandAccountHeader: View {
                 }
                 if shows.account, let account = provider.account {
                     Text(account)
-                        .font(.system(size: density.plan))
+                        .font(.glance(size: density.plan))
                         .foregroundStyle(ink.caption)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -689,7 +689,7 @@ struct IslandMetricRow: View {
                         if let reset = document.resetText(for: metric, now: now, showsReset: showsReset) {
                             Spacer(minLength: 8)
                             Text(reset)
-                                .font(.system(size: density.support))
+                                .font(.glance(size: density.support))
                                 .foregroundStyle(ink.caption)
                                 .monospacedDigit()
                                 .lineLimit(1)
@@ -699,7 +699,7 @@ struct IslandMetricRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     if let restore = document.restoreText(for: metric, now: now, showsReset: showsReset) {
                         Text(restore)
-                            .font(.system(size: density.caption))
+                            .font(.glance(size: density.caption))
                             .foregroundStyle(ink.faint)
                             .monospacedDigit()
                             .lineLimit(1)
@@ -723,7 +723,7 @@ struct IslandMetricRow: View {
 
     private var title: some View {
         Text(metric.label)
-            .font(.system(size: density.label, weight: .semibold))
+            .font(.glance(size: density.label, weight: .semibold))
             .foregroundStyle(ink.primary)
             .lineLimit(1)
             .truncationMode(.tail)
@@ -731,7 +731,7 @@ struct IslandMetricRow: View {
 
     private var headline: some View {
         Text(metric.headline)
-            .font(.system(size: density.label))
+            .font(.glance(size: density.label))
             .foregroundStyle(ink.primary)
             .monospacedDigit()
             .lineLimit(1)
@@ -746,7 +746,7 @@ struct IslandMoreLine: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 10.5, weight: .medium))
+            .font(.glance(size: 10.5, weight: .medium))
             .foregroundStyle(IslandPanelInk(scheme).faint)
             .lineLimit(1)
     }
@@ -787,11 +787,11 @@ struct IslandResetsMissing: View {
     var body: some View {
         VStack(alignment: .leading, spacing: spacing / 2) {
             Text(part.title)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.glance(size: 12, weight: .semibold))
                 .foregroundStyle(Color.primary)
                 .lineLimit(1)
             Text(part.message)
-                .font(.system(size: 11))
+                .font(.glance(size: 11))
                 .foregroundStyle(part.failed ? GlanceResetPalette(scheme: scheme).noticeText : Color.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -820,7 +820,7 @@ struct IslandUpcomingSection: View {
         VStack(alignment: .leading, spacing: density.upcomingGap) {
             if !document.labels.upcoming.isEmpty {
                 Text(document.labels.upcoming)
-                    .font(.system(size: density.upcomingText - 0.5, weight: .medium))
+                    .font(.glance(size: density.upcomingText - 0.5, weight: .medium))
                     .foregroundStyle(ink.label)
                     .lineLimit(1)
             }
@@ -838,13 +838,13 @@ struct IslandUpcomingSection: View {
                     .frame(width: density.upcomingMark, height: density.upcomingMark)
                     .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
                 Text("\(accountName(limit.provider, in: document.providers)) · \(limit.metric.label)")
-                    .font(.system(size: density.upcomingText))
+                    .font(.glance(size: density.upcomingText))
                     .foregroundStyle(ink.dark ? Color.white.opacity(0.88) : Color.black.opacity(0.88))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 8)
                 Text(limit.metric.headline)
-                    .font(.system(size: density.upcomingText, weight: .semibold))
+                    .font(.glance(size: density.upcomingText, weight: .semibold))
                     .foregroundStyle(ink.primary)
                     .monospacedDigit()
                     .lineLimit(1)
@@ -863,7 +863,7 @@ struct IslandUpcomingSection: View {
                         .fixedSize()
                 }
             }
-            .font(.system(size: density.upcomingLine))
+            .font(.glance(size: density.upcomingLine))
             .monospacedDigit()
             .padding(.leading, density.upcomingMark + 7)
         }
@@ -888,11 +888,11 @@ struct IslandAlertView: View {
                     .frame(width: 22, height: 22)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(alert.title)
-                        .font(.system(size: 13.5, weight: .semibold))
+                        .font(.glance(size: 13.5, weight: .semibold))
                         .foregroundStyle(GlancePalette.text(alert.severity, onDark: true))
                         .fixedSize(horizontal: false, vertical: true)
                     Text(alert.body)
-                        .font(.system(size: 12))
+                        .font(.glance(size: 12))
                         .foregroundStyle(Color.white.opacity(0.78))
                         .fixedSize(horizontal: false, vertical: true)
                 }

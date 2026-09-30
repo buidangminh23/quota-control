@@ -32,11 +32,11 @@ struct ResetsSummary: View {
                         .font(.system(size: WidgetScale.title, weight: .semibold))
                         .foregroundStyle(.secondary)
                     Text(WidgetText.resetsTitle(document))
-                        .font(.system(size: WidgetScale.title, weight: .semibold))
+                        .font(.glance(size: WidgetScale.title, weight: .semibold))
                         .lineLimit(1)
                 }
                 Text(message.text)
-                    .font(.system(size: WidgetScale.caption))
+                    .font(.glance(size: WidgetScale.caption))
                     .foregroundStyle(message.failed ? GlanceResetPalette(scheme: colorScheme).noticeText : Color.secondary)
                     .lineLimit(4)
                     .fixedSize(horizontal: false, vertical: true)
@@ -60,7 +60,7 @@ struct ResetsSummary: View {
                 Spacer(minLength: 0)
                 if let latest = resets.latest {
                     latest.since.live(now: now, units: units)
-                        .font(.system(size: WidgetScale.caption))
+                        .font(.glance(size: WidgetScale.caption))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
@@ -142,7 +142,7 @@ struct OverviewLayout: View {
     private func quota(width: CGFloat, height: CGFloat, showsAccounts: Bool = false) -> some View {
         if providers.isEmpty {
             Text(document.widget.empty)
-                .font(.system(size: WidgetScale.caption))
+                .font(.glance(size: WidgetScale.caption))
                 .foregroundStyle(.secondary)
                 .lineLimit(4)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -225,23 +225,23 @@ struct OverviewLayout: View {
                     ResetsHeader(resets: resets)
                     if let upcoming = resets.upcoming(at: now) {
                         upcoming.liveValue(now: now, units: document.labels.units)
-                            .font(.system(size: WidgetScale.value, weight: .semibold))
+                            .font(.glance(size: WidgetScale.value, weight: .semibold))
                             .monospacedDigit()
                             .lineLimit(2)
                     } else if let chance = resets.chance(days: 1) ?? resets.forecast.first {
                         Text("\(chance.label) · \(chance.percent)%")
-                            .font(.system(size: WidgetScale.value, weight: .semibold))
+                            .font(.glance(size: WidgetScale.value, weight: .semibold))
                             .lineLimit(2)
                     } else if let latest = resets.latest {
                         latest.since.live(now: now, units: document.labels.units)
-                            .font(.system(size: WidgetScale.caption))
+                            .font(.glance(size: WidgetScale.caption))
                             .lineLimit(2)
                     }
                 }
             } else {
                 let message = WidgetText.resetsMessage(document)
                 Text(message.text)
-                    .font(.system(size: WidgetScale.caption))
+                    .font(.glance(size: WidgetScale.caption))
                     .foregroundStyle(message.failed ? GlanceResetPalette(scheme: colorScheme).noticeText : Color.secondary)
                     .lineLimit(3)
             }
@@ -255,12 +255,12 @@ struct OverviewLayout: View {
                 }
                 if let next = all.first {
                     Text("\(accountName(next.provider, in: document.widget.providers)) · \(next.metric.label) · \(document.resetWording.span(next.at, now: now))")
-                        .font(.system(size: WidgetScale.caption, weight: .medium))
+                        .font(.glance(size: WidgetScale.caption, weight: .medium))
                         .lineLimit(2)
                         .truncationMode(.middle)
                 } else {
                     Text(UpcomingText.empty(document))
-                        .font(.system(size: WidgetScale.caption))
+                        .font(.glance(size: WidgetScale.caption))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }

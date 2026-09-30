@@ -291,13 +291,13 @@ private struct QuotaMetricRow: View {
                     if let reset {
                         Spacer(minLength: 4)
                         reset
-                            .font(.system(size: WidgetScale.value))
+                            .font(.glance(size: WidgetScale.value))
                             .foregroundStyle(.secondary)
                     }
                 }
                 if restores, let restore = document.restoreText(for: metric, now: now, showsReset: showsReset) {
                     Text(restore)
-                        .font(.system(size: WidgetScale.caption))
+                        .font(.glance(size: WidgetScale.caption))
                         .monospacedDigit()
                         .foregroundStyle(GlanceRowInk.tertiary(dark: colorScheme == .dark))
                         .lineLimit(1)
@@ -316,7 +316,7 @@ private struct QuotaMetricRow: View {
                     GlanceMeter(fraction: fraction, severity: metric.severity, height: 4, tick: metric.tick)
                     if let reset, !dense {
                         reset
-                            .font(.system(size: WidgetScale.caption))
+                            .font(.glance(size: WidgetScale.caption))
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -346,7 +346,7 @@ private struct QuotaMetricRow: View {
 
     private var title: some View {
         Text(metric.label)
-            .font(.system(size: WidgetScale.label, weight: .semibold))
+            .font(.glance(size: WidgetScale.label, weight: .semibold))
             .foregroundStyle(.primary)
             .lineLimit(1)
     }
@@ -359,7 +359,7 @@ private struct QuotaMetricRow: View {
                 ColorlessSeverityMark(severity: metric.severity, size: WidgetScale.value)
             }
             Text(metric.headline)
-                .font(.system(size: WidgetScale.value))
+                .font(.glance(size: WidgetScale.value))
                 .monospacedDigit()
                 .foregroundStyle(.primary)
                 .lineLimit(1)
@@ -384,7 +384,7 @@ private struct CondensedAccount: View {
                     GlanceValueWithDot(metric: metric, now: now, dotSize: 5) {
                         ColorlessSeverityMark(severity: metric.severity, size: WidgetScale.value)
                         Text(metric.value)
-                            .font(.system(size: WidgetScale.value, weight: .semibold))
+                            .font(.glance(size: WidgetScale.value, weight: .semibold))
                             .monospacedDigit()
                             .foregroundStyle(.primary)
                             .lineLimit(1)
@@ -392,7 +392,7 @@ private struct CondensedAccount: View {
                     .fixedSize()
                 } else {
                     Text(provider.notice ?? document.labels.noData)
-                        .font(.system(size: WidgetScale.caption))
+                        .font(.glance(size: WidgetScale.caption))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -533,12 +533,12 @@ private struct CompactAccount: View {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         mark
                         Text(provider.name)
-                            .font(.system(size: WidgetScale.label, weight: .semibold))
+                            .font(.glance(size: WidgetScale.label, weight: .semibold))
                             .lineLimit(1)
                         problemMark
                         Spacer(minLength: 4)
                         Text(provider.notice ?? document.labels.noData)
-                            .font(.system(size: WidgetScale.caption))
+                            .font(.glance(size: WidgetScale.caption))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
@@ -561,7 +561,7 @@ private struct CompactAccount: View {
                 if !headed { mark }
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(title)
-                        .font(.system(size: WidgetScale.label, weight: headed ? .semibold : .regular))
+                        .font(.glance(size: WidgetScale.label, weight: headed ? .semibold : .regular))
                         .foregroundStyle(headed ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                         .lineLimit(1)
                     if !headed { problemMark }
@@ -584,7 +584,7 @@ private struct CompactAccount: View {
                             reset
                         }
                     }
-                    .font(.system(size: WidgetScale.caption))
+                    .font(.glance(size: WidgetScale.caption))
                     .foregroundStyle(.secondary)
                     .frame(width: 84, alignment: .trailing)
                 }
@@ -594,14 +594,14 @@ private struct CompactAccount: View {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     mark
                     Text(provider.name)
-                        .font(.system(size: WidgetScale.label, weight: .semibold))
+                        .font(.glance(size: WidgetScale.label, weight: .semibold))
                         .lineLimit(1)
                     problemMark
                     Spacer(minLength: 4)
                     value(metric)
                 }
                 Text(metric.label)
-                    .font(.system(size: WidgetScale.caption))
+                    .font(.glance(size: WidgetScale.caption))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .padding(.leading, 14)
@@ -613,7 +613,7 @@ private struct CompactAccount: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(title)
-                        .font(.system(size: WidgetScale.label, weight: headed ? .semibold : .regular))
+                        .font(.glance(size: WidgetScale.label, weight: headed ? .semibold : .regular))
                         .foregroundStyle(headed ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                         .lineLimit(1)
                     Spacer(minLength: 4)
@@ -630,7 +630,7 @@ private struct CompactAccount: View {
         GlanceValueWithDot(metric: metric, now: now, dotSize: 5) {
             ColorlessSeverityMark(severity: metric.severity, size: WidgetScale.value)
             Text(metric.value)
-                .font(.system(size: WidgetScale.value, weight: .semibold))
+                .font(.glance(size: WidgetScale.value, weight: .semibold))
                 .monospacedDigit()
                 .foregroundStyle(.primary)
                 .lineLimit(1)
@@ -800,7 +800,7 @@ private struct RingTileView: View {
                         GlanceValueWithDot(metric: metric, now: now, dotSize: max(4, ring * 0.07)) {
                             ColorlessSeverityMark(severity: metric.severity, size: max(10, ring * 0.16))
                             Text(metric.value)
-                                .font(.system(size: max(10, ring * 0.2), weight: .bold))
+                                .font(.glance(size: max(10, ring * 0.2), weight: .bold))
                                 .monospacedDigit()
                                 .foregroundStyle(.primary)
                                 .lineLimit(1)
@@ -812,7 +812,7 @@ private struct RingTileView: View {
                             .foregroundStyle(GlanceHeaderInk.warning(dark: colorScheme == .dark))
                     } else {
                         Text(Self.noReading)
-                            .font(.system(size: max(10, ring * 0.2), weight: .bold))
+                            .font(.glance(size: max(10, ring * 0.2), weight: .bold))
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -820,7 +820,7 @@ private struct RingTileView: View {
             }
             .frame(width: ring, height: ring)
             Text(caption)
-                .font(.system(size: WidgetScale.footnote, weight: .medium))
+                .font(.glance(size: WidgetScale.footnote, weight: .medium))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
@@ -828,7 +828,7 @@ private struct RingTileView: View {
             if fit.resets, document.widget.shows.resets, let metric = tile.metric,
                let reset = ResetText(metric: metric, document: document, now: now, short: true) {
                 reset
-                    .font(.system(size: WidgetScale.footnote - 0.5))
+                    .font(.glance(size: WidgetScale.footnote - 0.5))
                     .foregroundStyle(.tertiary)
                     .frame(width: fit.cell)
             }
