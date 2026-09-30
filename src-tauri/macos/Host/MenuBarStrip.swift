@@ -323,6 +323,8 @@ final class MenuBarStripController {
     private var document: StripDocument?
     private var image: NSImage?
     private var appearance: NSKeyValueObservation?
+    /// Whether the menu bar was dark when the strip was last drawn for it.
+    private var drawnDark: Bool?
 
     func show(_ item: NSStatusItem, _ data: Data) -> Bool {
         guard let button = item.button,
@@ -345,12 +347,15 @@ final class MenuBarStripController {
         followButton(button)
         if button !== self.button {
             appearance = button.observe(\.effectiveAppearance) { button, _ in
-                DispatchQueue.main.async { button.needsDisplay = true }
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated { MenuBarStripController.shared.appearanceChanged(button) }
+                }
             }
         }
         self.button = button
         self.document = document
         self.image = image
+        drawnDark = Self.menuBarIsDark(button)
         return true
     }
 
@@ -361,6 +366,23 @@ final class MenuBarStripController {
         button = nil
         document = nil
         image = nil
+        drawnDark = nil
+    }
+
+    /// The button's appearance also changes while the system snapshots the item for its copies in
+    /// the menu bar: it sets the button's own appearance and restores it at once. Redrawing for that
+    /// makes the system snapshot again, in a loop that keeps a core busy, so the strip is drawn
+    /// again only when the menu bar itself turned light or dark, which the button's window carries.
+    private func appearanceChanged(_ button: NSStatusBarButton) {
+        guard button === self.button else { return }
+        let dark = Self.menuBarIsDark(button)
+        guard dark != drawnDark else { return }
+        drawnDark = dark
+        button.needsDisplay = true
+    }
+
+    private static func menuBarIsDark(_ button: NSStatusBarButton) -> Bool {
+        MenuBarStrip.isDark(button.window?.effectiveAppearance ?? button.effectiveAppearance)
     }
 
     /// The tray's own click target covers the button it was created over; let it follow the
