@@ -737,8 +737,8 @@ mod platform {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, FindWindowExW,
         FindWindowW, GW_CHILD, GetMessageW, GetParent, GetWindow, GetWindowRect, HWND_TOP,
-        IDC_ARROW, IsChild, IsWindow, LoadCursorW, MA_NOACTIVATE, MSG, PostMessageW,
-        RegisterClassExW, RegisterWindowMessageW, SWP_ASYNCWINDOWPOS, SWP_HIDEWINDOW,
+        IDC_ARROW, IsChild, IsWindow, IsWindowVisible, LoadCursorW, MA_NOACTIVATE, MSG,
+        PostMessageW, RegisterClassExW, RegisterWindowMessageW, SWP_ASYNCWINDOWPOS, SWP_HIDEWINDOW,
         SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SendMessageW, SetTimer,
         SetWindowPos, TranslateMessage, ULW_ALPHA, UpdateLayeredWindow, WM_APP, WM_DISPLAYCHANGE,
         WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_NCDESTROY, WM_RBUTTONUP,
@@ -1444,6 +1444,43 @@ mod platform {
         Slotted { width: u32, height: u32 },
     }
 
+    #[derive(Default)]
+    struct SlotStretch {
+        request: Option<u32>,
+        wanted: Option<u32>,
+        unheld: u8,
+    }
+
+    impl SlotStretch {
+        fn retry(&mut self) {
+            self.wanted = None;
+            self.unheld = 0;
+        }
+
+        fn tray(&mut self, wanted: Option<u32>, held: bool, visible: bool) -> TraySlot {
+            let Some(wanted) = wanted else {
+                *self = Self::default();
+                return TraySlot::Icon;
+            };
+            if self.wanted != Some(wanted) {
+                self.wanted = Some(wanted);
+                self.unheld = 0;
+            }
+            let request = next_slot_width(self.request, wanted);
+            self.request = Some(request);
+            self.unheld = if held {
+                0
+            } else {
+                self.unheld.saturating_add(1)
+            };
+            if self.unheld > SLOT_STRETCH_PASSES && visible {
+                TraySlot::Icon
+            } else {
+                TraySlot::Clear { width: request }
+            }
+        }
+    }
+
     struct State<R: Runtime> {
         app: AppHandle<R>,
         shared: Shared,
@@ -1462,11 +1499,7 @@ mod platform {
         slot_misses: u8,
         /// What the app last heard its button should show.
         tray: TraySlot,
-        /// Points last asked of the button, and the width the strip wanted then.
-        slot_request: Option<u32>,
-        slot_wanted: Option<u32>,
-        /// Passes since the strip wanted that width in which it did not fit the button.
-        slot_unheld: u8,
+        stretch: SlotStretch,
     }
 
     thread_local! {
@@ -1524,13 +1557,11 @@ mod platform {
             }
         }
 
-        fn taskbar_changed(&mut self, restarted: bool) {
+        fn taskbar_changed(&mut self, _restarted: bool) {
             self.islands.forget();
             self.slot = None;
             self.slot_misses = 0;
-            if restarted {
-                self.slot_wanted = None;
-            }
+            self.stretch.retry();
             self.sync();
         }
 
@@ -1709,8 +1740,11 @@ mod platform {
                     );
                 }
                 self.placed = None;
-            } else if self.placed != Some(placement) || !self.painted {
-                unsafe {
+            } else if self.placed != Some(placement)
+                || !self.painted
+                || unsafe { IsWindowVisible(window.strip) } == 0
+            {
+                let positioned = unsafe {
                     SetWindowPos(
                         window.strip,
                         HWND_TOP,
@@ -1721,7 +1755,7 @@ mod platform {
                         SWP_ASYNCWINDOWPOS | SWP_NOACTIVATE | SWP_SHOWWINDOW,
                     )
                 };
-                self.placed = Some(placement);
+                self.placed = (positioned != 0).then_some(placement);
             } else if unsafe { GetWindow(taskbar.hwnd, GW_CHILD) } != window.strip {
                 unsafe {
                     SetWindowPos(
@@ -1746,31 +1780,13 @@ mod platform {
 
         /// What the app's button should show while it is widened for the strip, which wants
         /// `wanted` points of it: a clear icon that wide (see [`TraySlot::Clear`]), until the strip
-        /// has not fitted the button for [`SLOT_STRETCH_PASSES`] passes, which means a styler rule
-        /// keeps the button's width fixed and the strip sits elsewhere.
+        /// has not fitted the button for [`SLOT_STRETCH_PASSES`] passes and is visible elsewhere.
         fn tray_for(&mut self, wanted: Option<u32>) -> TraySlot {
-            let Some(wanted) = wanted.filter(|_| self.painted) else {
-                self.slot_request = None;
-                self.slot_wanted = None;
-                self.slot_unheld = 0;
-                return TraySlot::Icon;
-            };
-            if self.slot_wanted != Some(wanted) {
-                self.slot_wanted = Some(wanted);
-                self.slot_unheld = 0;
-            }
-            let request = next_slot_width(self.slot_request, wanted);
-            self.slot_request = Some(request);
-            self.slot_unheld = if self.slot.is_some() {
-                0
-            } else {
-                self.slot_unheld.saturating_add(1)
-            };
-            if self.slot_unheld > SLOT_STRETCH_PASSES {
-                TraySlot::Icon
-            } else {
-                TraySlot::Clear { width: request }
-            }
+            self.stretch.tray(
+                wanted.filter(|_| self.painted),
+                self.slot.is_some(),
+                self.placed.is_some(),
+            )
         }
 
         /// Tell the app, when it changes, what its notification-area button should show.
@@ -1802,9 +1818,7 @@ mod platform {
             self.discard_window();
             self.slot = None;
             self.slot_misses = 0;
-            self.slot_request = None;
-            self.slot_wanted = None;
-            self.slot_unheld = 0;
+            self.stretch = SlotStretch::default();
             self.cover(TraySlot::Icon);
         }
     }
@@ -2186,9 +2200,7 @@ mod platform {
                 slot: None,
                 slot_misses: 0,
                 tray: TraySlot::Icon,
-                slot_request: None,
-                slot_wanted: None,
-                slot_unheld: 0,
+                stretch: SlotStretch::default(),
             }));
         });
         unsafe { SetTimer(host, SYNC_TIMER, SYNC_INTERVAL_MS, None) };
@@ -2249,6 +2261,57 @@ mod platform {
                 slot: None,
                 apps: None,
             }
+        }
+
+        #[test]
+        fn hidden_strip_keeps_its_slot_request_through_a_long_layout_delay() {
+            let mut stretch = SlotStretch::default();
+            let expanded = stretch.tray(Some(440), false, false);
+            assert!(matches!(expanded, TraySlot::Clear { .. }));
+            for _ in 0..1000 {
+                assert_eq!(stretch.tray(Some(440), false, false), expanded);
+            }
+            assert_eq!(stretch.tray(Some(440), true, true), expanded);
+            assert_eq!(stretch.unheld, 0);
+        }
+
+        #[test]
+        fn a_fixed_slot_can_release_space_only_while_the_strip_is_visible_elsewhere() {
+            let mut stretch = SlotStretch::default();
+            for _ in 0..SLOT_STRETCH_PASSES {
+                assert!(matches!(
+                    stretch.tray(Some(440), false, true),
+                    TraySlot::Clear { .. }
+                ));
+            }
+            assert_eq!(stretch.tray(Some(440), false, true), TraySlot::Icon);
+            assert!(matches!(
+                stretch.tray(Some(440), false, false),
+                TraySlot::Clear { .. }
+            ));
+        }
+
+        #[test]
+        fn reconnect_retries_a_failed_slot_without_collapsing_the_reserved_width() {
+            let mut stretch = SlotStretch::default();
+            let expanded = stretch.tray(Some(440), false, true);
+            for _ in 0..20 {
+                stretch.tray(Some(440), false, true);
+            }
+            assert_eq!(stretch.tray(Some(440), false, true), TraySlot::Icon);
+            stretch.retry();
+            assert_eq!(stretch.tray(Some(440), false, true), expanded);
+            assert_eq!(stretch.request, Some(next_slot_width(None, 440)));
+        }
+
+        #[test]
+        fn turning_the_strip_off_releases_a_pending_slot() {
+            let mut stretch = SlotStretch::default();
+            stretch.tray(Some(440), false, false);
+            assert_eq!(stretch.tray(None, false, false), TraySlot::Icon);
+            assert_eq!(stretch.request, None);
+            assert_eq!(stretch.wanted, None);
+            assert_eq!(stretch.unheld, 0);
         }
 
         #[test]
