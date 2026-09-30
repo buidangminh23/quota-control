@@ -13,7 +13,7 @@ import type { Language } from "@/i18n";
 import { insightsFor, type InsightsMessages } from "@/i18n/insights";
 import { timeOnDayLabel, type TimeFormat } from "./format";
 import type { GlanceCountdown, GlanceResetCompare, GlanceResetCompareColumn, GlanceResetPresentation, GlanceResets, GlanceResetStatusCard, GlanceUpcomingReset } from "./glance";
-import { addHistory, COUNTDOWN_SPAN, fetchedLine } from "./glanceResets";
+import { addHistory, COUNTDOWN_SPAN, fetchedLine, stillPresentation } from "./glanceResets";
 import { CLAUDE_ACCOUNT, concerns, openBanked, type ClaudePlan, type ClaudeReset, type ClaudeResetFeed } from "./insights/claudeResets";
 import { authorOf, buildClaudePresentation, type ClaudeBankedCard, type ClaudePresentation } from "./insights/claudePresentation";
 import type { CodexReset } from "./insights/resets";
@@ -102,8 +102,9 @@ function upcomingOf(reset: ClaudeReset, now: Date, timeFormat: TimeFormat, langu
  * counting down to their deadlines, the forecast with its self-check, the limit changes and the
  * comparison with Codex (its columns named and marked), the @ClaudeDevs picture for that account's
  * posts, when the feed was read (`fetched`), the method word for word, and none of what only the
- * popup can do (marking a banked reset as applied). The chances' meters are kept to the whole
- * percent they show, so the document does not change each minute as the estimate drifts.
+ * popup can do (marking a banked reset as applied). Like the Codex copy (`stillPresentation`), the
+ * meters are kept to the whole percent they show and the latest reset's time since is left to
+ * Swift, so the document does not change each minute.
  */
 function glancePresentation(presentation: ClaudePresentation, pending: readonly ClaudeReset[], language: Language, fetched: GlanceCountdown | undefined): GlanceResetPresentation {
   const insights = insightsFor(language);
@@ -111,14 +112,13 @@ function glancePresentation(presentation: ClaudePresentation, pending: readonly 
   const waiting = new Set(pending.map((reset) => reset.id));
   const left = text.bankedLeft(COUNTDOWN_SPAN);
   const banked = presentation.banked.filter((card) => waiting.has(card.resetId)).map((card) => bankedStatus(card, text.glanceBankedHow, left));
-  const chances = presentation.forecast.chances.map((chance) => ({ ...chance, fraction: Math.round(chance.fraction * 100) / 100 }));
   const reduced: GlanceResetPresentation = {
     locale: presentation.locale,
     authorAvatar: claudeDevsAvatar,
     avatarHandle: authorOf(CLAUDE_ACCOUNT).handle,
     ...(presentation.notices.length > 0 ? { notices: [...presentation.notices] } : {}),
     statuses: banked.length > 0 ? banked : presentation.statuses,
-    forecast: { ...presentation.forecast, chances },
+    forecast: presentation.forecast,
     statsTitle: presentation.statsTitle,
     stats: presentation.stats,
     historyTitle: presentation.historyTitle,
@@ -135,7 +135,7 @@ function glancePresentation(presentation: ClaudePresentation, pending: readonly 
   };
   if (presentation.latest) reduced.latest = presentation.latest;
   if (presentation.quietTitle !== undefined) reduced.quietTitle = presentation.quietTitle;
-  return reduced;
+  return stillPresentation(reduced);
 }
 
 /**

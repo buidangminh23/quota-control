@@ -228,7 +228,7 @@ export function buildGlanceResets(input: GlanceResetsInput): GlanceResets | null
     forecastTitle: text.glanceChanceTitle,
     forecast: [],
     forecastNote: withHistory ? text.forecastUnavailable : "",
-    presentation: withHistory ? presentation : withoutHistory(presentation),
+    presentation: stillPresentation(withHistory ? presentation : withoutHistory(presentation)),
     theme: input.theme,
   };
   const mark = PROVIDER_MARKS[BRAND];
@@ -240,6 +240,39 @@ export function buildGlanceResets(input: GlanceResetsInput): GlanceResets | null
   if (withHistory) addHistory(resets, feeds.resets, now, language, timeFormat);
   else addLatest(resets, feeds.resets[0], now, language, timeFormat);
   return resets;
+}
+
+/**
+ * The Reset tab's cards as the glance document carries them: what Swift words from a moment is left
+ * to Swift, so the document holds nothing that moves each minute. The latest reset's `ago` goes
+ * (the island and the widgets word it from `at`), a scheduled card keeps only its fixed meta line
+ * and no `due` (they word both from `announced`, `scheduledMeta` and `dueCountdown`), and the
+ * meters are kept to the whole percent their chances and wait show. The popup's own cards stay as
+ * `buildResetPresentation` makes them.
+ */
+export function stillPresentation(presentation: GlanceResetPresentation): GlanceResetPresentation {
+  const hundredths = (value: number) => Math.round(value * 100) / 100;
+  const { forecast } = presentation;
+  const still: GlanceResetPresentation = {
+    ...presentation,
+    statuses: presentation.statuses.map(stillStatus),
+    forecast: {
+      ...forecast,
+      chances: forecast.chances.map((chance) => ({ ...chance, fraction: hundredths(chance.fraction) })),
+      ...(forecast.waitFraction === undefined ? {} : { waitFraction: hundredths(forecast.waitFraction) }),
+    },
+  };
+  if (presentation.latest) {
+    const { ago: _ago, ...latest } = presentation.latest;
+    still.latest = latest;
+  }
+  return still;
+}
+
+function stillStatus(status: GlanceResetStatusCard): GlanceResetStatusCard {
+  if (status.kind !== "scheduled" || !status.announced || status.scheduledMeta === undefined) return status;
+  const { due: _due, ...rest } = status;
+  return { ...(status.dueCountdown ? rest : status), meta: [status.scheduledMeta] };
 }
 
 /**

@@ -463,8 +463,9 @@ export interface GlanceResetsPending {
  * one (claude-resets.com, where `upcoming` is a banked reset's deadline), worked out and worded here
  * like the rest of the document. Everything that moves with the clock travels as a moment plus
  * words (`GlanceCountdown`), and chances as whole percents, so these fields only change when the
- * tracker's numbers do. `presentation`, the Reset tab's cards, is looser: its words for how long
- * ago the latest reset was, and the Codex chances' meter fractions, move as time passes.
+ * tracker's numbers do. `presentation`, the Reset tab's cards, keeps the same promise in the
+ * document (`stillPresentation`): its words that move with the clock are left to Swift, which
+ * words them from their moments, and its meters are kept to the whole percent they show.
  */
 export interface GlanceResets {
   /** `Reset Codex`, `Reset Claude`. */
@@ -530,7 +531,9 @@ export interface GlanceResetStatusCard {
  */
 export interface GlanceResetLatestPresentation {
   title: string;
-  ago: string;
+  /** How long ago, in the Reset tab's words (`12 phút trước`); the glance document leaves it out,
+   * since the island and the widgets word it from `at` as time passes. */
+  ago?: string;
   at: string;
   meta: string;
   author?: GlanceResetAuthor;

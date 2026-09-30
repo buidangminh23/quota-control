@@ -995,7 +995,9 @@ struct GlanceResetAuthor: Decodable, Equatable {
 
 struct GlanceResetLatestPresentation: Decodable, Equatable {
     var title: String
-    var ago: String
+    /// The Reset tab's words for how long ago; the app leaves them out, and the cards word them
+    /// from `at` (`ago(since:now:locale:)`) as time passes.
+    var ago: String? = nil
     var at: Date
     var meta: String
     var author: GlanceResetAuthor?

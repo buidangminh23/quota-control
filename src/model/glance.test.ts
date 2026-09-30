@@ -984,11 +984,15 @@ describe("a document for someone who never chose Claude", () => {
    * five minutes and the line under it (`labels.resetsSoon`, `labels.restoresAt`). The wings
    * scenario's two reset wings also took the popup's words (`chưa rõ giờ` from the Codex card's
    * Reset free row, `{d} trước` like the Reset tab's `3 ngày trước`).
+   * The reset cards (`presentation`) also stopped moving each minute: the latest reset's `ago`
+   * is gone (the island and the widgets word it from `at`), a scheduled card keeps only its fixed
+   * meta line (`statuses[].meta`, no `due`), and the meters are rounded to the whole percent they
+   * show (`forecast.chances[].fraction`, `forecast.waitFraction`).
    */
   const PINNED: Readonly<Record<string, string>> = {
-    defaults: "1e09a838741208e0fc1fb92bd7fb5f0be54bf1ad0540897f5ab384d32d664a0b",
-    wings: "dde757320720f1382f160bd090d1cfb442cc78455d69003ed9302c1abe11cae5",
-    tuned: "181777f9585540c18086e8554ed4455a2fc4288e59ca49fe6c3c4a03150418bc",
+    defaults: "9eadcd8a63238ab3ef93c58efa116b5297b47f4dda4f20f3fb47a1cef297cb63",
+    wings: "e2e15cb7d9652811e33f5235dcced660e55f6299ea18f21b4d32654403cfbe4a",
+    tuned: "8618b464fccc3324d33718ea7d8b109de98703a96ee877337b2c02232c15a40c",
   };
   const digest = (document: object) => createHash("sha256").update(JSON.stringify(document)).digest("hex");
   /** The document without what was added to it since: the announcement the latest reset's card
