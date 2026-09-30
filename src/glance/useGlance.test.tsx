@@ -184,6 +184,14 @@ describe("the glance document the popup sends", () => {
     await waitFor(() => expect(api.latest?.resets?.stale).toBeUndefined());
   });
 
+  it("keeps the Claude tracker's saved-copy note off after a single failed check", async () => {
+    const api = await start({ widget: { resetsProvider: "claude" }, notifyClaudeResets: false }, (backend) => {
+      backend.feedStates.claudeResets = { error: "offline", stale: false };
+    });
+    await waitFor(() => expect(api.latest?.claudeResets?.brand).toBe("claude"));
+    expect(api.latest!.claudeResets!.stale).toBeUndefined();
+  });
+
   it("drops the Claude tracker once the Reset tab and Claude notifications are both turned off", async () => {
     const api = await start({ island: { resetsProvider: "claude" }, notifyClaudeResets: false });
     await waitFor(() => expect(api.latest?.claudeResets?.brand).toBe("claude"));

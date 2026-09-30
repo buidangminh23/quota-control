@@ -139,21 +139,26 @@ describe("Benchmark tab", () => {
     expect(await screen.findByText("Vừa tải")).toBeInTheDocument();
   });
 
-  it("dates a board by its last good download after a failed fetch", async () => {
+  it("dates a board by its source's last confirmation after a failed fetch, and notes the saved copy once it has kept failing", async () => {
     await renderApp();
     openTab("Benchmark");
     await screen.findByRole("article", { name: "Claude Opus 5" });
     fireEvent.click(screen.getByRole("radio", { name: "Công khai" }));
     await screen.findByText("GPT-6 Astra");
     const snapshot = useInsights.getState().feeds.epochScores!;
-    const downloaded = new Date(Date.now() - 3 * 3_600_000).toISOString();
-    act(() =>
-      useInsights.setState({
-        feeds: { ...useInsights.getState().feeds, epochScores: { ...snapshot, fetchedAt: downloaded, checkedAt: new Date().toISOString(), verifiedAt: downloaded, error: "timed out", stale: true } },
-      }),
-    );
-    expect(screen.getByText("Lần tải gần nhất bị lỗi, đang hiện bản đã lưu.")).toBeInTheDocument();
+    const downloaded = new Date(Date.now() - 5 * 3_600_000).toISOString();
+    const confirmed = new Date(Date.now() - 3 * 3_600_000).toISOString();
+    const failing = (stale: boolean) =>
+      act(() =>
+        useInsights.setState({
+          feeds: { ...useInsights.getState().feeds, epochScores: { ...snapshot, fetchedAt: downloaded, checkedAt: new Date().toISOString(), verifiedAt: confirmed, error: "timed out", stale } },
+        }),
+      );
+    failing(false);
+    expect(screen.queryByText("Lần tải gần nhất bị lỗi, đang hiện bản đã lưu.")).not.toBeInTheDocument();
     expect(screen.getByText(/^Tải 3 giờ/)).toBeInTheDocument();
+    failing(true);
+    expect(screen.getByText("Lần tải gần nhất bị lỗi, đang hiện bản đã lưu.")).toBeInTheDocument();
   });
 
   it("compares the user's models across sources and adds one by search", async () => {
@@ -252,6 +257,19 @@ describe("the saved-copy note on the Reset tab", () => {
     failFeed("codexResetStatus", false);
     expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
     failFeed("codexResetStatus", true);
+    expect(screen.getByText(NOTE)).toBeInTheDocument();
+  });
+  it("keeps the note off the Claude view after one failed check and shows it once the site has kept failing", async () => {
+    await renderApp({ resetsProvider: "claude" });
+    openTab("Reset");
+    await screen.findByText("Lần reset gần nhất");
+    const failing = (stale: boolean) => {
+      const snapshot = useInsights.getState().feeds.claudeResets!;
+      act(() => useInsights.setState({ feeds: { ...useInsights.getState().feeds, claudeResets: { ...snapshot, error: "HTTP 503", stale } } }));
+    };
+    failing(false);
+    expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
+    failing(true);
     expect(screen.getByText(NOTE)).toBeInTheDocument();
   });
 });
