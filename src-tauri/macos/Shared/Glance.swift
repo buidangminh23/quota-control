@@ -965,6 +965,13 @@ struct GlanceResetLegend: Decodable, Equatable {
     var regular: String
     var banked: String
     var today: String
+
+    /// The key's entries, in the order the calendar lists them.
+    enum Item: CaseIterable {
+        case regular
+        case banked
+        case today
+    }
 }
 
 struct GlanceResetRhythm: Decodable, Equatable {

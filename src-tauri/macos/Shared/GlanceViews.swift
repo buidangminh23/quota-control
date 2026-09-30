@@ -293,7 +293,9 @@ enum GlanceResetElement {
     case chances([GlanceResetForecastChance])
     case meter(Double)
     case calendar(GlanceResetCalendar, Range<Int>, Range<Int>)
-    case legend(GlanceResetLegend)
+    /// The calendar's key, the entries listed with their colors; a widget page too short for the
+    /// whole key gets one entry at a time.
+    case legend(GlanceResetLegend, [GlanceResetLegend.Item])
     case rhythm(String, [GlanceResetBucket])
     /// One statistic: its name on the left, the value on the right.
     case stat(String, String)
@@ -597,10 +599,10 @@ struct GlanceResetElementView: View {
             meter(fraction)
         case let .calendar(calendar, weeks, days):
             calendarGrid(calendar, weeks: weeks, days: days)
-        case let .legend(legend):
+        case let .legend(legend, items):
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 10) { legendItems(legend) }
-                VStack(alignment: .leading, spacing: 5) { legendItems(legend) }
+                HStack(spacing: 10) { legendItems(legend, items) }
+                VStack(alignment: .leading, spacing: 5) { legendItems(legend, items) }
             }
             .font(.system(size: 10.5)).foregroundStyle(.secondary)
         case let .rhythm(title, buckets):
@@ -851,11 +853,17 @@ struct GlanceResetElementView: View {
         }
     }
 
-    @ViewBuilder
-    private func legendItems(_ legend: GlanceResetLegend) -> some View {
-        HStack(spacing: 4) { RoundedRectangle(cornerRadius: 2).fill(palette.blue).frame(width: 9, height: 9); Text(legend.regular) }
-        HStack(spacing: 4) { RoundedRectangle(cornerRadius: 2).fill(Color.orange).frame(width: 9, height: 9); Text(legend.banked) }
-        HStack(spacing: 4) { RoundedRectangle(cornerRadius: 2).strokeBorder(Color.primary, lineWidth: 1).frame(width: 9, height: 9); Text(legend.today) }
+    private func legendItems(_ legend: GlanceResetLegend, _ items: [GlanceResetLegend.Item]) -> some View {
+        ForEach(items, id: \.self) { item in
+            switch item {
+            case .regular:
+                HStack(spacing: 4) { RoundedRectangle(cornerRadius: 2).fill(palette.blue).frame(width: 9, height: 9); Text(legend.regular) }
+            case .banked:
+                HStack(spacing: 4) { RoundedRectangle(cornerRadius: 2).fill(Color.orange).frame(width: 9, height: 9); Text(legend.banked) }
+            case .today:
+                HStack(spacing: 4) { RoundedRectangle(cornerRadius: 2).strokeBorder(Color.primary, lineWidth: 1).frame(width: 9, height: 9); Text(legend.today) }
+            }
+        }
     }
 
     private func calendarGrid(_ calendar: GlanceResetCalendar, weeks: Range<Int>, days: Range<Int>) -> some View {
@@ -1014,7 +1022,7 @@ enum GlanceResetCards {
             if !elements.isEmpty { add("forecast", resets.forecastTitle, elements) }
         }
         if let calendar = resets.calendar {
-            add("calendar", calendar.title, [.calendar(calendar, 0..<calendar.weekRows().count, 0..<7), .legend(calendar.legend)])
+            add("calendar", calendar.title, [.calendar(calendar, 0..<calendar.weekRows().count, 0..<7), .legend(calendar.legend, GlanceResetLegend.Item.allCases)])
         }
         if let rhythm = resets.rhythm {
             var elements: [GlanceResetElement] = [.rhythm(rhythm.weekdayTitle, rhythm.weekdays), .rhythm(rhythm.hourTitle, rhythm.hours)]

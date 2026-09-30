@@ -555,8 +555,8 @@ enum ResetWidgetPagination {
             }
         case let .calendar(calendar, weeks, days):
             return calendarPieces(calendar, weeks: weeks, days: days, card: card, width: width, height: height)
-        case let .legend(legend):
-            return [legend.regular, legend.banked, legend.today].map { .text($0, .secondary) }
+        case let .legend(legend, items):
+            return items.map { .legend(legend, [$0]) }
         case let .rhythm(title, buckets):
             return [.text(title, .secondary)] + buckets.filter { $0.count > 0 }.flatMap { pieces(.stat($0.label, String($0.count)), card: card, width: width, height: height) }
         case let .stat(label, value):
