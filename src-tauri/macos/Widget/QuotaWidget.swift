@@ -243,24 +243,36 @@ struct GlanceWidgetView: View {
     let style: QuotaWidgetStyle
     let family: WidgetFamily
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.widgetRenderingMode) private var renderingMode
 
     var body: some View {
         GeometryReader { proxy in
             content(size: proxy.size)
                 .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
         }
-        .containerBackground(.background, for: .widget)
-        .environment(\.colorScheme, resolvedScheme)
+        .containerBackground(containerFill, for: .widget)
+        .environment(\.colorScheme, themedScheme ?? colorScheme)
     }
 
-    private var resolvedScheme: ColorScheme {
+    /// The reset widgets draw in the app's theme, like the Reset tab and the island. Only in full
+    /// color: dimmed on the desktop, the system draws every widget its own way, and dark ink forced
+    /// by a light theme would fade out there.
+    private var themedScheme: ColorScheme? {
+        guard renderingMode == .fullColor else { return nil }
         switch style {
         case .overview, .codexResets, .resetCalendar:
             let theme = entry.document?.forWidget.resets?.theme
-            return theme == "light" ? .light : theme == "dark" ? .dark : colorScheme
+            return theme == "light" ? .light : theme == "dark" ? .dark : nil
         default:
-            return colorScheme
+            return nil
         }
+    }
+
+    /// A themed widget's background follows its theme, with the island's fill behind the tracker,
+    /// so what is drawn straight on it (a section's name, the page buttons, the update time) stays
+    /// readable when the app's theme and the Mac's appearance differ.
+    private var containerFill: AnyShapeStyle {
+        themedScheme.map { AnyShapeStyle(GlanceResetPalette(scheme: $0).background) } ?? AnyShapeStyle(.background)
     }
 
     @ViewBuilder

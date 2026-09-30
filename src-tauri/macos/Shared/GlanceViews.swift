@@ -219,6 +219,8 @@ struct GlanceResetCardData: Identifiable {
 
 struct GlanceResetPalette {
     let scheme: ColorScheme
+    /// What the tracker's cards sit on, like the Reset tab's page.
+    var background: Color { Color(glanceHex: scheme == .dark ? "#1e1e1e" : "#ffffff")! }
     var card: Color { Color(glanceHex: scheme == .dark ? "#2a2a2b" : "#f4f4f5")! }
     var blue: Color { Color(glanceHex: scheme == .dark ? "#0a84ff" : "#007aff")! }
     var yellow: Color { Color(glanceHex: scheme == .dark ? "#ffd60a" : "#f5b800")! }

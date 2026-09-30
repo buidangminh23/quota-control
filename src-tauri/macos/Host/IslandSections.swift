@@ -454,7 +454,7 @@ struct IslandResetsSection: View {
         let scheme = resets.theme == "dark" ? ColorScheme.dark : resets.theme == "light" ? .light : systemScheme
         GlanceResetContent(resets: resets, units: labels.units, now: now, availableWidth: max(1, availableWidth - 16))
             .padding(8)
-            .background(Color(glanceHex: scheme == .dark ? "#1e1e1e" : "#ffffff"))
+            .background(GlanceResetPalette(scheme: scheme).background)
             .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 }

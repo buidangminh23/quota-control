@@ -255,7 +255,6 @@ struct ResetWidgetPager: View {
     let namespace: String
     var initialCard: String?
     var prefixPages: [AnyView] = []
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let height = max(40, size.height - 46)
@@ -316,7 +315,6 @@ struct ResetWidgetPager: View {
             .frame(height: 22)
             UpdatedFooter(document: document, now: now)
         }
-        .environment(\.colorScheme, resets.theme == "dark" ? .dark : resets.theme == "light" ? .light : colorScheme)
     }
 }
 
