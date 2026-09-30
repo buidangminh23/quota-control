@@ -87,7 +87,8 @@
   text-decoration: underline;
 }
 
-.uc-reset-status .uc-insight-link {
+.uc-reset-status .uc-insight-link,
+.uc-reset-message .uc-insight-link {
   font-size: var(--uc-plan-size);
   font-weight: 500;
 }
@@ -599,6 +600,27 @@
   line-height: 1.25;
   color: #1c1c1e;
   background: var(--uc-yellow);
+}
+
+/* The announcement the latest reset came with, quoted under its time like the message it was. */
+.uc-reset-message {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  align-self: stretch;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--uc-quinary);
+}
+
+/* Quoted whole: the words are cut at 280 characters already, so no lines are hidden as well. */
+.uc-reset-message .uc-reset-post {
+  display: block;
+}
+
+.uc-reset-message .uc-insight-more {
+  padding: 0;
 }
 
 .uc-reset-status {

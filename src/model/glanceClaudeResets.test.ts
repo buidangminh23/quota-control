@@ -56,6 +56,14 @@ describe("buildClaudeGlanceResets", () => {
     }
   });
 
+  it("quotes the latest announcement in its card and keeps the banked card's words for a widget that hides it", () => {
+    const presentation = build()!.presentation!;
+    expect(presentation.latest?.excerpt).toBeTruthy();
+    expect(presentation.latest?.url).toBe(`https://x.com/ClaudeDevs/status/${BANKED}`);
+    const card = presentation.statuses.find((status) => status.id === `banked:${BANKED}`)!;
+    expect(card).toMatchObject({ sameAsLatest: true, excerpt: presentation.latest!.excerpt, author: { handle: "@ClaudeDevs" } });
+  });
+
   it("counts down to the banked reset still to apply, the way a Claude card reads it", () => {
     const upcoming = build()!.upcoming!;
     expect(upcoming).toEqual({

@@ -47,7 +47,7 @@ function CodexResets() {
       {!loaded ? <p className="uc-empty">{text.loading}</p> : null}
       {empty ? <p className="uc-insight-error">{text.failed(error ?? "")}</p> : null}
       {stale && !empty ? <p className="uc-insight-note">{text.staleNote}</p> : null}
-      {presentation.latest ? <LatestReset latest={presentation.latest} /> : null}
+      {presentation.latest ? <LatestReset latest={presentation.latest} text={text} /> : null}
       <StatusCards cards={presentation.statuses} text={text} />
       {resets.length > 0 ? (
         <>

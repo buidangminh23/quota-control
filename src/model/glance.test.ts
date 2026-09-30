@@ -429,13 +429,27 @@ describe("a document for someone who never chose Claude", () => {
     tuned: "d319d2b1be43d61562cff513331df6d8124f0c2c50107cf27a7267073fd52973",
   };
   const digest = (document: object) => createHash("sha256").update(JSON.stringify(document)).digest("hex");
+  /** The document without the one thing added since: the announcement the latest reset's card quotes. */
+  const unquoted = (document: ReturnType<typeof glance>) => {
+    const copy = JSON.parse(JSON.stringify(document)) as ReturnType<typeof glance>;
+    const latest = copy.resets?.presentation?.latest;
+    if (latest) {
+      delete latest.excerpt;
+      delete latest.fullText;
+      delete latest.url;
+      delete latest.observed;
+    }
+    return copy;
+  };
 
-  it("stays byte for byte what 0.3.16 sent, even with a Claude tracker at hand", () => {
+  it("stays byte for byte what 0.3.16 sent apart from the quoted announcement, even with a Claude tracker at hand", () => {
     const tracker = claude();
     expect(tracker).not.toBeNull();
     for (const [name, options] of Object.entries(scenarios())) {
-      expect(digest(glance(options)), name).toBe(RELEASED[name]);
-      expect(digest(glance({ ...options, claudeResets: tracker })), name).toBe(RELEASED[name]);
+      const document = glance(options);
+      expect(document.resets?.presentation?.latest, name).toMatchObject({ excerpt: expect.stringMatching(/^GPT-6 Sol and Luna are out\./), url: "https://x.com/thsottiaux/status/2102463847714247142" });
+      expect(digest(unquoted(document)), name).toBe(RELEASED[name]);
+      expect(digest(unquoted(glance({ ...options, claudeResets: tracker }))), name).toBe(RELEASED[name]);
     }
   });
 

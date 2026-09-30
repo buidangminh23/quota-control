@@ -33,7 +33,12 @@ export function setBankedUsed(resetId: string, used: boolean): void {
   updateSettings({ usedBankedResets: used ? [...current, resetId] : current });
 }
 
-function BankedCards({ cards, text }: { cards: readonly ClaudeBankedCard[]; text: InsightsMessages }) {
+/**
+ * The banked resets still to apply. The one that is the latest reset leaves its author and words
+ * to the latest card above when that card quotes them, and keeps its deadline and how to apply it.
+ */
+function BankedCards({ cards, quotedAbove, text }: { cards: readonly ClaudeBankedCard[]; quotedAbove: boolean; text: InsightsMessages }) {
+  const repeats = (card: ClaudeBankedCard) => quotedAbove && card.sameAsLatest === true;
   return (
     <>
       {cards.map((card) =>
@@ -47,9 +52,9 @@ function BankedCards({ cards, text }: { cards: readonly ClaudeBankedCard[]; text
         ) : (
           <article key={card.id} className="uc-card uc-reset-status is-banked">
             <span className="uc-reset-status-title">{card.title}</span>
-            {card.author ? <PostAuthor author={card.author} /> : null}
+            {card.author && !repeats(card) ? <PostAuthor author={card.author} /> : null}
             {card.due ? <span className="uc-reset-banked-left uc-num">{card.due}</span> : null}
-            {card.excerpt !== undefined ? <p className="uc-reset-post">{card.excerpt}</p> : null}
+            {card.excerpt !== undefined && !repeats(card) ? <p className="uc-reset-post">{card.excerpt}</p> : null}
             {card.meta.map((meta) => (
               <span key={meta} className="uc-reset-meta">
                 {meta}
@@ -191,8 +196,8 @@ export function ClaudeResets() {
       ))}
       {presentation && feed ? (
         <>
-          {presentation.latest ? <LatestReset latest={presentation.latest} /> : null}
-          <BankedCards cards={presentation.banked} text={text} />
+          {presentation.latest ? <LatestReset latest={presentation.latest} text={text} /> : null}
+          <BankedCards cards={presentation.banked} quotedAbove={presentation.latest?.excerpt !== undefined} text={text} />
           <StatusCards cards={presentation.statuses} text={text} />
           {feed.resets.length > 0 ? (
             <>

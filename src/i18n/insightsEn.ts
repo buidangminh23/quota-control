@@ -190,6 +190,7 @@ export const insightsEn: InsightsMessages = {
   arena3dSource: "Source: 3D Arena on Hugging Face",
   showMore: (count) => `Show ${count} more`,
   showLess: "Show less",
+  readMore: "Read more",
 
   addModel: "Add model",
   searchPlaceholder: "Find a model…",

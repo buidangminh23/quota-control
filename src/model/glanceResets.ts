@@ -10,7 +10,7 @@ import resetAvatar from "@/assets/thsottiaux.webp?inline";
 import type { Language } from "@/i18n";
 import { insightsFor, type InsightsMessages } from "@/i18n/insights";
 import { compactDuration, shortTime, timeOnDayLabel, type TimeFormat } from "./format";
-import type { GlanceCountdown, GlanceResetAuthor, GlanceResetCalendar, GlanceResetPresentation, GlanceResetRhythm, GlanceResets, GlanceResetStatusCard, GlanceUpcomingReset } from "./glance";
+import type { GlanceCountdown, GlanceResetAuthor, GlanceResetCalendar, GlanceResetLatestPresentation, GlanceResetPresentation, GlanceResetRhythm, GlanceResets, GlanceResetStatusCard, GlanceUpcomingReset } from "./glance";
 import {
   announcementPattern,
   activeWatch,
@@ -35,6 +35,8 @@ import { deviceTimeZone, offsetLabel, zonedParts } from "./timeZone";
 export const COUNTDOWN_SPAN = "{d}";
 const BRAND = "codex";
 export const RESET_PRESENTATION_AUTHOR: GlanceResetAuthor = { handle: "@thsottiaux" };
+/** How much of a post the Reset tab's cards quote. */
+export const POST_EXCERPT_LENGTH = 280;
 
 /** The two tracker feeds read once, the way the Reset tab reads them. */
 export interface ResetFeeds {
@@ -80,7 +82,7 @@ export function buildResetPresentation(input: Omit<GlanceResetsInput, "stale">):
     const duration = due && (due > now ? compactDuration((due.getTime() - now.getTime()) / 1000, language) : ago(due));
     statuses.push({
       id: `scheduled:${scheduled.id}`, kind: "scheduled", title: text.scheduledTitle,
-      excerpt: excerpt(scheduled.text, 280), author: author(scheduled.source), url: scheduled.source.url ?? undefined,
+      excerpt: excerpt(scheduled.text, POST_EXCERPT_LENGTH), author: author(scheduled.source), url: scheduled.source.url ?? undefined,
       meta: [[text.announcedAgo(ago(scheduled.announcedAt) ?? "—"), due ? text.scheduledFor(when(due)) : text.scheduledNoTime].join(" · ")],
       due: due && duration ? (due > now ? text.scheduledIn(duration) : text.scheduledOverdue(duration)) : undefined,
       announced: { at: scheduled.announcedAt.toISOString(), text: text.announcedAgo(COUNTDOWN_SPAN), since: true },
@@ -93,7 +95,7 @@ export function buildResetPresentation(input: Omit<GlanceResetsInput, "stale">):
   if (watch) {
     statuses.push({
       id: `watch:${watch.observedAt.toISOString()}`, kind: "watch", level: watch.level, title: text.watchTitle(watch.level),
-      excerpt: excerpt(watch.text, 280), author: author(watch.source), url: watch.source.url ?? undefined,
+      excerpt: excerpt(watch.text, POST_EXCERPT_LENGTH), author: author(watch.source), url: watch.source.url ?? undefined,
       meta: [...(watch.chancePercent === null ? [] : [text.watchChance(`${watch.chancePercent}%`, watch.forecastWindow)]), text.watchUntil(when(watch.expiresAt))],
       hideAt: watch.expiresAt.toISOString(),
     });
@@ -118,7 +120,7 @@ export function buildResetPresentation(input: Omit<GlanceResetsInput, "stale">):
   return {
     locale: language === "vi" ? "vi-VN" : "en-US",
     authorAvatar: resetAvatar,
-    latest: latest ? { title: text.latestTitle, ago: resetAgoText(latest.announcedAt, now, language), at: latest.announcedAt.toISOString(), meta: latest.kind === "banked" ? `${moment} · ${text.kind("banked")}` : moment, author: author(latest.source) } : undefined,
+    latest: latest ? { title: text.latestTitle, ago: resetAgoText(latest.announcedAt, now, language), at: latest.announcedAt.toISOString(), meta: latest.kind === "banked" ? `${moment} · ${text.kind("banked")}` : moment, author: author(latest.source), ...latestMessage(latest, text) } : undefined,
     statuses,
     quietTitle: feeds.status || feeds.resets.length ? text.quietTitle : undefined,
     forecast: {
@@ -139,6 +141,24 @@ export function buildResetPresentation(input: Omit<GlanceResetsInput, "stale">):
     source: text.resetsSource,
     methodTitle: text.methodTitle,
     method: [...text.resetsMethod],
+  };
+}
+
+/**
+ * The words a reset was announced with, as the latest reset's card quotes them under its time: the
+ * post, whose link opens it on X, or the site's own note on a reset it saw happen without a post,
+ * with a line saying so. The reset notification quotes the same words. A long post is cut like the
+ * other cards' and also kept whole, since the reset is often its last sentence.
+ */
+export function latestMessage(reset: CodexReset, text: InsightsMessages): Pick<GlanceResetLatestPresentation, "excerpt" | "fullText" | "url" | "observed"> {
+  const whole = excerpt(reset.text, Number.POSITIVE_INFINITY);
+  if (!whole) return {};
+  const words = excerpt(reset.text, POST_EXCERPT_LENGTH);
+  return {
+    excerpt: words,
+    ...(words === whole ? {} : { fullText: whole }),
+    ...(reset.source.url ? { url: reset.source.url } : {}),
+    ...(reset.source.kind === "observed" ? { observed: text.observed } : {}),
   };
 }
 

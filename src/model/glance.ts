@@ -274,6 +274,30 @@ export interface GlanceResetStatusCard {
   scheduledMeta?: string;
   dueCountdown?: GlanceCountdown;
   overdueCountdown?: GlanceCountdown;
+  /** The card is about the latest reset (a Claude banked reset still to apply). While the latest
+   * card above it is drawn with the announcement, the card leaves out the author and the excerpt. */
+  sameAsLatest?: boolean;
+}
+
+/**
+ * The latest reset's card: how long ago, its moment and kind, and the words it was announced with,
+ * the message the reset notification quoted, with its author and a link to the post, or the line
+ * saying the site recorded it without one.
+ */
+export interface GlanceResetLatestPresentation {
+  title: string;
+  ago: string;
+  at: string;
+  meta: string;
+  author?: GlanceResetAuthor;
+  /** Lines under the announcement, e.g. whether the reset covers this account's plan (Claude). */
+  notes?: string[];
+  excerpt?: string;
+  /** The whole announcement, when `excerpt` had to cut it (the popup's `Đọc tiếp`). */
+  fullText?: string;
+  url?: string;
+  /** `Codex Resets tự ghi nhận khi reset xảy ra`, when no post announced it. */
+  observed?: string;
 }
 
 export interface GlanceResetForecastPresentation {
@@ -309,7 +333,7 @@ export interface GlanceResetPresentation {
   authorAvatar: string;
   /** The one account `authorAvatar` pictures (Claude: `@ClaudeDevs`); absent, it pictures every author. */
   avatarHandle?: string;
-  latest?: { title: string; ago: string; at: string; meta: string; author?: GlanceResetAuthor; notes?: string[] };
+  latest?: GlanceResetLatestPresentation;
   statuses: GlanceResetStatusCard[];
   quietTitle?: string;
   forecast: GlanceResetForecastPresentation;

@@ -9,7 +9,7 @@ import type { Language } from "@/i18n";
 import { insightsFor, type ClaudeResetMessages, type CompareRow, type InsightsMessages } from "@/i18n/insights";
 import { compactDuration, shortTime, timeOnDayLabel, type TimeFormat } from "../format";
 import type { GlanceResetAuthor, GlanceResetHistoryItem, GlanceResetPresentation, GlanceResetStatusCard } from "../glance";
-import { buildResetPresentation } from "../glanceResets";
+import { buildResetPresentation, POST_EXCERPT_LENGTH } from "../glanceResets";
 import {
   compareTrackers,
   concerns,
@@ -183,7 +183,7 @@ export function buildClaudePresentation(input: ClaudePresentationInput): ClaudeP
       resetId: reset.id,
       kind: "banked",
       title: claude.bankedTitle,
-      excerpt: excerpt(reset.text, 280),
+      excerpt: excerpt(reset.text, POST_EXCERPT_LENGTH),
       author: authorOf(reset.account),
       url: reset.source.url ?? undefined,
       meta: [...(scope ? [scope] : []), ...planLines(reset.scope, plans, claude), claude.bankedUntil(when(until))],
@@ -191,6 +191,7 @@ export function buildClaudePresentation(input: ClaudePresentationInput): ClaudeP
       hideAt: until.toISOString(),
       used: used.has(reset.id),
       how: claude.bankedHow,
+      ...(reset.id === latest?.id ? { sameAsLatest: true } : {}),
     };
   });
 

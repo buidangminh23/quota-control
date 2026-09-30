@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setSystemTimeZone } from "@/model/timeZone";
 import { insightsFor } from "@/i18n/insights";
 import type { GlanceResets } from "./glance";
-import { addHistory, buildGlanceResets, buildResetPresentation, parseResetFeeds, resetAgoText, type GlanceResetsInput, type ResetFeeds } from "./glanceResets";
+import { addHistory, buildGlanceResets, buildResetPresentation, parseResetFeeds, POST_EXCERPT_LENGTH, resetAgoText, type GlanceResetsInput, type ResetFeeds } from "./glanceResets";
 
 /** Friday 25/09/2026 10:00 in Vietnam. */
 const NOW = new Date("2026-09-25T03:00:00Z");
@@ -160,6 +160,37 @@ describe("shared Reset tab presentation", () => {
     expect(result.statuses[1]?.hideAt).toBe("2026-09-27T20:00:00.000Z");
     expect(result.statuses[1]?.meta[0]).toContain("65%");
     expect(result.authorAvatar).toMatch(/^data:image\/webp;base64,/);
+  });
+
+  it("quotes the latest reset's post under its time, and keeps it there while newer announcements wait below", () => {
+    const quiet = present(parseResetFeeds(status(), HISTORY));
+    expect(quiet.latest).toMatchObject({ excerpt: "reset 1", url: "https://x.com/thsottiaux/status/1", author: { handle: "@thsottiaux" } });
+    expect(quiet.latest?.observed).toBeUndefined();
+    expect(quiet.statuses.map((item) => item.kind)).toEqual(["quiet"]);
+    const announced = present(parseResetFeeds(status(scheduled("Scheduled post body", "2026-09-28T01:00:00Z"), WATCH), HISTORY));
+    expect(announced.latest).toEqual(quiet.latest);
+    expect(announced.statuses.map((item) => item.excerpt)).toEqual(["Scheduled post body", WATCH.text]);
+  });
+
+  it("quotes a reset the site saw happen in the site's own words, saying no post announced it", () => {
+    const words = "Sam Altman and Tibo gave everyone a banked reset live on stage at OpenAI DevDay 2026.";
+    const observed = { ...post("observed-20260929T190000Z", "banked", "2026-09-29T19:00:00Z"), text: words, source: { type: "observed" } };
+    const result = present(parseResetFeeds(status(null, null, observed), null), new Date("2026-09-30T02:17:13Z"));
+    expect(result.latest).toMatchObject({ ago: "7 giờ trước", meta: "2:00 · T4 30/09 · Lượt để dành", excerpt: words, observed: insightsFor("vi").observed });
+    expect(result.latest?.url).toBeUndefined();
+    expect(result.latest?.author).toBeUndefined();
+  });
+
+  it("quotes nothing for a reset without words, and no more of a post than the other cards", () => {
+    const silent = present(parseResetFeeds(null, JSON.stringify({ data: [{ ...post("1", "regular", POSTED), text: "  https://t.co/abc  " }] })));
+    expect(silent.latest).not.toHaveProperty("excerpt");
+    expect(silent.latest?.author).toEqual({ handle: "@thsottiaux" });
+    expect(silent.latest).not.toHaveProperty("fullText");
+    const long = present(parseResetFeeds(null, JSON.stringify({ data: [{ ...post("1", "regular", POSTED), text: "word ".repeat(100) }] })));
+    expect(long.latest?.excerpt).toHaveLength(POST_EXCERPT_LENGTH);
+    expect(long.latest?.excerpt?.endsWith("…")).toBe(true);
+    expect(long.latest?.fullText).toBe("word ".repeat(100).trim());
+    expect(present(parseResetFeeds(status(), HISTORY)).latest).not.toHaveProperty("fullText");
   });
 
   it("expires a watch exactly at its deadline but retains an overdue scheduled post like the app", () => {

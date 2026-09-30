@@ -150,6 +150,8 @@ export interface InsightsMessages {
   arena3dSource: string;
   showMore(count: number): string;
   showLess: string;
+  /** Opens the rest of a quoted announcement. */
+  readMore: string;
 
   addModel: string;
   searchPlaceholder: string;

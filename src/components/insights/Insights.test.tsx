@@ -184,6 +184,15 @@ describe("Reset tab", () => {
     const latest = screen.getByText("Lần reset gần nhất").closest("article")!;
     expect(within(latest).getByText(/^\d+ (phút|giờ|ngày) trước$/)).toBeInTheDocument();
     expect(within(latest).getByText(/^\d{1,2}:\d{2} · (T[2-7]|CN) \d{2}\/\d{2} · Lượt để dành$/)).toBeInTheDocument();
+    const message = within(latest).getByText(/^GPT-6 Sol and Luna are out\./).closest<HTMLElement>(".uc-reset-message")!;
+    expect(within(message).getByText("@thsottiaux")).toBeInTheDocument();
+    expect(within(message).getByRole("button", { name: "Mở bài trên X" })).toBeInTheDocument();
+    expect(within(latest).getByText(/^\d+ (phút|giờ|ngày) trước$/).compareDocumentPosition(message) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(message).queryByText(/We are loading a banked reset/)).not.toBeInTheDocument();
+    fireEvent.click(within(message).getByRole("button", { name: "Đọc tiếp" }));
+    expect(within(message).getByText(/We are loading a banked reset into all accounts of our Plus, Pro and Business users\. Let's go!$/)).toBeInTheDocument();
+    fireEvent.click(within(message).getByRole("button", { name: "Thu gọn" }));
+    expect(within(message).queryByText(/We are loading a banked reset/)).not.toBeInTheDocument();
     expect(latest.compareDocumentPosition(screen.getByText("Đã hẹn reset")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByText(/we’ll reset usage limits for all paid users/)).toBeInTheDocument();
     expect(screen.getByText("Khả năng sắp có reset (ứng dụng tự ước tính)")).toBeInTheDocument();
@@ -336,8 +345,15 @@ describe("Claude resets", () => {
     expect(within(latest).getByText("2 ngày trước")).toBeInTheDocument();
     expect(within(latest).getByText("@ClaudeDevs")).toBeInTheDocument();
     expect(within(latest).getByText(/· Lượt để dành · Gói Pro, Max, Team$/)).toBeInTheDocument();
+    const message = within(latest).getByText("Gave Pro, Max and Team users a banked reset.").closest<HTMLElement>(".uc-reset-message")!;
+    expect(within(message).getByText("@ClaudeDevs")).toBeInTheDocument();
+    expect(within(message).getByRole("button", { name: "Mở bài trên X" })).toBeInTheDocument();
+    expect(within(message).queryByRole("button", { name: "Đọc tiếp" })).not.toBeInTheDocument();
 
     const card = screen.getByText("Có lượt reset để dành").closest("article")!;
+    expect(within(card).queryByText("Gave Pro, Max and Team users a banked reset.")).not.toBeInTheDocument();
+    expect(within(card).queryByText("@ClaudeDevs")).not.toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Mở bài trên X" })).toBeInTheDocument();
     expect(within(card).getByText(/^Còn 10 ngày/)).toBeInTheDocument();
     expect(within(card).getByText(/^Dùng được đến \d{1,2}:\d{2} \d{2}\/\d{2}\/\d{4}$/)).toBeInTheDocument();
     expect(within(card).getByText(/^Gói .+ của bạn: có áp dụng$/)).toBeInTheDocument();
@@ -366,6 +382,7 @@ describe("Claude resets", () => {
     expect(screen.queryByText("Có lượt reset để dành")).not.toBeInTheDocument();
     expect(screen.getByText("Bạn đã đánh dấu lượt này là đã dùng.")).toBeInTheDocument();
     expect(screen.getByText("Chưa có thông báo reset mới")).toBeInTheDocument();
+    expect(within(screen.getByText("Lần reset gần nhất").closest("article")!).getByText("Gave Pro, Max and Team users a banked reset.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Hoàn tác" }));
     expect(useApp.getState().settings.usedBankedResets).toEqual([]);
     expect(screen.getByText("Có lượt reset để dành")).toBeInTheDocument();

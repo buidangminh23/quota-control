@@ -22,7 +22,8 @@ import {
   SKILL_MIN_TRIED_RESETS,
   type ClaudeReset,
 } from "./claudeResets";
-import type { CodexReset } from "./resets";
+import { POST_EXCERPT_LENGTH } from "../glanceResets";
+import { excerpt, type CodexReset } from "./resets";
 
 /** Tuesday 29/09/2026 20:00 in Vietnam. */
 const NOW = new Date("2026-09-29T13:00:00Z");
@@ -321,6 +322,21 @@ describe("buildClaudePresentation", () => {
     expect(view.banked).toHaveLength(1);
     expect(view.banked[0]).toMatchObject({ kind: "banked", resetId: BANKED, used: false, title: "Có lượt reset để dành", due: "Còn 23 ngày 11 giờ", author: { handle: "@ClaudeDevs" } });
     expect(view.banked[0]!.meta).toEqual(["Gói Pro, Max, Team", "Gói Max của bạn: có áp dụng", "Dùng được đến 6:59 23/10/2026"]);
+  });
+
+  it("quotes the latest reset's announcement in its card, and marks the banked card that repeats it", () => {
+    const view = build();
+    const latest = feed.resets[0]!;
+    expect(latest.id).toBe(BANKED);
+    expect(view.latest).toMatchObject({ excerpt: excerpt(latest.text, POST_EXCERPT_LENGTH), url: `https://x.com/ClaudeDevs/status/${BANKED}` });
+    expect(view.latest!.excerpt).not.toBe("");
+    expect(view.latest!.observed).toBeUndefined();
+    expect(view.banked[0]).toMatchObject({ resetId: BANKED, sameAsLatest: true, excerpt: view.latest!.excerpt });
+    const older = parseClaudeResets(body([event({ id: "9", date: "2026-09-28T12:00:00Z" }), event({ id: "8", date: "2026-09-20T12:00:00Z", resetType: "banked", usableUntil: "2026-10-30T00:00:00Z", note: "A banked reset." })]))!;
+    const other = build({ feed: older });
+    expect(other.latest!.excerpt).toBe("Reset for all.");
+    expect(other.banked.map((card) => card.resetId)).toEqual(["8"]);
+    expect(other.banked[0]).not.toHaveProperty("sameAsLatest");
   });
 
   it("says when a plan was left out, and falls back to the quiet card once the reset is marked as applied", () => {

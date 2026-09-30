@@ -191,6 +191,7 @@ export const insightsVi: InsightsMessages = {
   arena3dSource: "Nguồn: 3D Arena trên Hugging Face",
   showMore: (count) => `Xem thêm ${count}`,
   showLess: "Thu gọn",
+  readMore: "Đọc tiếp",
 
   addModel: "Thêm model",
   searchPlaceholder: "Tìm model…",

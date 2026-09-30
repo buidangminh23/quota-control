@@ -7,7 +7,7 @@
 import { Fragment, useMemo, useState } from "react";
 import type { InsightsMessages } from "@/i18n/insights";
 import type { Language } from "@/i18n";
-import type { GlanceResetAuthor, GlanceResetPresentation } from "@/model/glance";
+import type { GlanceResetAuthor, GlanceResetLatestPresentation, GlanceResetPresentation } from "@/model/glance";
 import { announcementPattern, HOUR_BLOCKS, resetCalendar, type CodexReset, type ResetSource } from "@/model/insights/resets";
 import { zonedParts } from "@/model/timeZone";
 import { useNow } from "@/state/hooks";
@@ -37,13 +37,38 @@ export function PostAuthor({ author }: { author: GlanceResetAuthor }) {
   );
 }
 
-export function LatestReset({ latest }: { latest: NonNullable<GlanceResetPresentation["latest"]> }) {
+/** The announcement a reset came with, quoted like the message it was; a long one opens in full. */
+function ResetMessage({ latest, text }: { latest: GlanceResetLatestPresentation; text: InsightsMessages }) {
+  const [whole, setWhole] = useState(false);
+  return (
+    <div className="uc-reset-message">
+      {latest.author ? <PostAuthor author={latest.author} /> : null}
+      <p className="uc-reset-post">{whole && latest.fullText ? latest.fullText : latest.excerpt}</p>
+      {latest.fullText ? (
+        <button type="button" className="uc-insight-more" aria-expanded={whole} onClick={() => setWhole(!whole)}>
+          {whole ? text.showLess : text.readMore}
+        </button>
+      ) : null}
+      {latest.observed ? <span className="uc-reset-meta">{latest.observed}</span> : null}
+      {latest.url ? <PostLink source={{ kind: "x_post", url: latest.url }} text={text} /> : null}
+    </div>
+  );
+}
+
+/**
+ * The latest reset: how long ago, its moment and kind, then the announcement it came with, with its
+ * author and the post, or the site's line when no post announced it. A reset announced or hinted at
+ * since then gets the card below; this one keeps its message until the next reset replaces it.
+ */
+export function LatestReset({ latest, text }: { latest: GlanceResetLatestPresentation; text: InsightsMessages }) {
+  const quoted = latest.excerpt !== undefined;
   return (
     <article className="uc-card uc-reset-latest">
       <span className="uc-reset-latest-title">{latest.title}</span>
-      {latest.author ? <PostAuthor author={latest.author} /> : null}
+      {latest.author && !quoted ? <PostAuthor author={latest.author} /> : null}
       <span className="uc-reset-latest-ago">{latest.ago}</span>
       <span className="uc-reset-meta uc-num">{latest.meta}</span>
+      {quoted ? <ResetMessage key={latest.at} latest={latest} text={text} /> : null}
       {latest.notes?.map((note) => (
         <span key={note} className="uc-reset-meta">
           {note}
