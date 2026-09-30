@@ -109,9 +109,9 @@ struct GlanceDocument: Decodable, Equatable {
     }
 
     /// The appearance a widget draws in: the app's theme when it forces one, else `nil` to follow
-    /// the Mac. A document from before the theme was its own key carries it on the reset tracker.
+    /// the Mac. A document from before the theme was its own key carries it on its reset trackers.
     var forcedScheme: ColorScheme? {
-        switch theme ?? forWidget.resets?.theme {
+        switch theme ?? resets?.theme ?? claudeResets?.theme {
         case "light": return .light
         case "dark": return .dark
         default: return nil

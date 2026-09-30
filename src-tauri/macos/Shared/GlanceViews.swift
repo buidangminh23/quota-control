@@ -131,8 +131,9 @@ enum GlanceHeaderInk {
 }
 
 /// A widget account's header as the popup's card header draws it: the mark in its brand color,
-/// the name, the plan in plain secondary text, `Dữ liệu cũ` and the warning triangle when the
-/// account has a problem, the email under; with `term`, the plan period in the right corner.
+/// the name, the plan in plain secondary text, `Dữ liệu cũ` once the reading is outdated, the
+/// warning triangle when the account has a problem, the email under; with `term`, the plan period
+/// in the right corner.
 struct GlanceProviderHeader: View {
     let provider: GlanceProvider
     var shows: GlanceShows = .all
