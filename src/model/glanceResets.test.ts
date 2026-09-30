@@ -385,7 +385,7 @@ describe("the words the island's and widgets' reset cards add", () => {
     for (const language of ["vi", "en"] as const) {
       const text = insightsFor(language);
       const showMore = text.showMore as unknown as (count: string) => string;
-      for (const phrase of [text.openPost, showMore("\\(count)"), text.showLess]) {
+      for (const phrase of [text.openPost, text.openLink, showMore("\\(count)"), text.showLess]) {
         expect(words, `${language}: ${phrase}`).toContain(`"${phrase}"`);
       }
     }

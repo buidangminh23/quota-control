@@ -689,14 +689,15 @@ struct GlancePlanTerm: Decodable, Equatable {
     }
 
     /// The moments after `now` when `lines` reads differently: each step of the count within `span`
-    /// (in the last hour it steps every minute) and the first beyond it, the corner turning to the
-    /// warning color, the period ending, and the midnight that turns its day into tomorrow or today.
+    /// and the first beyond it, but every minute of the last hour through the end, so a widget whose
+    /// reload comes late still counts down; the corner turning to the warning color, the period
+    /// ending, and the midnight that turns its day into tomorrow or today.
     func changes(after now: Date, within span: TimeInterval = 15 * 60, calendar: Calendar = .current) -> [Date] {
         var moments = [soonAt.addingTimeInterval(1), endsAt]
         var cursor = now
         while let step = nextStep(after: cursor) {
             moments.append(step)
-            if step.timeIntervalSince(now) > span { break }
+            if step.timeIntervalSince(now) > span && endsAt.timeIntervalSince(step) >= Self.hour { break }
             cursor = step
         }
         if Self.calendarDays(from: now, to: endsAt, calendar: calendar) <= 2,

@@ -99,9 +99,9 @@ struct GlanceTimeline: TimelineProvider {
     /// their own, one a minute at most: a little past `refresh`, when the widget looks again. Every
     /// entry is drawn ahead of time, so the span stays short.
     private static let tickSpan: TimeInterval = 20 * 60
-    /// Enough entries for a minute-by-minute `tickSpan` plus the moments between; entries cost no
-    /// reload.
-    private static let momentEntries = 40
+    /// Enough entries for a minute-by-minute `tickSpan`, a plan period's last hour counted minute by
+    /// minute to its end, and the moments between; entries cost no reload.
+    private static let momentEntries = 80
 
     func placeholder(in context: Context) -> GlanceEntry {
         GlanceEntry(date: Date(), document: .sample)

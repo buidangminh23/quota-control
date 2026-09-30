@@ -554,8 +554,8 @@ private struct CompactAccount: View {
                 if !headed { mark }
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(title)
-                        .font(.system(size: WidgetScale.label))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: WidgetScale.label, weight: headed ? .semibold : .regular))
+                        .foregroundStyle(headed ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                         .lineLimit(1)
                     if !headed { problemMark }
                 }
@@ -606,8 +606,8 @@ private struct CompactAccount: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(title)
-                        .font(.system(size: WidgetScale.label))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: WidgetScale.label, weight: headed ? .semibold : .regular))
+                        .foregroundStyle(headed ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                         .lineLimit(1)
                     Spacer(minLength: 4)
                     value(metric)
@@ -640,10 +640,11 @@ private struct CompactAccount: View {
     /// The header's warning triangle, beside the name on a line that stands in for the header.
     @ViewBuilder
     private var problemMark: some View {
-        if provider.problem != nil {
+        if let problem = provider.problem {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: WidgetScale.caption))
                 .foregroundStyle(GlanceHeaderInk.warning(dark: colorScheme == .dark))
+                .accessibilityLabel(problem)
         }
     }
 }

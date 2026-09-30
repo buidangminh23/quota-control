@@ -567,6 +567,7 @@ final class IslandPanel: NSPanel {
         hidesOnDeactivate = false
         isReleasedWhenClosed = false
         becomesKeyOnlyIfNeeded = true
+        allowsToolTipsWhenApplicationIsInactive = true
         collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
     }
 

@@ -136,6 +136,7 @@ private struct UpcomingRowFit {
 
 /// One limit (or several of one account due together) coming back.
 private struct UpcomingRow: View {
+    @Environment(\.colorScheme) private var colorScheme
     let group: UpcomingGroup
     let document: GlanceDocument
     let now: Date
@@ -206,15 +207,15 @@ private struct UpcomingRow: View {
             .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
     }
 
-    /// The reading in the text color, as the popup's rows read it: the row's headline where the line
-    /// has room (`Còn 42%`), the short reading otherwise (`42%`).
+    /// The reading, the row's headline where the line has room (`Còn 42%`), the short reading
+    /// otherwise (`42%`), in the pace color: the row has no meter to carry it, as the popup's do.
     private var reading: some View {
         HStack(alignment: .firstTextBaseline, spacing: 3) {
             ColorlessSeverityMark(severity: metric.severity, size: WidgetScale.caption)
             Text(fit.roomy ? metric.headline : metric.value)
                 .font(.system(size: WidgetScale.caption, weight: .semibold))
                 .monospacedDigit()
-                .foregroundStyle(.primary)
+                .foregroundStyle(GlancePalette.text(metric.severity, onDark: colorScheme == .dark))
                 .lineLimit(1)
         }
         .fixedSize()

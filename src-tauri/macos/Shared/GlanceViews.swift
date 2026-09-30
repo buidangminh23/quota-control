@@ -124,7 +124,7 @@ struct GlanceProviderHeader: View {
                         if let outdated = provider.outdated {
                             Text(outdated)
                                 .font(.system(size: smallSize))
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(GlanceResetPalette(scheme: colorScheme).tertiary)
                                 .lineLimit(1)
                         }
                     }
@@ -190,7 +190,7 @@ struct GlancePlanTermCorner: View {
                 .foregroundStyle(ink(dim: onDark ? AnyShapeStyle(Color.white.opacity(0.62)) : AnyShapeStyle(.secondary)))
             Text(day)
                 .font(.system(size: size))
-                .foregroundStyle(ink(dim: onDark ? AnyShapeStyle(Color.white.opacity(0.5)) : AnyShapeStyle(.tertiary)))
+                .foregroundStyle(ink(dim: onDark ? AnyShapeStyle(Color.white.opacity(0.5)) : AnyShapeStyle(GlanceResetPalette(scheme: colorScheme).tertiary)))
         }
         .monospacedDigit()
         .lineLimit(1)
@@ -343,8 +343,8 @@ enum GlanceResetElement {
     case row([GlanceResetElement])
     /// A history row's first line: who posted, the kind, whether the site reviewed it, when, the post.
     case rowHead(GlanceResetRowHead)
-    /// The attribution under the cards, with the link to the site.
-    case source(String, String)
+    /// The attribution under the cards, with the link to the site and what VoiceOver reads for it.
+    case source(String, String, String)
     /// A part the Reset tab folds: its words, and whether it is open.
     case fold(GlanceResetFold, String, Bool)
 }
@@ -430,6 +430,8 @@ struct GlanceResetWords {
     }
 
     var openPost: String { vietnamese ? "Mở bài trên X" : "Open the post on X" }
+
+    var openLink: String { vietnamese ? "Mở trang nguồn" : "Open the source page" }
 
     func showMore(_ count: Int) -> String { vietnamese ? "Xem thêm \(count)" : "Show \(count) more" }
 
@@ -730,15 +732,15 @@ struct GlanceResetElementView: View {
                     rowTimeAndLink(head)
                 }
             }
-        case let .source(text, url):
+        case let .source(text, url, label):
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 4) {
                     sourceText(text)
-                    sourceLink(url)
+                    sourceLink(url, label)
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     sourceText(text).fixedSize(horizontal: false, vertical: true)
-                    sourceLink(url)
+                    sourceLink(url, label)
                 }
             }
         case let .fold(fold, label, open):
@@ -786,12 +788,12 @@ struct GlanceResetElementView: View {
     }
 
     @ViewBuilder
-    private func sourceLink(_ url: String) -> some View {
+    private func sourceLink(_ url: String, _ label: String) -> some View {
         if let destination = Self.web(url) {
             Link(destination: destination) {
                 Image(systemName: "arrow.up.right.square").font(.system(size: 10)).foregroundStyle(palette.blue)
             }
-            .accessibilityLabel(url)
+            .accessibilityLabel(label)
         }
     }
 
@@ -1261,7 +1263,7 @@ enum GlanceResetCards {
             if let fetched = presentation.fetched {
                 add("fetched", "", [.live(.countdown(fetched, units), .status)], look: .plain)
             }
-            add("source", "", [.source(presentation.source, resets.site ?? "https://codex-resets.com")], look: .plain)
+            add("source", "", [.source(presentation.source, resets.site ?? "https://codex-resets.com", words.openLink)], look: .plain)
             if !presentation.method.isEmpty {
                 var elements: [GlanceResetElement] = [.fold(.method, presentation.methodTitle, folds.methodOpen)]
                 if folds.methodOpen { elements += presentation.method.map { .text($0, .secondary) } }
