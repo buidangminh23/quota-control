@@ -1,13 +1,15 @@
 import AppKit
 import SwiftUI
 
-/// The capsule meter (the popup's `Meter`): a faint track and a flat fill in the pace color. Any
-/// non-zero fill is at least as wide as the bar is tall, so 1-2% never disappears.
+/// The capsule meter (the popup's `Meter`): a faint track and a flat fill in the pace color, the
+/// light or the dark theme's as the widget is drawn. Any non-zero fill is at least as wide as the
+/// bar is tall, so 1-2% never disappears.
 struct GlanceMeter: View {
     let fraction: Double
     let severity: GlanceSeverity
     var onDark = false
     var height: CGFloat = 5
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         GeometryReader { proxy in
@@ -18,7 +20,7 @@ struct GlanceMeter: View {
                 Capsule().fill(onDark ? Color.white.opacity(0.16) : Color.primary.opacity(0.12))
                 if fill > 0 {
                     Capsule()
-                        .fill(GlancePalette.fill(severity, onDark: onDark))
+                        .fill(GlancePalette.fill(severity, onDark: onDark || colorScheme == .dark))
                         .frame(width: min(fill, width))
                 }
             }
@@ -35,6 +37,7 @@ struct GlanceRing<Center: View>: View {
     var onDark = false
     var lineWidth: CGFloat = 4
     @ViewBuilder var center: () -> Center
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ZStack {
@@ -44,7 +47,7 @@ struct GlanceRing<Center: View>: View {
                 Circle()
                     .trim(from: 0, to: min(max(fraction, 0.03), 1))
                     .stroke(
-                        GlancePalette.fill(severity, onDark: onDark),
+                        GlancePalette.fill(severity, onDark: onDark || colorScheme == .dark),
                         style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
                     )
                     .rotationEffect(.degrees(-90))
@@ -77,7 +80,8 @@ struct GlanceResetText: View {
     }
 }
 
-/// One metric: its label and headline over the meter, and the reset countdown beneath.
+/// One metric as the popup's row reads it: its title in bold and its headline in the text color
+/// over the meter, which alone carries the pace color, and the reset countdown beneath.
 struct GlanceMetricRow: View {
     let metric: GlanceMetric
     let labels: GlanceLabels
@@ -90,13 +94,13 @@ struct GlanceMetricRow: View {
         VStack(alignment: .leading, spacing: compact ? 2 : 3) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(metric.label)
-                    .font(.system(size: compact ? 10.5 : 11.5, weight: .medium))
-                    .foregroundStyle(onDark ? Color.white.opacity(0.72) : Color.secondary)
+                    .font(.system(size: compact ? 10.5 : 11.5, weight: .semibold))
+                    .foregroundStyle(onDark ? Color.white : Color.primary)
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 Text(metric.headline)
-                    .font(.system(size: compact ? 11 : 12.5, weight: .semibold))
-                    .foregroundStyle(GlancePalette.text(metric.severity, onDark: onDark))
+                    .font(.system(size: compact ? 11 : 12.5))
+                    .foregroundStyle(onDark ? Color.white : Color.primary)
                     .monospacedDigit()
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
@@ -113,81 +117,143 @@ struct GlanceMetricRow: View {
     }
 }
 
-/// A provider's mark in its brand color beside its name and plan, with the account's email under.
+/// The popup's header colors in its light or dark theme.
+enum GlanceHeaderInk {
+    /// The warning triangle beside a card's name (`--uc-orange`).
+    static func warning(dark: Bool) -> Color {
+        dark ? Color(red: 1.0, green: 0.624, blue: 0.039) : Color(red: 1.0, green: 0.584, blue: 0)
+    }
+
+    /// The plan-period corner once the end is near (`--uc-notice-text`).
+    static func notice(dark: Bool) -> Color {
+        dark ? Color(red: 1.0, green: 0.624, blue: 0.039) : Color(red: 0.698, green: 0.349, blue: 0)
+    }
+}
+
+/// A widget account's header as the popup's card header draws it: the mark in its brand color,
+/// the name, the plan in plain secondary text, `Dữ liệu cũ` and the warning triangle when the
+/// account has a problem, the email under; with `term`, the plan period in the right corner.
 struct GlanceProviderHeader: View {
     let provider: GlanceProvider
     var shows: GlanceShows = .all
-    var onDark = false
     var size: CGFloat = 13
+    /// The plan period's words and the moment drawn, where the column has room for the corner.
+    var term: GlanceTermContext? = nil
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            HStack(spacing: 5) {
-                ProviderMark(mark: provider.mark)
-                    .foregroundStyle(onDark ? provider.tint : markColor)
-                    .frame(width: size, height: size)
-                Text(provider.name)
-                    .font(.system(size: size - 1, weight: .semibold))
-                    .foregroundStyle(onDark ? Color.white : Color.primary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                if shows.plan, let plan = provider.plan {
-                    GlancePlanBadge(text: plan, onDark: onDark, size: size)
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 5) {
+                    ProviderMarkView(provider: provider)
+                        .frame(width: size, height: size)
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text(provider.name)
+                            .font(.system(size: size - 1, weight: .semibold))
+                            .foregroundStyle(Color.primary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        if shows.plan, let plan = provider.plan {
+                            Text(plan)
+                                .font(.system(size: smallSize))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .layoutPriority(1)
+                        }
+                        if let outdated = provider.outdated {
+                            Text(outdated)
+                                .font(.system(size: smallSize))
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                        }
+                    }
+                    if let problem = provider.problem {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: smallSize))
+                            .foregroundStyle(GlanceHeaderInk.warning(dark: colorScheme == .dark))
+                            .accessibilityLabel(problem)
+                    }
+                }
+                if shows.account, let account = provider.account {
+                    Text(account)
+                        .font(.system(size: smallSize))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .padding(.leading, size + 5)
                 }
             }
-            if shows.account, let account = provider.account {
-                Text(account)
-                    .font(.system(size: max(size - 3.5, 8.5)))
-                    .foregroundStyle(onDark ? Color.white.opacity(0.55) : Color.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .padding(.leading, size + 5)
+            if let term, let lines = provider.term.flatMap({ $0.lines(now: term.now, words: term.words) }) {
+                Spacer(minLength: 6)
+                GlancePlanTermCorner(left: lines.left, day: lines.day, soon: lines.soon, size: smallSize)
             }
         }
     }
 
-    private var markColor: Color {
-        provider.color.uppercased() == "#FFFFFF" ? .primary : provider.tint
-    }
+    /// The plan, the email and the corner, a little smaller than the name, as in the popup.
+    private var smallSize: CGFloat { max(size - 3, 8.5) }
 }
 
-/// The plan (`Pro`, `Max 5x`) in a small rounded tag.
-struct GlancePlanBadge: View {
-    let text: String
-    var onDark = false
-    var size: CGFloat = 13
+/// A provider's mark in the color the popup gives it on a widget's background (light or dark, the
+/// app's theme when it forces one), its initial when the brand has no mark.
+struct ProviderMarkView: View {
+    let provider: GlanceProvider
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        Text(text)
-            .font(.system(size: max(size - 4, 8), weight: .semibold))
-            .foregroundStyle(onDark ? Color.white.opacity(0.7) : Color.secondary)
-            .lineLimit(1)
-            .padding(.horizontal, 4)
-            .padding(.vertical, 1)
-            .background(
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .fill(onDark ? Color.white.opacity(0.12) : Color.primary.opacity(0.08))
-            )
-            .fixedSize()
+        ProviderMark(mark: provider.mark, brand: provider.brand)
+            .foregroundStyle(provider.markColor(in: colorScheme))
     }
 }
 
-/// Why an account shows no readings: signed out, session expired, no data yet.
+/// What the plan-period corner needs to word itself: the document's words and the moment drawn.
+struct GlanceTermContext {
+    let words: GlancePlanTermWords
+    let now: Date
+}
+
+/// The card header's right corner: the time left in the plan's paid period over the day it ends,
+/// in the notice color from three days out.
+struct GlancePlanTermCorner: View {
+    let left: String
+    let day: String
+    let soon: Bool
+    var onDark = false
+    var size: CGFloat = 10
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 1) {
+            Text(left)
+                .font(.system(size: size, weight: .medium))
+                .foregroundStyle(ink(dim: onDark ? AnyShapeStyle(Color.white.opacity(0.62)) : AnyShapeStyle(.secondary)))
+            Text(day)
+                .font(.system(size: size))
+                .foregroundStyle(ink(dim: onDark ? AnyShapeStyle(Color.white.opacity(0.5)) : AnyShapeStyle(.tertiary)))
+        }
+        .monospacedDigit()
+        .lineLimit(1)
+        .fixedSize()
+    }
+
+    private func ink(dim: AnyShapeStyle) -> AnyShapeStyle {
+        soon ? AnyShapeStyle(GlanceHeaderInk.notice(dark: onDark || colorScheme == .dark)) : dim
+    }
+}
+
+/// What an account without readings says in their place: its problem, or `Không có dữ liệu` as the
+/// popup's rows read, in their secondary color; the header carries the warning triangle.
 struct GlanceNoticeRow: View {
     let text: String
     var onDark = false
     var size: CGFloat = 10.5
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: size - 1))
-            Text(text)
-                .font(.system(size: size))
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .foregroundStyle(onDark ? Color(red: 1.0, green: 0.62, blue: 0.04) : Color.orange)
+        Text(text)
+            .font(.system(size: size))
+            .foregroundStyle(onDark ? Color.white.opacity(0.62) : Color.secondary)
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 

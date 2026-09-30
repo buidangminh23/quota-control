@@ -26,12 +26,6 @@ enum WidgetScale {
     static let moreHeight: CGFloat = 14
 }
 
-extension GlanceProvider {
-    /// The mark's color: the brand color, or the text color for a white brand that would vanish on a
-    /// light background.
-    var markTint: Color { color.uppercased() == "#FFFFFF" ? .primary : tint }
-}
-
 extension GlanceResets {
     /// The tracker's mark color, the text color when the brand is white.
     var markTint: Color { color.uppercased() == "#FFFFFF" ? .primary : tint }

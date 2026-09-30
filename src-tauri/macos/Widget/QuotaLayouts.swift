@@ -175,7 +175,7 @@ struct DetailsLayout: View {
 }
 
 /// An account's header with its first `count` meters, a `+N` for the metrics left out, or the
-/// notice saying why it has none.
+/// line saying why it has none. A wide column has room for the plan period's corner.
 private struct DetailedAccount: View {
     let provider: GlanceProvider
     let count: Int
@@ -191,9 +191,10 @@ private struct DetailedAccount: View {
                 GlanceProviderHeader(
                     provider: provider,
                     shows: GlanceShows(account: shows.account && detail == .full, plan: shows.plan, resets: shows.resets),
-                    size: WidgetScale.mark
+                    size: WidgetScale.mark,
+                    term: inline ? document.termContext(now: now) : nil
                 )
-                Spacer(minLength: 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 HiddenCount(count: provider.metrics.count - count)
             }
             if provider.metrics.isEmpty {
@@ -206,7 +207,15 @@ private struct DetailedAccount: View {
     }
 }
 
-/// A metric's name and headline over its meter, with its reset countdown on the name's line when
+extension GlanceDocument {
+    /// What a header needs to word the plan period's corner at `now`, when any account has one.
+    func termContext(now: Date) -> GlanceTermContext? {
+        labels.planTerm.map { GlanceTermContext(words: $0, now: now) }
+    }
+}
+
+/// A metric as the popup's row reads it: its title in bold and its headline in the text color over
+/// the meter, which alone carries the pace color, with its reset countdown on the title's line when
 /// the column is wide and on a line of its own otherwise.
 private struct QuotaMetricRow: View {
     let metric: GlanceMetric
@@ -221,8 +230,8 @@ private struct QuotaMetricRow: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(metric.label)
-                    .font(.system(size: WidgetScale.label, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: WidgetScale.label, weight: .semibold))
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
                 if inline, hasReset {
                     ResetText(metric: metric, labels: labels, now: now)
@@ -232,9 +241,9 @@ private struct QuotaMetricRow: View {
                 }
                 Spacer(minLength: 4)
                 Text(metric.headline)
-                    .font(.system(size: WidgetScale.value, weight: .semibold))
+                    .font(.system(size: WidgetScale.value))
                     .monospacedDigit()
-                    .foregroundStyle(GlancePalette.text(metric.severity, onDark: false))
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
                     .fixedSize()
             }
@@ -250,7 +259,8 @@ private struct QuotaMetricRow: View {
     }
 }
 
-/// An account in one line: the mark and name, the first reading and its meter.
+/// An account in one line: the mark and name, the first reading and its meter, or what it says in
+/// place of readings.
 private struct CondensedAccount: View {
     let provider: GlanceProvider
     let document: GlanceDocument
@@ -264,13 +274,14 @@ private struct CondensedAccount: View {
                     Text(metric.value)
                         .font(.system(size: WidgetScale.value, weight: .semibold))
                         .monospacedDigit()
-                        .foregroundStyle(GlancePalette.text(metric.severity, onDark: false))
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
                         .fixedSize()
                 } else {
-                    Image(systemName: "exclamationmark.triangle.fill")
+                    Text(provider.notice ?? document.labels.noData)
                         .font(.system(size: WidgetScale.caption))
-                        .foregroundStyle(Color.orange)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
             if let metric = provider.metrics.first, let fraction = metric.fraction {
@@ -321,7 +332,7 @@ struct CompactQuota: View {
     var body: some View {
         let count = max(1, min(columns, providers.count))
         let column = columnWidth(width, count: count)
-        let style = CompactRowStyle(wide: column >= 200, resets: column >= 280 && document.widget.shows.resets)
+        let style = CompactRowStyle(wide: column >= 200, resets: column >= 280 && document.widget.shows.resets, terms: column >= 280)
         let most = QuotaPlan.mostRows(height: height, columns: count, row: 14)
         ViewThatFits(in: .vertical) {
             ForEach(Array(QuotaPlan.candidates(providers, most: most, details: [.full, .noAccounts]).enumerated()), id: \.offset) { _, plan in
@@ -367,6 +378,8 @@ struct CompactRowStyle {
     let wide: Bool
     /// The reset countdown at the end of the line.
     let resets: Bool
+    /// The plan period's corner in an account's header.
+    var terms = false
 }
 
 /// An account as short lines: its header, then one line per metric; or, headless, one line naming
@@ -379,6 +392,7 @@ private struct CompactAccount: View {
     let style: CompactRowStyle
     let document: GlanceDocument
     let now: Date
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -387,16 +401,29 @@ private struct CompactAccount: View {
                     GlanceProviderHeader(
                         provider: provider,
                         shows: GlanceShows(account: showsAccount && document.widget.shows.account, plan: document.widget.shows.plan, resets: false),
-                        size: WidgetScale.mark
+                        size: WidgetScale.mark,
+                        term: style.terms ? document.termContext(now: now) : nil
                     )
-                    Spacer(minLength: 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     HiddenCount(count: provider.metrics.count - count)
                 }
             }
             if provider.metrics.isEmpty {
-                HStack(spacing: 4) {
-                    if !headed { mark }
-                    GlanceNoticeRow(text: headed ? (provider.notice ?? document.labels.noData) : provider.name, size: WidgetScale.caption)
+                if headed {
+                    GlanceNoticeRow(text: provider.notice ?? document.labels.noData, size: WidgetScale.caption)
+                } else {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        mark
+                        Text(provider.name)
+                            .font(.system(size: WidgetScale.label, weight: .semibold))
+                            .lineLimit(1)
+                        problemMark
+                        Spacer(minLength: 4)
+                        Text(provider.notice ?? document.labels.noData)
+                            .font(.system(size: WidgetScale.caption))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
             }
             ForEach(provider.metrics.prefix(count)) { metric in
@@ -411,11 +438,14 @@ private struct CompactAccount: View {
         if style.wide {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 if !headed { mark }
-                Text(title)
-                    .font(.system(size: WidgetScale.label))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(title)
+                        .font(.system(size: WidgetScale.label))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if !headed { problemMark }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 Group {
                     if let fraction = metric.fraction {
                         GlanceMeter(fraction: fraction, severity: metric.severity, height: 4)
@@ -441,6 +471,7 @@ private struct CompactAccount: View {
                     Text(provider.name)
                         .font(.system(size: WidgetScale.label, weight: .semibold))
                         .lineLimit(1)
+                    problemMark
                     Spacer(minLength: 4)
                     value(metric)
                 }
@@ -474,16 +505,25 @@ private struct CompactAccount: View {
         Text(metric.value)
             .font(.system(size: WidgetScale.value, weight: .semibold))
             .monospacedDigit()
-            .foregroundStyle(GlancePalette.text(metric.severity, onDark: false))
+            .foregroundStyle(.primary)
             .lineLimit(1)
             .fixedSize()
     }
 
     private var mark: some View {
-        ProviderMark(mark: provider.mark)
-            .foregroundStyle(provider.markTint)
+        ProviderMarkView(provider: provider)
             .frame(width: 10, height: 10)
             .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
+    }
+
+    /// The header's warning triangle, beside the name on a line that stands in for the header.
+    @ViewBuilder
+    private var problemMark: some View {
+        if provider.problem != nil {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: WidgetScale.caption))
+                .foregroundStyle(GlanceHeaderInk.warning(dark: colorScheme == .dark))
+        }
     }
 }
 
@@ -618,26 +658,30 @@ private struct RingTileView: View {
     let providers: [GlanceProvider]
     let now: Date
     let fit: RingFit
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let ring = fit.ring
         VStack(spacing: 3) {
             GlanceRing(fraction: tile.metric?.fraction, severity: tile.metric?.severity ?? .none, lineWidth: max(3.5, ring / 13)) {
                 VStack(spacing: ring > 60 ? 2 : 1) {
-                    ProviderMark(mark: tile.provider.mark)
-                        .foregroundStyle(tile.provider.markTint)
+                    ProviderMarkView(provider: tile.provider)
                         .frame(width: ring * 0.22, height: ring * 0.22)
                     if let metric = tile.metric {
                         Text(metric.value)
                             .font(.system(size: max(10, ring * 0.2), weight: .bold))
                             .monospacedDigit()
-                            .foregroundStyle(GlancePalette.text(metric.severity, onDark: false))
+                            .foregroundStyle(.primary)
                             .lineLimit(1)
                             .minimumScaleFactor(0.6)
-                    } else {
+                    } else if tile.provider.problem != nil {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: max(9, ring * 0.16)))
-                            .foregroundStyle(Color.orange)
+                            .foregroundStyle(GlanceHeaderInk.warning(dark: colorScheme == .dark))
+                    } else {
+                        Text(Self.noReading)
+                            .font(.system(size: max(10, ring * 0.2), weight: .bold))
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .padding(ring * 0.15)
@@ -658,6 +702,9 @@ private struct RingTileView: View {
         }
         .frame(width: fit.cell)
     }
+
+    /// What the popup's rows read without a reading.
+    private static let noReading = "—"
 
     private var caption: String {
         guard let metric = tile.metric else {

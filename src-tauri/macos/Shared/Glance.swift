@@ -13,6 +13,9 @@ struct GlanceDocument: Decodable, Equatable {
     var locale: String
     /// Settings → Time Format: `true` for 12-hour, `false` for 24-hour, absent to follow the locale.
     var hour12: Bool?
+    /// Settings → Theme when it is not System (`light` or `dark`): every widget draws in it, as the
+    /// whole popup does.
+    var theme: String?
     var labels: GlanceLabels
     /// The open island's accounts.
     var providers: [GlanceProvider]
@@ -29,7 +32,7 @@ struct GlanceDocument: Decodable, Equatable {
     static let supportedVersion = 1
 
     private enum CodingKeys: String, CodingKey {
-        case version, generatedAt, locale, hour12, labels, providers, island, widget, resets, claudeResets, alert
+        case version, generatedAt, locale, hour12, theme, labels, providers, island, widget, resets, claudeResets, alert
     }
 
     init(
@@ -37,6 +40,7 @@ struct GlanceDocument: Decodable, Equatable {
         generatedAt: Date,
         locale: String,
         hour12: Bool?,
+        theme: String? = nil,
         labels: GlanceLabels,
         providers: [GlanceProvider],
         island: GlanceIsland,
@@ -49,6 +53,7 @@ struct GlanceDocument: Decodable, Equatable {
         self.generatedAt = generatedAt
         self.locale = locale
         self.hour12 = hour12
+        self.theme = theme
         self.labels = labels
         self.providers = providers
         self.island = island
@@ -64,6 +69,7 @@ struct GlanceDocument: Decodable, Equatable {
         generatedAt = try container.decode(Date.self, forKey: .generatedAt)
         locale = try container.decode(String.self, forKey: .locale)
         hour12 = try container.decodeIfPresent(Bool.self, forKey: .hour12)
+        theme = try? container.decodeIfPresent(String.self, forKey: .theme)
         labels = try container.decode(GlanceLabels.self, forKey: .labels)
         providers = try container.decode([GlanceProvider].self, forKey: .providers)
         island = try container.decode(GlanceIsland.self, forKey: .island)
@@ -100,6 +106,16 @@ struct GlanceDocument: Decodable, Equatable {
     /// the tracker's title, else the same words in the document's language.
     var claudeResetsTitle: String {
         labels.claudeResetsTab ?? claudeResets?.title ?? (isVietnamese ? "Reset Claude" : "Claude Resets")
+    }
+
+    /// The appearance a widget draws in: the app's theme when it forces one, else `nil` to follow
+    /// the Mac. A document from before the theme was its own key carries it on the reset tracker.
+    var forcedScheme: ColorScheme? {
+        switch theme ?? forWidget.resets?.theme {
+        case "light": return .light
+        case "dark": return .dark
+        default: return nil
+        }
     }
 
     /// The island's accounts with something to show: readings, or a notice saying why there are none.
@@ -207,9 +223,12 @@ struct GlanceLabels: Decodable, Equatable {
     /// What that view says while the Claude tracker is off, naming the Claude reset notifications;
     /// sent with `claudeResetsTab`.
     var claudeResetsOff: String?
+    /// The plan-period corner's words, sent while an account the island or the widget lists has a
+    /// plan period.
+    var planTerm: GlancePlanTermWords?
 
     private enum CodingKeys: String, CodingKey {
-        case title, empty, updated, resetsIn, resetting, open, notRunning, noData, more, units, resetsOff, upcoming, upcomingEmpty, tabs, claudeResetsTab, claudeResetsOff
+        case title, empty, updated, resetsIn, resetting, open, notRunning, noData, more, units, resetsOff, upcoming, upcomingEmpty, tabs, claudeResetsTab, claudeResetsOff, planTerm
     }
 
     init(
@@ -228,7 +247,8 @@ struct GlanceLabels: Decodable, Equatable {
         upcomingEmpty: String = "",
         tabs: GlanceTabLabels = .fallback,
         claudeResetsTab: String? = nil,
-        claudeResetsOff: String? = nil
+        claudeResetsOff: String? = nil,
+        planTerm: GlancePlanTermWords? = nil
     ) {
         self.title = title
         self.empty = empty
@@ -246,6 +266,7 @@ struct GlanceLabels: Decodable, Equatable {
         self.tabs = tabs
         self.claudeResetsTab = claudeResetsTab
         self.claudeResetsOff = claudeResetsOff
+        self.planTerm = planTerm
     }
 
     init(from decoder: Decoder) throws {
@@ -266,6 +287,7 @@ struct GlanceLabels: Decodable, Equatable {
         tabs = (try? container.decodeIfPresent(GlanceTabLabels.self, forKey: .tabs)) ?? .fallback
         claudeResetsTab = try? container.decodeIfPresent(String.self, forKey: .claudeResetsTab)
         claudeResetsOff = try? container.decodeIfPresent(String.self, forKey: .claudeResetsOff)
+        planTerm = try? container.decodeIfPresent(GlancePlanTermWords.self, forKey: .planTerm)
     }
 }
 
@@ -515,20 +537,152 @@ struct GlanceWidgetContent: Decodable, Equatable {
     }
 }
 
-struct GlanceProvider: Decodable, Equatable, Identifiable {
+struct GlanceProvider: Equatable, Identifiable {
     var id: String
     /// The card heading: the brand for an account named by its email, the account title otherwise.
     var name: String
     var account: String?
     var plan: String?
-    /// Why an account without readings shows none (signed out, session expired).
+    /// The plan's paid period, the card header's right corner.
+    var term: GlancePlanTerm? = nil
+    /// `Dữ liệu cũ`, while the reading is two refresh intervals old, as beside the card's name.
+    var outdated: String? = nil
+    /// Why the card header shows its warning triangle: a failed refresh, an error, a provider
+    /// warning; with readings or without.
+    var problem: String? = nil
+    /// What an account without readings says in their place: its problem, or `Không có dữ liệu`.
     var notice: String?
     var brand: String
+    /// The mark's color on the island's black, `#FFFFFF` for a brand without one.
     var color: String
+    /// The mark's color on a light background, where it differs from `color`.
+    var lightColor: String? = nil
     var mark: GlanceMark?
     var metrics: [GlanceMetric]
 
     var tint: Color { Color(glanceHex: color) ?? .white }
+
+    /// Whether the popup draws this mark in its brand color: a brand with a color and a mark (or
+    /// its official color logo, which keeps its own colors).
+    var hasBrandTint: Bool {
+        color.uppercased() != "#FFFFFF" && (mark?.art != nil || !(mark?.paths.isEmpty ?? true))
+    }
+
+    /// The mark's color on a widget in `scheme`, as the popup picks it for its theme: the brand color
+    /// for that appearance, else the secondary text color (a brand without a color, or without a
+    /// mark, whose initial is drawn instead).
+    func markColor(in scheme: ColorScheme) -> Color {
+        guard hasBrandTint else { return .secondary }
+        if scheme == .light, let lightColor, let light = Color(glanceHex: lightColor) { return light }
+        return tint
+    }
+}
+
+extension GlanceProvider: Decodable {
+    private enum CodingKeys: String, CodingKey {
+        case id, name, account, plan, term, outdated, problem, notice, brand, color, lightColor, mark, metrics
+    }
+
+    /// Keys added after the first release are read leniently, so one malformed key never loses the
+    /// whole document.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        account = try container.decodeIfPresent(String.self, forKey: .account)
+        plan = try container.decodeIfPresent(String.self, forKey: .plan)
+        term = try? container.decodeIfPresent(GlancePlanTerm.self, forKey: .term)
+        outdated = try? container.decodeIfPresent(String.self, forKey: .outdated)
+        problem = try? container.decodeIfPresent(String.self, forKey: .problem)
+        notice = try container.decodeIfPresent(String.self, forKey: .notice)
+        brand = try container.decode(String.self, forKey: .brand)
+        color = try container.decode(String.self, forKey: .color)
+        lightColor = try? container.decodeIfPresent(String.self, forKey: .lightColor)
+        mark = try container.decodeIfPresent(GlanceMark.self, forKey: .mark)
+        metrics = try container.decode([GlanceMetric].self, forKey: .metrics)
+    }
+}
+
+/// The plan's paid period (see `GlancePlanTerm` in `src/model/glance.ts`): when it ends, when the
+/// corner turns to the warning color, and the day it ends as a date. The words are filled in at the
+/// moment drawn, so the corner stays right between documents, as the popup's does.
+struct GlancePlanTerm: Decodable, Equatable {
+    var endsAt: Date
+    var soonAt: Date
+    var on: String
+    var estimated: Bool? = nil
+
+    /// The corner at `now`: the time left over the day it ends, and whether it takes the warning
+    /// color; `nil` for an estimate whose day has passed, which the next document replaces.
+    func lines(now: Date, words: GlancePlanTermWords, calendar: Calendar = .current) -> (left: String, day: String, soon: Bool)? {
+        let about = estimated == true ? "~" : ""
+        let remaining = endsAt.timeIntervalSince(now)
+        let days = Self.calendarDays(from: now, to: endsAt, calendar: calendar)
+        if remaining <= 0 {
+            if estimated == true { return nil }
+            return (words.due, days >= 0 ? words.today : on, true)
+        }
+        let word = days <= 0 ? words.today : days == 1 ? words.tomorrow : on
+        let (forms, count) = Self.left(remaining, words: words)
+        guard let form = count == 1 ? forms.first : forms.last else { return nil }
+        let left = form.replacingOccurrences(of: "{n}", with: "\(about)\(count)")
+        return (left, words.until.replacingOccurrences(of: "{d}", with: "\(about)\(word)"), now > soonAt)
+    }
+
+    /// The moments after `now` when `lines` reads differently: each step of the count within `span`
+    /// (in the last hour it steps every minute) and the first beyond it, the corner turning to the
+    /// warning color, the period ending, and the midnight that turns its day into tomorrow or today.
+    func changes(after now: Date, within span: TimeInterval = 15 * 60, calendar: Calendar = .current) -> [Date] {
+        var moments = [soonAt.addingTimeInterval(1), endsAt]
+        var cursor = now
+        while let step = nextStep(after: cursor) {
+            moments.append(step)
+            if step.timeIntervalSince(now) > span { break }
+            cursor = step
+        }
+        if Self.calendarDays(from: now, to: endsAt, calendar: calendar) <= 2,
+           let midnight = calendar.nextDate(after: now, matching: DateComponents(hour: 0, minute: 0, second: 0), matchingPolicy: .nextTime) {
+            moments.append(midnight)
+        }
+        return moments.filter { $0 > now }
+    }
+
+    /// The first moment after `moment` when the count of time left steps down, as `left` rounds it.
+    private func nextStep(after moment: Date) -> Date? {
+        let remaining = endsAt.timeIntervalSince(moment)
+        if remaining <= 0 { return nil }
+        if remaining < Self.hour { return endsAt.addingTimeInterval(-(ceil(remaining / 60) - 1) * 60) }
+        if remaining < Self.day { return endsAt.addingTimeInterval(-floor(remaining / Self.hour) * Self.hour + 1) }
+        return endsAt.addingTimeInterval(-floor(remaining / Self.day) * Self.day + 1)
+    }
+
+    private static let hour: TimeInterval = 3600
+    private static let day: TimeInterval = 86400
+
+    /// The time left in its largest whole unit, as the popup counts it: whole days, whole hours in the
+    /// last day, minutes rounded up in the last hour.
+    private static func left(_ remaining: TimeInterval, words: GlancePlanTermWords) -> ([String], Int) {
+        if remaining < hour { return (words.minutes, Int(ceil(remaining / 60))) }
+        if remaining < day { return (words.hours, Int(floor(remaining / hour))) }
+        return (words.days, Int(floor(remaining / day)))
+    }
+
+    /// Calendar days from `start`'s day to `end`'s in the device's zone: 0 today, 1 tomorrow.
+    private static func calendarDays(from start: Date, to end: Date, calendar: Calendar) -> Int {
+        calendar.dateComponents([.day], from: calendar.startOfDay(for: start), to: calendar.startOfDay(for: end)).day ?? 0
+    }
+}
+
+/// The plan-period corner's words: `{n}` stands for the count (the form for 1, then any other) and
+/// `{d}` for the day; an estimate puts `~` before either.
+struct GlancePlanTermWords: Decodable, Equatable {
+    var days: [String]
+    var hours: [String]
+    var minutes: [String]
+    var due: String
+    var until: String
+    var today: String
+    var tomorrow: String
 }
 
 /// A provider's logo: single-color path data drawn in the provider's tint, and for a brand whose
@@ -975,19 +1129,25 @@ enum GlanceDates {
 }
 
 enum GlancePalette {
+    /// A meter's fill in the popup's pace colors (`--uc-blue`, `--uc-yellow`, `--uc-red`): the dark
+    /// theme's on the island's black or a dark widget, the light theme's on a light one, where the
+    /// yellow is darkened to read on white.
     static func fill(_ severity: GlanceSeverity, onDark: Bool) -> Color {
         switch severity {
         case .normal:
-            return onDark ? Color(red: 0.04, green: 0.52, blue: 1.0) : .blue
+            return onDark ? Color(red: 0.04, green: 0.52, blue: 1.0) : Color(red: 0, green: 0.478, blue: 1.0)
         case .warning:
-            return onDark ? Color(red: 1.0, green: 0.84, blue: 0.04) : .yellow
+            return onDark ? Color(red: 1.0, green: 0.84, blue: 0.04) : Color(red: 0.961, green: 0.722, blue: 0)
         case .critical:
-            return onDark ? Color(red: 1.0, green: 0.27, blue: 0.23) : .red
+            return onDark ? Color(red: 1.0, green: 0.27, blue: 0.23) : Color(red: 1.0, green: 0.231, blue: 0.188)
         case .none:
             return .secondary
         }
     }
 
+    /// A reading that no meter or ring beside it colors (a percentage beside the notch, an alert's
+    /// title): the pace color for a warning or a limit running out, the text color otherwise.
+    /// Everywhere a meter carries the pace, the reading keeps the text color, as the popup's rows do.
     static func text(_ severity: GlanceSeverity, onDark: Bool) -> Color {
         switch severity {
         case .warning, .critical:

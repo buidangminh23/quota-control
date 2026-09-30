@@ -323,10 +323,11 @@ struct IslandQuotaSection: View {
         return best.index
     }
 
-    /// The rough height of one account, in lines.
+    /// The rough height of one account, in lines: the plan period's corner takes the email's line
+    /// when there is none.
     private static func weight(_ provider: GlanceProvider, perAccount: Int, shows: GlanceShows) -> CGFloat {
         var lines: CGFloat = 1.3
-        if shows.account && provider.account != nil { lines += 0.9 }
+        if (shows.account && provider.account != nil) || provider.term != nil { lines += 0.9 }
         if provider.metrics.isEmpty { return lines + 1.2 }
         for metric in provider.metrics.prefix(perAccount) {
             lines += 1.2
@@ -347,7 +348,7 @@ struct IslandAccount: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            IslandAccountHeader(provider: provider, shows: document.island.shows)
+            IslandAccountHeader(provider: provider, shows: document.island.shows, words: document.labels.planTerm, now: now)
             if provider.metrics.isEmpty {
                 GlanceNoticeRow(text: provider.notice ?? document.labels.noData, onDark: true, size: 11)
             }
@@ -361,39 +362,76 @@ struct IslandAccount: View {
     }
 }
 
-/// An account's mark in its brand color beside its name and plan, with its email under.
+extension GlanceProvider {
+    /// The mark's color on the island's black, as the popup's dark theme draws it: the brand color,
+    /// or the secondary text color for a brand without a color or without a mark.
+    var islandMarkColor: Color { hasBrandTint ? tint : IslandInk.caption }
+}
+
+/// An account's header as the popup's card header draws it in the dark theme: the mark in its
+/// brand color, the name, the plan in plain secondary text, `Dữ liệu cũ` and the warning triangle
+/// (its reason on hover), the email under, and the plan period in the right corner.
 struct IslandAccountHeader: View {
     let provider: GlanceProvider
     let shows: GlanceShows
+    /// The plan period's words, sent while an account has one.
+    let words: GlancePlanTermWords?
+    let now: Date
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
-                ProviderMark(mark: provider.mark)
-                    .foregroundStyle(provider.tint)
-                    .frame(width: 14, height: 14)
-                Text(provider.name)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.white)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                if shows.plan, let plan = provider.plan {
-                    GlancePlanBadge(text: plan, onDark: true, size: 13)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    ProviderMark(mark: provider.mark, brand: provider.brand)
+                        .foregroundStyle(provider.islandMarkColor)
+                        .frame(width: 14, height: 14)
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        Text(provider.name)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color.white)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        if shows.plan, let plan = provider.plan {
+                            Text(plan)
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(IslandInk.caption)
+                                .lineLimit(1)
+                                .layoutPriority(1)
+                        }
+                        if let outdated = provider.outdated {
+                            Text(outdated)
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(IslandInk.faint)
+                                .lineLimit(1)
+                        }
+                    }
+                    if let problem = provider.problem {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(IslandInk.warning)
+                            .help(problem)
+                            .accessibilityLabel(problem)
+                    }
+                }
+                if shows.account, let account = provider.account {
+                    Text(account)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(IslandInk.caption)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .padding(.leading, 20)
                 }
             }
-            if shows.account, let account = provider.account {
-                Text(account)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(IslandInk.caption)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .padding(.leading, 20)
+            if let words, let lines = provider.term?.lines(now: now, words: words) {
+                Spacer(minLength: 6)
+                GlancePlanTermCorner(left: lines.left, day: lines.day, soon: lines.soon, onDark: true, size: 10.5)
             }
         }
     }
 }
 
-/// One reading: its label and headline over the meter, and when it comes back beneath.
+/// One reading as the popup's row reads it: its title in bold and its headline in the text color
+/// over the meter, which alone carries the pace color, and when it comes back beneath.
 struct IslandMetricRow: View {
     let metric: GlanceMetric
     let labels: GlanceLabels
@@ -404,14 +442,14 @@ struct IslandMetricRow: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(metric.label)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(IslandInk.label)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.white)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 4)
                 Text(metric.headline)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(GlancePalette.text(metric.severity, onDark: true))
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.white)
                     .monospacedDigit()
                     .lineLimit(1)
                     .layoutPriority(1)
@@ -485,8 +523,8 @@ struct IslandUpcomingSection: View {
 
     private func row(_ limit: GlanceUpcomingLimit) -> some View {
         HStack(spacing: 7) {
-            ProviderMark(mark: limit.provider.mark)
-                .foregroundStyle(limit.provider.tint)
+            ProviderMark(mark: limit.provider.mark, brand: limit.provider.brand)
+                .foregroundStyle(limit.provider.islandMarkColor)
                 .frame(width: 12, height: 12)
             Text("\(limit.provider.name) · \(limit.metric.label)")
                 .font(.system(size: 11.5))
@@ -524,7 +562,7 @@ struct IslandAlertView: View {
         VStack(alignment: .leading, spacing: 0) {
             Color.clear.frame(height: topInset)
             HStack(alignment: .top, spacing: 12) {
-                ProviderMark(mark: mark)
+                ProviderMark(mark: mark, brand: alert.brand)
                     .foregroundStyle(tint)
                     .frame(width: 22, height: 22)
                 VStack(alignment: .leading, spacing: 3) {

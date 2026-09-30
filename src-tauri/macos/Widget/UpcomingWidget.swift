@@ -176,17 +176,17 @@ private struct UpcomingRow: View {
     }
 
     private var mark: some View {
-        ProviderMark(mark: group.provider.mark)
-            .foregroundStyle(group.provider.markTint)
+        ProviderMarkView(provider: group.provider)
             .frame(width: 10, height: 10)
             .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
     }
 
+    /// The reading in the text color, as the popup's rows read it.
     private var reading: some View {
         Text(metric.value)
             .font(.system(size: WidgetScale.caption, weight: .semibold))
             .monospacedDigit()
-            .foregroundStyle(GlancePalette.text(metric.severity, onDark: false))
+            .foregroundStyle(.primary)
             .lineLimit(1)
             .fixedSize()
     }

@@ -2,11 +2,14 @@ import SwiftUI
 
 /// A provider's logo from the same SVG path data the popup draws (`src/assets/providerMarks.ts`),
 /// scaled into its box with a small inset so every mark fills the same space (upstream
-/// `ProviderIconShape`). Paths keep their own fill rule; a missing mark draws a dot. A brand with an
-/// official color logo draws that picture in its own colors instead, ignoring the foreground tint,
-/// as the popup and the taskbar strip do.
+/// `ProviderIconShape`). Paths keep their own fill rule. A brand without a mark shows its initial in
+/// a ring, as the popup does; without a brand either, a dot. A brand with an official color logo
+/// draws that picture in its own colors instead, ignoring the foreground tint, as the popup and the
+/// taskbar strip do.
 struct ProviderMark: View {
     let mark: GlanceMark?
+    /// The brand whose initial stands in for a missing mark.
+    var brand: String? = nil
     var inset: CGFloat = 0.04
 
     var body: some View {
@@ -21,6 +24,19 @@ struct ProviderMark: View {
                     MarkPathShape(box: mark.box, data: component.d, inset: inset)
                         .fill(style: FillStyle(eoFill: component.evenOdd ?? false))
                 }
+            }
+        } else if let initial = brand?.first {
+            GeometryReader { proxy in
+                let side = min(proxy.size.width, proxy.size.height)
+                ZStack {
+                    Circle().strokeBorder(lineWidth: max(1, side * 0.094))
+                    Text(String(initial).uppercased())
+                        .font(.system(size: max(1, side * 0.62), weight: .bold))
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                .frame(width: side, height: side)
+                .frame(width: proxy.size.width, height: proxy.size.height)
             }
         } else {
             Circle().padding(1)

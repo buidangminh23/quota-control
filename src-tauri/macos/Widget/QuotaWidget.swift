@@ -92,7 +92,9 @@ struct GlanceEntry: TimelineEntry {
 struct GlanceTimeline: TimelineProvider {
     /// How often the widget looks again on its own; the app also reloads it whenever readings change.
     private static let refresh: TimeInterval = 15 * 60
-    private static let momentEntries = 8
+    /// Enough entries for a plan period's last hour, whose count steps every minute, to stay right
+    /// until the next look; entries cost no reload.
+    private static let momentEntries = 20
 
     func placeholder(in context: Context) -> GlanceEntry {
         GlanceEntry(date: Date(), document: .sample)
@@ -114,12 +116,13 @@ struct GlanceTimeline: TimelineProvider {
     }
 
     /// The moments after `now` when something drawn changes on its own, soonest first: a limit
-    /// comes back, a countdown of the reset tracker the widget chose ends or its row goes away, or
-    /// the readings turn stale.
+    /// comes back, a countdown of the reset tracker the widget chose ends or its row goes away, an
+    /// account's plan period counts down or its day turns into today, or the readings turn stale.
     static func moments(_ document: GlanceDocument?, after now: Date) -> [Date] {
         guard let document else { return [] }
         var moments = Set(GlanceUpcomingLimit.list(document.widget.providers, now: now).map(\.at))
         moments.formUnion(document.forWidget.resetMoments(after: now))
+        moments.formUnion(document.widget.providers.compactMap(\.term).flatMap { $0.changes(after: now) })
         let stale = document.generatedAt.addingTimeInterval(GlanceStaleness.after)
         if stale > now {
             moments.insert(stale)
@@ -257,23 +260,17 @@ struct GlanceWidgetView: View {
         .environment(\.colorScheme, themedScheme ?? colorScheme)
     }
 
-    /// The reset widgets draw in the app's theme, like the Reset tab and the island. Only in full
-    /// color: dimmed on the desktop, the system draws every widget its own way, and dark ink forced
-    /// by a light theme would fade out there.
+    /// Every widget draws in the app's theme, as the whole popup does. Only in full color: dimmed on
+    /// the desktop, the system draws every widget its own way, and dark ink forced by a light theme
+    /// would fade out there.
     private var themedScheme: ColorScheme? {
         guard renderingMode == .fullColor else { return nil }
-        switch style {
-        case .overview, .codexResets, .resetCalendar:
-            let theme = entry.document?.forWidget.resets?.theme
-            return theme == "light" ? .light : theme == "dark" ? .dark : nil
-        default:
-            return nil
-        }
+        return entry.document?.forcedScheme
     }
 
-    /// A themed widget's background follows its theme, with the island's fill behind the tracker,
-    /// so what is drawn straight on it (a section's name, the page buttons, the update time) stays
-    /// readable when the app's theme and the Mac's appearance differ.
+    /// A themed widget's background is the popup's page in that theme, so what is drawn straight on
+    /// it (a section's name, the page buttons, the update time) stays readable when the app's theme
+    /// and the Mac's appearance differ.
     private var containerFill: AnyShapeStyle {
         themedScheme.map { AnyShapeStyle(GlanceResetPalette(scheme: $0).background) } ?? AnyShapeStyle(.background)
     }
@@ -340,7 +337,7 @@ extension GlanceDocument {
             resetting: vietnamese ? "Đang đặt lại…" : "Resetting…",
             open: vietnamese ? "Mở Quota Control" : "Open Quota Control",
             notRunning: WidgetText.notRunning,
-            noData: vietnamese ? "Chưa có số liệu" : "No data yet",
+            noData: vietnamese ? "Không có dữ liệu" : "No data",
             more: vietnamese ? "tài khoản khác" : "more",
             units: vietnamese
                 ? GlanceUnits(day: " ngày", hour: " giờ", minute: " phút")

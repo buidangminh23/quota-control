@@ -856,15 +856,17 @@ struct IslandWingPiece: View {
     }
 
     private var mark: some View {
-        ProviderMark(mark: slot.provider.mark)
-            .foregroundStyle(slot.provider.tint)
+        ProviderMark(mark: slot.provider.mark, brand: slot.provider.brand)
+            .foregroundStyle(slot.provider.islandMarkColor)
     }
 
+    /// The value in the pace color only where no ring or bar beside it carries that color, as the
+    /// popup's rows leave it to their meter.
     private var value: some View {
         Text(slot.metric.liveValue(now: now, units: units))
             .font(.system(size: 12.5, weight: .semibold))
             .monospacedDigit()
-            .foregroundStyle(GlancePalette.text(slot.metric.severity, onDark: true))
+            .foregroundStyle(fraction == nil ? GlancePalette.text(slot.metric.severity, onDark: true) : Color.white)
             .lineLimit(1)
             .minimumScaleFactor(0.7)
             .contentTransition(.numericText())
