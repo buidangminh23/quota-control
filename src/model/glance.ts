@@ -51,6 +51,8 @@ export interface GlanceCountdown {
   text: string;
   since?: boolean;
   after?: string;
+  /** What a `since` countdown reads while less than a minute has gone by (`Vừa tải`). */
+  recent?: string;
 }
 
 /**
@@ -358,6 +360,8 @@ export interface GlanceResetPresentation {
   historyTitle: string;
   history: GlanceResetHistoryItem[];
   patternNote: string;
+  /** When the copy shown was read (`Tải 5 phút trước`, `Vừa tải`), the line above the source. */
+  fetched?: GlanceCountdown;
   source: string;
   methodTitle: string;
   method: string[];

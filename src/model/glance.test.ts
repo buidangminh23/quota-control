@@ -450,7 +450,7 @@ describe("a document for someone who never chose Claude", () => {
 
   const codex = (language: "vi" | "en") => {
     const feeds = parseResetFeeds(FEED_FIXTURES.codexResetStatus, FEED_FIXTURES.codexResets);
-    return buildGlanceResets({ feeds, stale: false, now: NOW_GLANCE, language, timeFormat: "auto", theme: "system", reliability: dailyReliability(feeds.resets, NOW_GLANCE, language) });
+    return buildGlanceResets({ feeds, stale: false, now: NOW_GLANCE, language, timeFormat: "auto", theme: "system", reliability: dailyReliability(feeds.resets, NOW_GLANCE, language), fetchedAt: new Date(FETCHED).toISOString() });
   };
   const claude = () =>
     buildClaudeGlanceResets({ feed: parseClaudeResets(FEED_FIXTURES.claudeResets)!, accounts: ["max", null], used: [], stale: false, now: NOW_GLANCE, language: "vi", timeFormat: "auto", theme: "system" });
@@ -476,7 +476,8 @@ describe("a document for someone who never chose Claude", () => {
     tuned: "d319d2b1be43d61562cff513331df6d8124f0c2c50107cf27a7267073fd52973",
   };
   const digest = (document: object) => createHash("sha256").update(JSON.stringify(document)).digest("hex");
-  /** The document without the one thing added since: the announcement the latest reset's card quotes. */
+  /** The document without what was added to it since: the announcement the latest reset's card
+   * quotes, and when the tracker's feed was read. */
   const unquoted = (document: ReturnType<typeof glance>) => {
     const copy = JSON.parse(JSON.stringify(document)) as ReturnType<typeof glance>;
     const latest = copy.resets?.presentation?.latest;
@@ -486,15 +487,17 @@ describe("a document for someone who never chose Claude", () => {
       delete latest.url;
       delete latest.observed;
     }
+    delete copy.resets?.presentation?.fetched;
     return copy;
   };
 
-  it("stays byte for byte what was pinned apart from the quoted announcement, even with a Claude tracker at hand", () => {
+  it("stays byte for byte what was pinned apart from the quoted announcement and the fetch time, even with a Claude tracker at hand", () => {
     const tracker = claude();
     expect(tracker).not.toBeNull();
     for (const [name, options] of Object.entries(scenarios())) {
       const document = glance(options);
       expect(document.resets?.presentation?.latest, name).toMatchObject({ excerpt: expect.stringMatching(/^GPT-6 Sol and Luna are out\./), url: "https://x.com/thsottiaux/status/2102463847714247142" });
+      expect(document.resets?.presentation?.fetched?.at, name).toBe(new Date(FETCHED).toISOString());
       expect(digest(unquoted(document)), name).toBe(RELEASED[name]);
       expect(digest(unquoted(glance({ ...options, claudeResets: tracker }))), name).toBe(RELEASED[name]);
     }

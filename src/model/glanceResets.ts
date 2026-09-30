@@ -82,6 +82,18 @@ export interface GlanceResetsInput {
    * the rhythm, the statistics and the history rather than work them out from a single reset.
    */
   withHistory?: boolean;
+  /** When the copy shown was read (`feedShownAt`), for the line the Reset tab shows above its source. */
+  fetchedAt?: string | null;
+}
+
+/**
+ * The Reset tab's line saying when its copy was read (`Tải 5 phút trước`, `Vừa tải` within the
+ * first minute), as a moment Swift counts from; nothing for a time that cannot be read.
+ */
+export function fetchedLine(at: string | null | undefined, text: InsightsMessages): GlanceCountdown | undefined {
+  const time = at ? Date.parse(at) : Number.NaN;
+  if (!Number.isFinite(time)) return undefined;
+  return { at: new Date(time).toISOString(), text: text.fetchedAgo(COUNTDOWN_SPAN), since: true, recent: text.justNow };
 }
 
 /**
@@ -153,6 +165,7 @@ export function buildResetPresentation(input: Omit<GlanceResetsInput, "stale">):
     [text.statLongest, stats.longestGap ? `${days(stats.longestGap.days)} · ${text.gapRange(shortDate(stats.longestGap.from, now, language), shortDate(stats.longestGap.to, now, language))}` : "—"],
   ];
   const moment = latest ? timeOnDayLabel(latest.announcedAt, now, timeFormat, language, false) : "";
+  const fetched = fetchedLine(input.fetchedAt, text);
   return {
     locale: language === "vi" ? "vi-VN" : "en-US",
     authorAvatar: resetAvatar,
@@ -175,6 +188,7 @@ export function buildResetPresentation(input: Omit<GlanceResetsInput, "stale">):
     historyTitle: text.historyTitle,
     history: feeds.resets.map((reset) => ({ id: reset.id, kind: reset.kind, kindLabel: text.kind(reset.kind), when: when(reset.announcedAt), excerpt: excerpt(reset.text, 220), author: author(reset.source), url: reset.source.url ?? undefined, observed: reset.source.kind === "observed" ? text.observed : undefined })),
     patternNote: text.patternNote(numberText(language, announcementPattern(feeds.resets).total)),
+    ...(fetched ? { fetched } : {}),
     source: text.resetsSource,
     methodTitle: text.methodTitle,
     method: [...text.resetsMethod],

@@ -623,12 +623,13 @@ struct GlanceMetric: Decodable, Equatable, Identifiable {
 
 /// Words around a moving span of time (see `GlanceCountdown` in `src/model/glance.ts`): `text` with
 /// `{d}` replaced by the time left until `at`, or gone by since it when `since`; once a countdown
-/// has passed, `after`.
+/// has passed, `after`; a `since` one reads `recent` while under a minute has gone by.
 struct GlanceCountdown: Decodable, Equatable {
     var at: Date
     var text: String
     var since: Bool?
     var after: String?
+    var recent: String? = nil
 
     static let placeholder = "{d}"
 
@@ -636,6 +637,7 @@ struct GlanceCountdown: Decodable, Equatable {
 
     func text(now: Date, units: GlanceUnits, short: Bool = false) -> String {
         if passed(now), let after { return after }
+        if since == true, let recent, now.timeIntervalSince(at) < 60 { return recent }
         let from = since == true ? at : now
         let to = since == true ? now : at
         let span = short
@@ -853,6 +855,8 @@ struct GlanceResetPresentation: Decodable, Equatable {
     var historyTitle: String
     var history: [GlanceResetHistoryItem]
     var patternNote: String
+    /// When the copy shown was read (`Tải 5 phút trước`), the line above the source.
+    var fetched: GlanceCountdown? = nil
     var source: String
     var methodTitle: String
     var method: [String]

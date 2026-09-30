@@ -44,6 +44,13 @@ describe("buildClaudeGlanceResets", () => {
     expect(build(feedOf([event({ id: "r1" })])).latest?.at).toBe("2026-09-20T10:00:00.000Z");
   });
 
+  it("says above the source when the feed was read, like the Reset tab's Claude view", () => {
+    const presentation = build(FIXTURE, { fetchedAt: "2026-09-29T12:57:00Z" }).presentation!;
+    expect(presentation.fetched).toEqual({ at: "2026-09-29T12:57:00.000Z", text: "Tải {d} trước", since: true, recent: "Vừa tải" });
+    expect(Object.keys(presentation).indexOf("fetched")).toBe(Object.keys(presentation).indexOf("source") - 1);
+    expect("fetched" in build(FIXTURE).presentation!).toBe(false);
+  });
+
   it("words the tracker like the Codex one, with the Claude mark, color and site", () => {
     const resets = build()!;
     expect(resets).toMatchObject({ title: "Reset Claude", source: "Theo claude-resets.com", brand: "claude", color: SOURCE_COLORS.claude, site: CLAUDE_RESETS_SITE });

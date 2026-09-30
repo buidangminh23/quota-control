@@ -249,6 +249,17 @@ describe("shared Reset tab presentation", () => {
     expect(statusOnly.reliability).toBeUndefined();
   });
 
+  it("says above the source when the copy shown was read, as a moment counted from, like the Reset tab", () => {
+    const feeds = parseResetFeeds(status(), HISTORY);
+    const fetched = buildResetPresentation({ feeds, now: LATER, language: "vi", timeFormat: "24h", fetchedAt: "2026-09-26T23:55:00.123456789+00:00" }).fetched;
+    expect(fetched).toEqual({ at: "2026-09-26T23:55:00.123Z", text: "Tải {d} trước", since: true, recent: "Vừa tải" });
+    const english = build(feeds, { now: LATER, language: "en", fetchedAt: "2026-09-26T23:55:00Z" })!.presentation!;
+    expect(english.fetched).toEqual({ at: "2026-09-26T23:55:00.000Z", text: "Fetched {d} ago", since: true, recent: "Just fetched" });
+    expect(Object.keys(english).indexOf("fetched")).toBe(Object.keys(english).indexOf("source") - 1);
+    expect("fetched" in present(feeds)).toBe(false);
+    expect("fetched" in buildResetPresentation({ feeds, now: LATER, language: "vi", timeFormat: "24h", fetchedAt: "not a time" })).toBe(false);
+  });
+
   it("keeps observed resets anonymous and handles no-history state without fabricated cards", () => {
     const observed = { ...post("observed", "regular", POSTED), source: { type: "observed", url: null } };
     const result = present(parseResetFeeds(null, JSON.stringify({ data: [observed] })));

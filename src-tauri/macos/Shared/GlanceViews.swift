@@ -202,6 +202,8 @@ enum GlanceResetTextStyle {
     case rowPost
     /// 10pt in the secondary color: a card's meta lines, a note, an explanation.
     case secondary
+    /// 11pt in the secondary color: when the feed was read, the line above the source.
+    case status
     /// 11pt semibold: the current wait.
     case heading
     /// 20pt bold: a chance.
@@ -693,7 +695,7 @@ struct GlanceResetElementView: View {
     private func styled(_ text: String, _ style: GlanceResetTextStyle) -> some View {
         Text(text)
             .font(.system(size: Self.size(style), weight: style == .value ? .bold : style == .heading ? .semibold : .regular))
-            .foregroundStyle(style == .secondary || style == .rowPost ? Color.secondary : Color.primary)
+            .foregroundStyle(style == .secondary || style == .rowPost || style == .status ? Color.secondary : Color.primary)
             .lineLimit(style == .post ? 4 : style == .rowPost ? 3 : nil)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -702,7 +704,7 @@ struct GlanceResetElementView: View {
         switch style {
         case .value: return 20
         case .secondary: return 10
-        case .body, .post, .rowPost, .heading: return 11
+        case .body, .post, .rowPost, .heading, .status: return 11
         }
     }
 
@@ -1000,6 +1002,9 @@ enum GlanceResetCards {
             }
             if !presentation.history.isEmpty {
                 add("history", presentation.historyTitle, history(presentation, folds: folds, words: words), look: .list(inset: 0))
+            }
+            if let fetched = presentation.fetched {
+                add("fetched", "", [.live(.countdown(fetched, units), .status)], look: .plain)
             }
             add("source", "", [.source(presentation.source, resets.site ?? "https://codex-resets.com")], look: .plain)
             if !presentation.method.isEmpty {

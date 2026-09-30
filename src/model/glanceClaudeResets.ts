@@ -12,8 +12,8 @@ import claudeDevsAvatar from "@/assets/claudedevs.webp?inline";
 import type { Language } from "@/i18n";
 import { insightsFor } from "@/i18n/insights";
 import { timeOnDayLabel, type TimeFormat } from "./format";
-import type { GlanceResetPresentation, GlanceResets, GlanceResetStatusCard, GlanceUpcomingReset } from "./glance";
-import { addHistory, COUNTDOWN_SPAN } from "./glanceResets";
+import type { GlanceCountdown, GlanceResetPresentation, GlanceResets, GlanceResetStatusCard, GlanceUpcomingReset } from "./glance";
+import { addHistory, COUNTDOWN_SPAN, fetchedLine } from "./glanceResets";
 import { CLAUDE_ACCOUNT, concerns, openBanked, type ClaudePlan, type ClaudeReset, type ClaudeResetFeed } from "./insights/claudeResets";
 import { authorOf, buildClaudePresentation, type ClaudeBankedCard, type ClaudePresentation } from "./insights/claudePresentation";
 import { SOURCE_COLORS } from "./palette";
@@ -32,6 +32,8 @@ export interface ClaudeGlanceResetsInput {
   used: readonly string[];
   /** The feed could not be refreshed and its last good copy is shown. */
   stale: boolean;
+  /** When the copy shown was read (`feedShownAt`), for the line the Reset tab shows above its source. */
+  fetchedAt?: string | null;
   now: Date;
   language: Language;
   timeFormat: TimeFormat;
@@ -61,7 +63,7 @@ export function buildClaudeGlanceResets(input: ClaudeGlanceResetsInput): GlanceR
     forecastTitle: text.glanceChanceTitle,
     forecast: [],
     forecastNote: text.forecastUnavailable,
-    presentation: glancePresentation(presentation, pending, language),
+    presentation: glancePresentation(presentation, pending, language, fetchedLine(input.fetchedAt, text)),
     theme: input.theme,
     site: CLAUDE_RESETS_SITE,
   };
@@ -93,12 +95,13 @@ function upcomingOf(reset: ClaudeReset, now: Date, timeFormat: TimeFormat, langu
 /**
  * The Reset tab's Claude view cut down to what the island and the widgets draw: its cards in the
  * Codex shape, the banked resets still to apply as status cards counting down to their deadlines,
- * the forecast with its self-check, the @ClaudeDevs picture for that account's posts, the method
- * word for word, and none of what only the popup has yet (limit changes, the comparison with
- * Codex, marking a banked reset as applied). The chances' meters are kept to the whole percent
- * they show, so the document does not change each minute as the estimate drifts.
+ * the forecast with its self-check, the @ClaudeDevs picture for that account's posts, when the
+ * feed was read (`fetched`), the method word for word, and none of what only the popup has yet
+ * (limit changes, the comparison with Codex, marking a banked reset as applied). The chances'
+ * meters are kept to the whole percent they show, so the document does not change each minute as
+ * the estimate drifts.
  */
-function glancePresentation(presentation: ClaudePresentation, pending: readonly ClaudeReset[], language: Language): GlanceResetPresentation {
+function glancePresentation(presentation: ClaudePresentation, pending: readonly ClaudeReset[], language: Language, fetched: GlanceCountdown | undefined): GlanceResetPresentation {
   const text = insightsFor(language).claude;
   const waiting = new Set(pending.map((reset) => reset.id));
   const left = text.bankedLeft(COUNTDOWN_SPAN);
@@ -115,6 +118,7 @@ function glancePresentation(presentation: ClaudePresentation, pending: readonly 
     historyTitle: presentation.historyTitle,
     history: presentation.history,
     patternNote: presentation.patternNote,
+    ...(fetched ? { fetched } : {}),
     source: presentation.source,
     methodTitle: presentation.methodTitle,
     method: [...presentation.method],

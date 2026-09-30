@@ -163,6 +163,17 @@ describe("the glance document the popup sends", () => {
     expect("resetsPending" in api.latest!).toBe(false);
   });
 
+  it("dates each tracker's copy the way the Reset tab's line above its source does", async () => {
+    const checked = "2026-09-30T01:02:03.000Z";
+    const verified = "2026-09-29T22:00:00.000Z";
+    const api = await start({ island: { resetsProvider: "claude" }, notifyClaudeResets: false }, (backend) => {
+      backend.feedStates.codexResetStatus = { checkedAt: checked };
+      backend.feedStates.claudeResets = { error: "offline", verifiedAt: verified };
+    });
+    await waitFor(() => expect(api.latest?.claudeResets?.presentation?.fetched?.at).toBe(verified));
+    expect(api.latest!.resets!.presentation!.fetched).toEqual({ at: checked, text: "Tải {d} trước", since: true, recent: "Vừa tải" });
+  });
+
   it("carries the Reset tab's self-check under the Codex chances once the history is long enough to try", async () => {
     const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
     const post = (id: string, days: number) => ({ id, reset_type: "regular", announced_at: ago(days), text: `Codex reset ${id}.`, source: { type: "x_post", author: "thsottiaux", url: `https://x.com/thsottiaux/status/${id}` } });

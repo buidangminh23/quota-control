@@ -21,7 +21,7 @@ import { buildClaudeGlanceResets } from "@/model/glanceClaudeResets";
 import { buildGlanceResets, parseResetFeeds, trackerPending } from "@/model/glanceResets";
 import { dailyReliability } from "@/model/insights/claudePresentation";
 import { parseClaudeResets } from "@/model/insights/claudeResets";
-import { feedOutdated, resetTrackerOutdated } from "@/model/insights/resets";
+import { feedOutdated, feedShownAt, resetTrackerOutdated } from "@/model/insights/resets";
 import { brandOf, glanceGroups } from "@/model/layout";
 import { surfaceResetProvider } from "@/model/settings";
 import { cardIdentity } from "@/model/providerText";
@@ -100,9 +100,10 @@ export function useGlance(): void {
     () => (tracking && showResetsTab ? dailyReliability(feeds.resets, now, display.language) : undefined),
     [tracking, showResetsTab, feeds, today, display.language],
   );
+  const fetchedAt = tracking ? feedShownAt(statusFeed) : null;
   const resets = useMemo(
-    () => (tracking ? buildGlanceResets({ feeds, stale, now, language: display.language, timeFormat, theme, reliability, withHistory: showResetsTab }) : null),
-    [tracking, feeds, stale, now, display.language, timeFormat, theme, reliability, showResetsTab],
+    () => (tracking ? buildGlanceResets({ feeds, stale, now, language: display.language, timeFormat, theme, reliability, withHistory: showResetsTab, fetchedAt }) : null),
+    [tracking, feeds, stale, now, display.language, timeFormat, theme, reliability, showResetsTab, fetchedAt],
   );
   const resetsPending = useMemo(
     () =>
@@ -120,12 +121,23 @@ export function useGlance(): void {
   const claudeBody = claudeTracking ? (claudeFeed?.body ?? null) : null;
   const claudeParsed = useMemo(() => parseClaudeResets(claudeBody), [claudeBody]);
   const claudeStale = Boolean(claudeFeed?.stale || claudeError);
+  const claudeFetchedAt = claudeTracking ? feedShownAt(claudeFeed) : null;
   const claudeResets = useMemo(
     () =>
       claudeParsed
-        ? buildClaudeGlanceResets({ feed: claudeParsed, accounts: claudeAccounts ?? [], used: usedBankedResets, stale: claudeStale, now, language: display.language, timeFormat, theme })
+        ? buildClaudeGlanceResets({
+            feed: claudeParsed,
+            accounts: claudeAccounts ?? [],
+            used: usedBankedResets,
+            stale: claudeStale,
+            fetchedAt: claudeFetchedAt,
+            now,
+            language: display.language,
+            timeFormat,
+            theme,
+          })
         : null,
-    [claudeParsed, claudeAccounts, usedBankedResets, claudeStale, now, display.language, timeFormat, theme],
+    [claudeParsed, claudeAccounts, usedBankedResets, claudeStale, claudeFetchedAt, now, display.language, timeFormat, theme],
   );
   const claudeResetsPending = useMemo(
     () => (claudeTracking && !claudeResets ? trackerPending([{ snapshot: claudeFeed, error: claudeError }], display.language) : null),
