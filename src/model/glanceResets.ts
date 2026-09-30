@@ -63,6 +63,13 @@ export interface GlanceResetsInput {
    * The caller works it out once a day, since trying the whole history again is the slow part.
    */
   reliability?: string;
+  /**
+   * Whether the list of past resets is loaded, which it is while the Reset tab is on. Without it
+   * the popup shows none of what the history gives, so the tracker keeps what the status says
+   * (the latest reset and an announced one) and leaves out the chances, the wait, the calendar,
+   * the rhythm, the statistics and the history rather than work them out from a single reset.
+   */
+  withHistory?: boolean;
 }
 
 export function resetAgoText(date: Date, now: Date, language: Language): string {
@@ -173,6 +180,8 @@ export function buildGlanceResets(input: GlanceResetsInput): GlanceResets | null
   const { feeds, now, language, timeFormat } = input;
   if (!feeds.status && feeds.resets.length === 0) return null;
   const text = insightsFor(language);
+  const withHistory = input.withHistory !== false;
+  const presentation = buildResetPresentation(input);
   const resets: GlanceResets = {
     title: text.glanceTitle,
     source: text.glanceSource,
@@ -180,8 +189,8 @@ export function buildGlanceResets(input: GlanceResetsInput): GlanceResets | null
     color: SOURCE_COLORS.codex,
     forecastTitle: text.glanceChanceTitle,
     forecast: [],
-    forecastNote: text.forecastUnavailable,
-    presentation: buildResetPresentation(input),
+    forecastNote: withHistory ? text.forecastUnavailable : "",
+    presentation: withHistory ? presentation : withoutHistory(presentation),
     theme: input.theme,
   };
   const mark = PROVIDER_MARKS[BRAND];
@@ -190,8 +199,17 @@ export function buildGlanceResets(input: GlanceResetsInput): GlanceResets | null
 
   const next = upcomingReset(feeds.status, now);
   if (next) resets.upcoming = upcomingOf(next, now, timeFormat, language, text);
-  addHistory(resets, feeds.resets, now, language, timeFormat);
+  if (withHistory) addHistory(resets, feeds.resets, now, language, timeFormat);
+  else addLatest(resets, feeds.resets[0], now, language, timeFormat);
   return resets;
+}
+
+/**
+ * The Reset tab's cards without what only the history gives: the latest reset and the status
+ * cards stay, the chances and the words under them, the statistics and the history go.
+ */
+function withoutHistory(presentation: GlanceResetPresentation): GlanceResetPresentation {
+  return { ...presentation, forecast: { title: presentation.forecast.title, chances: [] }, stats: [], history: [], patternNote: "" };
 }
 
 /**
@@ -201,18 +219,7 @@ export function buildGlanceResets(input: GlanceResetsInput): GlanceResets | null
  */
 export function addHistory(resets: GlanceResets, history: readonly CodexReset[], now: Date, language: Language, timeFormat: TimeFormat): void {
   const text = insightsFor(language);
-  const latest = history[0];
-  if (latest) {
-    const at = latest.announcedAt.toISOString();
-    resets.latest = {
-      at,
-      kind: latest.kind,
-      label: text.latestTitle,
-      kindLabel: text.kind(latest.kind),
-      since: { at, text: text.glanceSinceLast(COUNTDOWN_SPAN), since: true },
-      when: timeOnDayLabel(latest.announcedAt, now, timeFormat, language, false),
-    };
-  }
+  addLatest(resets, history[0], now, language, timeFormat);
 
   const forecast = forecastResets(history, now);
   if (forecast) {
@@ -231,6 +238,21 @@ export function addHistory(resets: GlanceResets, history: readonly CodexReset[],
     resets.calendar = calendarOf(history, now, text);
     resets.rhythm = rhythmOf(history, text);
   }
+}
+
+/** The newest reset and the time since it, which the status alone also gives. */
+function addLatest(resets: GlanceResets, latest: CodexReset | undefined, now: Date, language: Language, timeFormat: TimeFormat): void {
+  if (!latest) return;
+  const text = insightsFor(language);
+  const at = latest.announcedAt.toISOString();
+  resets.latest = {
+    at,
+    kind: latest.kind,
+    label: text.latestTitle,
+    kindLabel: text.kind(latest.kind),
+    since: { at, text: text.glanceSinceLast(COUNTDOWN_SPAN), since: true },
+    when: timeOnDayLabel(latest.announcedAt, now, timeFormat, language, false),
+  };
 }
 
 /**

@@ -126,6 +126,23 @@ describe("the glance document the popup sends", () => {
     expect(api.latest!.widget.resetsProvider).toBe("claude");
   });
 
+  it("keeps the Codex tracker to what its status says while the Reset tab is hidden and reset notifications are on", async () => {
+    const api = await start({ showResetsTab: false, notifyCodexResets: true });
+    await settle();
+    await waitFor(() => expect(api.latest?.resets?.brand).toBe("codex"));
+    const resets = api.latest!.resets!;
+    expect(resets.latest?.at).toBe("2026-09-22T18:23:37.000Z");
+    expect(resets.presentation?.latest?.at).toBe("2026-09-22T18:23:37.000Z");
+    expect(resets.presentation?.statuses.map((card) => card.kind)).toEqual(["scheduled"]);
+    expect(resets.presentation?.forecast.chances).toEqual([]);
+    expect(resets.presentation?.forecast.unavailable).toBeUndefined();
+    expect(resets.presentation?.stats).toEqual([]);
+    expect(resets.presentation?.history).toEqual([]);
+    expect(resets.calendar).toBeUndefined();
+    expect(resets.rhythm).toBeUndefined();
+    expect(api.feedsAsked).not.toContain("codexResets");
+  });
+
   it("carries the Reset tab's self-check under the Codex chances once the history is long enough to try", async () => {
     const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
     const post = (id: string, days: number) => ({ id, reset_type: "regular", announced_at: ago(days), text: `Codex reset ${id}.`, source: { type: "x_post", author: "thsottiaux", url: `https://x.com/thsottiaux/status/${id}` } });

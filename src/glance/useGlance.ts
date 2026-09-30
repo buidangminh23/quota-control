@@ -4,8 +4,11 @@
  * glance document, which goes to the core only when it changed. Each surface lists what its Settings
  * choose (the Hạn mức cards, the starred metrics or a hand-picked set). The Codex free-reset
  * tracker rides along while the Reset tab or reset notifications are on, loading the feeds they
- * need; the Claude tracker only while a surface or a wing reads it and the Reset tab or Claude reset
- * notifications are on. The hidden popup keeps running, so both stay live while it is closed.
+ * need: with the notifications alone that is the status, so the tracker keeps the latest and the
+ * announced reset and none of what the history gives, which the popup then shows nowhere either.
+ * The Claude tracker rides along only while a surface or a wing reads it and the Reset tab or
+ * Claude reset notifications are on. The hidden popup keeps running, so both stay live while it
+ * is closed.
  * Elsewhere the core has no glance and this does nothing.
  */
 import { useEffect, useMemo, useRef } from "react";
@@ -92,10 +95,13 @@ export function useGlance(): void {
       historyStale: showResetsTab && feedOutdated(historyFeed, historyError),
     });
   const today = dayNumber(now);
-  const reliability = useMemo(() => (tracking ? dailyReliability(feeds.resets, now, display.language) : undefined), [tracking, feeds, today, display.language]);
+  const reliability = useMemo(
+    () => (tracking && showResetsTab ? dailyReliability(feeds.resets, now, display.language) : undefined),
+    [tracking, showResetsTab, feeds, today, display.language],
+  );
   const resets = useMemo(
-    () => (tracking ? buildGlanceResets({ feeds, stale, now, language: display.language, timeFormat, theme, reliability }) : null),
-    [tracking, feeds, stale, now, display.language, timeFormat, theme, reliability],
+    () => (tracking ? buildGlanceResets({ feeds, stale, now, language: display.language, timeFormat, theme, reliability, withHistory: showResetsTab }) : null),
+    [tracking, feeds, stale, now, display.language, timeFormat, theme, reliability, showResetsTab],
   );
 
   const claudeRead = island.resetsProvider === "claude" || widget.resetsProvider === "claude" || island.wings.some(isClaudeResetsWing);

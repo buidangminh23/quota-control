@@ -144,6 +144,27 @@ describe("buildGlanceResets", () => {
     expect(legacy(new Date(LATER.getTime() + 60_000))).toBe(legacy(LATER));
   });
 
+  it("keeps what the status says, and nothing the history would give, while the history is not loaded", () => {
+    const feeds = parseResetFeeds(status(scheduled("Resetting at the time below", "2026-09-28T01:00:00Z"), null, post("1", "regular", "2026-09-24T18:17:54Z")), null);
+    const bare = build(feeds, { now: LATER, withHistory: false, reliability: "Thử lại trên 60 ngày đã qua." })!;
+    expect(bare.latest?.at).toBe("2026-09-24T18:17:54.000Z");
+    expect(bare.upcoming?.countdown?.at).toBe("2026-09-28T01:00:00.000Z");
+    expect(bare.presentation?.latest).toMatchObject({ at: "2026-09-24T18:17:54.000Z", excerpt: "reset 1" });
+    expect(bare.presentation?.statuses.map((card) => card.kind)).toEqual(["scheduled"]);
+    expect(bare.presentation?.forecast).toEqual({ title: insightsFor("vi").forecastTitle, chances: [] });
+    expect(bare.presentation?.stats).toEqual([]);
+    expect(bare.presentation?.history).toEqual([]);
+    expect(bare.presentation?.patternNote).toBe("");
+    expect(bare.forecast).toEqual([]);
+    expect(bare.forecastNote).toBe("");
+    for (const key of ["calendar", "rhythm", "wait", "median"] as const) expect(bare[key], key).toBeUndefined();
+
+    const loaded = build(feeds, { now: LATER })!;
+    expect(loaded.calendar?.cells.replace(/[^rb]/g, "")).toBe("r");
+    expect(loaded.presentation?.history).toHaveLength(1);
+    expect(loaded.presentation?.forecast.unavailable).toBe(insightsFor("vi").forecastUnavailable);
+  });
+
   it("marks a tracker whose feed could not be refreshed", () => {
     expect(build(parseResetFeeds(status(), HISTORY), { stale: true })!.stale).toBe("Lần tải gần nhất bị lỗi, đang hiện bản đã lưu.");
   });

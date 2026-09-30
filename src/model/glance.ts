@@ -205,7 +205,8 @@ export interface GlanceDocument {
   island: GlanceIsland;
   widget: GlanceWidget;
   /** The Codex free-reset tracker, for the island's reset section and wings and the reset widgets;
-   * absent while the Reset tab and reset notifications are both off. */
+   * absent while the Reset tab and reset notifications are both off, and with the notifications
+   * alone only what its status says, without the history. */
   resets?: GlanceResets;
   /** The Claude reset tracker (claude-resets.com), for the island or the widget when its Settings
    * chose it (a wing reading it needs no copy here); absent otherwise, and while the Reset tab and
