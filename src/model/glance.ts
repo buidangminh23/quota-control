@@ -8,13 +8,15 @@
 import { PROVIDER_MARKS, type ProviderMark } from "@/assets/providerMarks";
 import { knownBrandColor } from "./totalSpend";
 import { messagesFor, type Language } from "@/i18n";
-import type { Provider, WidgetDescriptor } from "@/lib/types";
+import type { PlanTerm, Provider, WidgetDescriptor } from "@/lib/types";
 import { insightsFor } from "@/i18n/insights";
 import { COUNTDOWN_SPAN } from "./glanceResets";
 import { brandOf, type ProviderMetrics } from "./layout";
 import { boundedTrailingText, isFreshSessionWindow, meterSeverity, meterState } from "./meterState";
 import { SOURCE_COLORS } from "./palette";
-import type { GlanceSurfaceSettings, IslandSettings, IslandStyle, IslandView, ResetParts, ResetProvider } from "./settings";
+import { PLAN_TERM_SOON_DAYS, planTermEnd } from "./planTerm";
+import { isOutdated } from "./providerText";
+import type { GlanceSurfaceSettings, IslandSettings, IslandStyle, IslandView, ResetParts, ResetProvider, ThemeSetting } from "./settings";
 import { boundedHeadline, fraction, isBounded, menuBarValue, unboundedDetail, type WidgetData } from "./widgetData";
 
 export const GLANCE_VERSION = 1;
@@ -63,17 +65,63 @@ export interface GlanceProvider {
   id: string;
   /** The card heading: the brand for an account named by its email, the account title otherwise. */
   name: string;
-  /** The account's email, which the card shows under its name. */
+  /** The account's email, which the card shows under its name: its label when that is an email,
+   * else the address the provider reports. */
   account?: string;
-  /** The plan badge (`Pro`, `Plus`). */
+  /** The plan (`Pro`, `Plus`), which the card shows after its name. */
   plan?: string;
-  /** Why an account without readings shows none (signed out, session expired); only without metrics. */
+  /** The plan's paid period, the card header's right corner. */
+  term?: GlancePlanTerm;
+  /** `Dữ liệu cũ`, while the reading is two refresh intervals old, as beside the card's name. */
+  outdated?: string;
+  /** The header notice's first line (a failed refresh, an error snapshot, a provider warning): the
+   * reason for the warning triangle beside the name, whether or not the account has readings. */
+  problem?: string;
+  /** What an account without readings says in their place: its `problem`, else `Không có dữ liệu`
+   * as the card's rows read; only without metrics. */
   notice?: string;
   brand: string;
   /** The mark's color on the island's black, `#FFFFFF` for providers without a brand color. */
   color: string;
+  /** The mark's color on a light background where it differs from `color` (Cursor's is near black
+   * there), for a widget in light mode, as the popup picks the brand color for its theme. */
+  lightColor?: string;
   mark?: GlanceMark;
   metrics: GlanceMetric[];
+}
+
+/**
+ * The plan's paid period, as the popup's card header shows it in its right corner (`planTermLines`):
+ * the time left over the day it ends, in the warning color from three days out. It travels as moments
+ * so the document only changes when the period does; the Swift side words the time left and names
+ * the day (`today`, `tomorrow` or `on`) at the moment it draws, with `GlanceDocument.labels.planTerm`.
+ */
+export interface GlancePlanTerm {
+  /** When the period ends: the date ChatGPT states, or Claude's next monthly renewal. */
+  endsAt: string;
+  /** Once past this moment the corner takes the warning color (three whole days or fewer left). */
+  soonAt: string;
+  /** The day it ends as the popup names a day neither today nor tomorrow: `T7 17/10`, `Sat, Oct 17`. */
+  on: string;
+  /** Claude's renewal, worked out from the subscription start: the count and the day read with `~`,
+   * and past `endsAt` the corner waits for the next document, which carries the next renewal. */
+  estimated?: true;
+}
+
+/** The words of the plan-period corner, filled in at the moment drawn. */
+export interface GlancePlanTermWords {
+  /** The time left with `{n}` for the count (`~` goes before it for an estimate), the form for 1 then
+   * the form for any other count: `còn {n} ngày`, `{n} day left` / `{n} days left`. */
+  days: [string, string];
+  hours: [string, string];
+  minutes: [string, string];
+  /** A stated period whose end has passed: `đã tới hạn`. */
+  due: string;
+  /** The day it ends with `{d}` for the day (`~` before it for an estimate): `tới {d}`, `{d}`. Once
+   * the period has ended the day stands alone. */
+  until: string;
+  today: string;
+  tomorrow: string;
 }
 
 /** What each account shows, per surface. */
@@ -175,6 +223,9 @@ export interface GlanceDocument {
   locale: string;
   /** Settings → Time Format: `true` for 12-hour, `false` for 24-hour, absent to follow the locale. */
   hour12?: boolean;
+  /** Settings → Theme when it is not System: every widget draws in it, as the whole popup does (the
+   * island keeps its black). */
+  theme?: "light" | "dark";
   labels: {
     title: string;
     empty: string;
@@ -199,6 +250,8 @@ export interface GlanceDocument {
     /** What that view says while the Claude tracker is off, naming Claude's notifications; absent
      * otherwise, like `claudeResetsTab`. */
     claudeResetsOff?: string;
+    /** The plan-period corner's words, while an account the island or the widget lists has a term. */
+    planTerm?: GlancePlanTermWords;
   };
   /** The open island's accounts. */
   providers: GlanceProvider[];
@@ -428,7 +481,9 @@ export interface GlanceProviderText {
   name: string;
   account?: string | null;
   plan?: string | null;
+  /** The header notice's first line, behind the header's warning triangle. */
   notice?: string | null;
+  planTerm?: PlanTerm | null;
 }
 
 export interface GlanceInput {
@@ -449,9 +504,13 @@ export interface GlanceInput {
   providerOf: (providerId: string) => Provider | undefined;
   /** When a provider's snapshot was fetched (ISO), if it has one. */
   refreshedAt: (providerId: string) => string | undefined;
+  /** How often the core refreshes, which says when a reading is outdated. */
+  refreshIntervalMs: number;
   language: Language;
   /** Settings → Time Format as a 12-hour flag, `null` for the locale's own clock. */
   hour12: boolean | null;
+  /** Settings → Theme. */
+  theme: ThemeSetting;
   appName: string;
   alert: GlanceAlert | null;
   /** The Codex free-reset tracker (`buildGlanceResets`), `null` while it is off or has no data. */
@@ -467,6 +526,9 @@ export interface GlanceInput {
 const BRAND_COLORS: Readonly<Record<string, string>> = { claude: SOURCE_COLORS.claude, codex: SOURCE_COLORS.codex };
 const PLAIN_MARK_COLOR = "#FFFFFF";
 const LOCALES: Readonly<Record<Language, string>> = { vi: "vi_VN", en: "en_US" };
+const DAY_MS = 86_400_000;
+const COUNT_PLACEHOLDER = "{n}";
+const DAY_PLACEHOLDER = "{d}";
 
 export function glanceMetric(id: string, data: WidgetData, now: Date): GlanceMetric {
   const bounded = isBounded(data);
@@ -491,20 +553,66 @@ function shows(settings: GlanceSurfaceSettings): GlanceShows {
   return { account: settings.showAccount, plan: settings.showPlan, resets: settings.showResets };
 }
 
+/**
+ * The plan's paid period as the header corner reads it at `now`: when it ends (Claude's next monthly
+ * renewal, else the stated date), when it turns to the warning color, and its day as a date.
+ */
+export function glancePlanTerm(term: PlanTerm, now: Date, language: Language): GlancePlanTerm | null {
+  const end = planTermEnd(term, now);
+  if (!end) return null;
+  const entry: GlancePlanTerm = {
+    endsAt: end.endsAt.toISOString(),
+    soonAt: new Date(end.endsAt.getTime() - (PLAN_TERM_SOON_DAYS + 1) * DAY_MS).toISOString(),
+    on: messagesFor(language).dashboard.planTermDay({ kind: "on", date: end.endsAt }, false, true),
+  };
+  if (end.estimated) entry.estimated = true;
+  return entry;
+}
+
+/**
+ * The popup's plan-period words (`planTermLeft`, `planTermDay`) with `{n}` where the count goes and
+ * `{d}` where the day goes, read off the words the popup itself renders so the two never drift.
+ */
+export function glancePlanTermWords(language: Language): GlancePlanTermWords {
+  const text = messagesFor(language).dashboard;
+  const left = (kind: "days" | "hours" | "minutes"): [string, string] => [
+    text.planTermLeft({ kind, count: 1 }, false).replace("1", COUNT_PLACEHOLDER),
+    text.planTermLeft({ kind, count: 2 }, false).replace("2", COUNT_PLACEHOLDER),
+  ];
+  const today = text.planTermDay({ kind: "today" }, false, true);
+  return {
+    days: left("days"),
+    hours: left("hours"),
+    minutes: left("minutes"),
+    due: text.planTermLeft({ kind: "due" }, false),
+    until: text.planTermDay({ kind: "today" }, false, false).replace(today, DAY_PLACEHOLDER),
+    today,
+    tomorrow: text.planTermDay({ kind: "tomorrow" }, false, true),
+  };
+}
+
 export function buildGlance(input: GlanceInput): GlanceDocument {
-  const text = messagesFor(input.language).glance;
+  const messages = messagesFor(input.language);
+  const text = messages.glance;
   const times: number[] = [];
 
   const provider = (source: Provider, metrics: GlanceMetric[]): GlanceProvider => {
     const brand = brandOf(source.icon || source.id);
     const mark = PROVIDER_MARKS[brand];
     const about = input.describe(source);
-    const entry: GlanceProvider = { id: source.id, name: about.name, brand, color: BRAND_COLORS[brand] ?? knownBrandColor(brand, true) ?? PLAIN_MARK_COLOR, metrics };
+    const color = BRAND_COLORS[brand] ?? knownBrandColor(brand, true) ?? PLAIN_MARK_COLOR;
+    const entry: GlanceProvider = { id: source.id, name: about.name, brand, color, metrics };
+    const light = BRAND_COLORS[brand] ?? knownBrandColor(brand, false);
+    if (light && light !== color) entry.lightColor = light;
     const art = input.markArt?.[brand];
     if (mark) entry.mark = art ? { ...mark, art } : mark;
     if (about.account) entry.account = about.account;
     if (about.plan) entry.plan = about.plan;
-    if (metrics.length === 0) entry.notice = about.notice ?? text.noData;
+    const term = about.planTerm ? glancePlanTerm(about.planTerm, input.now, input.language) : null;
+    if (term) entry.term = term;
+    if (isOutdated(input.refreshedAt(source.id), input.refreshIntervalMs, input.now)) entry.outdated = messages.meter.outdated;
+    if (about.notice) entry.problem = about.notice;
+    if (metrics.length === 0) entry.notice = about.notice ?? messages.meter.noData;
     return entry;
   };
 
@@ -540,7 +648,7 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
       resetting: text.resetting,
       open: text.open,
       notRunning: text.notRunning,
-      noData: text.noData,
+      noData: messages.meter.noData,
       more: text.more,
       units: text.units,
       resetsOff: text.resetsOff,
@@ -580,7 +688,9 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
     document.labels.claudeResetsTab = insightsFor(input.language).claude.glanceTitle;
     document.labels.claudeResetsOff = text.claudeResetsOff;
   }
+  if ([...islandProviders, ...widgetProviders].some((entry) => entry.term)) document.labels.planTerm = glancePlanTermWords(input.language);
   if (input.hour12 !== null) document.hour12 = input.hour12;
+  if (input.theme !== "system") document.theme = input.theme;
   if (input.resets) document.resets = input.resets;
   if (input.claudeResets && (claudeIsland || claudeWidget)) document.claudeResets = input.claudeResets;
   if (input.alert) document.alert = input.alert;

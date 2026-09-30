@@ -520,7 +520,6 @@ export const vi: Messages = {
       starred: "Gắn sao chỉ số trong Quota Control để hiện ở đây.",
       custom: "Chọn chỉ số trong Cài đặt của Quota Control để hiện ở đây.",
     },
-    noData: "Chưa có số liệu",
     more: "tài khoản khác",
     updated: "Cập nhật",
     resetsIn: "Đặt lại sau",

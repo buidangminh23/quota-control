@@ -222,6 +222,22 @@ describe("the glance document the popup sends", () => {
     expect(api.latest!.labels.claudeResetsTab).toBe("Reset Claude");
   });
 
+  it("draws every widget in the app's theme, and leaves the theme out while it follows the Mac", async () => {
+    const api = await start({ theme: "dark" });
+    await waitFor(() => expect(api.latest?.theme).toBe("dark"));
+    act(() => updateSettings({ theme: "light" }));
+    await waitFor(() => expect(api.latest?.theme).toBe("light"));
+    act(() => updateSettings({ theme: "system" }));
+    await waitFor(() => expect("theme" in api.latest!).toBe(false));
+  });
+
+  it("shows the plan on the island for settings saved while it was hidden by default", async () => {
+    const api = await start({ island: { content: "dashboard", showPlan: false, showAccount: true } });
+    expect(api.latest!.island.shows.plan).toBe(true);
+    expect(api.latest!.providers.find((provider) => provider.id === "codex@52d0")?.term).toMatchObject({ on: expect.any(String) });
+    expect(api.latest!.labels.planTerm?.until).toBe("tới {d}");
+  });
+
   it("loads the Claude tracker for a Claude wing without copying it into the document", async () => {
     const api = await start({ island: { wings: ["claude-resets:since", ""] }, notifyClaudeResets: false });
     await waitFor(() => expect(api.latest?.island.wings[0]?.id).toBe("claude-resets"));

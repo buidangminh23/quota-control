@@ -1,6 +1,6 @@
 import { chartDayLabel } from "./chart";
 import { foldedModels, OTHER_MODEL_NAME, wholePercents } from "./modelUsage";
-import { headerNotice, providerTitle, spendLegendName, stalenessHint } from "./providerText";
+import { cardIdentity, headerNotice, isOutdated, providerTitle, spendLegendName, stalenessHint } from "./providerText";
 
 const account = (label: string) => ({ id: "claude@1", displayName: `Claude · ${label}`, icon: "claude" });
 
@@ -42,6 +42,33 @@ describe("header notice and staleness", () => {
     });
     expect(stalenessHint(snapshot(4), 300_000, now, "vi")).toBeNull();
     expect(stalenessHint(snapshot(12), 300_000, now, "vi")).toEqual({ label: "Dữ liệu cũ", tooltip: "Cập nhật lần cuối 12 phút trước" });
+    for (const minutes of [4, 9, 10, 12]) {
+      expect(isOutdated(snapshot(minutes).snapshot.refreshedAt, 300_000, now), `${minutes}`).toBe(stalenessHint(snapshot(minutes), 300_000, now, "vi") !== null);
+    }
+    expect(isOutdated(undefined, 300_000, now)).toBe(false);
+  });
+});
+
+describe("card identity", () => {
+  const snapshot = (extra: object = {}) => ({ refreshing: false, snapshot: { providerID: "x", displayName: "x", lines: [], refreshedAt: "2026-09-26T03:00:00Z", ...extra } });
+
+  it("names the account by the email the provider reports when its label is not one, as the card does", () => {
+    const copilot = { id: "copilot@1", displayName: "Copilot", icon: "copilot" };
+    expect(cardIdentity(copilot, snapshot({ account: "octo@example.com", plan: "Business" }), "vi")).toMatchObject({ name: "Copilot", account: "octo@example.com", plan: "Business" });
+    expect(cardIdentity(copilot, snapshot(), "vi").account).toBeNull();
+    const labelled = { id: "claude@1", displayName: "Claude · me@example.com", icon: "claude" };
+    expect(cardIdentity(labelled, snapshot({ account: "other@example.com" }), "vi")).toMatchObject({ name: "Claude", account: "me@example.com" });
+    const local = { id: "claude-local", displayName: "Claude Local Usage", icon: "claude" };
+    expect(cardIdentity(local, snapshot({ account: "me@example.com", plan: "Max", planTerm: { basis: "stated", endsAt: "2026-10-01T00:00:00Z" } }), "vi")).toMatchObject({ account: null, plan: null, planTerm: null });
+  });
+
+  it("passes on the plan's paid period and the header notice's first line", () => {
+    const term = { basis: "monthlyFrom", startedAt: "2026-08-30T03:00:00Z" } as const;
+    const codex = { id: "codex@1", displayName: "Codex · codex", icon: "codex" };
+    expect(cardIdentity(codex, snapshot({ planTerm: term }), "vi").planTerm).toEqual(term);
+    expect(cardIdentity(codex, undefined, "vi")).toMatchObject({ planTerm: null, notice: null });
+    const failed = { ...snapshot({ errorCategory: "network", lines: [{ type: "badge", label: "Error", text: "The request timed out." }] }) } as Parameters<typeof cardIdentity>[1];
+    expect(cardIdentity(codex, failed, "vi").notice).toBe("Lỗi mạng");
   });
 });
 

@@ -4,7 +4,7 @@
  * where they become short, localized header text.
  */
 import { messagesFor, translate, type Language } from "@/i18n";
-import type { ErrorCategory, Provider, ProviderRuntimeState } from "@/lib/types";
+import type { ErrorCategory, PlanTerm, Provider, ProviderRuntimeState } from "@/lib/types";
 import { compactDuration } from "./format";
 import { brandOf, isLocalHistoryCard, layoutFamily } from "./layout";
 
@@ -170,21 +170,26 @@ export function headerNotice(runtime: ProviderRuntimeState | undefined, language
 export interface CardIdentity {
   /** The heading: the brand for an account named by its email, the account title otherwise. */
   name: string;
+  /** The email under the heading: the label when it is one, else the address the provider reports. */
   account: string | null;
   plan: string | null;
-  /** The header notice's first line, for an account that shows no readings. */
+  /** The header notice's first line (a failed refresh, an error snapshot, a provider warning): the
+   * reason behind the header's warning triangle. */
   notice: string | null;
+  /** The plan's paid period, as the provider sent it, for the header's right corner. */
+  planTerm: PlanTerm | null;
 }
 
 export function cardIdentity(provider: Provider, runtime: ProviderRuntimeState | undefined, language: Language): CardIdentity {
   const local = isLocalHistoryCard(provider.id);
   const email = local ? null : accountEmailOf(provider);
-  const plan = local ? undefined : runtime?.snapshot?.plan;
+  const snapshot = local ? undefined : runtime?.snapshot;
   return {
     name: email ? brandName(providerBrand(provider)) : providerTitle(provider, language),
-    account: email,
-    plan: plan ? translate(plan, language) : null,
+    account: email ?? snapshot?.account ?? null,
+    plan: snapshot?.plan ? translate(snapshot.plan, language) : null,
     notice: headerNotice(runtime, language)?.split("\n")[0] ?? null,
+    planTerm: snapshot?.planTerm ?? null,
   };
 }
 
@@ -209,16 +214,27 @@ export interface StalenessHint {
 /** Two refresh intervals: past this a refresh was genuinely missed (upstream `stalenessThreshold`). */
 export const STALENESS_INTERVALS = 2;
 
+/** How long ago, in seconds, a reading fetched at `refreshedAt` was taken, when it is past
+ * `STALENESS_INTERVALS` refresh intervals; `null` while it is fresher, or without a reading. */
+function outdatedAge(refreshedAt: string | undefined, refreshIntervalMs: number, now: Date): number | null {
+  if (!refreshedAt) return null;
+  const age = (now.getTime() - new Date(refreshedAt).getTime()) / 1000;
+  return age * 1000 >= refreshIntervalMs * STALENESS_INTERVALS && age > 0 ? age : null;
+}
+
+/** Whether a reading fetched at `refreshedAt` is old enough for the card to say `Outdated`. */
+export function isOutdated(refreshedAt: string | undefined, refreshIntervalMs: number, now: Date): boolean {
+  return outdatedAge(refreshedAt, refreshIntervalMs, now) !== null;
+}
+
 export function stalenessHint(
   runtime: ProviderRuntimeState | undefined,
   refreshIntervalMs: number,
   now: Date,
   language: Language,
 ): StalenessHint | null {
-  const refreshedAt = runtime?.snapshot?.refreshedAt;
-  if (!refreshedAt) return null;
-  const age = (now.getTime() - new Date(refreshedAt).getTime()) / 1000;
-  if (!(age * 1000 >= refreshIntervalMs * STALENESS_INTERVALS)) return null;
+  const age = outdatedAge(runtime?.snapshot?.refreshedAt, refreshIntervalMs, now);
+  if (age === null) return null;
   const duration = compactDuration(age, language);
   if (!duration) return null;
   const meter = messagesFor(language).meter;

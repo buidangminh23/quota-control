@@ -205,7 +205,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     content: "dashboard",
     metrics: [],
     showAccount: true,
-    showPlan: false,
+    showPlan: true,
     showResets: true,
     showProblems: true,
     style: "percent",
@@ -261,6 +261,20 @@ export const DEFAULT_SETTINGS: AppSettings = {
 
 /** Keys the core owns inside the shared document; the popup never writes them from its own copy. */
 const CORE_OWNED_KEYS = ["enabledProviders"] as const;
+
+/**
+ * How many one-time changes settings saved by an earlier version have been through: every save
+ * writes the latest, and a document without it predates them all. Each change reads an older
+ * document as the version it names says.
+ */
+export const SETTINGS_REVISION = 1;
+/** Revision 1 (0.3.20): the island shows the plan, as the popup's cards and the widgets do. It used
+ * to hide it by default, and every island saved before held that `false`, so it turns on once. */
+const ISLAND_PLAN_REVISION = 1;
+
+function revisionOf(stored: Record<string, unknown>): number {
+  return typeof stored.settingsRevision === "number" ? stored.settingsRevision : 0;
+}
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -336,12 +350,14 @@ function legacyIslandTabs(stored: Record<string, unknown>): IslandView[] | undef
   return [view, ...on.filter((other) => other !== view)];
 }
 
-function parseIsland(value: unknown, defaults: IslandSettings): IslandSettings {
+function parseIsland(value: unknown, defaults: IslandSettings, revision: number): IslandSettings {
   const stored = asRecord(value);
   const wings = Array.isArray(stored.wings) ? stored.wings : [];
   const wing = (index: number) => (typeof wings[index] === "string" && wings[index].length <= 512 ? (wings[index] as string) : "");
+  const surface = parseSurface(value, defaults, legacyIslandTabs(stored));
   return {
-    ...parseSurface(value, defaults, legacyIslandTabs(stored)),
+    ...surface,
+    showPlan: revision >= ISLAND_PLAN_REVISION ? surface.showPlan : defaults.showPlan,
     style: oneOf(stored.style, ISLAND_STYLES, defaults.style),
     wings: [wing(0), wing(1)],
     expandOnHover: flag(stored.expandOnHover, defaults.expandOnHover),
@@ -365,7 +381,7 @@ export function parseSettings(raw: unknown): AppSettings {
     showTaskbarStrip: flag(stored.showTaskbarStrip, defaults.showTaskbarStrip),
     strip: parseStrip(stored.strip, defaults.strip),
     dynamicIsland: flag(stored.dynamicIsland, defaults.dynamicIsland),
-    island: parseIsland(stored.island, defaults.island),
+    island: parseIsland(stored.island, defaults.island, revisionOf(stored)),
     widget: parseSurface(stored.widget, defaults.widget),
     showTotalSpend: flag(stored.showTotalSpend, defaults.showTotalSpend),
     showBenchmarkTab: flag(stored.showBenchmarkTab, defaults.showBenchmarkTab),
@@ -420,6 +436,7 @@ export function mergeSettingsDocument(
   return {
     ...base,
     ...settings,
+    settingsRevision: Math.max(SETTINGS_REVISION, revisionOf(base)),
     notifications: { ...settings.notifications },
     strip: { ...settings.strip, metrics: [...settings.strip.metrics] },
     island: storedSurface(

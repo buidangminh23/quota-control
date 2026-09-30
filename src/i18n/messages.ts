@@ -379,8 +379,6 @@ export interface StripMessages {
 export interface GlanceMessages {
   /** What an empty island or widget says, worded for its content choice. */
   empty: Record<GlanceContent, string>;
-  /** An account whose card has no readings and no error to explain it. */
-  noData: string;
   /** After a count of accounts left out: `+2 tài khoản khác`, `+2 more`. */
   more: string;
   updated: string;

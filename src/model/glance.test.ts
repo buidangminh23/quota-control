@@ -1,21 +1,38 @@
 import { createHash } from "node:crypto";
-import { fixtureCatalog, fixtureSnapshots } from "@/lib/fixtures";
+import { accountDescriptors, fixtureCatalog, fixtureSnapshots } from "@/lib/fixtures";
 import { FEED_FIXTURES } from "@/lib/insightsFeedFixtures";
-import type { ProviderSnapshot } from "@/lib/types";
-import { buildGlance, CLAUDE_RESETS_PROVIDER_ID, CODEX_RESETS_PROVIDER_ID, glanceMetric, GLANCE_VERSION, isClaudeResetsWing, type GlanceAlert, type GlanceResets, type GlanceWingChoice } from "./glance";
+import type { Provider, ProviderSnapshot } from "@/lib/types";
+import {
+  buildGlance,
+  CLAUDE_RESETS_PROVIDER_ID,
+  CODEX_RESETS_PROVIDER_ID,
+  glanceMetric,
+  glancePlanTerm,
+  glancePlanTermWords,
+  GLANCE_VERSION,
+  isClaudeResetsWing,
+  type GlanceAlert,
+  type GlanceDocument,
+  type GlancePlanTerm,
+  type GlancePlanTermWords,
+  type GlanceResets,
+  type GlanceWingChoice,
+} from "./glance";
 import { buildClaudeGlanceResets } from "./glanceClaudeResets";
 import { buildGlanceResets, parseResetFeeds } from "./glanceResets";
 import { parseClaudeResets } from "./insights/claudeResets";
 import { glanceGroups, reconcileLayout } from "./layout";
 import { barKind, platformKey } from "./platform";
 import { cardIdentity } from "./providerText";
-import { DEFAULT_SETTINGS, type GlanceContent, type IslandSettings } from "./settings";
+import { DEFAULT_SETTINGS, type GlanceContent, type IslandSettings, type ThemeSetting } from "./settings";
+import { planTermLines } from "./planTermLines";
 import { makeWidget, NOW, resetsAt, WEEK_SECONDS } from "./testHelpers";
-import { setSystemTimeZone } from "./timeZone";
+import { calendarDaysBetween, setSystemTimeZone } from "./timeZone";
 import { DEFAULT_DISPLAY, widgetDataFor, type DisplayOptions } from "./widgetData";
 
 const FETCHED = Date.UTC(2026, 8, 26, 3);
 const NOW_GLANCE = new Date(FETCHED + 60_000);
+const REFRESH_INTERVAL_MS = 300_000;
 const catalog = fixtureCatalog();
 const snapshots = fixtureSnapshots(FETCHED);
 const layout = reconcileLayout(null, catalog);
@@ -33,9 +50,13 @@ interface Options {
   resets?: GlanceResets | null;
   claudeResets?: GlanceResets | null;
   markArt?: Readonly<Record<string, string>>;
+  theme?: ThemeSetting;
+  now?: Date;
+  /** The refresh error each provider's runtime carries beside its last good snapshot. */
+  errors?: Readonly<Record<string, string>>;
 }
 
-function glance({ display = DEFAULT_DISPLAY, data = snapshots, alert = null, island = {}, widget = {}, wings = [null, null], hour12 = null, resets = null, claudeResets, markArt }: Options = {}) {
+function glance({ display = DEFAULT_DISPLAY, data = snapshots, alert = null, island = {}, widget = {}, wings = [null, null], hour12 = null, resets = null, claudeResets, markArt, theme = "system", now = NOW_GLANCE, errors = {} }: Options = {}) {
   const islandSettings = { ...DEFAULT_SETTINGS.island, ...island };
   const widgetSettings = { ...DEFAULT_SETTINGS.widget, ...widget };
   const groups = (content: GlanceContent, metrics: readonly string[]) => glanceGroups(content, metrics, layout, catalog, () => true);
@@ -45,18 +66,22 @@ function glance({ display = DEFAULT_DISPLAY, data = snapshots, alert = null, isl
     dataFor: (descriptor) => widgetDataFor(descriptor, data[descriptor.providerId], display),
     describe: (provider) => {
       const snapshot = data[provider.id];
-      return cardIdentity(provider, snapshot ? { snapshot, refreshing: false } : undefined, display.language);
+      const error = errors[provider.id];
+      const runtime = snapshot || error ? { refreshing: false, ...(snapshot ? { snapshot } : {}), ...(error ? { error } : {}) } : undefined;
+      return cardIdentity(provider, runtime, display.language);
     },
     providerOf: (providerId) => providers.get(providerId),
     refreshedAt: (providerId) => data[providerId]?.refreshedAt,
+    refreshIntervalMs: REFRESH_INTERVAL_MS,
     language: display.language,
     hour12,
+    theme,
     appName: "Quota Control",
     alert,
     resets,
     claudeResets,
     markArt,
-    now: NOW_GLANCE,
+    now,
   });
 }
 
@@ -94,12 +119,17 @@ describe("glance document", () => {
     expect(document.alert).toBeUndefined();
   });
 
-  it("keeps an account without readings as a line saying why, unless told not to", () => {
+  it("keeps an account without readings as a line in the popup's words, unless told not to", () => {
     const signedOut = { ...snapshots, "claude@a93f": undefined };
     const document = glance({ data: signedOut });
     const personal = document.widget.providers.find((provider) => provider.id === "claude@a93f");
     expect(personal?.metrics).toEqual([]);
-    expect(personal?.notice).toBe("Chưa có số liệu");
+    expect(personal?.notice).toBe("Không có dữ liệu");
+    expect(personal?.problem).toBeUndefined();
+    expect(document.labels.noData).toBe("Không có dữ liệu");
+    const english = glance({ data: signedOut, display: { ...DEFAULT_DISPLAY, language: "en" } });
+    expect(english.widget.providers.find((provider) => provider.id === "claude@a93f")?.notice).toBe("No data");
+    expect(english.labels.noData).toBe("No data");
     expect(ids(glance({ data: signedOut, widget: { showProblems: false } }).widget.providers)).not.toContain("claude@a93f");
     expect(glance({ data: {} }).widget.providers.every((provider) => provider.metrics.length === 0)).toBe(true);
     expect(glance({ data: {}, widget: { showProblems: false } }).widget.providers).toEqual([]);
@@ -157,10 +187,177 @@ describe("island wings", () => {
   });
 
   it("carries the closed style and the hover choice", () => {
-    const island = glance({ island: { style: "ring", expandOnHover: false, showPlan: true } }).island;
+    const island = glance({ island: { style: "ring", expandOnHover: false, showPlan: false } }).island;
     expect(island.style).toBe("ring");
     expect(island.expandOnHover).toBe(false);
-    expect(island.shows.plan).toBe(true);
+    expect(island.shows.plan).toBe(false);
+  });
+
+  it("shows the plan by default, as the popup's cards and the widgets do", () => {
+    expect(glance().island.shows).toEqual({ account: true, plan: true, resets: true });
+  });
+});
+
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
+/** How the island and the widgets word the plan period's corner (`GlancePlanTerm.lines` in Glance.swift). */
+function fillPlanTerm(term: GlancePlanTerm, words: GlancePlanTermWords, now: Date): { left: string; day: string; soon: boolean } | null {
+  const about = term.estimated ? "~" : "";
+  const remaining = Date.parse(term.endsAt) - now.getTime();
+  const days = calendarDaysBetween(now, new Date(term.endsAt));
+  if (remaining <= 0) return term.estimated ? null : { left: words.due, day: days >= 0 ? words.today : term.on, soon: true };
+  const word = days <= 0 ? words.today : days === 1 ? words.tomorrow : term.on;
+  const [forms, count] =
+    remaining < HOUR ? [words.minutes, Math.ceil(remaining / MINUTE)] : remaining < DAY ? [words.hours, Math.floor(remaining / HOUR)] : [words.days, Math.floor(remaining / DAY)];
+  const form = (count === 1 ? forms[0] : forms[forms.length - 1]) ?? "";
+  return { left: form.replace("{n}", `${about}${count}`), day: words.until.replace("{d}", `${about}${word}`), soon: now.getTime() > Date.parse(term.soonAt) };
+}
+
+describe("the account header", () => {
+  beforeEach(() => setSystemTimeZone("Asia/Saigon"));
+  afterEach(() => setSystemTimeZone(null));
+
+  const account = (document: GlanceDocument, id: string) => document.widget.providers.find((entry) => entry.id === id)!;
+  const english = { ...DEFAULT_DISPLAY, language: "en" as const };
+
+  it("carries each account's plan period as moments, with the day it ends as the popup names a date", () => {
+    const document = glance();
+    expect(account(document, "claude@7c1e").term).toEqual({ endsAt: "2026-09-30T03:00:00.000Z", soonAt: "2026-09-26T03:00:00.000Z", on: "T4 30/09", estimated: true });
+    expect(account(document, "codex@52d0").term).toEqual({ endsAt: "2026-10-16T15:00:00.000Z", soonAt: "2026-10-12T15:00:00.000Z", on: "T6 16/10" });
+    expect(account(document, "claude@a93f").term).toBeUndefined();
+    expect(document.providers.find((entry) => entry.id === "codex@52d0")?.term).toEqual(account(document, "codex@52d0").term);
+    expect(account(glance({ display: english }), "codex@52d0").term?.on).toBe("Fri, Oct 16");
+  });
+
+  it("carries the popup's plan-period words, with a place for the count and one for the day, only while an account has a period", () => {
+    expect(glance().labels.planTerm).toEqual({
+      days: ["còn {n} ngày", "còn {n} ngày"],
+      hours: ["còn {n} giờ", "còn {n} giờ"],
+      minutes: ["còn {n} phút", "còn {n} phút"],
+      due: "đã tới hạn",
+      until: "tới {d}",
+      today: "hôm nay",
+      tomorrow: "ngày mai",
+    });
+    expect(glance({ display: english }).labels.planTerm).toEqual({
+      days: ["{n} day left", "{n} days left"],
+      hours: ["{n} hour left", "{n} hours left"],
+      minutes: ["{n} min left", "{n} min left"],
+      due: "Period ended",
+      until: "{d}",
+      today: "today",
+      tomorrow: "tomorrow",
+    });
+    const { planTerm: _claude, ...claude } = snapshots["claude@7c1e"]!;
+    const { planTerm: _codex, ...codex } = snapshots["codex@52d0"]!;
+    expect(glance({ data: { ...snapshots, "claude@7c1e": claude, "codex@52d0": codex } }).labels.planTerm).toBeUndefined();
+  });
+
+  it("words the corner as the popup does at any moment, filled in the way the island and the widgets fill it", () => {
+    const stated = { basis: "stated", endsAt: "2026-10-16T15:00:00Z" } as const;
+    const estimate = { basis: "monthlyFrom", startedAt: "2026-08-30T03:00:00Z" } as const;
+    const lines = (term: typeof stated | typeof estimate, now: Date, language: "vi" | "en") => {
+      const popup = planTermLines(term, now, "auto", language);
+      return popup ? { left: popup.left, day: popup.day, soon: popup.soon } : null;
+    };
+    for (const zone of ["Asia/Saigon", "America/Los_Angeles"]) {
+      setSystemTimeZone(zone);
+      for (const language of ["vi", "en"] as const) {
+        const words = glancePlanTermWords(language);
+        const statedTerm = glancePlanTerm(stated, NOW_GLANCE, language)!;
+        const end = Date.parse(statedTerm.endsAt);
+        for (const offset of [-25 * DAY, -4 * DAY - 1000, -4 * DAY + 1000, -2 * DAY, -30 * HOUR, -23.5 * HOUR, -HOUR - 1000, -HOUR + 1000, -90_000, -MINUTE, -30_000, HOUR, 2 * DAY]) {
+          const now = new Date(end + offset);
+          expect(fillPlanTerm(statedTerm, words, now), `${zone} ${language} ${offset}`).toEqual(lines(stated, now, language));
+        }
+        const estimatedTerm = glancePlanTerm(estimate, NOW_GLANCE, language)!;
+        const renewal = Date.parse(estimatedTerm.endsAt);
+        for (const offset of [-4 * DAY + MINUTE, -3 * DAY, -25 * HOUR, -5 * HOUR, -40 * MINUTE, -1000]) {
+          const now = new Date(renewal + offset);
+          expect(fillPlanTerm(estimatedTerm, words, now), `${zone} ${language} ~${offset}`).toEqual(lines(estimate, now, language));
+        }
+        expect(fillPlanTerm(estimatedTerm, words, new Date(renewal + 1000))).toBeNull();
+      }
+    }
+  });
+
+  it("flags an account whose refresh failed with the warning triangle and its reason, with readings or without", () => {
+    expect(glance().widget.providers.some((entry) => entry.problem)).toBe(false);
+    const codex = account(glance({ errors: { "codex@52d0": "Refresh failed" } }), "codex@52d0");
+    expect(codex.problem).toBe("Làm mới thất bại");
+    expect(codex.metrics.length).toBeGreaterThan(0);
+    expect(codex.notice).toBeUndefined();
+    const signedOut = glance({ data: { ...snapshots, "claude@a93f": undefined }, errors: { "claude@a93f": "Refresh failed" } });
+    expect(account(signedOut, "claude@a93f")).toMatchObject({ metrics: [], problem: "Làm mới thất bại", notice: "Làm mới thất bại" });
+    const expired = { ...snapshots["claude@a93f"]!, errorCategory: "auth_expired" as const, lines: [] };
+    expect(account(glance({ data: { ...snapshots, "claude@a93f": expired } }), "claude@a93f")).toMatchObject({
+      metrics: [],
+      problem: "Phiên đăng nhập đã hết hạn",
+      notice: "Phiên đăng nhập đã hết hạn",
+    });
+  });
+
+  it("says a reading is outdated two refresh intervals after it was taken, as beside the card's name", () => {
+    expect(glance().widget.providers.some((entry) => entry.outdated)).toBe(false);
+    expect(glance({ now: new Date(FETCHED + 8 * MINUTE) }).widget.providers.some((entry) => entry.outdated)).toBe(false);
+    const later = glance({ now: new Date(FETCHED + 11 * MINUTE) });
+    expect(later.widget.providers.map((entry) => entry.outdated)).toEqual(["Dữ liệu cũ", "Dữ liệu cũ", "Dữ liệu cũ"]);
+    expect(account(glance({ now: new Date(FETCHED + 11 * MINUTE), display: english }), "codex@52d0").outdated).toBe("Outdated");
+  });
+
+  it("carries the email the provider reports when the card's label is not one, keeping the heading", () => {
+    const reported = {
+      ...snapshots,
+      "codex@52d0": { ...snapshots["codex@52d0"]!, account: "dev@example.com" },
+      "claude@7c1e": { ...snapshots["claude@7c1e"]!, account: "work@example.com" },
+    };
+    const document = glance({ data: reported });
+    expect(account(document, "codex@52d0")).toMatchObject({ name: "Codex", account: "dev@example.com" });
+    expect(account(document, "claude@7c1e")).toMatchObject({ name: "Claude · Công ty", account: "work@example.com" });
+    expect(account(glance(), "codex@52d0").account).toBeUndefined();
+  });
+
+  it("gives a mark its color on a light background where the brand's differs there, as the popup's light theme does", () => {
+    expect(glance().widget.providers.some((entry) => "lightColor" in entry)).toBe(false);
+    const single = (provider: Provider) => {
+      const snapshot: ProviderSnapshot = {
+        providerID: provider.id,
+        displayName: provider.displayName,
+        refreshedAt: new Date(FETCHED).toISOString(),
+        lines: [{ type: "progress", label: "Session", used: 40, limit: 100, format: { kind: "percent" } }],
+      };
+      const groups = [{ provider, always: accountDescriptors(provider, "codex").slice(0, 1), onDemand: [] }];
+      return buildGlance({
+        island: { groups, settings: DEFAULT_SETTINGS.island, enabled: true, wings: [null, null] },
+        widget: { groups, settings: DEFAULT_SETTINGS.widget },
+        dataFor: (descriptor) => widgetDataFor(descriptor, snapshot, DEFAULT_DISPLAY),
+        describe: (entry) => cardIdentity(entry, { snapshot, refreshing: false }, "vi"),
+        providerOf: () => provider,
+        refreshedAt: () => snapshot.refreshedAt,
+        refreshIntervalMs: REFRESH_INTERVAL_MS,
+        language: "vi",
+        hour12: null,
+        theme: "system",
+        appName: "Quota Control",
+        alert: null,
+        resets: null,
+        now: NOW_GLANCE,
+      }).widget.providers[0]!;
+    };
+    expect(single({ id: "cursor@1", displayName: "Cursor", icon: "cursor" })).toMatchObject({ color: "#F5F5F7", lightColor: "#13120A" });
+    expect(single({ id: "openai@1", displayName: "OpenAI", icon: "openai" })).toMatchObject({ color: "#ECECEC", lightColor: "#0D0D0D" });
+    expect("lightColor" in single({ id: "copilot@1", displayName: "Copilot", icon: "copilot" })).toBe(false);
+    const plain = single({ id: "mystery@1", displayName: "Mystery", icon: "mystery" });
+    expect(plain.color).toBe("#FFFFFF");
+    expect("lightColor" in plain).toBe(false);
+  });
+
+  it("carries the app's theme for every widget, and nothing while it follows the Mac", () => {
+    expect("theme" in glance()).toBe(false);
+    expect(glance({ theme: "dark" }).theme).toBe("dark");
+    expect(glance({ theme: "light" }).theme).toBe("light");
   });
 });
 
@@ -422,11 +619,17 @@ describe("a document for someone who never chose Claude", () => {
       wings: ["quota:next", "codex-resets:chance-7"],
     },
   });
-  /** SHA-256 of the documents 0.3.16 (`be761f5`) built from these same inputs. */
-  const RELEASED: Readonly<Record<string, string>> = {
-    defaults: "27f79bf299e37eeefc370b5c7c50f50479639888e0cc999596faaa04ec00652f",
-    wings: "e1d39d984056f8e5571c619d2146b07637743d83ce6fe62050e215cd3d53f1fa",
-    tuned: "d319d2b1be43d61562cff513331df6d8124f0c2c50107cf27a7267073fd52973",
+  /**
+   * SHA-256 of the documents built from these same inputs, without the quoted announcement: what
+   * 0.3.16 (`be761f5`) built, apart from the account header 0.3.20 brought in line with the popup's
+   * card: the plan period (`term` on the accounts that have one, `labels.planTerm`), the plan the
+   * island now shows by default (`island.shows.plan`) and the rows' `Không có dữ liệu`
+   * (`labels.noData`).
+   */
+  const PINNED: Readonly<Record<string, string>> = {
+    defaults: "507d2a501a52d96fb25a64500ac5c5e54f4a3a126c5858095bcb528973950174",
+    wings: "a70d17d7fd4da2c9c8cc8fdf11021735b5d1e37be43754c304d7dd2e24c8c00f",
+    tuned: "fbd30bf8aa1c0673b4c83461c6a5ba01cc3b7130b86dc04e6ec28169bb3d9337",
   };
   const digest = (document: object) => createHash("sha256").update(JSON.stringify(document)).digest("hex");
   /** The document without the one thing added since: the announcement the latest reset's card quotes. */
@@ -442,14 +645,14 @@ describe("a document for someone who never chose Claude", () => {
     return copy;
   };
 
-  it("stays byte for byte what 0.3.16 sent apart from the quoted announcement, even with a Claude tracker at hand", () => {
+  it("stays byte for byte what 0.3.16 sent apart from the quoted announcement and the account header, even with a Claude tracker at hand", () => {
     const tracker = claude();
     expect(tracker).not.toBeNull();
     for (const [name, options] of Object.entries(scenarios())) {
       const document = glance(options);
       expect(document.resets?.presentation?.latest, name).toMatchObject({ excerpt: expect.stringMatching(/^GPT-6 Sol and Luna are out\./), url: "https://x.com/thsottiaux/status/2102463847714247142" });
-      expect(digest(unquoted(document)), name).toBe(RELEASED[name]);
-      expect(digest(unquoted(glance({ ...options, claudeResets: tracker }))), name).toBe(RELEASED[name]);
+      expect(digest(unquoted(document)), name).toBe(PINNED[name]);
+      expect(digest(unquoted(glance({ ...options, claudeResets: tracker }))), name).toBe(PINNED[name]);
     }
   });
 

@@ -1,4 +1,14 @@
-import { anyNotificationEnabled, DEFAULT_SETTINGS, enabledProvidersOf, mergeSettingsDocument, parseSettings, surfaceResetProvider, taskbarDisplayOf, taskbarDisplayPatch } from "./settings";
+import {
+  anyNotificationEnabled,
+  DEFAULT_SETTINGS,
+  enabledProvidersOf,
+  mergeSettingsDocument,
+  parseSettings,
+  SETTINGS_REVISION,
+  surfaceResetProvider,
+  taskbarDisplayOf,
+  taskbarDisplayPatch,
+} from "./settings";
 
 describe("parseSettings", () => {
   it("defaults to Vietnamese and every documented default", () => {
@@ -106,6 +116,27 @@ describe("glance surfaces", () => {
     expect(parseSettings({ island: { upcomingLimit: 8 } }).island.upcomingLimit).toBe(8);
     expect(parseSettings({ island: { upcomingLimit: 7 } }).island.upcomingLimit).toBe(5);
     expect(parseSettings({ widget: {} }).widget.upcomingLimit).toBe(0);
+  });
+
+  it("shows the plan on the island by default, as on the widgets and the popup's cards", () => {
+    expect(DEFAULT_SETTINGS.island.showPlan).toBe(true);
+    expect(DEFAULT_SETTINGS.widget.showPlan).toBe(true);
+    expect(parseSettings({ island: {} }).island.showPlan).toBe(true);
+  });
+
+  it("turns the plan on once for an island saved while it was hidden by default, then keeps the choice", () => {
+    const before = { language: "vi", island: { content: "starred", showPlan: false, showAccount: false }, widget: { showPlan: false } };
+    const migrated = parseSettings(before);
+    expect(migrated.island).toMatchObject({ content: "starred", showPlan: true, showAccount: false });
+    expect(migrated.widget.showPlan).toBe(false);
+    const saved = mergeSettingsDocument(before, migrated, new Set());
+    expect(saved.settingsRevision).toBe(SETTINGS_REVISION);
+    expect((saved.island as { showPlan: boolean }).showPlan).toBe(true);
+    const hidden = mergeSettingsDocument(saved, { ...migrated, island: { ...migrated.island, showPlan: false } }, new Set());
+    expect(parseSettings(hidden).island.showPlan).toBe(false);
+    expect(parseSettings({ ...hidden, settingsRevision: 7 }).island.showPlan).toBe(false);
+    expect(mergeSettingsDocument({ settingsRevision: 7 }, DEFAULT_SETTINGS, new Set()).settingsRevision).toBe(7);
+    expect(parseSettings({ settingsRevision: "1", island: { showPlan: false } }).island.showPlan).toBe(true);
   });
 
   it("keeps any wing id up to 512 characters, special ones included", () => {

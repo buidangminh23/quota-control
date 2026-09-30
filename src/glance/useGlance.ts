@@ -30,6 +30,8 @@ import { useMarkArt } from "./markArt";
 
 /** Pace colors move with the clock; a minute is fine enough for the island and the widget. */
 const CLOCK_MS = 60_000;
+/** The core's refresh interval before its first state arrives, as the popup's cards assume. */
+const DEFAULT_REFRESH_INTERVAL_MS = 300_000;
 
 export function useGlance(): void {
   const ready = useApp((state) => state.ready);
@@ -134,8 +136,10 @@ export function useGlance(): void {
       describe: (provider) => cardIdentity(provider, engine?.providers[provider.id], display.language),
       providerOf: (providerId) => providers.get(providerId),
       refreshedAt: (providerId) => engine?.providers[providerId]?.snapshot?.refreshedAt,
+      refreshIntervalMs: engine?.refreshIntervalMs ?? DEFAULT_REFRESH_INTERVAL_MS,
       language: display.language,
       hour12: timeFormat === "auto" ? null : timeFormat === "12h",
+      theme,
       appName: info?.name ?? messagesFor(display.language).chrome.appName,
       alert,
       resets,
@@ -143,7 +147,7 @@ export function useGlance(): void {
       markArt,
       now,
     });
-  }, [supported, layout, catalog, isEnabled, engine, display, info, islandEnabled, island, widget, timeFormat, alert, resets, claudeResets, markArt, now]);
+  }, [supported, layout, catalog, isEnabled, engine, display, info, islandEnabled, island, widget, timeFormat, theme, alert, resets, claudeResets, markArt, now]);
 
   useEffect(() => {
     if (!ready || !document) return;

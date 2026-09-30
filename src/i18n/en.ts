@@ -482,7 +482,6 @@ export const en: Messages = {
       starred: "Star metrics in Quota Control to show them here.",
       custom: "Choose metrics in Quota Control's Settings to show them here.",
     },
-    noData: "No data yet",
     more: "more",
     updated: "Updated",
     resetsIn: "Resets in",
