@@ -71,6 +71,11 @@ export interface Backend {
    * asks; the regular limits keep resetting on the provider's own schedule.
    */
   redeemLimitReset?(providerId: string): Promise<LimitResetResult>;
+  /**
+   * What the macOS Dynamic Island and desktop widgets ask of the popup with their buttons, as the
+   * surfaces sent it (`src/glance/glanceActions.ts` checks and does it). Absent elsewhere.
+   */
+  onGlanceAction?(listener: (action: unknown) => void): Unsubscribe;
   /** Which providers the engine refreshes; the popup owns enablement (Customize). */
   setEnabledProviders(providerIds: string[]): Promise<void>;
   loadDocument<T>(name: DocumentName): Promise<T | null>;

@@ -271,6 +271,7 @@ pub fn run() -> anyhow::Result<()> {
             #[cfg(target_os = "macos")]
             {
                 macos::start_island(app.handle());
+                glance::start_widget_requests(app.handle());
                 macos::adopt_current_widget();
                 system::start(app.handle());
             }

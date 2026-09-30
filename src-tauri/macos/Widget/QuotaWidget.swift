@@ -129,16 +129,19 @@ struct GlanceTimeline: TimelineProvider {
 }
 
 enum GlanceStore {
-    /// `~/Library/Application Support/usage-control/widget/glance.json` in the real home folder:
-    /// the widget is sandboxed, and its entitlement grants read access to exactly that folder, not
-    /// to the accounts beside it.
-    static var fileURL: URL {
+    /// `~/Library/Application Support/usage-control/widget` in the real home folder: the widget is
+    /// sandboxed, and its entitlement grants read access to exactly that folder, not to the accounts
+    /// beside it, and write access only to its `requests` folder (`WidgetRequests`).
+    static var folderURL: URL {
         realHome
             .appendingPathComponent("Library", isDirectory: true)
             .appendingPathComponent("Application Support", isDirectory: true)
             .appendingPathComponent("usage-control", isDirectory: true)
             .appendingPathComponent("widget", isDirectory: true)
-            .appendingPathComponent("glance.json", isDirectory: false)
+    }
+
+    static var fileURL: URL {
+        folderURL.appendingPathComponent("glance.json", isDirectory: false)
     }
 
     private static var realHome: URL {

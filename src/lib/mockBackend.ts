@@ -66,6 +66,7 @@ export class MockBackend implements Backend {
   private readonly catalogListeners = new Set<(catalog: ProviderEntry[]) => void>();
   private readonly visibilityListeners = new Set<(shown: boolean) => void>();
   private readonly navigateListeners = new Set<(screen: PopoverScreen) => void>();
+  private readonly glanceActionListeners = new Set<(action: unknown) => void>();
   private readonly documents = new Map<DocumentName, unknown>();
   private readonly accounts: ConnectedAccount[] = fixtureAccounts();
   private removedLogins: { account: ConnectedAccount; entry: ProviderEntry; runtime: ProviderRuntimeState | undefined }[] = [];
@@ -350,6 +351,16 @@ export class MockBackend implements Backend {
   }
 
   /** Test hook: behaves like a tray menu item asking the popup to open `screen`. */
+  onGlanceAction(listener: (action: unknown) => void): Unsubscribe {
+    this.glanceActionListeners.add(listener);
+    return () => this.glanceActionListeners.delete(listener);
+  }
+
+  /** What the core does when the island or a widget sends a button's request. */
+  glanceAction(action: unknown): void {
+    for (const listener of this.glanceActionListeners) listener(action);
+  }
+
   navigate(screen: PopoverScreen): void {
     for (const listener of this.navigateListeners) listener(screen);
   }

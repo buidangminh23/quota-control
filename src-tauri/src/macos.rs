@@ -12,6 +12,7 @@ use std::time::Duration;
 use tauri::{AppHandle, PhysicalPosition, PhysicalRect, PhysicalSize, WebviewWindow};
 
 type IslandHandler = extern "C" fn(i32, f64, f64, f64, f64, f64);
+type IslandActionHandler = extern "C" fn(*const u8, usize);
 type AppearanceHandler = extern "C" fn(bool);
 type NotificationAccessHandler = extern "C" fn(*mut c_void, i32);
 type NotificationOpenHandler = extern "C" fn();
@@ -20,6 +21,7 @@ unsafe extern "C" {
     fn qc_popup_configure(window: *mut c_void, radius: f64);
     fn qc_popup_refresh_shadow(window: *mut c_void);
     fn qc_island_start(handler: Option<IslandHandler>);
+    fn qc_island_actions_start(handler: Option<IslandActionHandler>);
     fn qc_island_update(bytes: *const u8, length: usize);
     fn qc_island_popup_visible(visible: bool);
     fn qc_widgets_reload();
@@ -72,7 +74,10 @@ pub fn refresh_popup_shadow(window: &WebviewWindow) {
 /// Start the Dynamic Island; it stays hidden until the popup sends readings with the island on.
 pub fn start_island(app: &AppHandle) {
     let _ = APP.set(app.clone());
-    unsafe { qc_island_start(Some(island_event)) }
+    unsafe {
+        qc_island_start(Some(island_event));
+        qc_island_actions_start(Some(island_action));
+    }
 }
 
 pub fn update_island(document: &[u8]) {
@@ -280,6 +285,29 @@ extern "C" fn island_event(kind: i32, x: f64, y: f64, width: f64, height: f64, _
         if let Err(error) = crate::show_popup_anchored(&app, rect) {
             tracing::warn!("{error}");
         }
+    });
+}
+
+/// A button on the island asked for something, after the user confirmed it there: pass the request
+/// (JSON, copied before this returns) to the popup, which checks it and does it
+/// (`src/glance/glanceActions.ts`).
+extern "C" fn island_action(bytes: *const u8, length: usize) {
+    if bytes.is_null() || length == 0 || length > 4096 {
+        return;
+    }
+    let Some(app) = APP.get().cloned() else {
+        return;
+    };
+    let copy = unsafe { std::slice::from_raw_parts(bytes, length) }.to_vec();
+    let Some(action) = serde_json::from_slice(&copy)
+        .ok()
+        .and_then(crate::glance::action)
+    else {
+        tracing::warn!("ignored a malformed request from the island");
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        crate::glance::relay_action(&app, action);
     });
 }
 

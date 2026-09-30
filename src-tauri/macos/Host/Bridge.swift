@@ -9,6 +9,8 @@ public typealias QCIslandHandler = @convention(c) (Int32, Double, Double, Double
 
 public typealias QCAppearanceHandler = @convention(c) (Bool) -> Void
 
+public typealias QCIslandActionHandler = @convention(c) (UnsafePointer<UInt8>?, Int) -> Void
+
 /// Island event codes passed to the handler.
 enum IslandEvent: Int32 {
     /// The island was clicked; the rectangle (top-left origin, points) and scale follow.
@@ -44,6 +46,13 @@ public func qcIslandStart(_ handler: QCIslandHandler?) {
     onMain { IslandController.shared.start(handler: handler) }
 }
 
+/// Where the island's buttons send what they ask for, as JSON (`GlanceActionRequest`), once the user
+/// has confirmed it on the island.
+@_cdecl("qc_island_actions_start")
+public func qcIslandActionsStart(_ handler: QCIslandActionHandler?) {
+    onMain { IslandActions.shared.start(handler: handler) }
+}
+
 @_cdecl("qc_island_update")
 public func qcIslandUpdate(_ bytes: UnsafePointer<UInt8>?, _ length: Int) {
     guard let bytes, length > 0 else { return }
@@ -75,6 +84,25 @@ public func qcWidgetsReload() {
 public func qcWidgetsAdoptCurrent() {
     WidgetExtension.adoptInBackground {
         onMain { WidgetCenter.shared.reloadAllTimelines() }
+    }
+}
+
+@MainActor
+final class IslandActions {
+    static let shared = IslandActions()
+
+    private var handler: QCIslandActionHandler?
+
+    func start(handler: QCIslandActionHandler?) {
+        self.handler = handler
+    }
+
+    func send(_ request: GlanceActionRequest) {
+        guard let handler, let data = request.json else { return }
+        data.withUnsafeBytes { buffer in
+            guard let base = buffer.bindMemory(to: UInt8.self).baseAddress else { return }
+            handler(base, buffer.count)
+        }
     }
 }
 

@@ -9,6 +9,7 @@ import { messagesFor } from "@/i18n";
 import { backend } from "@/lib/backend";
 import { useUsageNotifications } from "@/notify/useUsageNotifications";
 import { useTaskbarStrip } from "@/strip/useTaskbarStrip";
+import { startGlanceActions } from "@/glance/glanceActions";
 import { useGlance } from "@/glance/useGlance";
 import { useDashboardTabs, useIsDark, useTimeZoneWatch } from "@/state/hooks";
 import { cycleDashboardTab, dashboardTabs, navigate, refresh, startApp, undoLayout, useApp, type Screen } from "@/state/store";
@@ -163,6 +164,7 @@ export function App() {
   const scrollRef = useRef<HTMLElement>(null);
 
   useEffect(() => startInsights(), []);
+  useEffect(() => startGlanceActions(), []);
 
   useEffect(() => {
     const release = startApp();

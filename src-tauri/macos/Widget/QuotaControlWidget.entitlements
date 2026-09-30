@@ -8,5 +8,9 @@
 	<array>
 		<string>/Library/Application Support/usage-control/widget/</string>
 	</array>
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-write</key>
+	<array>
+		<string>/Library/Application Support/usage-control/widget/requests/</string>
+	</array>
 </dict>
 </plist>

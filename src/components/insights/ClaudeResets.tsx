@@ -11,10 +11,10 @@ import { messagesFor, type Language } from "@/i18n";
 import { buildClaudePresentation, type ClaudeBankedCard, type ClaudePresentation, type ComparePresentation } from "@/model/insights/claudePresentation";
 import { parseClaudeResets } from "@/model/insights/claudeResets";
 import { parseResets } from "@/model/insights/resets";
+import { setBankedUsed } from "@/state/bankedResets";
 import { useClaudeAccountPlans, useClaudePlans } from "@/state/claudePlans";
 import { useNow, useSettings } from "@/state/hooks";
 import { useInsights } from "@/state/insights";
-import { updateSettings, useApp } from "@/state/store";
 import { Button } from "../ui/controls";
 import { confirmAction } from "../ui/dialog";
 import { ProviderMark } from "../ui/ProviderMark";
@@ -27,12 +27,6 @@ const FEEDS = ["claudeResets"] as const;
 const COMPARE_FEEDS = ["claudeResets", "codexResets"] as const;
 const CHANGES_PREVIEW = 3;
 const MARK_SIZE = 12;
-
-/** Mark a banked reset as applied, or take the mark back. */
-export function setBankedUsed(resetId: string, used: boolean): void {
-  const current = useApp.getState().settings.usedBankedResets.filter((id) => id !== resetId);
-  updateSettings({ usedBankedResets: used ? [...current, resetId] : current });
-}
 
 /** Mark a banked reset as used only after the user confirms it, the way Codex's "Dùng 1 lượt" asks first. */
 async function confirmBankedUsed(resetId: string, text: InsightsMessages, cancelLabel: string): Promise<void> {

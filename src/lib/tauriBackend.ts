@@ -183,6 +183,10 @@ export class TauriBackend implements Backend {
     return subscribe<PopoverScreen>("navigate", listener);
   }
 
+  onGlanceAction(listener: (action: unknown) => void): Unsubscribe {
+    return subscribe<unknown>("glance-action", listener);
+  }
+
   openUrl(url: string): Promise<void> {
     return invoke("open_url", { url });
   }
