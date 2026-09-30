@@ -215,6 +215,7 @@ export function useGlance(): void {
       claudeResetsPending,
       resetsTab,
       markArt,
+      redeemsResets: typeof backend().redeemLimitReset === "function",
       now,
     });
   }, [supported, layout, catalog, isEnabled, engine, display, info, islandEnabled, island, widget, timeFormat, theme, alert, resets, resetsPending, claudeResets, claudeResetsPending, resetsTab, resetRowFor, markArt, now]);

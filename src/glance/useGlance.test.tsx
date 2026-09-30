@@ -288,6 +288,28 @@ describe("the glance document the popup sends", () => {
     expect(api.latest!.labels.claudeResetsTab).toBe("Reset Claude");
   });
 
+  const redeems = (document: GlanceDocument) =>
+    [...document.providers, ...document.widget.providers].flatMap((entry) => entry.metrics.flatMap((metric) => (metric.redeem ? [`${entry.id}|${metric.id}|${metric.redeem.providerId}`] : [])));
+
+  it("puts the popup's Dùng 1 lượt under a Codex account's reset credits while the app can spend one", async () => {
+    const api = await start({});
+    await waitFor(() => expect(redeems(api.latest!).length).toBeGreaterThan(0));
+    for (const entry of redeems(api.latest!)) {
+      const [provider, metric, spends] = entry.split("|");
+      expect(provider).toMatch(/^codex@/);
+      expect(metric).toBe(`${provider}.rateLimitResets`);
+      expect(spends).toBe(provider);
+    }
+  });
+
+  it("leaves Dùng 1 lượt out where the app cannot spend a reset, as the popup does", async () => {
+    const api = await start({}, (backend) => {
+      Object.defineProperty(backend, "redeemLimitReset", { value: undefined });
+    });
+    await settle();
+    expect(api.glances.flatMap(redeems)).toEqual([]);
+  });
+
   it("draws every widget in the app's theme, and leaves the theme out while it follows the Mac", async () => {
     const api = await start({ theme: "dark" });
     await waitFor(() => expect(api.latest?.theme).toBe("dark"));

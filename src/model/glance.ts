@@ -17,14 +17,14 @@ import { insightsFor } from "@/i18n/insights";
 import { usesTwentyFourHour, type TimeFormat } from "./format";
 import { COUNTDOWN_SPAN } from "./glanceResets";
 import { MOMENT_PLACEHOLDER, resetRowAvatars } from "./glanceResetRows";
-import { brandOf, cardsAsShown, type ProviderMetrics } from "./layout";
+import { brandOf, cardsAsShown, isLocalHistoryCard, layoutFamily, type ProviderMetrics } from "./layout";
 import { periodLabel } from "./menuBar";
 import { boundedTrailingText, isFreshSessionWindow, meterSeverity, meterState, type MeterState } from "./meterState";
 import { SOURCE_COLORS } from "./palette";
 import { PLAN_TERM_SOON_DAYS, planTermEnd } from "./planTerm";
 import { isOutdated } from "./providerText";
 import type { GlanceContent, GlanceSurfaceSettings, IslandSettings, IslandStyle, IslandView, ResetParts, ResetProvider, ThemeSetting } from "./settings";
-import { boundedHeadline, fraction, isBounded, menuBarValue, unboundedDetail, type DisplayOptions, type WidgetData } from "./widgetData";
+import { availableResets, boundedHeadline, fraction, isBounded, menuBarValue, soonestExpiry, unboundedDetail, type DisplayOptions, type WidgetData } from "./widgetData";
 import { rolledOverReading } from "./windowReset";
 
 export const GLANCE_VERSION = 1;
@@ -59,6 +59,41 @@ export interface GlanceMetric {
   pace?: GlancePace;
   /** The reading once `resetsAt` has passed; only on a limit counting down. */
   after?: GlanceAfterReset;
+  /** The popup's "Dùng 1 lượt" under this row: only on the reset credits of a connected Codex
+   * account that can spend one now, where the popup shows the button. */
+  redeem?: GlanceRedeem;
+}
+
+/**
+ * What the popup's "Dùng 1 lượt" (`RedeemResetButton`) needs on the island and the widgets: the
+ * account it spends a reset of, and its words and its confirmation's words exactly as the popup
+ * builds them. The confirmation names the soonest credit's expiry as `whenLabel` words it at the
+ * moment it is asked; that moves with the clock, so it travels as `messageAt` with `{at}` for the
+ * expiry, the moment itself and the words that fill it in (`expiry`), and the document only changes
+ * when the credits do.
+ */
+export interface GlanceRedeem {
+  /** The account whose reset is spent (`redeemLimitReset`). */
+  providerId: string;
+  /** The button: `Dùng 1 lượt`. */
+  redeem: string;
+  /** The button while the reset is being spent: `Đang dùng…`. */
+  redeeming: string;
+  /** The confirmation's title: `Dùng 1 lượt đặt lại?`. */
+  title: string;
+  /** The confirmation's words without an expiry, once `expiresAt` has passed or where there is none. */
+  message: string;
+  /** The confirmation's words with `{at}` where the soonest credit's expiry goes. */
+  messageAt?: string;
+  /** When the soonest credit still ahead expires. */
+  expiresAt?: string;
+  /** How `{at}` words `expiresAt` at the moment the confirmation is asked (`whenLabel` in Exact Time):
+   * `{t} hôm nay`, `{t} ngày mai`, `{t} ngày {d}`. */
+  expiry?: GlanceDayWords;
+  /** `Xác nhận`, in the destructive color. */
+  confirm: string;
+  /** `Hủy`. */
+  cancel: string;
 }
 
 /**
@@ -766,6 +801,9 @@ export interface GlanceInput {
   resetsTab?: ResetProvider;
   /** The official color logos drawn so far (`useMarkArt`), base64 PNG by brand; optional. */
   markArt?: Readonly<Record<string, string>>;
+  /** Whether the app can spend a Codex limit reset (`backend().redeemLimitReset`), which puts the
+   * popup's "Dùng 1 lượt" under a connected Codex account's reset credits; absent, no row has it. */
+  redeemsResets?: boolean;
   now: Date;
 }
 
@@ -914,6 +952,54 @@ export function glanceRestoreWords(language: Language): string {
   return format.restoresAt(TIME_PLACEHOLDER, today).replace(format.timeOnDay(TIME_PLACEHOLDER, today), MOMENT_PLACEHOLDER);
 }
 
+/**
+ * The words `{at}` of the redemption's confirmation is filled with: a credit's expiry as `whenLabel`
+ * words it in Exact Time (`13:05 hôm nay`, `1:05 PM tomorrow`, `13:05 ngày 5/10`), read off the
+ * words the popup renders, with the patterns that draw the time as `shortTime` does for
+ * `timeFormat` and another day as `format.monthDay` does.
+ */
+export function glanceExpiryWords(language: Language, timeFormat: TimeFormat): GlanceDayWords {
+  const messages = messagesFor(language);
+  const when = messages.format.when;
+  return {
+    today: when({ kind: "today", time: TIME_PLACEHOLDER }),
+    tomorrow: when({ kind: "tomorrow", time: TIME_PLACEHOLDER }),
+    other: when({ kind: "on", date: DAY_PLACEHOLDER, time: TIME_PLACEHOLDER }),
+    time: messages.glance.clockPattern(usesTwentyFourHour(timeFormat, language)),
+    date: messages.glance.monthDayPattern,
+  };
+}
+
+/** An account the island and the widgets may ask to spend a reset of, as `glanceActions` accepts it. */
+export const GLANCE_ACTION_PROVIDER_ID = /^[a-z0-9-]{1,64}@[A-Za-z0-9_-]{1,128}$/;
+
+/**
+ * `GlanceMetric.redeem` for the row `data` of `providerId`, where the popup's card shows "Dùng 1
+ * lượt" under it (`canRedeemReset`, not on a local-history card) and a surface's press would be
+ * acted on (a connected Codex account); `null` elsewhere.
+ */
+export function glanceRedeem(providerId: string, data: WidgetData, now: Date): GlanceRedeem | null {
+  if (availableResets(data) < 1 || isLocalHistoryCard(providerId) || layoutFamily(providerId) !== "codex" || !GLANCE_ACTION_PROVIDER_ID.test(providerId)) return null;
+  const messages = messagesFor(data.language);
+  const text = messages.limitReset;
+  const redeem: GlanceRedeem = {
+    providerId,
+    redeem: text.redeem,
+    redeeming: text.redeeming,
+    title: text.confirmTitle,
+    message: text.confirmMessage(null),
+    confirm: text.confirm,
+    cancel: messages.chrome.cancel,
+  };
+  const expiry = soonestExpiry(data.expiriesAt, now);
+  if (expiry) {
+    redeem.messageAt = text.confirmMessage(MOMENT_PLACEHOLDER);
+    redeem.expiresAt = expiry.toISOString();
+    redeem.expiry = glanceExpiryWords(data.language, data.timeFormat);
+  }
+  return redeem;
+}
+
 /** The popup's pace notes (`PaceWarning`) with `{n}` where the figure goes, read off its words. */
 export function glancePaceWords(language: Language): GlancePaceWords {
   const meter = messagesFor(language).meter;
@@ -948,18 +1034,21 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
   };
 
   const periods = new Map<string, string>();
-  const readings = (descriptors: readonly WidgetDescriptor[]): GlanceMetric[] =>
+  const readings = (descriptors: readonly WidgetDescriptor[], providerId?: string): GlanceMetric[] =>
     descriptors.flatMap((descriptor) => {
       const data = input.dataFor(descriptor);
       if (!data.hasData) return [];
       const period = periodLabel(data.periodDurationMs);
       if (period) periods.set(descriptor.id, period);
-      return [glanceMetric(descriptor.id, data, input.now)];
+      const metric = glanceMetric(descriptor.id, data, input.now);
+      const redeem = providerId && input.redeemsResets ? glanceRedeem(providerId, data, input.now) : null;
+      if (redeem) metric.redeem = redeem;
+      return [metric];
     });
 
   const list = (groups: readonly ProviderMetrics[], content: GlanceContent, problems: boolean): GlanceProvider[] =>
     (content === "dashboard" ? cardsAsShown(groups, input.openProviders) : groups).flatMap((group) => {
-      const metrics = readings([...group.always, ...group.onDemand]);
+      const metrics = readings([...group.always, ...group.onDemand], group.provider.id);
       if (metrics.length === 0 && !problems) return [];
       if (metrics.length > 0) {
         const refreshed = Date.parse(input.refreshedAt(group.provider.id) ?? "");

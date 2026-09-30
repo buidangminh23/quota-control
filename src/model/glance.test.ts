@@ -12,6 +12,7 @@ import {
   glancePaceWords,
   glancePlanTerm,
   glancePlanTermWords,
+  glanceExpiryWords,
   glanceResetAbsoluteWords,
   glanceRestoreWords,
   GLANCE_VERSION,
@@ -25,7 +26,7 @@ import {
   type GlanceResetsPending,
   type GlanceWingChoice,
 } from "./glance";
-import { resetAbsoluteLabel, restoreLabel, shortTime, timeOnDayLabel } from "./format";
+import { resetAbsoluteLabel, restoreLabel, shortTime, timeOnDayLabel, whenLabel } from "./format";
 import { buildClaudeGlanceResets } from "./glanceClaudeResets";
 import { claudeResetRow, codexResetRow } from "./glanceResetRows";
 import { buildGlanceResets, parseResetFeeds } from "./glanceResets";
@@ -73,6 +74,8 @@ interface Options {
   /** The cards open on the Hạn mức tab; none by default, as the fixture layout has them. */
   openProviders?: readonly string[];
   resetRowFor?: (provider: Provider) => GlanceResetRow | null;
+  /** Whether the app can spend a Codex limit reset; off by default, as for the pinned documents. */
+  redeemsResets?: boolean;
 }
 
 function glance({
@@ -94,6 +97,7 @@ function glance({
   errors = {},
   openProviders = layout.openProviders,
   resetRowFor,
+  redeemsResets,
 }: Options = {}) {
   const islandSettings = { ...DEFAULT_SETTINGS.island, ...island };
   const widgetSettings = { ...DEFAULT_SETTINGS.widget, ...widget };
@@ -125,6 +129,7 @@ function glance({
     claudeResetsPending,
     ...(resetsTab ? { resetsTab } : {}),
     markArt,
+    ...(redeemsResets === undefined ? {} : { redeemsResets }),
     now,
   });
 }
@@ -296,6 +301,95 @@ describe("the rows of each account", () => {
     const english = { ...DEFAULT_DISPLAY, language: "en" as const };
     expect(glance({ display: english }).labels.days).toEqual({ today: "{t} · today", tomorrow: "{t} · tomorrow", other: "{t} · {d}", time: "h:mm a", date: "EEE, MMM d" });
     expect(glance({ display: english, hour12: false }).labels.days.time).toBe("HH:mm");
+  });
+});
+
+describe("the popup's Dùng 1 lượt under a Codex account's reset credits", () => {
+  beforeEach(() => setSystemTimeZone("Asia/Saigon"));
+  afterEach(() => setSystemTimeZone(null));
+
+  const CREDITS = "codex@52d0.rateLimitResets";
+  const redeems = (document: GlanceDocument) =>
+    [...document.providers, ...document.widget.providers].flatMap((entry) => entry.metrics.filter((metric) => metric.redeem).map((metric) => `${entry.id}|${metric.id}`));
+  const withCredits = (count: number, expiriesAt: string[]) => ({
+    ...snapshots,
+    "codex@52d0": {
+      ...snapshots["codex@52d0"]!,
+      lines: snapshots["codex@52d0"]!.lines.map((line) =>
+        line.label === "Rate Limit Resets" && line.type === "values" ? { ...line, values: [{ ...line.values[0]!, number: count }], expiriesAt } : line,
+      ),
+    },
+  });
+
+  it("puts it on the reset credits of a connected Codex account on the island and the widgets, and nowhere else", () => {
+    expect(redeems(glance({ redeemsResets: true }))).toEqual([`codex@52d0|${CREDITS}`, `codex@52d0|${CREDITS}`]);
+  });
+
+  it("leaves it out where the popup has no button: no way to spend one, no credit left", () => {
+    expect(redeems(glance())).toEqual([]);
+    expect(redeems(glance({ redeemsResets: false }))).toEqual([]);
+    const none = withCredits(0, []);
+    expect(redeems(glance({ redeemsResets: true, data: none }))).toEqual([]);
+    expect(JSON.stringify(glance({ redeemsResets: true, data: none }))).toBe(JSON.stringify(glance({ data: none })));
+  });
+
+  it("carries the popup's button and confirmation words, in either language", () => {
+    for (const language of ["vi", "en"] as const) {
+      const messages = messagesFor(language);
+      const document = glance({ redeemsResets: true, display: { ...DEFAULT_DISPLAY, language } });
+      const redeem = document.widget.providers.find((entry) => entry.id === "codex@52d0")!.metrics.find((metric) => metric.id === CREDITS)!.redeem!;
+      expect(redeem).toMatchObject({
+        providerId: "codex@52d0",
+        redeem: messages.limitReset.redeem,
+        redeeming: messages.limitReset.redeeming,
+        title: messages.limitReset.confirmTitle,
+        message: messages.limitReset.confirmMessage(null),
+        messageAt: messages.limitReset.confirmMessage("{at}"),
+        confirm: messages.limitReset.confirm,
+        cancel: messages.chrome.cancel,
+        expiresAt: new Date(FETCHED + 1.6 * 24 * 3_600_000).toISOString(),
+      });
+    }
+    expect(glance({ redeemsResets: true }).widget.providers.find((entry) => entry.id === "codex@52d0")!.metrics.find((metric) => metric.id === CREDITS)!.redeem).toMatchObject({
+      redeem: "Dùng 1 lượt",
+      redeeming: "Đang dùng…",
+      confirm: "Xác nhận",
+      cancel: "Hủy",
+      expiry: { today: "{t} hôm nay", tomorrow: "{t} ngày mai", other: "{t} ngày {d}", time: "H:mm", date: "d/M" },
+    });
+  });
+
+  it("names the soonest credit still ahead, and none once every credit has expired", () => {
+    const later = withCredits(1, [new Date(FETCHED - 3_600_000).toISOString(), new Date(FETCHED + 5 * 86_400_000).toISOString()]);
+    const redeem = glance({ redeemsResets: true, data: later }).providers.find((entry) => entry.id === "codex@52d0")!.metrics.find((metric) => metric.id === CREDITS)!.redeem!;
+    expect(redeem.expiresAt).toBe(new Date(FETCHED + 5 * 86_400_000).toISOString());
+    const expired = glance({ redeemsResets: true, data: withCredits(1, [new Date(FETCHED - 3_600_000).toISOString()]) });
+    const bare = expired.providers.find((entry) => entry.id === "codex@52d0")!.metrics.find((metric) => metric.id === CREDITS)!.redeem!;
+    expect(bare.message).toBe(messagesFor("vi").limitReset.confirmMessage(null));
+    expect(["messageAt", "expiresAt", "expiry"].filter((key) => key in bare)).toEqual([]);
+  });
+
+  it("fills in to the popup's own confirmation at any moment, the way the island and the widgets fill it", () => {
+    const base = Date.UTC(2026, 8, 30, 7, 30);
+    const moments = [base, Date.UTC(2026, 8, 30, 16, 59, 30), Date.UTC(2026, 9, 4, 23, 10)];
+    const offsets = [30_000, 3_600_000, 34_200_000, 86_340_000, 86_400_000, 3 * 86_400_000, 10 * 86_400_000 + 7_200_000];
+    for (const language of ["vi", "en"] as const) {
+      const text = messagesFor(language).limitReset;
+      for (const timeFormat of ["12h", "24h", "auto"] as const) {
+        const words = glanceExpiryWords(language, timeFormat);
+        for (const moment of moments) {
+          const now = new Date(moment);
+          for (const offset of offsets) {
+            const at = new Date(moment + offset);
+            const days = calendarDaysBetween(now, at);
+            const filled = (days <= 0 ? words.today : days === 1 ? words.tomorrow : words.other)
+              .replace("{t}", shortTime(at, timeFormat, language))
+              .replace("{d}", messagesFor(language).format.monthDay(at));
+            expect(text.confirmMessage("{at}").replace("{at}", filled)).toBe(text.confirmMessage(whenLabel(at, "absolute", now, timeFormat, language)));
+          }
+        }
+      }
+    }
   });
 });
 

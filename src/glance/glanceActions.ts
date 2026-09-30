@@ -7,6 +7,7 @@
  */
 import { messagesFor } from "@/i18n";
 import { backend } from "@/lib/backend";
+import { GLANCE_ACTION_PROVIDER_ID } from "@/model/glance";
 import { layoutFamily } from "@/model/layout";
 import { RESET_PROVIDERS, type ResetProvider } from "@/model/settings";
 import { setBankedUsed } from "@/state/bankedResets";
@@ -18,7 +19,6 @@ export type GlanceAction =
   | { kind: "markBankedReset"; resetId: string; used: boolean }
   | { kind: "openResets"; provider: ResetProvider };
 
-const PROVIDER_ID = /^[a-z0-9-]{1,64}@[A-Za-z0-9_-]{1,128}$/;
 const ANNOUNCEMENT_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -31,7 +31,7 @@ export function parseGlanceAction(value: unknown): GlanceAction | null {
   if (!request) return null;
   switch (request.kind) {
     case "redeemLimitReset":
-      return typeof request.providerId === "string" && PROVIDER_ID.test(request.providerId) ? { kind: "redeemLimitReset", providerId: request.providerId } : null;
+      return typeof request.providerId === "string" && GLANCE_ACTION_PROVIDER_ID.test(request.providerId) ? { kind: "redeemLimitReset", providerId: request.providerId } : null;
     case "markBankedReset":
       return typeof request.resetId === "string" && ANNOUNCEMENT_ID.test(request.resetId) && typeof request.used === "boolean"
         ? { kind: "markBankedReset", resetId: request.resetId, used: request.used }

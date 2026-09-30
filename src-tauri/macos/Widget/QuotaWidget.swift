@@ -116,7 +116,11 @@ struct GlanceTimeline: TimelineProvider {
         let now = Date()
         let document = GlanceStore.load()
         var entries = [GlanceEntry(date: now, document: document)]
-        for moment in Self.moments(document, after: now, style: style).prefix(Self.momentEntries) {
+        var moments = Array(Self.moments(document, after: now, style: style).prefix(Self.momentEntries))
+        if let change = WidgetPendingAction.nextChange(after: now), !moments.contains(change) {
+            moments = (moments + [change]).sorted()
+        }
+        for moment in moments {
             entries.append(GlanceEntry(date: moment, document: document))
         }
         completion(Timeline(entries: entries, policy: .after(now.addingTimeInterval(Self.refresh))))
@@ -161,6 +165,16 @@ extension QuotaWidgetStyle {
         case .details, .rings, .compact, .upcoming: return true
         case .overview: return document.widget.has(.quota) || document.widget.has(.upcoming)
         case .codexResets, .resetCalendar: return false
+        }
+    }
+
+    /// Whether the style draws the accounts' rows, where a Codex account's reset credits carry "Dùng 1
+    /// lượt": Details, Compact, and the Overview when Settings gave it the limits.
+    func drawsAccountRows(_ document: GlanceDocument) -> Bool {
+        switch self {
+        case .details, .compact: return true
+        case .overview: return document.widget.has(.quota)
+        case .rings, .upcoming, .codexResets, .resetCalendar: return false
         }
     }
 
@@ -336,6 +350,11 @@ struct GlanceWidgetView: View {
     private func content(size: CGSize) -> some View {
         if let document = entry.document {
             layout(document, size: size)
+                .overlay {
+                    if style.drawsAccountRows(document) {
+                        WidgetRedeemConfirmation(document: document.forWidget, now: entry.date)
+                    }
+                }
                 .environment(\.locale, document.resolvedLocale)
         } else {
             WidgetMessage(text: WidgetText.notRunning)

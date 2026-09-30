@@ -7,23 +7,13 @@ import { useState } from "react";
 import { messagesFor } from "@/i18n";
 import { backend } from "@/lib/backend";
 import { whenLabel } from "@/model/format";
-import type { WidgetData } from "@/model/widgetData";
+import { availableResets, soonestExpiry, type WidgetData } from "@/model/widgetData";
 import { showNotice } from "@/state/store";
 import { Button } from "../ui/controls";
 import { confirmAction } from "../ui/dialog";
 
-/** How many banked resets the row reports, or 0 for any other row. */
-export function availableResets(data: WidgetData): number {
-  if (!data.showsResetExpiries || !data.hasData) return 0;
-  return data.values.find((value) => value.kind === "count")?.number ?? 0;
-}
-
 export function canRedeemReset(data: WidgetData): boolean {
   return availableResets(data) >= 1 && typeof backend().redeemLimitReset === "function";
-}
-
-function soonest(dates: readonly Date[], now: Date): Date | null {
-  return dates.reduce<Date | null>((best, date) => (date.getTime() > now.getTime() && (best === null || date < best) ? date : best), null);
 }
 
 export function RedeemResetButton({ providerId, data, now }: { providerId: string; data: WidgetData; now: Date }) {
@@ -32,7 +22,7 @@ export function RedeemResetButton({ providerId, data, now }: { providerId: strin
   const text = messages.limitReset;
 
   const redeem = async () => {
-    const expiry = soonest(data.expiriesAt, now);
+    const expiry = soonestExpiry(data.expiriesAt, now);
     const confirmed = await confirmAction({
       title: text.confirmTitle,
       message: text.confirmMessage(expiry ? whenLabel(expiry, "absolute", now, data.timeFormat, data.language) : null),

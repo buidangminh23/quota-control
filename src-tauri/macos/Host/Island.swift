@@ -22,6 +22,7 @@ final class IslandController {
     private var pendingCollapse: DispatchWorkItem?
     private var pendingShrink: DispatchWorkItem?
     private var alertTimer: DispatchWorkItem?
+    private var redeemTimer: DispatchWorkItem?
     private var seenAlerts: Set<String> = []
     private var hovering = false
     /// While the popup is open under the island, the island stays closed so it never covers it.
@@ -55,6 +56,10 @@ final class IslandController {
         let document = decoded.forIsland
         model.trackers = (decoded.resets, decoded.claudeResets)
         model.document = document
+        let redeems = model.redeems.pruned(for: document, now: Date())
+        if redeems != model.redeems {
+            model.redeems = redeems
+        }
         relayout(animated: true)
         if let alert = document.alert, seenAlerts.insert(alert.id).inserted, document.island.enabled, document.island.alerts {
             showAlert(alert)
@@ -210,6 +215,52 @@ final class IslandController {
         relayout(animated: true)
     }
 
+    /// A press on an account's "Dùng 1 lượt" or on the confirmation it shows in its place, as the
+    /// popup's button and dialog take it: the button asks first; "Hủy" puts it back; "Xác nhận", still
+    /// asked at the count it was pressed at, sends the request and leaves the button reading `Đang
+    /// dùng…` until that count changes or `IslandRedeemState.sentLifetime` passes. The island stays
+    /// open, and grows or shrinks to fit.
+    func redeem(_ step: IslandRedeemStep, _ redeem: GlanceRedeem) {
+        guard model.mode == .expanded, let reading = model.document?.redeemRow(providerId: redeem.providerId)?.headline else { return }
+        pendingCollapse?.cancel()
+        let now = Date()
+        var state = model.redeems.pruned(for: model.document, now: now)
+        switch step {
+        case .press:
+            state.confirming = [redeem.providerId: IslandRedeemState.Mark(reading: reading)]
+        case .cancel:
+            state.confirming[redeem.providerId] = nil
+        case .confirm:
+            guard state.confirming.removeValue(forKey: redeem.providerId)?.reading == reading else { break }
+            IslandActions.shared.send(redeem.request)
+            let until = now.addingTimeInterval(IslandRedeemState.sentLifetime)
+            state.sent[redeem.providerId] = IslandRedeemState.Mark(reading: reading, until: until)
+            scheduleRedeemExpiry(until)
+        }
+        withAnimation(Self.spring) {
+            model.redeems = state
+        }
+        relayout(animated: true)
+    }
+
+    /// Puts a button back once its `Đang dùng…` has run its time without the count changing.
+    private func scheduleRedeemExpiry(_ until: Date) {
+        redeemTimer?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let state = self.model.redeems.pruned(for: self.model.document, now: Date())
+                guard state != self.model.redeems else { return }
+                withAnimation(Self.spring) {
+                    self.model.redeems = state
+                }
+                self.relayout(animated: true)
+            }
+        }
+        redeemTimer = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, until.timeIntervalSinceNow) + 0.1, execute: work)
+    }
+
     /// A click on a fold of the reset view (a list's "Xem thêm N", "Cách tính") opens or closes
     /// it, and the open island grows or shrinks to fit.
     func toggleResetFold(_ fold: GlanceResetFold) {
@@ -259,6 +310,9 @@ final class IslandController {
             model.mode = mode
         }
         guard mode == .compact else { return }
+        if !model.redeems.confirming.isEmpty {
+            model.redeems.confirming = [:]
+        }
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -448,6 +502,8 @@ final class IslandModel: ObservableObject {
     }
     /// The reset view's folds as last clicked, kept here so the open island is measured with them.
     @Published var resetFolds = GlanceResetFolds(foldsLists: true)
+    /// Where each account's "Dùng 1 lượt" stands, kept here so the open island is measured with it.
+    @Published var redeems = IslandRedeemState()
     /// Where the open island's tabs sit, in the panel's top-left coordinates.
     var tabFrames: [GlanceView: CGRect] = [:]
     var footerFrame: CGRect = .zero
@@ -514,7 +570,8 @@ final class IslandModel: ObservableObject {
         let width = min(preferred, max(1, geometry.screenFrame.width - IslandGeometry.shadowMargin * 2))
         let view = IslandDetails(
             document: document, now: now, topInset: geometry.detailsInset,
-            budget: .full, selected: selectedTab, availableWidth: width, resetFolds: resetFolds
+            budget: .full, selected: selectedTab, availableWidth: width, resetFolds: resetFolds,
+            redeems: redeems
         )
         .frame(width: width)
         .fixedSize(horizontal: false, vertical: true)
@@ -733,7 +790,9 @@ struct IslandRootView: View {
                     budget: model.budget, selected: model.selectedTab,
                     availableWidth: model.expandedSize.width, viewportHeight: model.expandedSize.height,
                     resetFolds: model.resetFolds,
-                    onResetFold: { fold in IslandController.shared.toggleResetFold(fold) }
+                    onResetFold: { fold in IslandController.shared.toggleResetFold(fold) },
+                    redeems: model.redeems,
+                    onRedeem: { step, redeem in IslandController.shared.redeem(step, redeem) }
                 )
             }
             .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
