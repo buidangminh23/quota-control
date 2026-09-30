@@ -158,10 +158,14 @@ enum GlanceStore {
 }
 
 enum WidgetText {
-    static var vietnamese: Bool {
-        Locale.preferredLanguages.first?.hasPrefix("vi") ?? false
-    }
+    /// Whether the widgets word what they say themselves (their names and descriptions in the
+    /// gallery, the preview, the words before the app first runs) in Vietnamese: in the app's
+    /// language, as the last document it wrote says, else in the Mac's.
+    static let vietnamese: Bool = GlanceStore.load()?.isVietnamese ?? (Locale.preferredLanguages.first?.hasPrefix("vi") ?? false)
 
+    /// A widget's name in the gallery. The reset widgets show whichever tracker Settings chose, so
+    /// they are named after the popup's Reset tab, not after Codex; their kind strings keep the
+    /// Codex names they were placed under.
     static func name(_ style: QuotaWidgetStyle) -> String {
         switch style {
         case .details: return vietnamese ? "Chi tiết" : "Details"
@@ -169,8 +173,8 @@ enum WidgetText {
         case .compact: return vietnamese ? "Gọn" : "Compact"
         case .overview: return vietnamese ? "Tổng quan" : "Overview"
         case .upcoming: return vietnamese ? "Sắp đặt lại" : "Coming Back"
-        case .codexResets: return vietnamese ? "Reset Codex" : "Codex Resets"
-        case .resetCalendar: return vietnamese ? "Lịch reset Codex" : "Codex Reset Calendar"
+        case .codexResets: return vietnamese ? "Reset" : "Resets"
+        case .resetCalendar: return vietnamese ? "Lịch reset" : "Reset Calendar"
         }
     }
 
@@ -186,20 +190,20 @@ enum WidgetText {
             return vietnamese ? "Mỗi chỉ số một dòng, xem được nhiều tài khoản nhất." : "One line per metric, the most accounts at once."
         case .overview:
             return vietnamese
-                ? "Hạn mức các tài khoản cùng dự báo reset Codex và các hạn mức sắp đặt lại."
-                : "Your limits beside the Codex reset forecast and the limits coming back next."
+                ? "Hạn mức các tài khoản cùng dự báo reset của Codex hoặc Claude và các hạn mức sắp đặt lại."
+                : "Your limits beside the Codex or Claude reset forecast and the limits coming back next."
         case .upcoming:
             return vietnamese
                 ? "Các hạn mức sắp được đặt lại, sớm nhất lên trước, kèm giờ đặt lại."
                 : "The limits coming back next, soonest first, with their reset times."
         case .codexResets:
             return vietnamese
-                ? "Theo dõi reset miễn phí của Codex: giờ reset đã báo, khả năng có reset và lần reset gần nhất."
-                : "The Codex free-reset tracker: announced resets, the chance of one and the last one."
+                ? "Reset của Codex hoặc Claude như tab Reset: lần reset gần nhất, reset đã báo và khả năng có reset."
+                : "Codex or Claude resets as in the Reset tab: the latest reset, announced ones and the chance of one."
         case .resetCalendar:
             return vietnamese
-                ? "Lịch 20 tuần reset Codex và nhịp reset theo thứ, theo giờ."
-                : "Twenty weeks of Codex resets and their rhythm by weekday and hour."
+                ? "Lịch reset 20 tuần qua của Codex hoặc Claude và thói quen thông báo theo thứ, theo giờ."
+                : "Codex or Claude resets in the last 20 weeks and when announcements land, by weekday and hour."
         }
     }
 
@@ -338,7 +342,7 @@ struct GlanceWidgetView: View {
 
 extension GlanceDocument {
     /// What the widget gallery shows before the app has written any readings: two accounts and a
-    /// reset tracker with its chances, calendar and rhythm, worded in the Mac's language.
+    /// reset tracker with its chances, calendar and rhythm, worded like the gallery (`WidgetText`).
     static var sample: GlanceDocument {
         let vietnamese = WidgetText.vietnamese
         let now = Date()

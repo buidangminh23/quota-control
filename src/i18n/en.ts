@@ -289,7 +289,7 @@ export const en: Messages = {
     desktopWidgetNote:
       "Right-click the desktop, choose Edit Widgets and search for Quota Control. There are three styles: Details (usage bars and reset times), Rings (percentage gauges) and Compact (one line per metric), each in four sizes.",
     desktopWidgetKindsNote:
-      "To keep them separate, add the Codex Resets, Codex Reset Calendar or Coming Back widget; to combine them, add Overview and choose the parts it combines right below.",
+      "To keep them separate, add the Resets, Reset Calendar or Coming Back widget; to combine them, add Overview and choose the parts it combines right below.",
     glanceGroup: (group) => ({ closed: "Closed", open: "Open", behavior: "Behavior", content: "Content" })[group],
     glanceTabName: (view, provider) => ({ quota: "Limits", resets: `${RESET_OWNERS[provider]} Resets`, upcoming: "Coming Back" })[view],
     glanceTabs: (surface) => (surface === "island" ? "Tabs When Open" : "Overview Widget Shows"),
@@ -297,13 +297,10 @@ export const en: Messages = {
       surface === "island"
         ? "Click to turn a tab on or off; at least one stays on. Each tab has its own options in the list below."
         : "Choose the parts the Overview widget combines. The single widgets always follow each part's options below.",
-    glanceWidgetScope: (view, provider) =>
+    glanceWidgetScope: (view) =>
       ({
         quota: "Applies to the Details, Rings, Compact and Overview widgets.",
-        resets:
-          provider === "claude"
-            ? "Applies to the Codex Resets, Codex Reset Calendar and Overview widgets; all three now show Claude's resets."
-            : "Applies to the Codex Resets, Codex Reset Calendar and Overview widgets.",
+        resets: "Applies to the Resets, Reset Calendar and Overview widgets.",
         upcoming: "Applies to the Coming Back and Overview widgets.",
       })[view],
     glanceTabOff: "Tab off",

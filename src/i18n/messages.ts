@@ -236,11 +236,8 @@ export interface SettingsMessages {
   /** The chips choosing the views: the island's tabs, the Overview widget's parts. */
   glanceTabs(surface: "island" | "widget"): string;
   glanceTabsNote(surface: "island" | "widget"): string;
-  /**
-   * What each view's editor changes on the widgets. The reset widgets keep their Codex names in the
-   * widget gallery, so with Claude chosen the reset view's note says they show Claude's resets.
-   */
-  glanceWidgetScope(view: IslandView, provider: ResetProvider): string;
+  /** What each view's editor changes on the widgets, naming them as the widget gallery does. */
+  glanceWidgetScope(view: IslandView): string;
   /** The editor of a view that is switched off on the island. */
   glanceTabOff: string;
   /** Quick ways to fill the metric list; `dashboard` and `starred` keep following the popup. */
