@@ -270,6 +270,7 @@ export const insightsVi: InsightsMessages = {
   showBenchmarkTab: "Hiện tab Benchmark",
   resetProviderLabel: "Reset của",
   resetProvider: (provider) => (provider === "claude" ? "Claude" : "Codex"),
+  resetProviderFollow: "Như tab Reset",
   forecastReliability: (verdict, percent, days, resets) =>
     verdict === "better"
       ? `Thử lại trên ${days} ngày đã qua (${resets} lần reset): cách ước tính này đoán sát hơn mức trung bình ${percent}.`

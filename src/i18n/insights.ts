@@ -225,6 +225,8 @@ export interface InsightsMessages {
   /** The Reset tab's switch between the two trackers. */
   resetProviderLabel: string;
   resetProvider(provider: ResetProvider): string;
+  /** The choice that shows whichever tracker the Reset tab shows. */
+  resetProviderFollow: string;
   /** How the estimate would have done on its own history: better or worse by `percent`, over `days` holding `resets`. */
   forecastReliability(verdict: ForecastSkill["verdict"], percent: string, days: string, resets: string): string;
   claude: ClaudeResetMessages;

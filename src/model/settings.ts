@@ -29,6 +29,14 @@ export const DASHBOARD_TABS: readonly DashboardTab[] = ["quota", "tokens", "pric
 /** Whose resets the Reset tab shows. */
 export type ResetProvider = "codex" | "claude";
 export const RESET_PROVIDERS: readonly ResetProvider[] = ["codex", "claude"];
+/** Whose tracker a glance surface shows: the one the Reset tab shows (`app`), or always Codex or Claude. */
+export type SurfaceResetProvider = "app" | ResetProvider;
+export const SURFACE_RESET_PROVIDERS: readonly SurfaceResetProvider[] = ["app", "codex", "claude"];
+
+/** The tracker a surface shows now: its own choice, or the Reset tab's while it follows the app. */
+export function surfaceResetProvider(surface: SurfaceResetProvider, app: ResetProvider): ResetProvider {
+  return surface === "app" ? app : surface;
+}
 /** More banked resets than this marked as applied are forgotten, oldest first. */
 const MAX_USED_BANKED_RESETS = 50;
 /** The Token tab's views, left to right. */
@@ -56,7 +64,8 @@ export const GLANCE_CONTENTS: readonly GlanceContent[] = ["dashboard", "starred"
 export type IslandStyle = "percent" | "ring" | "bar";
 export const ISLAND_STYLES: readonly IslandStyle[] = ["percent", "ring", "bar"];
 /** The views a glance surface can show, each named after the popup tab it mirrors: the limits, the
- * reset tracker the surface chose (Codex or Claude, `resetsProvider`), or the next limits to come back. */
+ * reset tracker the surface shows (the Reset tab's, or the one it picks: `resetsProvider`), or the next
+ * limits to come back. */
 export type IslandView = "quota" | "resets" | "upcoming";
 export const ISLAND_VIEWS: readonly IslandView[] = ["quota", "resets", "upcoming"];
 /** How the open island shows several chosen views: one at a time behind a tab bar, or stacked. */
@@ -87,8 +96,8 @@ export interface GlanceSurfaceSettings {
   resetParts: ResetParts;
   /** The most limits coming back listed, one of `UPCOMING_LIMITS`. */
   upcomingLimit: number;
-  /** Whose reset tracker the reset view shows: Codex (codex-resets.com) or Claude (claude-resets.com). */
-  resetsProvider: ResetProvider;
+  /** Whose reset tracker the reset view shows: the Reset tab's (`app`), Codex (codex-resets.com) or Claude (claude-resets.com). */
+  resetsProvider: SurfaceResetProvider;
 }
 
 /** What the taskbar strip (the macOS menu bar item) lists. */
@@ -203,7 +212,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     tabs: ["quota", "resets", "upcoming"],
     resetParts: { next: true, latest: true, chances: true, wait: true, calendar: true, rhythm: true },
     upcomingLimit: 5,
-    resetsProvider: "codex",
+    resetsProvider: "app",
   },
   widget: {
     content: "dashboard",
@@ -215,7 +224,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     tabs: ["quota", "resets", "upcoming"],
     resetParts: { next: true, latest: true, chances: true, wait: true, calendar: true, rhythm: true },
     upcomingLimit: 0,
-    resetsProvider: "codex",
+    resetsProvider: "app",
   },
   showTotalSpend: true,
   showBenchmarkTab: true,
@@ -297,7 +306,7 @@ function parseSurface(value: unknown, defaults: GlanceSurfaceSettings, legacyTab
     tabs: parseTabs(stored.tabs, legacyTabs ?? defaults.tabs),
     resetParts: parseResetParts(stored.resetParts, defaults.resetParts),
     upcomingLimit: typeof stored.upcomingLimit === "number" && UPCOMING_LIMITS.includes(stored.upcomingLimit) ? stored.upcomingLimit : defaults.upcomingLimit,
-    resetsProvider: oneOf(stored.resetsProvider, RESET_PROVIDERS, defaults.resetsProvider),
+    resetsProvider: oneOf(stored.resetsProvider, SURFACE_RESET_PROVIDERS, defaults.resetsProvider),
   };
 }
 
@@ -429,10 +438,11 @@ export function mergeSettingsDocument(
 }
 
 /**
- * A surface as saved. `resetsProvider` at its default is left out of a stored surface that never
- * had it, so the settings of someone who never picks Claude are saved exactly as before.
+ * A surface as saved. `resetsProvider` at its default (the Reset tab's tracker) is left out of a
+ * stored surface that never had it, so the settings of someone who never picks one are saved exactly
+ * as before.
  */
-function storedSurface<T extends GlanceSurfaceSettings>(stored: unknown, surface: T, fallback: ResetProvider): T | Omit<T, "resetsProvider"> {
+function storedSurface<T extends GlanceSurfaceSettings>(stored: unknown, surface: T, fallback: SurfaceResetProvider): T | Omit<T, "resetsProvider"> {
   if (surface.resetsProvider !== fallback || "resetsProvider" in asRecord(stored)) return surface;
   const { resetsProvider: _default, ...rest } = surface;
   return rest;

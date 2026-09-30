@@ -96,6 +96,19 @@ describe("the glance document the popup sends", () => {
     expect(api.feedsAsked).toContain("claudeResets");
   });
 
+  it("shows on the island and the widgets whichever tracker the Reset tab shows, until a surface picks its own", async () => {
+    const api = await start({ resetsProvider: "claude", notifyClaudeResets: false });
+    await waitFor(() => expect(api.latest?.claudeResets?.brand).toBe("claude"));
+    expect(api.latest!.island.resetsProvider).toBe("claude");
+    expect(api.latest!.widget.resetsProvider).toBe("claude");
+    act(() => updateSettings({ island: { ...useApp.getState().settings.island, resetsProvider: "codex" } }));
+    await waitFor(() => expect("resetsProvider" in api.latest!.island).toBe(false));
+    expect(api.latest!.widget.resetsProvider).toBe("claude");
+    act(() => updateSettings({ resetsProvider: "codex" }));
+    await waitFor(() => expect("claudeResets" in api.latest!).toBe(false));
+    expect("resetsProvider" in api.latest!.widget).toBe(false);
+  });
+
   it("follows Claude reset notifications alone when the Reset tab is off", async () => {
     const api = await start({ widget: { resetsProvider: "claude" }, showResetsTab: false, notifyClaudeResets: true });
     await waitFor(() => expect(api.latest?.claudeResets?.brand).toBe("claude"));

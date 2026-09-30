@@ -1,4 +1,4 @@
-import { anyNotificationEnabled, DEFAULT_SETTINGS, enabledProvidersOf, mergeSettingsDocument, parseSettings, taskbarDisplayOf, taskbarDisplayPatch } from "./settings";
+import { anyNotificationEnabled, DEFAULT_SETTINGS, enabledProvidersOf, mergeSettingsDocument, parseSettings, surfaceResetProvider, taskbarDisplayOf, taskbarDisplayPatch } from "./settings";
 
 describe("parseSettings", () => {
   it("defaults to Vietnamese and every documented default", () => {
@@ -114,19 +114,24 @@ describe("glance surfaces", () => {
     expect(parseSettings({ island: { wings: ["claude-resets:next", "claude-resets:chance-3"] } }).island.wings).toEqual(["claude-resets:next", "claude-resets:chance-3"]);
   });
 
-  it("reads each surface's reset tracker on its own, falling back to Codex for anything but Claude", () => {
-    expect(DEFAULT_SETTINGS.island.resetsProvider).toBe("codex");
-    expect(DEFAULT_SETTINGS.widget.resetsProvider).toBe("codex");
+  it("reads each surface's reset tracker on its own: the Reset tab's unless it picks Codex or Claude", () => {
+    expect(DEFAULT_SETTINGS.island.resetsProvider).toBe("app");
+    expect(DEFAULT_SETTINGS.widget.resetsProvider).toBe("app");
     const parsed = parseSettings({ island: { resetsProvider: "claude" }, widget: { resetsProvider: "gemini" } });
     expect(parsed.island.resetsProvider).toBe("claude");
-    expect(parsed.widget.resetsProvider).toBe("codex");
+    expect(parsed.widget.resetsProvider).toBe("app");
     expect(parseSettings({ widget: { resetsProvider: "claude" } }).widget.resetsProvider).toBe("claude");
-    expect(parseSettings({ widget: { resetsProvider: "claude" } }).island.resetsProvider).toBe("codex");
+    expect(parseSettings({ widget: { resetsProvider: "codex" } }).widget.resetsProvider).toBe("codex");
+    expect(parseSettings({ widget: { resetsProvider: "claude" } }).island.resetsProvider).toBe("app");
     for (const value of ["Claude", "", ["claude"], 1, null, { claude: true }]) {
-      expect(parseSettings({ island: { resetsProvider: value }, widget: { resetsProvider: value } }).island.resetsProvider).toBe("codex");
-      expect(parseSettings({ island: { resetsProvider: value }, widget: { resetsProvider: value } }).widget.resetsProvider).toBe("codex");
+      expect(parseSettings({ island: { resetsProvider: value }, widget: { resetsProvider: value } }).island.resetsProvider).toBe("app");
+      expect(parseSettings({ island: { resetsProvider: value }, widget: { resetsProvider: value } }).widget.resetsProvider).toBe("app");
     }
-    expect(parseSettings({ resetsProvider: "claude" }).island.resetsProvider).toBe("codex");
+    expect(parseSettings({ resetsProvider: "claude" }).island.resetsProvider).toBe("app");
+    expect(surfaceResetProvider("app", "claude")).toBe("claude");
+    expect(surfaceResetProvider("app", "codex")).toBe("codex");
+    expect(surfaceResetProvider("codex", "claude")).toBe("codex");
+    expect(surfaceResetProvider("claude", "codex")).toBe("claude");
   });
 });
 
@@ -153,7 +158,7 @@ describe("mergeSettingsDocument", () => {
     expect("resetsProvider" in fresh.widget).toBe(false);
   });
 
-  it("saves a surface's Claude choice on that surface alone, and Codex again once a choice was saved", () => {
+  it("saves a surface's own tracker on that surface alone, and keeps the key once a choice was saved", () => {
     const settings = parseSettings({});
     const picked = { ...settings, island: { ...settings.island, resetsProvider: "claude" as const } };
     const merged = mergeSettingsDocument({}, picked, new Set()) as { island: Record<string, unknown>; widget: Record<string, unknown> };
@@ -161,7 +166,7 @@ describe("mergeSettingsDocument", () => {
     expect("resetsProvider" in merged.widget).toBe(false);
     const reread = parseSettings(merged);
     expect(reread.island.resetsProvider).toBe("claude");
-    expect(reread.widget.resetsProvider).toBe("codex");
+    expect(reread.widget.resetsProvider).toBe("app");
     const again = mergeSettingsDocument(merged, reread, new Set()) as { island: Record<string, unknown>; widget: Record<string, unknown> };
     expect(again.island.resetsProvider).toBe("claude");
     expect("resetsProvider" in again.widget).toBe(false);
@@ -169,6 +174,9 @@ describe("mergeSettingsDocument", () => {
     expect(back.island.resetsProvider).toBe("codex");
     expect("resetsProvider" in back.widget).toBe(false);
     expect(parseSettings(back).island.resetsProvider).toBe("codex");
+    const follows = mergeSettingsDocument(back, { ...parseSettings(back), island: { ...parseSettings(back).island, resetsProvider: "app" } }, new Set()) as { island: Record<string, unknown> };
+    expect(follows.island.resetsProvider).toBe("app");
+    expect(parseSettings(follows).island.resetsProvider).toBe("app");
   });
 });
 

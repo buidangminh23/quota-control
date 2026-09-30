@@ -47,7 +47,7 @@ afterEach(async () => {
 });
 
 describe("whose reset tracker the island and the widgets show", () => {
-  it("keeps the Codex wording for someone who never picks Claude", async () => {
+  it("follows the Reset tab, in Codex's wording, for someone who never picks a tracker", async () => {
     await openSettings();
     const island = section("Dynamic Island");
     const widget = section("Widget màn hình");
@@ -55,14 +55,38 @@ describe("whose reset tracker the island and the widgets show", () => {
       expect(within(surface).getByRole("checkbox", { name: "Reset Codex" })).toBeChecked();
       fireEvent.click(within(surface).getByRole("button", { name: /^Reset Codex/ }));
       expect(within(surface).getByText("Reset của")).toBeInTheDocument();
-      expect(within(surface).getByRole("radio", { name: "Codex" })).toBeChecked();
+      expect(within(surface).getByRole("radio", { name: "Như tab Reset" })).toBeChecked();
+      expect(within(surface).getByRole("radio", { name: "Codex" })).not.toBeChecked();
       expect(within(surface).getByRole("radio", { name: "Claude" })).not.toBeChecked();
       expect(within(surface).queryByText(/Reset Claude|của Claude/)).not.toBeInTheDocument();
       expect(within(surface).queryByText(CODEX_OFF)).not.toBeInTheDocument();
     }
     expect(within(widget).getByText(CODEX_SCOPE)).toBeInTheDocument();
+    expect(useApp.getState().settings.island.resetsProvider).toBe("app");
+    expect(useApp.getState().settings.widget.resetsProvider).toBe("app");
+  });
+
+  it("turns the island and the widgets to Claude when the Reset tab turns to Claude, until a surface picks its own", async () => {
+    await openSettings();
+    const island = section("Dynamic Island");
+    const widget = section("Widget màn hình");
+    act(() => updateSettings({ resetsProvider: "claude" }));
+    for (const surface of [island, widget]) {
+      expect(within(surface).getByRole("checkbox", { name: "Reset Claude" })).toBeChecked();
+      fireEvent.click(within(surface).getByRole("button", { name: /^Reset Claude/ }));
+      expect(within(surface).getByRole("radio", { name: "Như tab Reset" })).toBeChecked();
+    }
+    expect(within(widget).getByText(CLAUDE_SCOPE)).toBeInTheDocument();
+
+    fireEvent.click(within(island).getByRole("radio", { name: "Codex" }));
     expect(useApp.getState().settings.island.resetsProvider).toBe("codex");
-    expect(useApp.getState().settings.widget.resetsProvider).toBe("codex");
+    expect(within(island).getByRole("checkbox", { name: "Reset Codex" })).toBeChecked();
+    expect(within(widget).getByRole("checkbox", { name: "Reset Claude" })).toBeChecked();
+    act(() => updateSettings({ resetsProvider: "codex" }));
+    expect(within(widget).getByRole("checkbox", { name: "Reset Codex" })).toBeChecked();
+
+    fireEvent.click(within(island).getByRole("radio", { name: "Như tab Reset" }));
+    expect(useApp.getState().settings.island.resetsProvider).toBe("app");
   });
 
   it("lets the island show Claude's resets and renames its reset view, leaving the widgets on Codex", async () => {
@@ -73,7 +97,7 @@ describe("whose reset tracker the island and the widgets show", () => {
     fireEvent.click(within(island).getByRole("radio", { name: "Claude" }));
 
     expect(useApp.getState().settings.island.resetsProvider).toBe("claude");
-    expect(useApp.getState().settings.widget.resetsProvider).toBe("codex");
+    expect(useApp.getState().settings.widget.resetsProvider).toBe("app");
     expect(within(island).getByRole("radio", { name: "Claude" })).toBeChecked();
     expect(within(island).getByRole("radio", { name: "Codex" })).not.toBeChecked();
     expect(within(island).getByRole("checkbox", { name: "Reset Claude" })).toBeChecked();
@@ -86,7 +110,7 @@ describe("whose reset tracker the island and the widgets show", () => {
     await act(() => new Promise((resolve) => setTimeout(resolve, 5)));
     const saved = await api.loadDocument<{ island: { resetsProvider?: string }; widget: { resetsProvider?: string } }>("settings");
     expect(saved?.island.resetsProvider).toBe("claude");
-    expect(saved?.widget.resetsProvider ?? "codex").toBe("codex");
+    expect(saved?.widget.resetsProvider ?? "app").toBe("app");
 
     fireEvent.click(within(island).getByRole("radio", { name: "Codex" }));
     expect(useApp.getState().settings.island.resetsProvider).toBe("codex");
@@ -102,7 +126,7 @@ describe("whose reset tracker the island and the widgets show", () => {
     fireEvent.click(within(widget).getByRole("radio", { name: "Claude" }));
 
     expect(useApp.getState().settings.widget.resetsProvider).toBe("claude");
-    expect(useApp.getState().settings.island.resetsProvider).toBe("codex");
+    expect(useApp.getState().settings.island.resetsProvider).toBe("app");
     expect(within(widget).getByRole("checkbox", { name: "Reset Claude" })).toBeChecked();
     expect(within(widget).getByRole("button", { name: /^Reset Claude/ })).toHaveAttribute("aria-expanded", "true");
     expect(within(widget).getByText(CLAUDE_SCOPE)).toBeInTheDocument();
@@ -157,6 +181,7 @@ describe("whose reset tracker the island and the widgets show", () => {
     expect(within(island).getByRole("checkbox", { name: "Codex Resets" })).toBeChecked();
     fireEvent.click(within(island).getByRole("button", { name: /^Codex Resets/ }));
     expect(within(island).getByText("Resets of")).toBeInTheDocument();
+    expect(within(island).getByRole("radio", { name: "As in the Reset tab" })).toBeChecked();
     fireEvent.click(within(island).getByRole("radio", { name: "Claude" }));
     expect(within(island).getByRole("checkbox", { name: "Claude Resets" })).toBeChecked();
     expect(within(island).getByRole("button", { name: /^Claude Resets/ })).toBeInTheDocument();
