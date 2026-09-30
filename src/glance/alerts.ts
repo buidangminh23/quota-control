@@ -1,7 +1,8 @@
 /**
- * Notices the macOS Dynamic Island opens up for a few seconds: a starred limit running low, or a
- * Codex reset announced. The notification hooks announce them here next to the system notification;
- * `useGlance` carries the newest one to the island, which shows each id once.
+ * Notices the macOS Dynamic Island opens up for a few seconds: a limit running low, or a Codex or
+ * Claude reset announced. The notification hooks announce them here, next to the system
+ * notification when that is on; `useGlance` carries the newest one to the island, which shows each
+ * id once.
  */
 import { useSyncExternalStore } from "react";
 import type { GlanceAlert, GlanceSeverity } from "@/model/glance";
