@@ -48,7 +48,7 @@ enum QuotaWidgetStyle {
 /// One widget kind: its style, the kind string WidgetKit stores placed widgets under, and the
 /// gallery wording. Kind strings never change, or placed widgets would turn blank.
 private func glanceConfiguration(kind: String, style: QuotaWidgetStyle) -> some WidgetConfiguration {
-    StaticConfiguration(kind: kind, provider: GlanceTimeline()) { entry in
+    StaticConfiguration(kind: kind, provider: GlanceTimeline(style: style)) { entry in
         GlanceWidgetEntryView(entry: entry, style: style)
     }
     .configurationDisplayName(WidgetText.name(style))
@@ -90,8 +90,15 @@ struct GlanceEntry: TimelineEntry {
 }
 
 struct GlanceTimeline: TimelineProvider {
+    var style: QuotaWidgetStyle = .details
+
     /// How often the widget looks again on its own; the app also reloads it whenever readings change.
     private static let refresh: TimeInterval = 15 * 60
+    /// How far ahead the limits' moving words (their countdowns and exact times in the popup's
+    /// words, their pace notes) get entries of their own, one a minute at most: a little past
+    /// `refresh`, when the widget looks again. Every entry is drawn ahead of time, so the span stays
+    /// short.
+    private static let tickSpan: TimeInterval = 20 * 60
     /// Enough entries for a plan period's last hour, whose count steps every minute, to stay right
     /// until the next look; entries cost no reload.
     private static let momentEntries = 20
@@ -109,7 +116,7 @@ struct GlanceTimeline: TimelineProvider {
         let now = Date()
         let document = GlanceStore.load()
         var entries = [GlanceEntry(date: now, document: document)]
-        for moment in Self.moments(document, after: now).prefix(Self.momentEntries) {
+        for moment in Self.moments(document, after: now, style: style).prefix(Self.momentEntries) {
             entries.append(GlanceEntry(date: moment, document: document))
         }
         completion(Timeline(entries: entries, policy: .after(now.addingTimeInterval(Self.refresh))))
@@ -119,18 +126,35 @@ struct GlanceTimeline: TimelineProvider {
     /// comes back or the day of its reset time turns, a countdown of the reset tracker the widget
     /// chose ends or its row goes away, an account's reset row counts down, goes or names another
     /// day, a reset credit's dot changes color, an account's plan period counts down or its day
-    /// turns into today, or the readings turn stale.
-    static func moments(_ document: GlanceDocument?, after now: Date) -> [Date] {
+    /// turns into today, or the readings turn stale; and on a widget drawing the limits, each minute
+    /// their words move over the next `tickSpan`: a countdown steps or says `Sắp đặt lại`, a pace
+    /// note's figure or verdict changes.
+    static func moments(_ document: GlanceDocument?, after now: Date, style: QuotaWidgetStyle) -> [Date] {
         guard let document else { return [] }
         var moments = Set(GlanceUpcomingLimit.list(document.widget.providers, now: now).map(\.at))
         moments.formUnion(document.forWidget.resetMoments(after: now))
         moments.formUnion(document.accountMoments(document.widget.providers, after: now))
         moments.formUnion(document.widget.providers.compactMap(\.term).flatMap { $0.changes(after: now) })
+        if style.drawsLimits(document) {
+            moments.formUnion(document.rowTicks(document.widget.providers, after: now, until: now.addingTimeInterval(tickSpan)))
+        }
         let stale = document.generatedAt.addingTimeInterval(GlanceStaleness.after)
         if stale > now {
             moments.insert(stale)
         }
         return moments.sorted()
+    }
+}
+
+extension QuotaWidgetStyle {
+    /// Whether the style draws the accounts' limits or the limits coming back: the limit widgets,
+    /// and the Overview when Settings gave it either part.
+    func drawsLimits(_ document: GlanceDocument) -> Bool {
+        switch self {
+        case .details, .rings, .compact, .upcoming: return true
+        case .overview: return document.widget.has(.quota) || document.widget.has(.upcoming)
+        case .codexResets, .resetCalendar: return false
+        }
     }
 }
 
@@ -261,6 +285,7 @@ struct GlanceWidgetView: View {
         }
         .containerBackground(containerFill, for: .widget)
         .environment(\.colorScheme, themedScheme ?? colorScheme)
+        .environment(\.glanceColorless, renderingMode != .fullColor)
     }
 
     /// Every widget draws in the app's theme, as the whole popup does. Only in full color: dimmed on
@@ -288,11 +313,13 @@ struct GlanceWidgetView: View {
         }
     }
 
+    /// The widget's copy of the document as the popup reads it at the entry's moment: its limits
+    /// rolled over once their reset has passed and paced then.
     @ViewBuilder
     private func layout(_ full: GlanceDocument, size: CGSize) -> some View {
-        let document = full.forWidget
-        let providers = document.widget.visibleProviders
         let now = entry.date
+        let document = full.forWidget.reading(at: now)
+        let providers = document.widget.visibleProviders
         switch style {
         case .details, .rings, .compact:
             if providers.isEmpty {

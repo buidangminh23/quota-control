@@ -266,6 +266,8 @@ struct IslandTabBar: View {
 
 // MARK: Quota
 
+/// The island's accounts as the popup reads them at `now`: each limit rolled over once its reset has
+/// passed and paced at `now` (`GlanceDocument.reading(at:)`).
 struct IslandQuotaSection: View {
     let document: GlanceDocument
     let now: Date
@@ -273,18 +275,20 @@ struct IslandQuotaSection: View {
     var availableWidth: CGFloat = 340
 
     var body: some View {
+        let document = self.document.reading(at: now)
         let all = document.visibleProviders
         let shown = Array(all.prefix(budget.maxAccounts ?? all.count))
         let perAccount = budget.perAccount
+        let restores = document.island.shows.resets && document.labels.restoresAt != nil && !document.resetWording.exact
         VStack(alignment: .leading, spacing: 10) {
             if shown.count > 1 && availableWidth >= 620 {
-                let split = Self.balancedSplit(shown, perAccount: perAccount, shows: document.island.shows, now: now)
+                let split = Self.balancedSplit(shown, perAccount: perAccount, shows: document.island.shows, restores: restores, now: now)
                 HStack(alignment: .top, spacing: 18) {
-                    column(Array(shown[..<split]), perAccount: perAccount)
-                    column(Array(shown[split...]), perAccount: perAccount)
+                    column(Array(shown[..<split]), document: document, perAccount: perAccount)
+                    column(Array(shown[split...]), document: document, perAccount: perAccount)
                 }
             } else {
-                column(shown, perAccount: perAccount)
+                column(shown, document: document, perAccount: perAccount)
             }
             if all.count > shown.count {
                 IslandMoreLine(text: more(all.count - shown.count))
@@ -297,7 +301,7 @@ struct IslandQuotaSection: View {
         return word.isEmpty ? "+\(count)" : "+\(count) \(word)"
     }
 
-    private func column(_ providers: [GlanceProvider], perAccount: Int) -> some View {
+    private func column(_ providers: [GlanceProvider], document: GlanceDocument, perAccount: Int) -> some View {
         VStack(alignment: .leading, spacing: 13) {
             ForEach(providers) { provider in
                 IslandAccount(provider: provider, document: document, now: now, perAccount: perAccount)
@@ -307,9 +311,10 @@ struct IslandQuotaSection: View {
     }
 
     /// Where the second column starts: keeps the accounts in reading order, top to bottom and
-    /// left to right, with the two columns as close in height as the accounts allow.
-    static func balancedSplit(_ providers: [GlanceProvider], perAccount: Int, shows: GlanceShows, now: Date) -> Int {
-        let weights = providers.map { weight($0, perAccount: perAccount, shows: shows, now: now) }
+    /// left to right, with the two columns as close in height as the accounts allow. `restores`: a
+    /// limit counting down has the line with the moment it comes back under it.
+    static func balancedSplit(_ providers: [GlanceProvider], perAccount: Int, shows: GlanceShows, restores: Bool = false, now: Date) -> Int {
+        let weights = providers.map { weight($0, perAccount: perAccount, shows: shows, restores: restores, now: now) }
         let total = weights.reduce(0, +)
         var best = (index: 1, tallest: CGFloat.infinity)
         var left: CGFloat = 0
@@ -324,8 +329,9 @@ struct IslandQuotaSection: View {
     }
 
     /// The rough height of one account, in lines: the plan period's corner takes the email's line
-    /// when there is none; a limit's headline shares its line with the reset countdown.
-    private static func weight(_ provider: GlanceProvider, perAccount: Int, shows: GlanceShows, now: Date) -> CGFloat {
+    /// when there is none; a limit's headline shares its line with the reset countdown, and the
+    /// moment it comes back takes a smaller line under them.
+    private static func weight(_ provider: GlanceProvider, perAccount: Int, shows: GlanceShows, restores: Bool, now: Date) -> CGFloat {
         var lines: CGFloat = 1.3
         if (shows.account && provider.account != nil) || provider.term != nil { lines += 0.9 }
         if let row = provider.resetRow(at: now) { lines += row.note == nil ? 2.1 : 3 }
@@ -333,6 +339,7 @@ struct IslandQuotaSection: View {
         for metric in provider.metrics.prefix(perAccount) {
             lines += 1.2
             if metric.fraction != nil { lines += 1.5 }
+            if restores, metric.resetsAt != nil { lines += 0.8 }
         }
         if provider.metrics.count > perAccount { lines += 1 }
         return lines + 0.9
@@ -357,7 +364,7 @@ struct IslandAccount: View {
                 GlanceNoticeRow(text: provider.notice ?? document.labels.noData, onDark: true, size: 11)
             }
             ForEach(provider.metrics.prefix(perAccount)) { metric in
-                IslandMetricRow(metric: metric, labels: document.labels, now: now, showsReset: document.island.shows.resets)
+                IslandMetricRow(metric: metric, document: document, now: now, showsReset: document.island.shows.resets)
             }
             if provider.metrics.count > perAccount {
                 IslandMoreLine(text: "+\(provider.metrics.count - perAccount)")
@@ -458,29 +465,50 @@ struct IslandAccountHeader: View {
     }
 }
 
-/// One reading as the popup's row reads it. A limit: its title in bold over the meter, which alone
-/// carries the pace color, then its headline in the text color with when it comes back on the right
-/// in the secondary color. A metric without a limit: its title with its value on the right, after the
-/// expiry dot of a reset credit.
+/// One reading as the popup's row reads it (`metric` read at `now`). A limit: its title in bold with
+/// its pace note at the other end, over the meter, which alone carries the pace color and the
+/// even-pace tick; then its headline in the text color with when it comes back on the right in the
+/// secondary color, in the Reset Times setting's form, and under a countdown the moment it comes
+/// back. Where reset times are switched off, a detail that is not one still shows. A metric without a
+/// limit: its title with its value on the right, after the expiry dot of a reset credit.
 struct IslandMetricRow: View {
     let metric: GlanceMetric
-    let labels: GlanceLabels
+    let document: GlanceDocument
     let now: Date
     var showsReset = true
 
     var body: some View {
         if let fraction = metric.fraction {
             VStack(alignment: .leading, spacing: 4) {
-                title
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    title
+                    if let note = metric.note {
+                        Spacer(minLength: 6)
+                        GlancePaceNoteView(note: note, severity: metric.severity, onDark: true, size: 11)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                GlanceMeter(fraction: fraction, severity: metric.severity, onDark: true, height: 4, tick: metric.tick)
+                VStack(alignment: .trailing, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        headline
+                        if let reset = document.resetText(for: metric, now: now, showsReset: showsReset) {
+                            Spacer(minLength: 8)
+                            Text(reset)
+                                .font(.system(size: 12))
+                                .foregroundStyle(IslandInk.caption)
+                                .monospacedDigit()
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                    }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                GlanceMeter(fraction: fraction, severity: metric.severity, onDark: true, height: 4)
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    headline
-                    if showsReset, metric.resetsAt != nil || metric.detail != nil {
-                        Spacer(minLength: 8)
-                        GlanceResetText(metric: metric, labels: labels, now: now)
-                            .font(.system(size: 12))
-                            .foregroundStyle(IslandInk.caption)
+                    if let restore = document.restoreText(for: metric, now: now, showsReset: showsReset) {
+                        Text(restore)
+                            .font(.system(size: 10))
+                            .foregroundStyle(IslandInk.faint)
+                            .monospacedDigit()
+                            .lineLimit(1)
                             .truncationMode(.tail)
                     }
                 }
@@ -547,14 +575,15 @@ struct IslandResetsSection: View {
 
 /// The next limits to come back across the island's accounts, soonest first, each as the popup's
 /// card reads it: the account's mark, its name (with its email when another account shares it) and
-/// the limit, the headline on the right; under them when it comes back and the clock time with its
-/// day.
+/// the limit, the headline on the right; under them when it comes back as the row says it in the
+/// Reset Times setting's form, with the clock time and its day beside a countdown.
 struct IslandUpcomingSection: View {
     let document: GlanceDocument
     let now: Date
     let count: Int
 
     var body: some View {
+        let wording = document.resetWording
         let limits = Array(GlanceUpcomingLimit.list(document.providers, now: now).prefix(max(count, 1)))
         VStack(alignment: .leading, spacing: 8) {
             if !document.labels.upcoming.isEmpty {
@@ -564,12 +593,12 @@ struct IslandUpcomingSection: View {
                     .lineLimit(1)
             }
             ForEach(limits) { limit in
-                row(limit)
+                row(limit, wording: wording)
             }
         }
     }
 
-    private func row(_ limit: GlanceUpcomingLimit) -> some View {
+    private func row(_ limit: GlanceUpcomingLimit, wording: GlanceResetWording) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .firstTextBaseline, spacing: 7) {
                 ProviderMark(mark: limit.provider.mark, brand: limit.provider.brand)
@@ -590,15 +619,17 @@ struct IslandUpcomingSection: View {
                     .fixedSize()
             }
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("\(document.labels.resetsIn) \(GlanceFormat.span(from: now, to: limit.at, units: document.labels.units))")
+                Text(wording.line(limit.at, now: now))
                     .foregroundStyle(IslandInk.label)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 8)
-                Text(document.dayLabel(limit.at, now: now))
-                    .foregroundStyle(IslandInk.caption)
-                    .lineLimit(1)
-                    .fixedSize()
+                if !wording.exact {
+                    Text(document.dayLabel(limit.at, now: now))
+                        .foregroundStyle(IslandInk.caption)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
             }
             .font(.system(size: 10.5))
             .monospacedDigit()

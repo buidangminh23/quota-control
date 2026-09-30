@@ -64,8 +64,10 @@ enum UpcomingText {
 }
 
 /// The next limits to come back across the widget's accounts, soonest first, as many as fit: the
-/// account and limit, its reading now, a live countdown and the clock time with its day. Every limit
-/// gets its own row when all of them fit; otherwise limits of one account due together share one.
+/// account and limit, its reading now, then when it comes back as the popup's rows word it in the
+/// Reset Times setting's form, the time left beside the clock time with its day, or in Exact Time
+/// that clock time and day alone. Every limit gets its own row when all of them fit; otherwise
+/// limits of one account due together share one.
 struct UpcomingList: View {
     let document: GlanceDocument
     let now: Date
@@ -141,6 +143,9 @@ private struct UpcomingRow: View {
 
     private var metric: GlanceMetric { group.metrics[0] }
 
+    /// Exact Time: the countdown's place says the clock time with its day, so the clock beside it goes.
+    private var exact: Bool { document.resetWording.exact }
+
     private var title: String {
         "\(accountName(group.provider, in: document.widget.providers)) · \(metric.label)"
     }
@@ -156,8 +161,10 @@ private struct UpcomingRow: View {
                 reading
                 Spacer(minLength: 6)
                 countdown
-                clock
-                    .frame(minWidth: 34, alignment: .trailing)
+                if !exact {
+                    clock
+                        .frame(minWidth: 34, alignment: .trailing)
+                }
             }
         } else {
             VStack(alignment: .leading, spacing: 1) {
@@ -174,9 +181,11 @@ private struct UpcomingRow: View {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         countdown
                         Spacer(minLength: 4)
-                        clock
+                        if !exact {
+                            clock
+                        }
                     }
-                    if let time = ResetClock.timeToday(group.at, now: now, document: document) {
+                    if !exact, let time = ResetClock.timeToday(group.at, now: now, document: document) {
                         HStack(alignment: .firstTextBaseline, spacing: 4) {
                             countdown
                             Spacer(minLength: 4)
@@ -200,16 +209,22 @@ private struct UpcomingRow: View {
     /// The reading in the text color, as the popup's rows read it: the row's headline where the line
     /// has room (`Còn 42%`), the short reading otherwise (`42%`).
     private var reading: some View {
-        Text(fit.roomy ? metric.headline : metric.value)
-            .font(.system(size: WidgetScale.caption, weight: .semibold))
-            .monospacedDigit()
-            .foregroundStyle(.primary)
-            .lineLimit(1)
-            .fixedSize()
+        HStack(alignment: .firstTextBaseline, spacing: 3) {
+            ColorlessSeverityMark(severity: metric.severity, size: WidgetScale.caption)
+            Text(fit.roomy ? metric.headline : metric.value)
+                .font(.system(size: WidgetScale.caption, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+        }
+        .fixedSize()
     }
 
+    /// The time left in the popup's words (`2 giờ 5 phút`, `Sắp đặt lại`), or in Exact Time the
+    /// clock time with its day; worded at the entry's moment, which the timeline gives each minute
+    /// the words change.
     private var countdown: some View {
-        Text(group.at, style: .relative)
+        Text(document.resetWording.span(group.at, now: now))
             .font(.system(size: WidgetScale.caption, weight: .medium))
             .monospacedDigit()
             .lineLimit(1)

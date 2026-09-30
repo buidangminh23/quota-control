@@ -3,12 +3,15 @@ import SwiftUI
 
 /// The capsule meter (the popup's `Meter`): a faint track and a flat fill in the pace color, the
 /// light or the dark theme's as the widget is drawn. Any non-zero fill is at least as wide as the
-/// bar is tall, so 1-2% never disappears.
+/// bar is tall, so 1-2% never disappears. With `tick`, the even-pace tick crosses it there, reaching
+/// a little above and below the bar as the popup's does.
 struct GlanceMeter: View {
     let fraction: Double
     let severity: GlanceSeverity
     var onDark = false
     var height: CGFloat = 5
+    /// Where an even pace would have the limit, 0...1 along the bar (`paceTick`).
+    var tick: Double? = nil
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -24,8 +27,24 @@ struct GlanceMeter: View {
                         .frame(width: min(fill, width))
                 }
             }
+            .overlay(alignment: .leading) {
+                if let tick {
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(tickColor)
+                        .frame(width: 2, height: height + overhang * 2)
+                        .offset(x: min(max(width * tick - 1, 0), max(width - 2, 0)))
+                }
+            }
         }
         .frame(height: height)
+    }
+
+    /// How far the tick reaches past the bar: 2 points on the popup's 5-point bar.
+    private var overhang: CGFloat { max(1, (height * 0.4).rounded()) }
+
+    /// The popup's `--uc-pace-tick`.
+    private var tickColor: Color {
+        onDark || colorScheme == .dark ? Color.white.opacity(0.6) : Color.black.opacity(0.5)
     }
 }
 
@@ -55,65 +74,6 @@ struct GlanceRing<Center: View>: View {
             center()
         }
         .padding(lineWidth / 2)
-    }
-}
-
-/// When the metric comes back: a countdown against `now`, the reset moment itself, or the metric's
-/// own detail text.
-struct GlanceResetText: View {
-    let metric: GlanceMetric
-    let labels: GlanceLabels
-    let now: Date
-
-    var body: some View {
-        Text(text)
-            .monospacedDigit()
-            .lineLimit(1)
-    }
-
-    private var text: String {
-        if let resetsAt = metric.resetsAt {
-            if resetsAt <= now { return labels.resetting }
-            return "\(labels.resetsIn) \(GlanceFormat.countdown(to: resetsAt, from: now, units: labels.units))"
-        }
-        return metric.detail ?? ""
-    }
-}
-
-/// One metric as the popup's row reads it: its title in bold and its headline in the text color
-/// over the meter, which alone carries the pace color, and the reset countdown beneath.
-struct GlanceMetricRow: View {
-    let metric: GlanceMetric
-    let labels: GlanceLabels
-    let now: Date
-    var onDark = false
-    var compact = false
-    var showsReset = true
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: compact ? 2 : 3) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(metric.label)
-                    .font(.system(size: compact ? 10.5 : 11.5, weight: .semibold))
-                    .foregroundStyle(onDark ? Color.white : Color.primary)
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                Text(metric.headline)
-                    .font(.system(size: compact ? 11 : 12.5))
-                    .foregroundStyle(onDark ? Color.white : Color.primary)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
-            if let fraction = metric.fraction {
-                GlanceMeter(fraction: fraction, severity: metric.severity, onDark: onDark, height: compact ? 4 : 5)
-            }
-            if showsReset, metric.resetsAt != nil || metric.detail != nil {
-                GlanceResetText(metric: metric, labels: labels, now: now)
-                    .font(.system(size: compact ? 9.5 : 10.5))
-                    .foregroundStyle(onDark ? Color.white.opacity(0.55) : Color.secondary.opacity(0.9))
-            }
-        }
     }
 }
 

@@ -828,12 +828,16 @@ struct IslandWingPiece: View {
         }
     }
 
-    private var fraction: Double? { style == .percent ? nil : slot.metric.fraction }
+    /// The reading as the popup's row reads it at `now`: rolled over once its reset has passed, its
+    /// color the pace verdict's at `now`.
+    private var metric: GlanceMetric { slot.metric.reading(at: now, pacing: .colorOnly) }
+
+    private var fraction: Double? { style == .percent ? nil : metric.fraction }
 
     @ViewBuilder
     private var lead: some View {
         if style == .ring, let fraction {
-            GlanceRing(fraction: fraction, severity: slot.metric.severity, onDark: true, lineWidth: 2.4) {
+            GlanceRing(fraction: fraction, severity: metric.severity, onDark: true, lineWidth: 2.4) {
                 mark.padding(4)
             }
             .frame(width: Self.ringSize, height: Self.ringSize)
@@ -846,7 +850,7 @@ struct IslandWingPiece: View {
     private var trail: some View {
         if style == .bar, let fraction {
             HStack(spacing: 5) {
-                GlanceMeter(fraction: fraction, severity: slot.metric.severity, onDark: true, height: 5)
+                GlanceMeter(fraction: fraction, severity: metric.severity, onDark: true, height: 5)
                     .frame(width: Self.barWidth)
                 value
             }
@@ -865,17 +869,17 @@ struct IslandWingPiece: View {
     /// bar strip labels it.
     private var value: some View {
         HStack(alignment: .firstTextBaseline, spacing: 3.5) {
-            if let period = slot.metric.period {
+            if let period = metric.period {
                 Text(period)
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(Color.white.opacity(0.85))
                     .lineLimit(1)
                     .fixedSize()
             }
-            Text(slot.metric.liveValue(now: now, units: units))
+            Text(metric.liveValue(now: now, units: units))
                 .font(.system(size: 12.5, weight: .semibold))
                 .monospacedDigit()
-                .foregroundStyle(fraction == nil ? GlancePalette.text(slot.metric.severity, onDark: true) : Color.white)
+                .foregroundStyle(fraction == nil ? GlancePalette.text(metric.severity, onDark: true) : Color.white)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
                 .contentTransition(.numericText())

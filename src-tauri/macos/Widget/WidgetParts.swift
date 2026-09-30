@@ -53,6 +53,38 @@ extension GlanceUpcomingReset {
     }
 }
 
+private struct GlanceColorlessKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// Whether the widget is drawn without its colors: dimmed on the desktop while a window is in
+    /// front, or in the monochrome widget style, where macOS draws it its own way.
+    var glanceColorless: Bool {
+        get { self[GlanceColorlessKey.self] }
+        set { self[GlanceColorlessKey.self] = newValue }
+    }
+}
+
+/// The mark before a reading where a widget is drawn without its colors: an outlined triangle for a
+/// limit in the warning color, a filled one for a limit in the critical color (running out, used
+/// up), which in full color the meter's color says, as the popup's does. In full color it draws
+/// nothing.
+struct ColorlessSeverityMark: View {
+    let severity: GlanceSeverity
+    var size: CGFloat = WidgetScale.value
+    @Environment(\.glanceColorless) private var colorless
+
+    var body: some View {
+        if colorless, severity == .warning || severity == .critical {
+            Image(systemName: severity == .critical ? "exclamationmark.triangle.fill" : "exclamationmark.triangle")
+                .font(.system(size: size * 0.85, weight: .semibold))
+                .foregroundStyle(.primary)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
 /// A capsule meter in any color, for readings that are not a limit's pace (reset chances).
 struct TintMeter: View {
     let fraction: Double

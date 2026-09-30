@@ -16,6 +16,12 @@ struct GlanceDocument: Decodable, Equatable {
     /// Settings → Theme when it is not System (`light` or `dark`): every widget draws in it, as the
     /// whole popup does.
     var theme: String?
+    /// Settings → Reset Times: `absolute` for Exact Time, absent for Countdown.
+    var resetDisplay: String? = nil
+    /// Settings → Always Show Pacing, while it is on.
+    var alwaysShowPacing: Bool? = nil
+    /// Settings → Used/Left: `used` for Used, absent for Left.
+    var displayMode: String? = nil
     var labels: GlanceLabels
     /// The open island's accounts.
     var providers: [GlanceProvider]
@@ -34,7 +40,7 @@ struct GlanceDocument: Decodable, Equatable {
     static let supportedVersion = 1
 
     private enum CodingKeys: String, CodingKey {
-        case version, generatedAt, locale, hour12, theme, labels, providers, island, widget, resets, claudeResets, avatars, alert
+        case version, generatedAt, locale, hour12, theme, resetDisplay, alwaysShowPacing, displayMode, labels, providers, island, widget, resets, claudeResets, avatars, alert
     }
 
     init(
@@ -72,6 +78,9 @@ struct GlanceDocument: Decodable, Equatable {
         locale = try container.decode(String.self, forKey: .locale)
         hour12 = try container.decodeIfPresent(Bool.self, forKey: .hour12)
         theme = try? container.decodeIfPresent(String.self, forKey: .theme)
+        resetDisplay = try? container.decodeIfPresent(String.self, forKey: .resetDisplay)
+        alwaysShowPacing = try? container.decodeIfPresent(Bool.self, forKey: .alwaysShowPacing)
+        displayMode = try? container.decodeIfPresent(String.self, forKey: .displayMode)
         labels = try container.decode(GlanceLabels.self, forKey: .labels)
         providers = try container.decode([GlanceProvider].self, forKey: .providers)
         island = try container.decode(GlanceIsland.self, forKey: .island)
@@ -208,6 +217,16 @@ struct GlanceLabels: Decodable, Equatable {
     var updated: String
     var resetsIn: String
     var resetting: String
+    /// A limit's reset text in its last five minutes (`Sắp đặt lại`); a document from before it counts
+    /// down to the end and then says `resetting`.
+    var resetsSoon: String? = nil
+    /// Countdown: the line under a limit's countdown, `{at}` standing for its clock time and day
+    /// (`Hồi lại lúc {at}`).
+    var restoresAt: String? = nil
+    /// Exact Time: a limit's reset text, `Đặt lại lúc {t} hôm nay`, worded like the day words.
+    var resetAbsolute: GlanceDayWords? = nil
+    /// The pace notes' words, sent while a limit carries a pace.
+    var pace: GlancePaceWords? = nil
     var open: String
     var notRunning: String
     var noData: String
@@ -234,7 +253,7 @@ struct GlanceLabels: Decodable, Equatable {
     var days: GlanceDayWords?
 
     private enum CodingKeys: String, CodingKey {
-        case title, empty, updated, resetsIn, resetting, open, notRunning, noData, more, units, resetsOff, upcoming, upcomingEmpty, tabs, claudeResetsTab, claudeResetsOff, planTerm, days
+        case title, empty, updated, resetsIn, resetting, resetsSoon, restoresAt, resetAbsolute, pace, open, notRunning, noData, more, units, resetsOff, upcoming, upcomingEmpty, tabs, claudeResetsTab, claudeResetsOff, planTerm, days
     }
 
     init(
@@ -284,6 +303,10 @@ struct GlanceLabels: Decodable, Equatable {
         updated = try container.decode(String.self, forKey: .updated)
         resetsIn = try container.decode(String.self, forKey: .resetsIn)
         resetting = try container.decode(String.self, forKey: .resetting)
+        resetsSoon = try? container.decodeIfPresent(String.self, forKey: .resetsSoon)
+        restoresAt = try? container.decodeIfPresent(String.self, forKey: .restoresAt)
+        resetAbsolute = try? container.decodeIfPresent(GlanceDayWords.self, forKey: .resetAbsolute)
+        pace = try? container.decodeIfPresent(GlancePaceWords.self, forKey: .pace)
         open = try container.decode(String.self, forKey: .open)
         notRunning = try container.decode(String.self, forKey: .notRunning)
         noData = try container.decodeIfPresent(String.self, forKey: .noData) ?? "—"
@@ -785,10 +808,44 @@ struct GlanceMetric: Decodable, Equatable, Identifiable {
     /// The limit window's short name (`5h`, `week`) the menu bar strip labels a reading with; sent
     /// on the readings beside the notch.
     var period: String? = nil
+    /// What the pace note and the even-pace tick are worked out from (`GlanceLimitRows.swift`).
+    var pace: GlancePace? = nil
+    /// The reading once `resetsAt` has passed.
+    var after: GlanceAfterReset? = nil
+    /// The note on the title line, worked out when the metric is read at a moment
+    /// (`reading(at:pacing:)`); never decoded.
+    var note: GlancePaceNote? = nil
+    /// The even-pace tick 0...1 along the meter, worked out with `note`; never decoded.
+    var tick: Double? = nil
+
+    fileprivate enum CodingKeys: String, CodingKey {
+        case id, label, value, headline, fraction, severity, resetsAt, detail, countdown, expiresAt, period, pace, after
+    }
 
     /// `value`, or the countdown's words at `now`, its span as short as `GlanceFormat.shortSpan`.
     func liveValue(now: Date, units: GlanceUnits) -> String {
         countdown?.text(now: now, units: units, short: true) ?? value
+    }
+}
+
+extension GlanceMetric {
+    /// Keys added after the first release are read leniently, so one malformed key never loses the
+    /// whole document.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        label = try container.decode(String.self, forKey: .label)
+        value = try container.decode(String.self, forKey: .value)
+        headline = try container.decode(String.self, forKey: .headline)
+        fraction = try container.decodeIfPresent(Double.self, forKey: .fraction)
+        severity = try container.decode(GlanceSeverity.self, forKey: .severity)
+        resetsAt = try container.decodeIfPresent(Date.self, forKey: .resetsAt)
+        detail = try container.decodeIfPresent(String.self, forKey: .detail)
+        countdown = try container.decodeIfPresent(GlanceCountdown.self, forKey: .countdown)
+        expiresAt = try? container.decodeIfPresent(Date.self, forKey: .expiresAt)
+        period = try? container.decodeIfPresent(String.self, forKey: .period)
+        pace = try? container.decodeIfPresent(GlancePace.self, forKey: .pace)
+        after = try? container.decodeIfPresent(GlanceAfterReset.self, forKey: .after)
     }
 }
 

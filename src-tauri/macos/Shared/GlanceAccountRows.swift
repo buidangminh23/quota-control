@@ -228,15 +228,14 @@ struct GlanceResetRowSizes {
 /// and the title, the value in the row's color on the right (the secondary color once its countdown
 /// has reached its time), then the time it points at and the poster's own day, right-aligned in the
 /// tertiary color. Where the title and the value do not fit one line, the value goes under the
-/// title. A widget draws the countdown as text WidgetKit keeps counting by itself; a compact list
-/// leaves the caption and the note out.
+/// title. The countdown is worded at `now` as the popup words it (a widget's timeline has an entry
+/// for each minute it steps); a compact list leaves the caption and the note out.
 struct GlanceResetRowView: View {
     let row: GlanceResetRow
     let document: GlanceDocument
     let now: Date
     let sizes: GlanceResetRowSizes
     var onDark = false
-    var live = false
     var showsCaption = true
     @Environment(\.colorScheme) private var colorScheme
 
@@ -280,18 +279,11 @@ struct GlanceResetRowView: View {
     }
 
     private func value(_ lines: (value: String, caption: String, note: String?, awaiting: Bool), dark: Bool) -> some View {
-        valueText(lines.value)
+        Text(lines.value)
             .font(.system(size: sizes.value))
             .monospacedDigit()
             .foregroundStyle(lines.awaiting ? GlanceRowInk.secondary(dark: dark) : GlanceRowInk.tone(row.tone, dark: dark))
             .lineLimit(1)
-    }
-
-    private func valueText(_ text: String) -> Text {
-        if live, let countdown = row.countdown {
-            return countdown.live(now: now, units: document.labels.units)
-        }
-        return Text(text)
     }
 
     private func caption(_ text: String) -> some View {
