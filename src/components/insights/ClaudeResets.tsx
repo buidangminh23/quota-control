@@ -7,7 +7,7 @@
  */
 import { useMemo, useState } from "react";
 import { insightsFor, type InsightsMessages } from "@/i18n/insights";
-import type { Language } from "@/i18n";
+import { messagesFor, type Language } from "@/i18n";
 import { buildClaudePresentation, type ClaudeBankedCard, type ClaudePresentation, type ComparePresentation } from "@/model/insights/claudePresentation";
 import { parseClaudeResets } from "@/model/insights/claudeResets";
 import { parseResets } from "@/model/insights/resets";
@@ -16,6 +16,7 @@ import { useNow, useSettings } from "@/state/hooks";
 import { useInsights } from "@/state/insights";
 import { updateSettings, useApp } from "@/state/store";
 import { Button } from "../ui/controls";
+import { confirmAction } from "../ui/dialog";
 import { ProviderMark } from "../ui/ProviderMark";
 import { useFeeds } from "./data";
 import { Disclosure, FeedStatus, numberText, SourceLine } from "./parts";
@@ -33,11 +34,33 @@ export function setBankedUsed(resetId: string, used: boolean): void {
   updateSettings({ usedBankedResets: used ? [...current, resetId] : current });
 }
 
+/** Mark a banked reset as used only after the user confirms it, the way Codex's "Dùng 1 lượt" asks first. */
+async function confirmBankedUsed(resetId: string, text: InsightsMessages, cancelLabel: string): Promise<void> {
+  const confirmed = await confirmAction({
+    title: text.claude.bankedConfirmTitle,
+    message: text.claude.bankedConfirmMessage,
+    confirmLabel: text.claude.bankedConfirm,
+    cancelLabel,
+    tone: "default",
+  });
+  if (confirmed) setBankedUsed(resetId, true);
+}
+
 /**
  * The banked resets still to apply. The one that is the latest reset leaves its author and words
  * to the latest card above when that card quotes them, and keeps its deadline and how to apply it.
  */
-function BankedCards({ cards, quotedAbove, text }: { cards: readonly ClaudeBankedCard[]; quotedAbove: boolean; text: InsightsMessages }) {
+function BankedCards({
+  cards,
+  quotedAbove,
+  text,
+  cancelLabel,
+}: {
+  cards: readonly ClaudeBankedCard[];
+  quotedAbove: boolean;
+  text: InsightsMessages;
+  cancelLabel: string;
+}) {
   const repeats = (card: ClaudeBankedCard) => quotedAbove && card.sameAsLatest === true;
   return (
     <>
@@ -63,7 +86,7 @@ function BankedCards({ cards, quotedAbove, text }: { cards: readonly ClaudeBanke
             <span className="uc-reset-meta">{card.how}</span>
             <div className="uc-reset-actions">
               {card.url ? <PostLink source={{ kind: "x_post", url: card.url }} text={text} /> : null}
-              <Button className="is-small" onClick={() => setBankedUsed(card.resetId, true)}>
+              <Button className="is-small" onClick={() => void confirmBankedUsed(card.resetId, text, cancelLabel)}>
                 {text.claude.bankedMarkUsed}
               </Button>
             </div>
@@ -197,7 +220,12 @@ export function ClaudeResets() {
       {presentation && feed ? (
         <>
           {presentation.latest ? <LatestReset latest={presentation.latest} text={text} /> : null}
-          <BankedCards cards={presentation.banked} quotedAbove={presentation.latest?.excerpt !== undefined} text={text} />
+          <BankedCards
+            cards={presentation.banked}
+            quotedAbove={presentation.latest?.excerpt !== undefined}
+            text={text}
+            cancelLabel={messagesFor(language).chrome.cancel}
+          />
           <StatusCards cards={presentation.statuses} text={text} />
           {feed.resets.length > 0 ? (
             <>

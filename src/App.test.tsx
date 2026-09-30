@@ -177,11 +177,17 @@ describe("popup", () => {
     fireEvent.click(within(codex).getByRole("button", { name: "Dùng 1 lượt" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText(/Dùng rồi không lấy lại được/)).toBeInTheDocument();
+    expect(within(dialog).getAllByRole("button").map((button) => button.textContent)).toEqual(["Hủy", "Xác nhận"]);
+    expect(within(dialog).getByRole("button", { name: "Hủy" })).toHaveFocus();
     fireEvent.click(within(dialog).getByRole("button", { name: "Hủy" }));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(within(codex).getByText("2 khả dụng")).toBeInTheDocument();
     for (const left of ["1 khả dụng", "0 khả dụng"]) {
       fireEvent.click(within(codex).getByRole("button", { name: "Dùng 1 lượt" }));
-      fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Dùng 1 lượt" }));
+      fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Xác nhận" }));
       expect(await within(codex).findByText(left)).toBeInTheDocument();
     }
     expect(screen.getByText("Đã dùng 1 lượt đặt lại. Hạn mức Codex đã hồi.")).toBeInTheDocument();

@@ -37,6 +37,10 @@ export interface ClaudeResetMessages {
   bankedLeft(duration: string): string;
   bankedHow: string;
   bankedMarkUsed: string;
+  /** The confirm step before a banked reset is marked as used. */
+  bankedConfirmTitle: string;
+  bankedConfirmMessage: string;
+  bankedConfirm: string;
   bankedUsed: string;
   bankedUndo: string;
   detectorBehind: string;

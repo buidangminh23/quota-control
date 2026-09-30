@@ -557,7 +557,7 @@ export const en: Messages = {
     confirmTitle: "Use 1 Limit Reset?",
     confirmMessage: (expiry) =>
       `Codex restores your limit now: the 5-hour limit, the weekly limit or both, as OpenAI decides. The reset that expires first is used${expiry ? ` (it expires ${expiry})` : ""}. This can't be undone.`,
-    confirm: "Use 1 Reset",
+    confirm: "Confirm",
     result(result, errors) {
       switch (result.status) {
         case "reset":

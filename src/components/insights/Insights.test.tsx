@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { setBackend } from "@/lib/backend";
 import { MockBackend } from "@/lib/mockBackend";
 import { resetInsights, useInsights } from "@/state/insights";
@@ -378,7 +378,20 @@ describe("Claude resets", () => {
     expect(screen.queryByText(/Dữ liệu từ Codex Resets/)).not.toBeInTheDocument();
 
     fireEvent.click(within(card).getByRole("button", { name: "Tôi đã dùng rồi" }));
-    expect(useApp.getState().settings.usedBankedResets).toEqual(["77"]);
+    const confirm = await screen.findByRole("alertdialog");
+    expect(within(confirm).getByText("Đánh dấu đã dùng lượt reset này?")).toBeInTheDocument();
+    expect(within(confirm).getAllByRole("button").map((button) => button.textContent)).toEqual(["Hủy", "Xác nhận"]);
+    fireEvent.click(within(confirm).getByRole("button", { name: "Hủy" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(useApp.getState().settings.usedBankedResets).toEqual([]);
+    expect(screen.getByText("Có lượt reset để dành")).toBeInTheDocument();
+
+    fireEvent.click(within(card).getByRole("button", { name: "Tôi đã dùng rồi" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Xác nhận" }));
+    await waitFor(() => expect(useApp.getState().settings.usedBankedResets).toEqual(["77"]));
     expect(screen.queryByText("Có lượt reset để dành")).not.toBeInTheDocument();
     expect(screen.getByText("Bạn đã đánh dấu lượt này là đã dùng.")).toBeInTheDocument();
     expect(screen.getByText("Chưa có thông báo reset mới")).toBeInTheDocument();

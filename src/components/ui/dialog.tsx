@@ -69,15 +69,24 @@ export function useDialogRequest(): boolean {
   return useSyncExternalStore(subscribe, () => request !== null, () => request !== null);
 }
 
-/** Ask to confirm a destructive action; resolves `true` only when the user confirms. */
-export function confirmAction(options: { title: string; message: string; confirmLabel: string; cancelLabel: string }): Promise<boolean> {
+/**
+ * Ask to confirm an action; resolves `true` only when the user confirms. The confirm button is
+ * destructive by default; `tone: "default"` suits an action the user can take back.
+ */
+export function confirmAction(options: {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  cancelLabel: string;
+  tone?: "destructive" | "default";
+}): Promise<boolean> {
   return new Promise((resolve) => {
     openDialog({
       title: options.title,
       message: options.message,
       actions: [
         { label: options.cancelLabel, role: "cancel", onSelect: () => resolve(false) },
-        { label: options.confirmLabel, role: "destructive", onSelect: () => resolve(true) },
+        { label: options.confirmLabel, role: options.tone ?? "destructive", onSelect: () => resolve(true) },
       ],
     });
   });

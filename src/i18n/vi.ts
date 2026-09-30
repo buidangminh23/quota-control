@@ -595,7 +595,7 @@ export const vi: Messages = {
     confirmTitle: "Dùng 1 lượt đặt lại?",
     confirmMessage: (expiry) =>
       `Codex sẽ hồi hạn mức ngay: giới hạn 5 giờ, giới hạn tuần hoặc cả hai, do OpenAI chọn. App dùng lượt hết hạn sớm nhất${expiry ? ` (hết hạn lúc ${expiry})` : ""}. Dùng rồi không lấy lại được.`,
-    confirm: "Dùng 1 lượt",
+    confirm: "Xác nhận",
     result(result, errors) {
       switch (result.status) {
         case "reset":
