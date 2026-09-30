@@ -125,9 +125,16 @@ export interface GlanceIslandSections {
  * tracker: the Codex card's "Reset free" row (or, without one, the 24-hour chance), a chance over
  * 1, 3 or 7 days, or the time since the last reset. The `claude-resets:` ones read the Claude tracker the
  * same way, its `next` counting down to the deadline of a banked reset that can still be applied.
+ * The `resets:` ones read whichever of the two the Reset tab shows (`followedWing`), so they move
+ * with its Codex | Claude switch like the surfaces that follow it.
  */
 export const SPECIAL_WINGS = [
   "quota:next",
+  "resets:next",
+  "resets:chance-1",
+  "resets:chance-3",
+  "resets:chance-7",
+  "resets:since",
   "codex-resets:next",
   "codex-resets:chance-1",
   "codex-resets:chance-3",
@@ -145,9 +152,22 @@ export function isSpecialWing(id: string): id is SpecialWing {
   return (SPECIAL_WINGS as readonly string[]).includes(id);
 }
 
-/** Whether a wing reads the Claude reset tracker. */
+/** Whether a wing reads the Claude reset tracker; a `resets:` wing does once `followedWing` says so. */
 export function isClaudeResetsWing(id: string): boolean {
   return isSpecialWing(id) && id.startsWith(`${CLAUDE_RESETS_PROVIDER_ID}:`);
+}
+
+const FOLLOWING_WING = "resets:";
+
+/**
+ * The wing a `resets:` wing stands for while the Reset tab shows `provider`'s tracker (Codex while
+ * the tab is hidden, as for the surfaces set to follow it): the same reading of that tracker. Any
+ * other wing, and a saved id this version does not know, is itself.
+ */
+export function followedWing(id: string, provider: ResetProvider): string {
+  if (!id.startsWith(FOLLOWING_WING) || !isSpecialWing(id)) return id;
+  const tracker = provider === "claude" ? CLAUDE_RESETS_PROVIDER_ID : CODEX_RESETS_PROVIDER_ID;
+  return `${tracker}:${id.slice(FOLLOWING_WING.length)}`;
 }
 
 /** What one wing slot asks for: a picked metric, a special reading, or `null` for automatic. */
@@ -346,11 +366,48 @@ export interface GlanceResetHistoryItem {
   provisional?: string;
 }
 
+/** A limit change (Claude): who posted it, when, the words, whom it covered, and whether the site reviewed it. */
+export interface GlanceResetChangeItem {
+  id: string;
+  when: string;
+  excerpt: string;
+  author: GlanceResetAuthor;
+  url?: string;
+  scope?: string;
+  /** `Chưa kiểm chứng`, while the site has not reviewed the entry. */
+  provisional?: string;
+}
+
+/** One side of the comparison as its column heading shows it: the tracker's name, mark and color. */
+export interface GlanceResetCompareColumn {
+  name: string;
+  color: string;
+  mark?: GlanceMark;
+}
+
+/**
+ * Claude against Codex over the time both were tracked, the last card of the Reset tab's Claude
+ * view: a row per measure with each side's value, then the resets of each month side by side.
+ */
+export interface GlanceResetCompare {
+  title: string;
+  /** `Tính các lần reset sau …`, under the months. */
+  since: string;
+  /** The surfaces' column headings; the popup names and marks the two sides itself. */
+  columns?: { claude: GlanceResetCompareColumn; codex: GlanceResetCompareColumn };
+  rows: { label: string; claude: string; codex: string }[];
+  monthsTitle: string;
+  /** Each month's count on either side, oldest first, and what VoiceOver reads for it. */
+  months: { label: string; claude: number; codex: number; summary: string }[];
+}
+
 export interface GlanceResetPresentation {
   locale: string;
   authorAvatar: string;
   /** The one account `authorAvatar` pictures (Claude: `@ClaudeDevs`); absent, it pictures every author. */
   avatarHandle?: string;
+  /** Lines above the cards (Claude): the site is behind, or its published copy is shown. */
+  notices?: string[];
   latest?: GlanceResetLatestPresentation;
   statuses: GlanceResetStatusCard[];
   quietTitle?: string;
@@ -359,6 +416,14 @@ export interface GlanceResetPresentation {
   stats: { label: string; value: string }[];
   historyTitle: string;
   history: GlanceResetHistoryItem[];
+  /** The limit changes (Claude), listed apart from the history since they reset nothing: the
+   * heading, the word on each row's badge, the changes newest first and the note under them. */
+  changesTitle?: string;
+  changeBadge?: string;
+  changes?: GlanceResetChangeItem[];
+  changesNote?: string;
+  /** Claude against Codex (Claude), once the Codex history is at hand. */
+  compare?: GlanceResetCompare;
   patternNote: string;
   /** When the copy shown was read (`Tải 5 phút trước`, `Vừa tải`), the line above the source. */
   fetched?: GlanceCountdown;
@@ -483,6 +548,9 @@ export interface GlanceInput {
   claudeResets?: GlanceResets | null;
   /** Why a Claude tracker that is on has no data yet; taken only without one, for a surface showing it. */
   claudeResetsPending?: GlanceResetsPending | null;
+  /** The tracker the Reset tab shows (Codex while the tab is hidden), which the `resets:` wings
+   * read; Codex when left out. */
+  resetsTab?: ResetProvider;
   /** The official color logos drawn so far (`useMarkArt`), base64 PNG by brand; optional. */
   markArt?: Readonly<Record<string, string>>;
   now: Date;
@@ -617,8 +685,9 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
 
 /**
  * The two readings beside the notch. A slot picked in Settings shows that metric, or that special
- * reading, while it has one; an automatic slot, or a pick without data, takes the next reading of the
- * island's accounts: each account's first metric, then a lone account's second.
+ * reading (a `resets:` one from the tracker the Reset tab shows), while it has one; an automatic
+ * slot, or a pick without data, takes the next reading of the island's accounts: each account's
+ * first metric, then a lone account's second.
  */
 function wings(
   input: GlanceInput,
@@ -627,7 +696,10 @@ function wings(
 ): GlanceProvider[] {
   const picked = input.island.wings.map((choice) => {
     if (!choice) return null;
-    if (typeof choice === "string") return specialWing(choice, providers, input);
+    if (typeof choice === "string") {
+      const wing = followedWing(choice, input.resetsTab ?? "codex");
+      return isSpecialWing(wing) ? specialWing(wing, providers, input) : null;
+    }
     const source = input.providerOf(choice.providerId);
     const data = input.dataFor(choice);
     if (!source || !data.hasData) return null;

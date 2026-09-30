@@ -268,7 +268,8 @@ export interface SettingsMessages {
   islandStyleOption(style: IslandStyle): string;
   islandWing(side: "left" | "right"): string;
   islandWingAuto: string;
-  /** A wing choice that is not one metric: the soonest limit reset or a Codex or Claude reset reading. */
+  /** A wing choice that is not one metric: the soonest limit reset, or a reset reading of Codex,
+   * Claude or whichever the Reset tab shows. */
   islandWingSpecial(wing: SpecialWing): string;
   islandLayout: string;
   islandLayoutOption(layout: IslandLayout): string;

@@ -6,6 +6,7 @@ import {
   buildGlance,
   CLAUDE_RESETS_PROVIDER_ID,
   CODEX_RESETS_PROVIDER_ID,
+  followedWing,
   glanceMetric,
   GLANCE_VERSION,
   isClaudeResetsWing,
@@ -21,7 +22,7 @@ import { parseClaudeResets } from "./insights/claudeResets";
 import { glanceGroups, reconcileLayout } from "./layout";
 import { barKind, platformKey } from "./platform";
 import { cardIdentity } from "./providerText";
-import { DEFAULT_SETTINGS, type GlanceContent, type IslandSettings } from "./settings";
+import { DEFAULT_SETTINGS, type GlanceContent, type IslandSettings, type ResetProvider } from "./settings";
 import { makeWidget, NOW, resetsAt, WEEK_SECONDS } from "./testHelpers";
 import { setSystemTimeZone } from "./timeZone";
 import { DEFAULT_DISPLAY, widgetDataFor, type DisplayOptions } from "./widgetData";
@@ -46,10 +47,11 @@ interface Options {
   resetsPending?: GlanceResetsPending | null;
   claudeResets?: GlanceResets | null;
   claudeResetsPending?: GlanceResetsPending | null;
+  resetsTab?: ResetProvider;
   markArt?: Readonly<Record<string, string>>;
 }
 
-function glance({ display = DEFAULT_DISPLAY, data = snapshots, alert = null, island = {}, widget = {}, wings = [null, null], hour12 = null, resets = null, resetsPending, claudeResets, claudeResetsPending, markArt }: Options = {}) {
+function glance({ display = DEFAULT_DISPLAY, data = snapshots, alert = null, island = {}, widget = {}, wings = [null, null], hour12 = null, resets = null, resetsPending, claudeResets, claudeResetsPending, resetsTab, markArt }: Options = {}) {
   const islandSettings = { ...DEFAULT_SETTINGS.island, ...island };
   const widgetSettings = { ...DEFAULT_SETTINGS.widget, ...widget };
   const groups = (content: GlanceContent, metrics: readonly string[]) => glanceGroups(content, metrics, layout, catalog, () => true);
@@ -71,6 +73,7 @@ function glance({ display = DEFAULT_DISPLAY, data = snapshots, alert = null, isl
     resetsPending,
     claudeResets,
     claudeResetsPending,
+    ...(resetsTab ? { resetsTab } : {}),
     markArt,
     now: NOW_GLANCE,
   });
@@ -279,7 +282,7 @@ describe("the Claude reset tracker", () => {
 
   it("tells the Claude wings apart from every other wing", () => {
     expect(["claude-resets:next", "claude-resets:chance-1", "claude-resets:chance-3", "claude-resets:chance-7", "claude-resets:since"].every(isClaudeResetsWing)).toBe(true);
-    expect(["", "quota:next", "codex-resets:next", "claude-resets:soon", "claude@7c1e.session", "claude-resets"].some(isClaudeResetsWing)).toBe(false);
+    expect(["", "quota:next", "codex-resets:next", "claude-resets:soon", "claude@7c1e.session", "claude-resets", "resets:next"].some(isClaudeResetsWing)).toBe(false);
   });
 });
 
@@ -441,6 +444,34 @@ describe("special wings", () => {
     expect(codexOnly).toEqual(wingIds(glance().island.wings));
     const claudeOnly = wingIds(glance({ claudeResets: CLAUDE_TRACKER, wings: ["codex-resets:chance-1", "codex-resets:since"] }).island.wings);
     expect(claudeOnly).toEqual(wingIds(glance().island.wings));
+  });
+
+  it("reads a wing that follows the Reset tab from whichever tracker that tab shows", () => {
+    const follow: [GlanceWingChoice, GlanceWingChoice] = ["resets:chance-1", "resets:since"];
+    const both = { resets: TRACKER, claudeResets: CLAUDE_TRACKER, wings: follow };
+    const codex = glance(both).island.wings;
+    expect(codex).toEqual(glance({ ...both, wings: ["codex-resets:chance-1", "codex-resets:since"] }).island.wings);
+    expect(codex.map((wing) => wing.brand)).toEqual(["codex", "codex"]);
+    expect(glance({ ...both, resetsTab: "codex" }).island.wings).toEqual(codex);
+    const claude = glance({ ...both, resetsTab: "claude" });
+    expect(claude.island.wings).toEqual(glance({ ...both, wings: ["claude-resets:chance-1", "claude-resets:since"] }).island.wings);
+    expect(claude.island.wings.map((wing) => wing.brand)).toEqual(["claude", "claude"]);
+    expect(claude.island.wings[0]!.metrics[0]).toMatchObject({ id: "claude-resets:chance-1", value: "9%" });
+    expect("claudeResets" in claude).toBe(false);
+    const next = glance({ ...both, wings: ["resets:next", null], resetsTab: "claude" }).island.wings[0]!;
+    expect(next).toMatchObject({ id: CLAUDE_RESETS_PROVIDER_ID, metrics: [{ id: "claude-resets:next", countdown: { at: DEADLINE, text: "còn {d}" } }] });
+    expect(wingIds(glance({ resets: TRACKER, wings: follow, resetsTab: "claude" }).island.wings)).toEqual(wingIds(glance().island.wings));
+  });
+
+  it("maps only the wings that follow the Reset tab, keeping every saved id as it was", () => {
+    expect(followedWing("resets:next", "claude")).toBe("claude-resets:next");
+    expect(followedWing("resets:chance-7", "claude")).toBe("claude-resets:chance-7");
+    expect(followedWing("resets:since", "codex")).toBe("codex-resets:since");
+    expect(followedWing("resets:chance-3", "codex")).toBe("codex-resets:chance-3");
+    for (const id of ["", "quota:next", "codex-resets:next", "claude-resets:chance-7", "resets:soon", "resets", "claude@7c1e.session"]) {
+      expect(followedWing(id, "claude"), id).toBe(id);
+      expect(followedWing(id, "codex"), id).toBe(id);
+    }
   });
 });
 

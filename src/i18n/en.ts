@@ -345,6 +345,11 @@ export const en: Messages = {
     islandWingSpecial: (wing) =>
       ({
         "quota:next": "Soonest Limit Reset",
+        "resets:next": "As in the Reset Tab · Next Free Reset or Banked Reset Deadline",
+        "resets:chance-1": "As in the Reset Tab · Chance in 24 Hours",
+        "resets:chance-3": "As in the Reset Tab · Chance in 3 Days",
+        "resets:chance-7": "As in the Reset Tab · Chance in 7 Days",
+        "resets:since": "As in the Reset Tab · Time Since the Last Reset",
         "codex-resets:next": "Codex Resets · Next Free Reset",
         "codex-resets:chance-1": "Codex Resets · Chance in 24 Hours",
         "codex-resets:chance-3": "Codex Resets · Chance in 3 Days",

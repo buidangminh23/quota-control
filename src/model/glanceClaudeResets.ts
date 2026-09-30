@@ -2,20 +2,21 @@
  * The Claude reset tracker (claude-resets.com) as the macOS Dynamic Island and desktop widgets draw
  * it, in the shape of the Codex one (`buildGlanceResets`) so every reset surface can draw either.
  * The latest reset, chances, wait, calendar and rhythm come from the same helper as Codex's; limit
- * changes never reach them, since they did not reset anything. Claude announces no reset ahead, so
- * the tracker's `upcoming` is instead the banked reset that can still be applied: the one with the
- * soonest deadline that the user has not marked as applied and that can concern the Claude accounts
- * connected here, counting down to its deadline.
+ * changes never reach them, since they did not reset anything, and are listed apart as in the Reset
+ * tab. Claude announces no reset ahead, so the tracker's `upcoming` is instead the banked reset that
+ * can still be applied: the one with the soonest deadline that the user has not marked as applied
+ * and that can concern the Claude accounts connected here, counting down to its deadline.
  */
 import { PROVIDER_MARKS } from "@/assets/providerMarks";
 import claudeDevsAvatar from "@/assets/claudedevs.webp?inline";
 import type { Language } from "@/i18n";
-import { insightsFor } from "@/i18n/insights";
+import { insightsFor, type InsightsMessages } from "@/i18n/insights";
 import { timeOnDayLabel, type TimeFormat } from "./format";
-import type { GlanceCountdown, GlanceResetPresentation, GlanceResets, GlanceResetStatusCard, GlanceUpcomingReset } from "./glance";
+import type { GlanceCountdown, GlanceResetCompare, GlanceResetCompareColumn, GlanceResetPresentation, GlanceResets, GlanceResetStatusCard, GlanceUpcomingReset } from "./glance";
 import { addHistory, COUNTDOWN_SPAN, fetchedLine } from "./glanceResets";
 import { CLAUDE_ACCOUNT, concerns, openBanked, type ClaudePlan, type ClaudeReset, type ClaudeResetFeed } from "./insights/claudeResets";
 import { authorOf, buildClaudePresentation, type ClaudeBankedCard, type ClaudePresentation } from "./insights/claudePresentation";
+import type { CodexReset } from "./insights/resets";
 import { SOURCE_COLORS } from "./palette";
 import { deviceTimeZone, offsetLabel } from "./timeZone";
 
@@ -34,6 +35,9 @@ export interface ClaudeGlanceResetsInput {
   stale: boolean;
   /** When the copy shown was read (`feedShownAt`), for the line the Reset tab shows above its source. */
   fetchedAt?: string | null;
+  /** The Codex history alone (`parseResets` of its list, as the Reset tab reads it), for the
+   * comparison with Codex; left out or empty while the Reset tab has not loaded it. */
+  codex?: readonly CodexReset[];
   now: Date;
   language: Language;
   timeFormat: TimeFormat;
@@ -53,7 +57,7 @@ export function buildClaudeGlanceResets(input: ClaudeGlanceResetsInput): GlanceR
   const { feed, accounts, used, now, language, timeFormat } = input;
   const text = insightsFor(language);
   const plans = [...new Set(accounts.filter((plan): plan is ClaudePlan => plan !== null))];
-  const presentation = buildClaudePresentation({ feed, codex: [], plans, accounts, used, now, language, timeFormat });
+  const presentation = buildClaudePresentation({ feed, codex: input.codex ?? [], plans, accounts, used, now, language, timeFormat });
   const pending = pendingBanked(feed.resets, accounts, used, now);
   const resets: GlanceResets = {
     title: text.claude.glanceTitle,
@@ -93,16 +97,17 @@ function upcomingOf(reset: ClaudeReset, now: Date, timeFormat: TimeFormat, langu
 }
 
 /**
- * The Reset tab's Claude view cut down to what the island and the widgets draw: its cards in the
- * Codex shape, the banked resets still to apply as status cards counting down to their deadlines,
- * the forecast with its self-check, the @ClaudeDevs picture for that account's posts, when the
- * feed was read (`fetched`), the method word for word, and none of what only the popup has yet
- * (limit changes, the comparison with Codex, marking a banked reset as applied). The chances'
- * meters are kept to the whole percent they show, so the document does not change each minute as
- * the estimate drifts.
+ * The Reset tab's Claude view cut down to what the island and the widgets draw: the notices above
+ * the cards, its cards in the Codex shape, the banked resets still to apply as status cards
+ * counting down to their deadlines, the forecast with its self-check, the limit changes and the
+ * comparison with Codex (its columns named and marked), the @ClaudeDevs picture for that account's
+ * posts, when the feed was read (`fetched`), the method word for word, and none of what only the
+ * popup can do (marking a banked reset as applied). The chances' meters are kept to the whole
+ * percent they show, so the document does not change each minute as the estimate drifts.
  */
 function glancePresentation(presentation: ClaudePresentation, pending: readonly ClaudeReset[], language: Language, fetched: GlanceCountdown | undefined): GlanceResetPresentation {
-  const text = insightsFor(language).claude;
+  const insights = insightsFor(language);
+  const text = insights.claude;
   const waiting = new Set(pending.map((reset) => reset.id));
   const left = text.bankedLeft(COUNTDOWN_SPAN);
   const banked = presentation.banked.filter((card) => waiting.has(card.resetId)).map((card) => bankedStatus(card, text.glanceBankedHow, left));
@@ -111,12 +116,17 @@ function glancePresentation(presentation: ClaudePresentation, pending: readonly 
     locale: presentation.locale,
     authorAvatar: claudeDevsAvatar,
     avatarHandle: authorOf(CLAUDE_ACCOUNT).handle,
+    ...(presentation.notices.length > 0 ? { notices: [...presentation.notices] } : {}),
     statuses: banked.length > 0 ? banked : presentation.statuses,
     forecast: { ...presentation.forecast, chances },
     statsTitle: presentation.statsTitle,
     stats: presentation.stats,
     historyTitle: presentation.historyTitle,
     history: presentation.history,
+    ...(presentation.changes.length > 0
+      ? { changesTitle: presentation.changesTitle, changeBadge: text.changeBadge, changes: presentation.changes, changesNote: presentation.changesNote }
+      : {}),
+    ...(presentation.compare ? { compare: withColumns(presentation.compare, insights) } : {}),
     patternNote: presentation.patternNote,
     ...(fetched ? { fetched } : {}),
     source: presentation.source,
@@ -126,6 +136,21 @@ function glancePresentation(presentation: ClaudePresentation, pending: readonly 
   if (presentation.latest) reduced.latest = presentation.latest;
   if (presentation.quietTitle !== undefined) reduced.quietTitle = presentation.quietTitle;
   return reduced;
+}
+
+/**
+ * The comparison with its two columns headed as the Reset tab heads them: each tracker's name
+ * beside its mark in its brand color, which the island and the widgets cannot look up themselves.
+ */
+function withColumns(compare: GlanceResetCompare, text: InsightsMessages): GlanceResetCompare {
+  const column = (brand: "claude" | "codex"): GlanceResetCompareColumn => {
+    const entry: GlanceResetCompareColumn = { name: text.resetProvider(brand), color: SOURCE_COLORS[brand] };
+    const mark = PROVIDER_MARKS[brand];
+    if (mark) entry.mark = mark;
+    return entry;
+  };
+  const { title, since, rows, monthsTitle, months } = compare;
+  return { title, since, columns: { claude: column("claude"), codex: column("codex") }, rows, monthsTitle, months };
 }
 
 /**

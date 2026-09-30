@@ -8,7 +8,9 @@ import { MockBackend } from "@/lib/mockBackend";
 import { FEED_FIXTURES } from "@/lib/insightsFeedFixtures";
 import type { GlanceDocument } from "@/model/glance";
 import { parseResetFeeds } from "@/model/glanceResets";
-import { dailyReliability } from "@/model/insights/claudePresentation";
+import { buildClaudePresentation, dailyReliability } from "@/model/insights/claudePresentation";
+import { parseClaudeResets } from "@/model/insights/claudeResets";
+import { parseResets } from "@/model/insights/resets";
 import { resetInsights } from "@/state/insights";
 import { updateSettings, useApp } from "@/state/store";
 
@@ -283,6 +285,40 @@ describe("the glance document the popup sends", () => {
     act(() => updateSettings({ showResetsTab: false }));
     await waitFor(() => expect("claudeResets" in api.latest!).toBe(false));
     expect(api.latest!.labels.claudeResetsTab).toBe("Reset Claude");
+  });
+
+  it("sets the Claude tracker against the Codex history alone, as the Reset tab's comparison does", async () => {
+    const newer = FEED_FIXTURES.codexResetStatus.replaceAll("2102463847714247142", "2103911959544610829");
+    const api = await start({ island: { resetsProvider: "claude" }, notifyClaudeResets: false }, (backend) => {
+      backend.feedStates.codexResetStatus = { body: newer };
+    });
+    await waitFor(() => expect(api.latest?.claudeResets?.presentation?.compare).toBeDefined());
+    const compare = api.latest!.claudeResets!.presentation!.compare!;
+    const popup = buildClaudePresentation({ feed: parseClaudeResets(FEED_FIXTURES.claudeResets)!, codex: parseResets(FEED_FIXTURES.codexResets), plans: [], used: [], now: new Date(), language: "vi", timeFormat: "auto" }).compare!;
+    expect(compare.rows[0]).toEqual(popup.rows[0]);
+    expect(compare.months.map((month) => month.codex)).toEqual(popup.months.map((month) => month.codex));
+    expect(compare.columns).toMatchObject({ claude: { name: "Claude", color: "#DE7356" }, codex: { name: "Codex", color: "#10A37F" } });
+  });
+
+  it("leaves the comparison out while the Reset tab has not loaded the Codex history", async () => {
+    const api = await start({ island: { resetsProvider: "claude" }, showResetsTab: false, notifyClaudeResets: true });
+    await waitFor(() => expect(api.latest?.claudeResets?.brand).toBe("claude"));
+    expect(api.latest!.claudeResets!.presentation!.changes?.length).toBeGreaterThan(0);
+    expect("compare" in api.latest!.claudeResets!.presentation!).toBe(false);
+    expect(api.feedsAsked).not.toContain("codexResets");
+  });
+
+  it("moves a wing that follows the Reset tab with the tab's Codex | Claude switch", async () => {
+    const api = await start({ island: { wings: ["resets:chance-1", ""] }, notifyClaudeResets: false });
+    await waitFor(() => expect(api.latest?.island.wings[0]?.id).toBe("codex-resets"));
+    expect(api.latest!.island.wings[0]).toMatchObject({ brand: "codex", metrics: [{ id: "codex-resets:chance-1" }] });
+    act(() => updateSettings({ resetsProvider: "claude" }));
+    await waitFor(() => expect(api.latest?.island.wings[0]?.id).toBe("claude-resets"));
+    expect(api.latest!.island.wings[0]).toMatchObject({ brand: "claude", metrics: [{ id: "claude-resets:chance-1" }] });
+    const settings = useApp.getState().settings;
+    act(() => updateSettings({ island: { ...settings.island, resetsProvider: "codex" }, widget: { ...settings.widget, resetsProvider: "codex" } }));
+    await waitFor(() => expect("claudeResets" in api.latest!).toBe(false));
+    expect(api.latest!.island.wings[0]?.id).toBe("claude-resets");
   });
 
   it("loads the Claude tracker for a Claude wing without copying it into the document", async () => {

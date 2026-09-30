@@ -8,7 +8,7 @@
 import type { Language } from "@/i18n";
 import { insightsFor, type ClaudeResetMessages, type CompareRow, type InsightsMessages } from "@/i18n/insights";
 import { compactDuration, shortTime, timeOnDayLabel, type TimeFormat } from "../format";
-import type { GlanceResetAuthor, GlanceResetHistoryItem, GlanceResetPresentation, GlanceResetStatusCard } from "../glance";
+import type { GlanceResetAuthor, GlanceResetChangeItem, GlanceResetCompare, GlanceResetHistoryItem, GlanceResetPresentation, GlanceResetStatusCard } from "../glance";
 import { buildResetPresentation, POST_EXCERPT_LENGTH } from "../glanceResets";
 import { deviceTimeZone, startOfDayIn } from "../timeZone";
 import {
@@ -48,23 +48,9 @@ export interface ClaudeBankedCard extends GlanceResetStatusCard {
   how: string;
 }
 
-export interface ClaudeChangeItem {
-  id: string;
-  when: string;
-  excerpt: string;
-  author: GlanceResetAuthor;
-  url?: string;
-  scope?: string;
-  provisional?: string;
-}
+export type ClaudeChangeItem = GlanceResetChangeItem;
 
-export interface ComparePresentation {
-  title: string;
-  since: string;
-  rows: { label: string; claude: string; codex: string }[];
-  monthsTitle: string;
-  months: { label: string; claude: number; codex: number; summary: string }[];
-}
+export type ComparePresentation = GlanceResetCompare;
 
 export interface ClaudePresentation extends GlanceResetPresentation {
   /** Lines above the cards: the site is behind, or its published copy is shown. */

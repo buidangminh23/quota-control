@@ -383,6 +383,11 @@ export const vi: Messages = {
     islandWingSpecial: (wing) =>
       ({
         "quota:next": "Hạn mức đặt lại sớm nhất",
+        "resets:next": "Như tab Reset · Reset free sắp tới hoặc hạn dùng lượt để dành",
+        "resets:chance-1": "Như tab Reset · Khả năng 24 giờ tới",
+        "resets:chance-3": "Như tab Reset · Khả năng 3 ngày tới",
+        "resets:chance-7": "Như tab Reset · Khả năng 7 ngày tới",
+        "resets:since": "Như tab Reset · Thời gian chưa reset",
         "codex-resets:next": "Reset Codex · Reset free sắp tới",
         "codex-resets:chance-1": "Reset Codex · Khả năng 24 giờ tới",
         "codex-resets:chance-3": "Reset Codex · Khả năng 3 ngày tới",

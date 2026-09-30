@@ -22,6 +22,13 @@ const CLAUDE_WINGS = [
   "Reset Claude · Khả năng 7 ngày tới",
   "Reset Claude · Thời gian chưa reset",
 ];
+const FOLLOWING_WINGS = [
+  "Như tab Reset · Reset free sắp tới hoặc hạn dùng lượt để dành",
+  "Như tab Reset · Khả năng 24 giờ tới",
+  "Như tab Reset · Khả năng 3 ngày tới",
+  "Như tab Reset · Khả năng 7 ngày tới",
+  "Như tab Reset · Thời gian chưa reset",
+];
 
 async function openSettings(platform: Platform = "macos") {
   const api = new MockBackend();
@@ -183,6 +190,17 @@ describe("whose reset tracker the island and the widgets show", () => {
     expect(within(island).getByRole("button", { name: "Bên phải tai thỏ: Reset Claude · Thời gian chưa reset" })).toBeInTheDocument();
   });
 
+  it("offers reset readings beside the notch that follow the Reset tab's tracker", async () => {
+    await openSettings();
+    const island = section("Dynamic Island");
+
+    fireEvent.click(within(island).getByRole("button", { name: "Bên phải tai thỏ: Tự động" }));
+    for (const name of FOLLOWING_WINGS) expect(screen.getByRole("menuitemcheckbox", { name })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Như tab Reset · Khả năng 24 giờ tới" }));
+    expect(useApp.getState().settings.island.wings).toEqual(["", "resets:chance-1"]);
+    expect(within(island).getByRole("button", { name: "Bên phải tai thỏ: Như tab Reset · Khả năng 24 giờ tới" })).toBeInTheDocument();
+  });
+
   it("words the choice in English as well", async () => {
     await openSettings();
     act(() => updateSettings({ language: "en" }));
@@ -208,6 +226,8 @@ describe("whose reset tracker the island and the widgets show", () => {
     expect(screen.getByRole("menuitemcheckbox", { name: "Codex Resets · Next Free Reset" })).toBeInTheDocument();
     expect(screen.getByRole("menuitemcheckbox", { name: "Claude Resets · Banked Reset Deadline" })).toBeInTheDocument();
     expect(screen.getByRole("menuitemcheckbox", { name: "Claude Resets · Time Since the Last Reset" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitemcheckbox", { name: "As in the Reset Tab · Chance in 24 Hours" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitemcheckbox", { name: "As in the Reset Tab · Next Free Reset or Banked Reset Deadline" })).toBeInTheDocument();
   });
 
   it.each<Platform>(["windows", "linux"])("leaves the %s Settings without the island and the widgets", async (platform) => {

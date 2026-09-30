@@ -7,21 +7,22 @@
  * need: with the notifications alone that is the status, so the tracker keeps the latest and the
  * announced reset and none of what the history gives, which the popup then shows nowhere either.
  * The Claude tracker rides along only while a surface or a wing reads it and the Reset tab or
- * Claude reset notifications are on. A tracker that is on but has nothing yet sends the Reset
- * tab's own line instead (loading, or could not load). The hidden popup keeps running, so both
- * stay live while it is closed.
+ * Claude reset notifications are on, with the Codex history for its comparison while the Reset tab
+ * has that loaded; a `resets:` wing reads whichever tracker the Reset tab shows. A tracker that is
+ * on but has nothing yet sends the Reset tab's own line instead (loading, or could not load). The
+ * hidden popup keeps running, so both stay live while it is closed.
  * Elsewhere the core has no glance and this does nothing.
  */
 import { useEffect, useMemo, useRef } from "react";
 import { messagesFor } from "@/i18n";
 import { backend } from "@/lib/backend";
 import type { Provider, WidgetDescriptor } from "@/lib/types";
-import { buildGlance, isClaudeResetsWing, isSpecialWing, type GlanceWingChoice } from "@/model/glance";
+import { buildGlance, followedWing, isClaudeResetsWing, isSpecialWing, type GlanceWingChoice } from "@/model/glance";
 import { buildClaudeGlanceResets } from "@/model/glanceClaudeResets";
 import { buildGlanceResets, parseResetFeeds, trackerPending } from "@/model/glanceResets";
 import { dailyReliability } from "@/model/insights/claudePresentation";
 import { parseClaudeResets } from "@/model/insights/claudeResets";
-import { feedOutdated, feedShownAt, resetTrackerOutdated } from "@/model/insights/resets";
+import { feedOutdated, feedShownAt, parseResets, resetTrackerOutdated } from "@/model/insights/resets";
 import { brandOf, glanceGroups } from "@/model/layout";
 import { surfaceResetProvider } from "@/model/settings";
 import { cardIdentity } from "@/model/providerText";
@@ -48,6 +49,7 @@ export function useGlance(): void {
   const widgetChoice = useApp((state) => state.settings.widget);
   const resetsProvider = useApp((state) => state.settings.resetsProvider);
   const showResetsTab = useApp((state) => state.settings.showResetsTab);
+  const resetsTab = surfaceResetProvider("app", { resetsProvider, showResetsTab });
   const island = useMemo(
     () => ({ ...islandChoice, resetsProvider: surfaceResetProvider(islandChoice.resetsProvider, { resetsProvider, showResetsTab }) }),
     [islandChoice, resetsProvider, showResetsTab],
@@ -113,7 +115,8 @@ export function useGlance(): void {
     [tracking, resets, statusFeed, statusError, showResetsTab, historyFeed, historyError, display.language],
   );
 
-  const claudeRead = island.resetsProvider === "claude" || widget.resetsProvider === "claude" || island.wings.some(isClaudeResetsWing);
+  const claudeRead =
+    island.resetsProvider === "claude" || widget.resetsProvider === "claude" || island.wings.some((id) => isClaudeResetsWing(followedWing(id, resetsTab)));
   const claudeTracking = supported && claudeRead && (showResetsTab || notifyClaudeResets);
   useEffect(() => {
     if (claudeTracking) ensureFeed("claudeResets");
@@ -122,6 +125,7 @@ export function useGlance(): void {
   const claudeParsed = useMemo(() => parseClaudeResets(claudeBody), [claudeBody]);
   const claudeStale = Boolean(claudeFeed?.stale || claudeError);
   const claudeFetchedAt = claudeTracking ? feedShownAt(claudeFeed) : null;
+  const codexHistory = useMemo(() => parseResets(historyBody), [historyBody]);
   const claudeResets = useMemo(
     () =>
       claudeParsed
@@ -131,13 +135,14 @@ export function useGlance(): void {
             used: usedBankedResets,
             stale: claudeStale,
             fetchedAt: claudeFetchedAt,
+            codex: codexHistory,
             now,
             language: display.language,
             timeFormat,
             theme,
           })
         : null,
-    [claudeParsed, claudeAccounts, usedBankedResets, claudeStale, claudeFetchedAt, now, display.language, timeFormat, theme],
+    [claudeParsed, claudeAccounts, usedBankedResets, claudeStale, claudeFetchedAt, codexHistory, now, display.language, timeFormat, theme],
   );
   const claudeResetsPending = useMemo(
     () => (claudeTracking && !claudeResets ? trackerPending([{ snapshot: claudeFeed, error: claudeError }], display.language) : null),
@@ -176,10 +181,11 @@ export function useGlance(): void {
       resetsPending,
       claudeResets,
       claudeResetsPending,
+      resetsTab,
       markArt,
       now,
     });
-  }, [supported, layout, catalog, isEnabled, engine, display, info, islandEnabled, island, widget, timeFormat, alert, resets, resetsPending, claudeResets, claudeResetsPending, markArt, now]);
+  }, [supported, layout, catalog, isEnabled, engine, display, info, islandEnabled, island, widget, timeFormat, alert, resets, resetsPending, claudeResets, claudeResetsPending, resetsTab, markArt, now]);
 
   useEffect(() => {
     if (!ready || !document) return;

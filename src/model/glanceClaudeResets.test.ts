@@ -5,6 +5,7 @@ import { timeOnDayLabel } from "./format";
 import { buildClaudeGlanceResets, CLAUDE_RESETS_SITE, pendingBanked, type ClaudeGlanceResetsInput } from "./glanceClaudeResets";
 import { buildClaudePresentation } from "./insights/claudePresentation";
 import { parseClaudeResets, type ClaudeResetFeed } from "./insights/claudeResets";
+import { parseResets } from "./insights/resets";
 import { SOURCE_COLORS } from "./palette";
 import { offsetLabel, setSystemTimeZone } from "./timeZone";
 
@@ -23,6 +24,8 @@ function feedOf(events: Record<string, unknown>[]): ClaudeResetFeed {
 }
 
 const FIXTURE = parseClaudeResets(FEED_FIXTURES.claudeResets)!;
+/** The Codex history as the Reset tab reads it for its comparison: the list alone. */
+const CODEX = parseResets(FEED_FIXTURES.codexResets);
 
 function build(feed: ClaudeResetFeed = FIXTURE, overrides: Partial<ClaudeGlanceResetsInput> = {}) {
   return buildClaudeGlanceResets({ feed, accounts: ["max"], used: [], stale: false, now: NOW, language: "vi", timeFormat: "24h", ...overrides });
@@ -40,6 +43,7 @@ describe("buildClaudeGlanceResets", () => {
       expect(resets.presentation).toMatchObject({ statuses: [], stats: [], history: [], forecast: { chances: [] } });
       expect(resets.presentation?.latest).toBeUndefined();
       expect(resets.presentation?.method).toEqual(insightsFor("vi").claude.method);
+      expect(resets.presentation?.changes ?? []).toHaveLength(feed.changes.length);
     }
     expect(build(feedOf([event({ id: "r1" })])).latest?.at).toBe("2026-09-20T10:00:00.000Z");
   });
@@ -63,13 +67,16 @@ describe("buildClaudeGlanceResets", () => {
     expect(build(FIXTURE, { stale: true })!.stale).toBe(insightsFor("vi").staleNote);
   });
 
-  it("says Codex only where the Reset tab's method does, in either language", () => {
+  it("says Codex only where the Reset tab's method and its comparison do, in either language", () => {
     for (const language of ["vi", "en"] as const) {
       for (const used of [[], [BANKED]]) {
-        const resets = build(FIXTURE, { language, used })!;
-        expect(resets.presentation!.method).toEqual(insightsFor(language).claude.method);
-        const { method: _method, ...rest } = resets.presentation!;
-        expect(JSON.stringify({ ...resets, presentation: rest })).not.toMatch(/codex/i);
+        for (const codex of [[], CODEX]) {
+          const resets = build(FIXTURE, { language, used, codex })!;
+          expect(resets.presentation!.method).toEqual(insightsFor(language).claude.method);
+          const { method: _method, compare, ...rest } = resets.presentation!;
+          expect(compare === undefined, `${language} ${codex.length}`).toBe(codex.length === 0);
+          expect(JSON.stringify({ ...resets, presentation: rest })).not.toMatch(/codex/i);
+        }
       }
     }
   });
@@ -195,7 +202,7 @@ describe("buildClaudeGlanceResets", () => {
   it("carries the Claude view cut down to what the island and the widgets draw", () => {
     const presentation = build()!.presentation!;
     const text = insightsFor("vi");
-    for (const key of ["notices", "banked", "changes", "changesTitle", "changesNote", "compare"]) expect(key in presentation, key).toBe(false);
+    for (const key of ["notices", "banked", "compare"]) expect(key in presentation, key).toBe(false);
     expect(presentation.forecast.chances).toHaveLength(3);
     expect(presentation.method).toEqual(text.claude.method);
     expect(presentation.source).toBe(text.claude.source);
@@ -215,5 +222,46 @@ describe("buildClaudeGlanceResets", () => {
     const morning = new Date("2026-09-29T01:00:00Z");
     const night = new Date("2026-09-29T16:30:00Z");
     expect(build(FIXTURE, { now: morning })!.presentation!.forecast.reliability).toBe(build(FIXTURE, { now: night })!.presentation!.forecast.reliability);
+  });
+
+  it("lists the limit changes apart from the history, as the Reset tab's Claude view does", () => {
+    const popup = buildClaudePresentation({ feed: FIXTURE, codex: [], plans: ["max"], accounts: ["max"], used: [], now: NOW, language: "vi", timeFormat: "24h" });
+    const presentation = build()!.presentation!;
+    const text = insightsFor("vi").claude;
+    expect(presentation.changes).toHaveLength(6);
+    expect(presentation.changes).toEqual(popup.changes);
+    expect(presentation).toMatchObject({ changesTitle: "Thay đổi hạn mức", changeBadge: "Hạn mức", changesNote: text.changesNote });
+    expect(presentation.changes![0]).toMatchObject({ scope: "Các gói trả phí", author: { handle: "@ClaudeDevs" } });
+    const keys = Object.keys(presentation);
+    expect(keys.indexOf("changes")).toBeGreaterThan(keys.indexOf("history"));
+    expect(presentation.history.map((item) => item.id)).not.toContain(presentation.changes![0]!.id);
+    const english = build(FIXTURE, { language: "en" }).presentation!;
+    expect(english).toMatchObject({ changesTitle: "Limit changes", changeBadge: "Limits" });
+    for (const key of ["changes", "changesTitle", "changeBadge", "changesNote"]) expect(key in build(feedOf([event({ id: "r1" })])).presentation!, key).toBe(false);
+  });
+
+  it("says above the cards when the site is behind or only its published copy could be read", () => {
+    const text = insightsFor("vi").claude;
+    const body = (extra: Record<string, unknown>) => parseClaudeResets(JSON.stringify({ ...JSON.parse(FEED_FIXTURES.claudeResets), ...extra }))!;
+    expect("notices" in build(body({ live: true, detector: "fresh" })).presentation!).toBe(false);
+    expect(build(body({ live: true, detector: "stale" })).presentation!.notices).toEqual([text.detectorBehind]);
+    expect(build(body({ live: false, detector: null })).presentation!.notices).toEqual([text.datasetNote]);
+    const popup = buildClaudePresentation({ feed: body({ live: false, detector: null }), codex: [], plans: ["max"], accounts: ["max"], used: [], now: NOW, language: "vi", timeFormat: "24h" });
+    expect(build(body({ live: false, detector: null })).presentation!.notices).toEqual(popup.notices);
+  });
+
+  it("sets Claude against Codex once the Codex history is at hand, each column named and marked as the Reset tab heads it", () => {
+    const popup = buildClaudePresentation({ feed: FIXTURE, codex: CODEX, plans: ["max"], accounts: ["max"], used: [], now: NOW, language: "vi", timeFormat: "24h" });
+    const compare = build(FIXTURE, { codex: CODEX }).presentation!.compare!;
+    const { columns, ...rest } = compare;
+    expect(rest).toEqual(popup.compare);
+    expect(columns).toMatchObject({ claude: { name: "Claude", color: SOURCE_COLORS.claude }, codex: { name: "Codex", color: SOURCE_COLORS.codex } });
+    expect(columns!.claude.mark?.paths.length).toBeGreaterThan(0);
+    expect(columns!.codex.mark?.paths.length).toBeGreaterThan(0);
+    expect(compare.rows[0]).toMatchObject({ label: "Số lần reset" });
+    expect(compare.months.length).toBeGreaterThan(0);
+    const keys = Object.keys(build(FIXTURE, { codex: CODEX }).presentation!);
+    expect(keys.indexOf("compare")).toBeGreaterThan(keys.indexOf("changes"));
+    expect("compare" in build(FIXTURE, { codex: [] }).presentation!).toBe(false);
   });
 });
