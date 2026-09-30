@@ -466,6 +466,8 @@ enum ResetWidgetPagination {
         case let .stat(label, value):
             return pieces(.text(label, .secondary), card: card, width: width, height: height)
                 + pieces(.text(value, .heading), card: card, width: width, height: height)
+        case let .message(lines):
+            return messagePieces(lines, card: card, width: width, height: height)
         default:
             return [element]
         }
@@ -476,23 +478,74 @@ enum ResetWidgetPagination {
         var result: [GlanceResetElement] = []
         while !remaining.isEmpty {
             let characters = Array(remaining)
-            var low = 1
-            var high = characters.count
-            var best = 1
-            while low <= high {
-                let middle = (low + high) / 2
+            let best = max(1, prefixLength(characters) { prefix in
                 var candidate = card
-                candidate.elements = [make(String(characters.prefix(middle)))]
-                if fits(candidate, width: width, height: height) { best = middle; low = middle + 1 }
-                else { high = middle - 1 }
-            }
-            if best < characters.count, let space = characters.prefix(best).lastIndex(where: { $0.isWhitespace }), space > 0 {
-                best = space + 1
-            }
+                candidate.elements = [make(prefix)]
+                return fits(candidate, width: width, height: height)
+            })
             result.append(make(String(characters.prefix(best))))
             remaining = String(characters.dropFirst(best))
         }
         return result
+    }
+
+    /// A quoted announcement too tall for one page as boxes that each fit one: the author stays
+    /// with the first words, and the words that do not fit go on in the next box.
+    private static func messagePieces(_ lines: [GlanceResetElement], card: GlanceResetCardData, width: CGFloat, height: CGFloat) -> [GlanceResetElement] {
+        func fitsBox(_ lines: [GlanceResetElement]) -> Bool {
+            var candidate = card
+            candidate.elements = [.message(lines)]
+            return fits(candidate, width: width, height: height)
+        }
+        var boxes: [GlanceResetElement] = []
+        var current: [GlanceResetElement] = []
+        for line in lines {
+            if fitsBox(current + [line]) {
+                current.append(line)
+                continue
+            }
+            guard case let .text(text, style) = line else {
+                if !current.isEmpty { boxes.append(.message(current)) }
+                current = [line]
+                continue
+            }
+            var remaining = text
+            while !remaining.isEmpty {
+                let characters = Array(remaining)
+                let kept = prefixLength(characters) { fitsBox(current + [.text($0, style)]) }
+                if kept == 0 && !current.isEmpty {
+                    boxes.append(.message(current))
+                    current = []
+                    continue
+                }
+                let best = max(1, kept)
+                current.append(.text(String(characters.prefix(best)), style))
+                remaining = String(characters.dropFirst(best))
+                if !remaining.isEmpty {
+                    boxes.append(.message(current))
+                    current = []
+                }
+            }
+        }
+        if !current.isEmpty { boxes.append(.message(current)) }
+        return boxes
+    }
+
+    /// How many of `characters` the longest prefix that `fits` keeps, cut after a space rather than
+    /// inside a word; 0 when not even one character fits.
+    private static func prefixLength(_ characters: [Character], fits: (String) -> Bool) -> Int {
+        var low = 1
+        var high = characters.count
+        var best = 0
+        while low <= high {
+            let middle = (low + high) / 2
+            if fits(String(characters.prefix(middle))) { best = middle; low = middle + 1 }
+            else { high = middle - 1 }
+        }
+        if best > 0, best < characters.count, let space = characters.prefix(best).lastIndex(where: { $0.isWhitespace }), space > 0 {
+            best = space + 1
+        }
+        return best
     }
 
     private static func calendarPieces(_ calendar: GlanceResetCalendar, weeks: Range<Int>, days: Range<Int>, card: GlanceResetCardData, width: CGFloat, height: CGFloat) -> [GlanceResetElement] {

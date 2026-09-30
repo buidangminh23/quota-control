@@ -719,8 +719,14 @@ struct GlanceResetLatestPresentation: Decodable, Equatable {
     var at: Date
     var meta: String
     var author: GlanceResetAuthor?
-    /// Lines under the meta, e.g. whether the reset covers this account's plan (Claude).
+    /// Lines under the announcement, e.g. whether the reset covers this account's plan (Claude).
     var notes: [String]? = nil
+    /// The words it was announced with, as the reset notification quoted them, cut like the other cards'.
+    var excerpt: String? = nil
+    /// A link to the post that announced it.
+    var url: String? = nil
+    /// Said when no post announced it: the site recorded the reset itself.
+    var observed: String? = nil
 
     func ago(now: Date, locale: String) -> String {
         let minutes = max(1, Int(floor(now.timeIntervalSince(at) / 60)))
@@ -749,6 +755,9 @@ struct GlanceResetStatusCard: Decodable, Equatable, Identifiable {
     var scheduledMeta: String? = nil
     var dueCountdown: GlanceCountdown? = nil
     var overdueCountdown: GlanceCountdown? = nil
+    /// The card is about the latest reset (a Claude banked reset), whose card already quotes the post
+    /// while it is drawn with it.
+    var sameAsLatest: Bool? = nil
 
     func metadata(now: Date, units: GlanceUnits) -> [String] {
         guard kind == "scheduled", let announced, let scheduledMeta else { return meta }

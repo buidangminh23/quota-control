@@ -208,6 +208,8 @@ enum GlanceResetElement {
     case stat(String, String)
     case link(String)
     case divider
+    /// An announcement quoted in a box, like the message under the Reset tab's latest reset.
+    case message([GlanceResetElement])
 }
 
 struct GlanceResetCardData: Identifiable {
@@ -224,6 +226,8 @@ struct GlanceResetPalette {
     var card: Color { Color(glanceHex: scheme == .dark ? "#2a2a2b" : "#f4f4f5")! }
     var blue: Color { Color(glanceHex: scheme == .dark ? "#0a84ff" : "#007aff")! }
     var yellow: Color { Color(glanceHex: scheme == .dark ? "#ffd60a" : "#f5b800")! }
+    /// What a quoted announcement sits on inside a card, the popup's `--uc-quinary`.
+    var message: Color { scheme == .dark ? Color.white.opacity(0.07) : Color.black.opacity(0.05) }
     static let orange = Color(glanceHex: "#ff9500")!
 }
 
@@ -285,7 +289,7 @@ struct GlanceResetElementView: View {
                 if let image = Self.avatar(avatar) {
                     Image(nsImage: image).resizable().scaledToFill().frame(width: 22, height: 22).clipShape(Circle())
                 }
-                Text(author.handle).font(.system(size: 10, weight: .medium))
+                Text(author.handle).font(.system(size: 10, weight: .medium)).lineLimit(1).minimumScaleFactor(0.8)
             }
         case let .badge(text):
             Text(text)
@@ -343,6 +347,16 @@ struct GlanceResetElementView: View {
                 Link(destination: destination) { Image(systemName: "arrow.up.right.square").font(.system(size: 14)) }
                     .accessibilityLabel(url)
             }
+        case let .message(lines):
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                    GlanceResetElementView(element: line, availableWidth: max(1, availableWidth - 20))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(palette.message))
         }
     }
 
@@ -430,18 +444,28 @@ enum GlanceResetCards {
         }
         if let presentation = resets.presentation {
             if let latest = presentation.latest {
+                let author = latest.author.map { GlanceResetElement.author($0, presentation.avatar(for: $0)) }
                 var elements: [GlanceResetElement] = []
-                if let author = latest.author { elements.append(.author(author, presentation.avatar(for: author))) }
+                if latest.excerpt == nil, let author { elements.append(author) }
                 elements += [.badge(latest.ago(now: now, locale: presentation.locale)), .text(latest.meta, .secondary)]
+                if let excerpt = latest.excerpt {
+                    var lines: [GlanceResetElement] = author.map { [$0] } ?? []
+                    lines.append(.text(excerpt, .body))
+                    if let observed = latest.observed { lines.append(.text(observed, .secondary)) }
+                    if let url = latest.url { lines.append(.link(url)) }
+                    elements.append(.message(lines))
+                }
                 elements += (latest.notes ?? []).map { .text($0, .secondary) }
                 add("latest", latest.title, elements)
             }
+            let quoted = presentation.latest?.excerpt != nil
             for status in presentation.statuses(at: now) {
+                let repeats = quoted && status.sameAsLatest == true
                 var elements: [GlanceResetElement] = []
                 let metadata = status.metadata(now: now, units: units)
                 if status.kind == "watch", metadata.count > 1 { elements.append(.text(metadata[0], .secondary)) }
-                if let author = status.author { elements.append(.author(author, presentation.avatar(for: author))) }
-                if let excerpt = status.excerpt { elements.append(.text(excerpt, .body)) }
+                if let author = status.author, !repeats { elements.append(.author(author, presentation.avatar(for: author))) }
+                if let excerpt = status.excerpt, !repeats { elements.append(.text(excerpt, .body)) }
                 elements += (status.kind == "watch" && metadata.count > 1 ? Array(metadata.dropFirst()) : metadata).map { .text($0, .secondary) }
                 if let due = status.due(now: now, units: units) { elements.append(.text(due, .secondary)) }
                 if let url = status.url { elements.append(.link(url)) }
