@@ -3,6 +3,7 @@ import { insightsFor } from "@/i18n/insights";
 import { FEED_FIXTURES } from "@/lib/insightsFeedFixtures";
 import { timeOnDayLabel } from "./format";
 import { buildClaudeGlanceResets, CLAUDE_RESETS_SITE, pendingBanked, type ClaudeGlanceResetsInput } from "./glanceClaudeResets";
+import { buildClaudePresentation } from "./insights/claudePresentation";
 import { parseClaudeResets, type ClaudeResetFeed } from "./insights/claudeResets";
 import { SOURCE_COLORS } from "./palette";
 import { offsetLabel, setSystemTimeZone } from "./timeZone";
@@ -49,10 +50,14 @@ describe("buildClaudeGlanceResets", () => {
     expect(build(FIXTURE, { stale: true })!.stale).toBe(insightsFor("vi").staleNote);
   });
 
-  it("never says Codex, in either language", () => {
+  it("says Codex only where the Reset tab's method does, in either language", () => {
     for (const language of ["vi", "en"] as const) {
-      expect(JSON.stringify(build(FIXTURE, { language }))).not.toMatch(/codex/i);
-      expect(JSON.stringify(build(FIXTURE, { language, used: [BANKED] }))).not.toMatch(/codex/i);
+      for (const used of [[], [BANKED]]) {
+        const resets = build(FIXTURE, { language, used })!;
+        expect(resets.presentation!.method).toEqual(insightsFor(language).claude.method);
+        const { method: _method, ...rest } = resets.presentation!;
+        expect(JSON.stringify({ ...resets, presentation: rest })).not.toMatch(/codex/i);
+      }
     }
   });
 
@@ -178,9 +183,8 @@ describe("buildClaudeGlanceResets", () => {
     const presentation = build()!.presentation!;
     const text = insightsFor("vi");
     for (const key of ["notices", "banked", "changes", "changesTitle", "changesNote", "compare"]) expect(key in presentation, key).toBe(false);
-    expect("reliability" in presentation.forecast).toBe(false);
     expect(presentation.forecast.chances).toHaveLength(3);
-    expect(presentation.method).toEqual(text.claude.glanceMethod);
+    expect(presentation.method).toEqual(text.claude.method);
     expect(presentation.source).toBe(text.claude.source);
     expect(presentation.authorAvatar).toMatch(/^data:image\//);
     expect(presentation.avatarHandle).toBe("@ClaudeDevs");
@@ -190,11 +194,13 @@ describe("buildClaudeGlanceResets", () => {
     expect(presentation.stats.length).toBeGreaterThan(0);
   });
 
-  it("keeps the method's shared paragraphs word for word from the Reset tab's Claude view", () => {
-    for (const language of ["vi", "en"] as const) {
-      const claude = insightsFor(language).claude;
-      expect(claude.glanceMethod.slice(0, 3)).toEqual(claude.method.slice(0, 3));
-      expect(claude.glanceMethod.join(" ")).not.toMatch(/codex/i);
-    }
+  it("carries the Reset tab's self-check under the chances, the same all day", () => {
+    const popup = buildClaudePresentation({ feed: FIXTURE, codex: [], plans: ["max"], accounts: ["max"], used: [], now: NOW, language: "vi", timeFormat: "24h" });
+    const forecast = build()!.presentation!.forecast;
+    expect(forecast.reliability).toMatch(/^Thử lại trên \d+ ngày đã qua \(\d+ lần reset\)/);
+    expect(forecast.reliability).toBe(popup.forecast.reliability);
+    const morning = new Date("2026-09-29T01:00:00Z");
+    const night = new Date("2026-09-29T16:30:00Z");
+    expect(build(FIXTURE, { now: morning })!.presentation!.forecast.reliability).toBe(build(FIXTURE, { now: night })!.presentation!.forecast.reliability);
   });
 });

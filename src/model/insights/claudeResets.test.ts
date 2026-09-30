@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FEED_FIXTURES } from "@/lib/insightsFeedFixtures";
 import { setSystemTimeZone } from "@/model/timeZone";
 import { bankedResetFor, bankedResetLines } from "./bankedResetLines";
-import { buildClaudePresentation, COMPARE_MONTHS, scopeText } from "./claudePresentation";
+import { buildClaudePresentation, COMPARE_MONTHS, dailyReliability, reliabilityText, scopeText } from "./claudePresentation";
 import { insightsFor } from "@/i18n/insights";
 import {
   compareTrackers,
@@ -305,6 +305,28 @@ describe("forecastSkill", () => {
     expect(forecastSkill([plain("a", "2026-09-01T00:00:00Z"), plain("b", "2026-09-10T00:00:00Z")], NOW)).toBeNull();
     const month = Array.from({ length: 6 }, (_, index) => plain(String(index), new Date(NOW.getTime() - (index + 1) * 6 * 86_400_000).toISOString()));
     expect(forecastSkill(month, NOW)).toBeNull();
+  });
+});
+
+describe("dailyReliability", () => {
+  const every5 = Array.from({ length: 30 }, (_, index) => plain(String(index), new Date(Date.UTC(2026, 3, 1, 5) + index * 5 * 86_400_000).toISOString()));
+  const text = insightsFor("vi");
+  const morning = new Date("2026-09-29T01:00:00Z");
+  const evening = new Date("2026-09-29T13:00:00Z");
+
+  it("tries the history up to the start of the device's day, so it reads the same all day", () => {
+    expect(reliabilityText(forecastSkill(every5, morning), "vi", text)).not.toBe(reliabilityText(forecastSkill(every5, evening), "vi", text));
+    const line = dailyReliability(every5, morning, "vi");
+    expect(line).toMatch(/^Thử lại trên \d+ ngày đã qua \(\d+ lần reset\)/);
+    expect(dailyReliability(every5, evening, "vi")).toBe(line);
+    expect(line).toBe(reliabilityText(forecastSkill(every5, new Date("2026-09-28T17:00:00Z")), "vi", text));
+    expect(dailyReliability(every5, new Date("2026-09-29T17:00:00Z"), "vi")).not.toBe(line);
+  });
+
+  it("gives the Reset tab's Claude view the same line", () => {
+    const feed = parseClaudeResets(FEED_FIXTURES.claudeResets)!;
+    const view = buildClaudePresentation({ feed, codex: [], plans: ["max"], used: [], now: NOW, language: "vi", timeFormat: "24h" });
+    expect(view.forecast.reliability).toBe(dailyReliability(feed.resets, NOW, "vi"));
   });
 });
 

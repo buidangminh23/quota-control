@@ -214,6 +214,18 @@ describe("shared Reset tab presentation", () => {
     expect(result.method).toEqual(text.resetsMethod);
   });
 
+  it("puts the Reset tab's self-check under the chances, and only while there are chances", () => {
+    const line = "Thử lại trên 60 ngày đã qua (14 lần reset): cách ước tính này chỉ ngang mức trung bình của lịch sử, nên chỉ để tham khảo.";
+    const forecast = build(parseResetFeeds(status(), HISTORY), { reliability: line })!.presentation!.forecast;
+    expect(forecast.chances).toHaveLength(3);
+    expect(forecast.reliability).toBe(line);
+    expect(Object.keys(forecast).indexOf("reliability")).toBe(Object.keys(forecast).indexOf("sampleNote") + 1);
+    expect("reliability" in JSON.parse(JSON.stringify(build(parseResetFeeds(status(), HISTORY))!.presentation!.forecast))).toBe(false);
+    const statusOnly = build(parseResetFeeds(status(null, WATCH), null), { reliability: line })!.presentation!.forecast;
+    expect(statusOnly.chances).toEqual([]);
+    expect(statusOnly.reliability).toBeUndefined();
+  });
+
   it("keeps observed resets anonymous and handles no-history state without fabricated cards", () => {
     const observed = { ...post("observed", "regular", POSTED), source: { type: "observed", url: null } };
     const result = present(parseResetFeeds(null, JSON.stringify({ data: [observed] })));

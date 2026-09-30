@@ -91,24 +91,23 @@ function upcomingOf(reset: ClaudeReset, now: Date, timeFormat: TimeFormat, langu
 /**
  * The Reset tab's Claude view cut down to what the island and the widgets draw: its cards in the
  * Codex shape, the banked resets still to apply as status cards counting down to their deadlines,
- * the @ClaudeDevs picture for that account's posts, and none of what only the popup has (limit
- * changes, the comparison with Codex, marking a banked reset as applied, the forecast's self-check).
- * The chances' meters are kept to the whole percent they show, so the document does not change
- * each minute as the estimate drifts.
+ * the forecast with its self-check, the @ClaudeDevs picture for that account's posts, the method
+ * word for word, and none of what only the popup has yet (limit changes, the comparison with
+ * Codex, marking a banked reset as applied). The chances' meters are kept to the whole percent
+ * they show, so the document does not change each minute as the estimate drifts.
  */
 function glancePresentation(presentation: ClaudePresentation, pending: readonly ClaudeReset[], language: Language): GlanceResetPresentation {
   const text = insightsFor(language).claude;
   const waiting = new Set(pending.map((reset) => reset.id));
   const left = text.bankedLeft(COUNTDOWN_SPAN);
   const banked = presentation.banked.filter((card) => waiting.has(card.resetId)).map((card) => bankedStatus(card, text.glanceBankedHow, left));
-  const { reliability: _reliability, ...forecast } = presentation.forecast;
-  const chances = forecast.chances.map((chance) => ({ ...chance, fraction: Math.round(chance.fraction * 100) / 100 }));
+  const chances = presentation.forecast.chances.map((chance) => ({ ...chance, fraction: Math.round(chance.fraction * 100) / 100 }));
   const reduced: GlanceResetPresentation = {
     locale: presentation.locale,
     authorAvatar: claudeDevsAvatar,
     avatarHandle: authorOf(CLAUDE_ACCOUNT).handle,
     statuses: banked.length > 0 ? banked : presentation.statuses,
-    forecast: { ...forecast, chances },
+    forecast: { ...presentation.forecast, chances },
     statsTitle: presentation.statsTitle,
     stats: presentation.stats,
     historyTitle: presentation.historyTitle,
@@ -116,7 +115,7 @@ function glancePresentation(presentation: ClaudePresentation, pending: readonly 
     patternNote: presentation.patternNote,
     source: presentation.source,
     methodTitle: presentation.methodTitle,
-    method: [...text.glanceMethod],
+    method: [...presentation.method],
   };
   if (presentation.latest) reduced.latest = presentation.latest;
   if (presentation.quietTitle !== undefined) reduced.quietTitle = presentation.quietTitle;

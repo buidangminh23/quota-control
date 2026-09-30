@@ -7,6 +7,8 @@ import type { PublicFeedName, PublicFeedSnapshot } from "@/lib/insightsTypes";
 import { MockBackend } from "@/lib/mockBackend";
 import { FEED_FIXTURES } from "@/lib/insightsFeedFixtures";
 import type { GlanceDocument } from "@/model/glance";
+import { parseResetFeeds } from "@/model/glanceResets";
+import { dailyReliability } from "@/model/insights/claudePresentation";
 import { resetInsights } from "@/state/insights";
 import { updateSettings, useApp } from "@/state/store";
 
@@ -122,6 +124,19 @@ describe("the glance document the popup sends", () => {
     act(() => updateSettings({ showResetsTab: true }));
     await waitFor(() => expect(api.latest?.island.resetsProvider).toBe("claude"));
     expect(api.latest!.widget.resetsProvider).toBe("claude");
+  });
+
+  it("carries the Reset tab's self-check under the Codex chances once the history is long enough to try", async () => {
+    const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+    const post = (id: string, days: number) => ({ id, reset_type: "regular", announced_at: ago(days), text: `Codex reset ${id}.`, source: { type: "x_post", author: "thsottiaux", url: `https://x.com/thsottiaux/status/${id}` } });
+    const history = [...Array.from({ length: 8 }, (_, index) => post(`1${index}`, 300 - index * 25)), ...Array.from({ length: 33 }, (_, index) => post(`2${index + 10}`, 100 - index * 3))];
+    const body = JSON.stringify({ data: history.reverse(), pagination: { has_more: false, next_cursor: null }, meta: { api_version: "v1" } });
+    const api = await start({}, (backend) => {
+      backend.feedStates.codexResets = { body };
+    });
+    await waitFor(() => expect(api.latest?.resets?.presentation?.forecast.reliability).toMatch(/^Thử lại trên \d+ ngày đã qua/));
+    const feeds = parseResetFeeds(FEED_FIXTURES.codexResetStatus, body);
+    expect(api.latest!.resets!.presentation!.forecast.reliability).toBe(dailyReliability(feeds.resets, new Date(), "vi"));
   });
 
   it("puts the saved-copy note on the Codex tracker while its status has never been read", async () => {

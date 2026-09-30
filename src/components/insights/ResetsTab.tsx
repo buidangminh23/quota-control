@@ -6,8 +6,7 @@
 import { useMemo } from "react";
 import { insightsFor } from "@/i18n/insights";
 import { buildResetPresentation } from "@/model/glanceResets";
-import { forecastSkill } from "@/model/insights/claudeResets";
-import { reliabilityText } from "@/model/insights/claudePresentation";
+import { dailyReliability } from "@/model/insights/claudePresentation";
 import { feedOutdated, parseResets, parseResetStatus, resetTrackerOutdated } from "@/model/insights/resets";
 import { SOURCE_COLORS } from "@/model/palette";
 import { RESET_PROVIDERS, type ResetProvider } from "@/model/settings";
@@ -34,9 +33,12 @@ function CodexResets() {
   const status = useMemo(() => parseResetStatus(feeds.codexResetStatus?.body), [feeds.codexResetStatus]);
   const resets = useMemo(() => parseResets(feeds.codexResets?.body, [status?.latest ?? null]), [feeds.codexResets, status]);
   const now = useNow();
-  const presentation = useMemo(() => buildResetPresentation({ feeds: { status, resets }, now, language, timeFormat }), [status, resets, now, language, timeFormat]);
   const today = dayNumber(now);
-  const reliability = useMemo(() => reliabilityText(forecastSkill(resets, now), language, text), [resets, today, language, text]);
+  const reliability = useMemo(() => dailyReliability(resets, now, language, text), [resets, today, language, text]);
+  const presentation = useMemo(
+    () => buildResetPresentation({ feeds: { status, resets }, now, language, timeFormat, reliability }),
+    [status, resets, now, language, timeFormat, reliability],
+  );
   const loaded = feeds.codexResetStatus !== undefined && feeds.codexResets !== undefined;
   const empty = loaded && !feeds.codexResetStatus?.body && !feeds.codexResets?.body;
   const stale = resetTrackerOutdated({
@@ -56,7 +58,7 @@ function CodexResets() {
       <StatusCards cards={presentation.statuses} text={text} />
       {resets.length > 0 ? (
         <>
-          <Forecast forecast={presentation.forecast.chances.length > 0 ? { ...presentation.forecast, reliability } : presentation.forecast} />
+          <Forecast forecast={presentation.forecast} />
           <Calendar resets={resets} language={language} text={text} />
           <Pattern resets={resets} language={language} text={text} />
           <Stats presentation={presentation} />

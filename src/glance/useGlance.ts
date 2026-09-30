@@ -15,11 +15,13 @@ import type { Provider, WidgetDescriptor } from "@/lib/types";
 import { buildGlance, isClaudeResetsWing, isSpecialWing, type GlanceWingChoice } from "@/model/glance";
 import { buildClaudeGlanceResets } from "@/model/glanceClaudeResets";
 import { buildGlanceResets, parseResetFeeds } from "@/model/glanceResets";
+import { dailyReliability } from "@/model/insights/claudePresentation";
 import { parseClaudeResets } from "@/model/insights/claudeResets";
 import { feedOutdated, resetTrackerOutdated } from "@/model/insights/resets";
 import { brandOf, glanceGroups } from "@/model/layout";
 import { surfaceResetProvider } from "@/model/settings";
 import { cardIdentity } from "@/model/providerText";
+import { dayNumber } from "@/model/timeZone";
 import { widgetDataFor } from "@/model/widgetData";
 import { useClaudeAccountPlans } from "@/state/claudePlans";
 import { useDisplay, useIsEnabled, useWallClock } from "@/state/hooks";
@@ -89,9 +91,11 @@ export function useGlance(): void {
       historyBody,
       historyStale: showResetsTab && feedOutdated(historyFeed, historyError),
     });
+  const today = dayNumber(now);
+  const reliability = useMemo(() => (tracking ? dailyReliability(feeds.resets, now, display.language) : undefined), [tracking, feeds, today, display.language]);
   const resets = useMemo(
-    () => (tracking ? buildGlanceResets({ feeds, stale, now, language: display.language, timeFormat, theme }) : null),
-    [tracking, feeds, stale, now, display.language, timeFormat, theme],
+    () => (tracking ? buildGlanceResets({ feeds, stale, now, language: display.language, timeFormat, theme, reliability }) : null),
+    [tracking, feeds, stale, now, display.language, timeFormat, theme, reliability],
   );
 
   const claudeRead = island.resetsProvider === "claude" || widget.resetsProvider === "claude" || island.wings.some(isClaudeResetsWing);

@@ -58,6 +58,11 @@ export interface GlanceResetsInput {
   now: Date;
   language: Language;
   timeFormat: TimeFormat;
+  /**
+   * The forecast's self-check (`dailyReliability`), shown under the chances while there are any.
+   * The caller works it out once a day, since trying the whole history again is the slow part.
+   */
+  reliability?: string;
 }
 
 export function resetAgoText(date: Date, now: Date, language: Language): string {
@@ -130,6 +135,7 @@ export function buildResetPresentation(input: Omit<GlanceResetsInput, "stale">):
       waitFraction: wait?.shorterShare,
       median: wait ? (wait.medianMark > now ? text.medianMark : text.medianMarkPassed)(text.days(numberText(language, wait.medianGapDays, 1)), `${shortTime(wait.medianMark, timeFormat, language)} ${shortDate(wait.medianMark, now, language)}`) : undefined,
       sampleNote: forecast ? text.forecastNote(numberText(language, forecast.resets)) : undefined,
+      reliability: forecast ? input.reliability : undefined,
       disclaimer: forecast ? text.forecastDisclaimer : undefined,
       unavailable: forecast || feeds.resets.length === 0 ? undefined : text.forecastUnavailable,
     },

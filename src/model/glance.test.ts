@@ -5,6 +5,7 @@ import type { ProviderSnapshot } from "@/lib/types";
 import { buildGlance, CLAUDE_RESETS_PROVIDER_ID, CODEX_RESETS_PROVIDER_ID, glanceMetric, GLANCE_VERSION, isClaudeResetsWing, type GlanceAlert, type GlanceResets, type GlanceWingChoice } from "./glance";
 import { buildClaudeGlanceResets } from "./glanceClaudeResets";
 import { buildGlanceResets, parseResetFeeds } from "./glanceResets";
+import { dailyReliability } from "./insights/claudePresentation";
 import { parseClaudeResets } from "./insights/claudeResets";
 import { glanceGroups, reconcileLayout } from "./layout";
 import { barKind, platformKey } from "./platform";
@@ -407,8 +408,10 @@ describe("a document for someone who never chose Claude", () => {
   beforeEach(() => setSystemTimeZone("Asia/Saigon"));
   afterEach(() => setSystemTimeZone(null));
 
-  const codex = (language: "vi" | "en") =>
-    buildGlanceResets({ feeds: parseResetFeeds(FEED_FIXTURES.codexResetStatus, FEED_FIXTURES.codexResets), stale: false, now: NOW_GLANCE, language, timeFormat: "auto", theme: "system" });
+  const codex = (language: "vi" | "en") => {
+    const feeds = parseResetFeeds(FEED_FIXTURES.codexResetStatus, FEED_FIXTURES.codexResets);
+    return buildGlanceResets({ feeds, stale: false, now: NOW_GLANCE, language, timeFormat: "auto", theme: "system", reliability: dailyReliability(feeds.resets, NOW_GLANCE, language) });
+  };
   const claude = () =>
     buildClaudeGlanceResets({ feed: parseClaudeResets(FEED_FIXTURES.claudeResets)!, accounts: ["max", null], used: [], stale: false, now: NOW_GLANCE, language: "vi", timeFormat: "auto", theme: "system" });
   const scenarios = (): Record<string, Options> => ({

@@ -476,7 +476,7 @@ enum GlanceResetCards {
             if !forecast.chances.isEmpty { elements.append(.chances(forecast.chances)) }
             if let wait = forecast.wait { elements += [.divider, .text(wait, .heading)] }
             if let fraction = forecast.waitFraction { elements.append(.meter(fraction)) }
-            for text in [forecast.median, forecast.sampleNote, forecast.disclaimer, forecast.unavailable].compactMap({ $0 }) {
+            for text in [forecast.median, forecast.sampleNote, forecast.reliability, forecast.disclaimer, forecast.unavailable].compactMap({ $0 }) {
                 elements.append(.text(text, .secondary))
             }
             if !elements.isEmpty { add("forecast", forecast.title, elements) }

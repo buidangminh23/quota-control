@@ -693,6 +693,7 @@ struct GlanceResets: Decodable, Equatable {
             copy.forecastNote = ""
             copy.presentation?.forecast.chances = []
             copy.presentation?.forecast.sampleNote = nil
+            copy.presentation?.forecast.reliability = nil
             copy.presentation?.forecast.disclaimer = nil
             copy.presentation?.forecast.unavailable = nil
         }
@@ -788,6 +789,9 @@ struct GlanceResetForecastPresentation: Decodable, Equatable {
     var waitFraction: Double?
     var median: String?
     var sampleNote: String?
+    /// How the estimate would have done on this history (`Thử lại trên 60 ngày…`), as the Reset tab
+    /// says it under the chances; absent while the history is too short to try.
+    var reliability: String? = nil
     var disclaimer: String?
     var unavailable: String?
 }
