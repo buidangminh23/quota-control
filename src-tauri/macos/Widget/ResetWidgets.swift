@@ -424,6 +424,7 @@ enum ResetWidgetPagination {
     private static var cache: [String: [GlanceResetCardData]] = [:]
     private static var keys: [String] = []
     private static var spreadCache: [String: [[GlanceResetCardData]]] = [:]
+    private static var headingCache: [String: CGFloat] = [:]
 
     /// The cards cut into fragments that each fit a page `height` high; the `headed` ones, whose
     /// page opens with the tracker's heading, into fragments that leave it `heading` of room.
@@ -481,8 +482,12 @@ enum ResetWidgetPagination {
 
     /// The room the tracker's heading takes at the top of a page, with the gap under it.
     static func headingSpace(_ resets: GlanceResets, width: CGFloat) -> CGFloat {
+        let key = "\(width)|\(resets.title)"
+        if let saved = headingCache[key] { return saved }
         let view = ResetsHeader(resets: resets).frame(width: width).fixedSize(horizontal: false, vertical: true)
-        return ceil(NSHostingController(rootView: view).sizeThatFits(in: CGSize(width: width, height: 1_000)).height) + 8
+        let space = ceil(NSHostingController(rootView: view).sizeThatFits(in: CGSize(width: width, height: 1_000)).height) + 8
+        headingCache[key] = space
+        return space
     }
 
     /// The fragments laid onto pages in order, each page as full as it takes. A `headed` card

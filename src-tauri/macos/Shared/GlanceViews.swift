@@ -902,16 +902,14 @@ struct GlanceResetElementView: View {
 /// tracker's mark in its color beside its title.
 struct GlanceResetHeading: View {
     let resets: GlanceResets
-    var markSize: CGFloat = 14
-    var fontSize: CGFloat = 12
 
     var body: some View {
         HStack(spacing: 6) {
             ProviderMark(mark: resets.mark)
                 .foregroundStyle(resets.markTint)
-                .frame(width: markSize, height: markSize)
+                .frame(width: 14, height: 14)
             Text(resets.title)
-                .font(.system(size: fontSize, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Color.primary)
                 .lineLimit(1)
         }
