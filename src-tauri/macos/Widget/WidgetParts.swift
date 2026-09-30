@@ -202,6 +202,7 @@ struct UpdatedFooter: View {
         HStack(spacing: 3) {
             if stale {
                 Image(systemName: "exclamationmark.circle")
+                    .font(.system(size: WidgetScale.footnote))
             }
             Text("\(document.labels.updated) \(GlanceFormat.time(document.generatedAt, locale: document.resolvedLocale, hour12: document.hour12))")
         }

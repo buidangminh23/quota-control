@@ -227,11 +227,14 @@ extension GlanceDocument {
         used ? "used" : "open"
     }
 
-    /// The row carrying `providerId`'s redemption button, on the island or the widget.
+    /// The row carrying `providerId`'s redemption button, on the island or the widget: an account
+    /// either lists without its reset credits (the island's starred metrics, say) is passed over.
     func redeemRow(providerId: String) -> GlanceMetric? {
         (providers + widget.providers)
-            .first { $0.id == providerId }?
-            .metrics.first { $0.redeem?.providerId == providerId }
+            .lazy
+            .filter { $0.id == providerId }
+            .compactMap { $0.metrics.first { $0.redeem?.providerId == providerId } }
+            .first
     }
 
     /// The reading of the row carrying `request`'s button (its count of resets), to tell when the

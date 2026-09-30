@@ -237,6 +237,8 @@ enum GlanceResetTextStyle {
     case value
     /// 20pt bold in the accent blue: a banked reset's time left, under who posted it.
     case timeLeft
+    /// 10pt in the notice color: a tracker that could not load, as the Reset tab's error line.
+    case notice
 }
 
 /// Words on a reset card that move with the clock, worded when the card is drawn at the moment
@@ -888,6 +890,7 @@ struct GlanceResetElementView: View {
         switch style {
         case .secondary, .rowPost, .status: return .secondary
         case .timeLeft: return palette.blue
+        case .notice: return palette.noticeText
         case .body, .post, .heading, .value: return .primary
         }
     }
@@ -895,7 +898,7 @@ struct GlanceResetElementView: View {
     private static func size(_ style: GlanceResetTextStyle) -> CGFloat {
         switch style {
         case .value, .timeLeft: return 20
-        case .secondary: return 10
+        case .secondary, .notice: return 10
         case .body, .post, .rowPost, .heading, .status: return 11
         }
     }

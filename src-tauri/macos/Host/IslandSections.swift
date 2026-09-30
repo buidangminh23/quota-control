@@ -791,7 +791,7 @@ struct IslandResetsMissing: View {
                 .foregroundStyle(Color.primary)
                 .lineLimit(1)
             Text(part.message)
-                .font(.glance(size: 11))
+                .font(.glance(size: part.failed ? 10 : 11))
                 .foregroundStyle(part.failed ? GlanceResetPalette(scheme: scheme).noticeText : Color.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

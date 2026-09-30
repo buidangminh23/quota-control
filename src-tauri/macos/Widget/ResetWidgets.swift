@@ -30,6 +30,7 @@ struct ResetsStaleLine: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 3) {
             Image(systemName: "exclamationmark.circle")
+                .font(.system(size: WidgetScale.caption))
             Text(text).lineLimit(1)
         }
         .font(.glance(size: WidgetScale.caption))
@@ -404,7 +405,7 @@ struct ResetWidgetPager: View {
             guard let resets = part.resets else {
                 let missing = GlanceResetCardData(
                     id: ResetWidgetPart.id("missing", of: part.provider, both: both), title: "", look: .plain,
-                    elements: [.text(part.title, .heading), .text(part.message, .secondary)]
+                    elements: [.text(part.title, .heading), .text(part.message, part.failed ? .notice : .status)]
                 )
                 return ResetWidgetPart(shown: part, cards: [missing], foldKey: foldKey)
             }
