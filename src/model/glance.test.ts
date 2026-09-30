@@ -15,15 +15,18 @@ import {
   type GlanceDocument,
   type GlancePlanTerm,
   type GlancePlanTermWords,
+  type GlanceResetRow,
   type GlanceResets,
   type GlanceWingChoice,
 } from "./glance";
 import { buildClaudeGlanceResets } from "./glanceClaudeResets";
+import { claudeResetRow, codexResetRow } from "./glanceResetRows";
 import { buildGlanceResets, parseResetFeeds } from "./glanceResets";
 import { parseClaudeResets } from "./insights/claudeResets";
+import { parseResetStatus } from "./insights/resets";
 import { glanceGroups, reconcileLayout } from "./layout";
 import { barKind, platformKey } from "./platform";
-import { cardIdentity } from "./providerText";
+import { cardIdentity, providerBrand } from "./providerText";
 import { DEFAULT_SETTINGS, type GlanceContent, type IslandSettings, type ThemeSetting } from "./settings";
 import { planTermLines } from "./planTermLines";
 import { makeWidget, NOW, resetsAt, WEEK_SECONDS } from "./testHelpers";
@@ -54,9 +57,28 @@ interface Options {
   now?: Date;
   /** The refresh error each provider's runtime carries beside its last good snapshot. */
   errors?: Readonly<Record<string, string>>;
+  /** The cards open on the Hạn mức tab; none by default, as the fixture layout has them. */
+  openProviders?: readonly string[];
+  resetRowFor?: (provider: Provider) => GlanceResetRow | null;
 }
 
-function glance({ display = DEFAULT_DISPLAY, data = snapshots, alert = null, island = {}, widget = {}, wings = [null, null], hour12 = null, resets = null, claudeResets, markArt, theme = "system", now = NOW_GLANCE, errors = {} }: Options = {}) {
+function glance({
+  display = DEFAULT_DISPLAY,
+  data = snapshots,
+  alert = null,
+  island = {},
+  widget = {},
+  wings = [null, null],
+  hour12 = null,
+  resets = null,
+  claudeResets,
+  markArt,
+  theme = "system",
+  now = NOW_GLANCE,
+  errors = {},
+  openProviders = layout.openProviders,
+  resetRowFor,
+}: Options = {}) {
   const islandSettings = { ...DEFAULT_SETTINGS.island, ...island };
   const widgetSettings = { ...DEFAULT_SETTINGS.widget, ...widget };
   const groups = (content: GlanceContent, metrics: readonly string[]) => glanceGroups(content, metrics, layout, catalog, () => true);
@@ -73,6 +95,8 @@ function glance({ display = DEFAULT_DISPLAY, data = snapshots, alert = null, isl
     providerOf: (providerId) => providers.get(providerId),
     refreshedAt: (providerId) => data[providerId]?.refreshedAt,
     refreshIntervalMs: REFRESH_INTERVAL_MS,
+    openProviders,
+    resetRowFor,
     language: display.language,
     hour12,
     theme,
@@ -195,6 +219,103 @@ describe("island wings", () => {
 
   it("shows the plan by default, as the popup's cards and the widgets do", () => {
     expect(glance().island.shows).toEqual({ account: true, plan: true, resets: true });
+  });
+
+  it("names the window of a reading beside the notch, as the menu bar strip labels it", () => {
+    const automatic = glance().island.wings;
+    expect(automatic.map((wing) => wing.metrics[0]!.period)).toEqual(["5h", "5h"]);
+    const weekly = descriptors.get("codex@52d0.weekly")!;
+    expect(glance({ wings: [weekly, null] }).island.wings[0]!.metrics[0]).toMatchObject({ id: "codex@52d0.weekly", period: "week" });
+    const english = glance({ display: { ...DEFAULT_DISPLAY, language: "en" } }).island.wings;
+    expect(english.map((wing) => wing.metrics[0]!.period)).toEqual(["5h", "5h"]);
+    const special = glance({ wings: ["quota:next", "codex-resets:chance-7"], resets: TRACKER }).island.wings;
+    expect(special.map((wing) => "period" in wing.metrics[0]!)).toEqual([false, false]);
+  });
+
+  it("keeps the period off every row the open island and the widgets list", () => {
+    const document = glance();
+    expect([...document.providers, ...document.widget.providers].flatMap((entry) => entry.metrics).some((metric) => "period" in metric)).toBe(false);
+  });
+});
+
+describe("the rows of each account", () => {
+  const metricIds = (document: GlanceDocument, id: string) => document.widget.providers.find((entry) => entry.id === id)?.metrics.map((metric) => metric.id);
+
+  it("lists a card's rows behind its show-more button only while the card is open, as the Hạn mức tab shows them", () => {
+    expect(metricIds(glance(), "codex@52d0")).toEqual(["codex@52d0.session", "codex@52d0.weekly", "codex@52d0.rateLimitResets"]);
+    expect(glance().providers.find((entry) => entry.id === "codex@52d0")?.metrics.map((metric) => metric.id)).toEqual(metricIds(glance(), "codex@52d0"));
+    const open = glance({ openProviders: ["codex@52d0"] });
+    expect(metricIds(open, "codex@52d0")).toEqual([
+      "codex@52d0.session",
+      "codex@52d0.weekly",
+      "codex@52d0.rateLimitResets",
+      "codex@52d0.spark",
+      "codex@52d0.sparkWeekly",
+      "codex@52d0.credits",
+    ]);
+    expect(open.providers.find((entry) => entry.id === "codex@52d0")?.metrics).toHaveLength(6);
+  });
+
+  it("lists a starred or picked metric whether or not its card is open", () => {
+    const picked = glance({ widget: { content: "custom", metrics: ["codex@52d0.spark", "codex@52d0.credits"] } });
+    expect(metricIds(picked, "codex@52d0")).toEqual(["codex@52d0.spark", "codex@52d0.credits"]);
+  });
+
+  it("dots the reset credits with the soonest one's expiry, and no other row", () => {
+    const codex = glance().widget.providers.find((entry) => entry.id === "codex@52d0")!;
+    const credits = codex.metrics.find((metric) => metric.id === "codex@52d0.rateLimitResets")!;
+    expect(credits).toMatchObject({ headline: "2 khả dụng", expiresAt: new Date(FETCHED + 1.6 * 24 * 3_600_000).toISOString() });
+    expect(codex.metrics.filter((metric) => "expiresAt" in metric)).toHaveLength(1);
+    const spent = { ...snapshots, "codex@52d0": { ...snapshots["codex@52d0"]!, lines: snapshots["codex@52d0"]!.lines.map((line) => (line.label === "Rate Limit Resets" ? { ...line, expiriesAt: [] } : line)) } };
+    expect("expiresAt" in glance({ data: spent }).widget.providers.find((entry) => entry.id === "codex@52d0")!.metrics.find((metric) => metric.id === "codex@52d0.rateLimitResets")!).toBe(false);
+  });
+
+  it("carries the popup's words for a clock time and its day, with the patterns for the time and for another day", () => {
+    expect(glance().labels.days).toEqual({ today: "{t} · hôm nay", tomorrow: "{t} · ngày mai", other: "{t} · {d}", time: "H:mm", date: "EEEEEE dd/MM" });
+    expect(glance({ hour12: true }).labels.days.time).toBe("h:mm a");
+    const english = { ...DEFAULT_DISPLAY, language: "en" as const };
+    expect(glance({ display: english }).labels.days).toEqual({ today: "{t} · today", tomorrow: "{t} · tomorrow", other: "{t} · {d}", time: "h:mm a", date: "EEE, MMM d" });
+    expect(glance({ display: english, hour12: false }).labels.days.time).toBe("HH:mm");
+  });
+});
+
+describe("the row each Codex and Claude account starts with", () => {
+  beforeEach(() => setSystemTimeZone("Asia/Saigon"));
+  afterEach(() => setSystemTimeZone(null));
+
+  const status = parseResetStatus(FEED_FIXTURES.codexResetStatus);
+  const feed = parseClaudeResets(FEED_FIXTURES.claudeResets)!;
+  const rowFor = (provider: Provider): GlanceResetRow | null => {
+    switch (providerBrand(provider)) {
+      case "codex":
+        return codexResetRow(status, NOW_GLANCE, "auto", "vi", true);
+      case "claude":
+        return claudeResetRow(feed.resets, snapshots[provider.id]?.plan, [], NOW_GLANCE, "auto", "vi", true);
+      default:
+        return null;
+    }
+  };
+
+  it("sits on the account in the island's and the widgets' lists, with the pictures it names sent once", () => {
+    const document = glance({ resetRowFor: rowFor });
+    for (const list of [document.providers, document.widget.providers]) {
+      expect(list.map((entry) => entry.resetRow?.tracker)).toEqual(["claude", "claude", "codex"]);
+    }
+    expect(document.widget.providers.find((entry) => entry.id === "codex@52d0")!.resetRow).toMatchObject({ title: "Reset free", value: "chưa rõ giờ", author: "@thsottiaux", opens: true });
+    expect(document.widget.providers.find((entry) => entry.id === "claude@7c1e")!.resetRow).toMatchObject({ title: "Lượt reset để dành", tone: "accent", author: "@ClaudeDevs" });
+    expect(Object.keys(document.avatars ?? {})).toEqual(["@claudedevs", "@thsottiaux"]);
+  });
+
+  it("stays off the readings beside the notch, which carry one metric each", () => {
+    const document = glance({ resetRowFor: rowFor, wings: ["quota:next", null] });
+    expect(document.island.wings.every((wing) => !("resetRow" in wing))).toBe(true);
+  });
+
+  it("leaves the document as it was when no card has a row", () => {
+    const document = glance({ resetRowFor: () => null });
+    expect([...document.providers, ...document.widget.providers].some((entry) => "resetRow" in entry)).toBe(false);
+    expect("avatars" in document).toBe(false);
+    expect(JSON.stringify(document)).toBe(JSON.stringify(glance()));
   });
 });
 
@@ -337,6 +458,7 @@ describe("the account header", () => {
         providerOf: () => provider,
         refreshedAt: () => snapshot.refreshedAt,
         refreshIntervalMs: REFRESH_INTERVAL_MS,
+        openProviders: [],
         language: "vi",
         hour12: null,
         theme: "system",
@@ -608,28 +730,52 @@ describe("a document for someone who never chose Claude", () => {
     buildGlanceResets({ feeds: parseResetFeeds(FEED_FIXTURES.codexResetStatus, FEED_FIXTURES.codexResets), stale: false, now: NOW_GLANCE, language, timeFormat: "auto", theme: "system" });
   const claude = () =>
     buildClaudeGlanceResets({ feed: parseClaudeResets(FEED_FIXTURES.claudeResets)!, accounts: ["max", null], used: [], stale: false, now: NOW_GLANCE, language: "vi", timeFormat: "auto", theme: "system" });
+  /** The rows the popup's Codex and Claude cards start with, with every tracking setting at its default. */
+  const rows =
+    (language: "vi" | "en", timeFormat: "auto" | "12h") =>
+    (provider: Provider): GlanceResetRow | null => {
+      switch (providerBrand(provider)) {
+        case "codex":
+          return codexResetRow(parseResetStatus(FEED_FIXTURES.codexResetStatus), NOW_GLANCE, timeFormat, language, true);
+        case "claude":
+          return claudeResetRow(parseClaudeResets(FEED_FIXTURES.claudeResets)!.resets, snapshots[provider.id]?.plan, [], NOW_GLANCE, timeFormat, language, true);
+        default:
+          return null;
+      }
+    };
   const scenarios = (): Record<string, Options> => ({
-    defaults: { resets: codex("vi") },
-    wings: { resets: codex("vi"), wings: ["codex-resets:next", "codex-resets:since"], alert: { id: "a1", title: "Title", body: "Body", brand: "codex", severity: "normal" }, hour12: true },
+    defaults: { resets: codex("vi"), resetRowFor: rows("vi", "auto") },
+    wings: {
+      resets: codex("vi"),
+      wings: ["codex-resets:next", "codex-resets:since"],
+      alert: { id: "a1", title: "Title", body: "Body", brand: "codex", severity: "normal" },
+      hour12: true,
+      resetRowFor: rows("vi", "12h"),
+    },
     tuned: {
       display: { ...DEFAULT_DISPLAY, language: "en" },
       resets: codex("en"),
       island: { layout: "combined", tabs: ["resets", "quota"], resetParts: { ...DEFAULT_SETTINGS.island.resetParts, calendar: false } },
       widget: { content: "starred", upcomingLimit: 3 },
       wings: ["quota:next", "codex-resets:chance-7"],
+      resetRowFor: rows("en", "auto"),
     },
   });
   /**
    * SHA-256 of the documents built from these same inputs, without the quoted announcement: what
-   * 0.3.16 (`be761f5`) built, apart from the account header 0.3.20 brought in line with the popup's
-   * card: the plan period (`term` on the accounts that have one, `labels.planTerm`), the plan the
-   * island now shows by default (`island.shows.plan`) and the rows' `Không có dữ liệu`
-   * (`labels.noData`).
+   * 0.3.16 (`be761f5`) built, apart from what the island and the widgets have since taken over from
+   * the popup's cards. The account header: the plan period (`term` on the accounts that have one,
+   * `labels.planTerm`), the plan the island now shows by default (`island.shows.plan`) and the rows'
+   * `Không có dữ liệu` (`labels.noData`). The cards' rows: the free reset and banked reset rows the
+   * Codex and Claude accounts start with (`resetRow`, with their pictures in `avatars`), the
+   * collapsed Codex card leaving its Spark and Credits rows behind the show-more button, the reset
+   * credits' expiry (`expiresAt`), the window's name beside the notch (`period` on the wings) and
+   * the words for a clock time and its day (`labels.days`).
    */
   const PINNED: Readonly<Record<string, string>> = {
-    defaults: "507d2a501a52d96fb25a64500ac5c5e54f4a3a126c5858095bcb528973950174",
-    wings: "a70d17d7fd4da2c9c8cc8fdf11021735b5d1e37be43754c304d7dd2e24c8c00f",
-    tuned: "fbd30bf8aa1c0673b4c83461c6a5ba01cc3b7130b86dc04e6ec28169bb3d9337",
+    defaults: "76875b9c777134c37782a622a41e2d42dbad796f3194e49e0eaedd49c1a51a84",
+    wings: "b49a75b5aae72f06a4361baf52366c0686ac70a95b93733f1e2ac715aed7c98b",
+    tuned: "a0605a9273e31108fc01055bea1c78123e704c9254c40373f4f4fdad98b8abf0",
   };
   const digest = (document: object) => createHash("sha256").update(JSON.stringify(document)).digest("hex");
   /** The document without the one thing added since: the announcement the latest reset's card quotes. */
@@ -645,7 +791,7 @@ describe("a document for someone who never chose Claude", () => {
     return copy;
   };
 
-  it("stays byte for byte what 0.3.16 sent apart from the quoted announcement and the account header, even with a Claude tracker at hand", () => {
+  it("stays byte for byte what 0.3.16 sent apart from the quoted announcement and what it took over from the popup's cards, even with a Claude tracker at hand", () => {
     const tracker = claude();
     expect(tracker).not.toBeNull();
     for (const [name, options] of Object.entries(scenarios())) {

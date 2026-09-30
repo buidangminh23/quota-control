@@ -37,6 +37,8 @@ export interface FormatMessages {
   restoresAt(time: string, day: RestoreDay): string;
   /** A clock time and its day, e.g. `13:05 · T6 02/10` / `1:05 PM · tomorrow`. */
   timeOnDay(time: string, day: RestoreDay): string;
+  /** The day beside a clock time on its own: `hôm nay`, `ngày mai`, `T6 02/10` / `today`, `Fri, Oct 2`. */
+  day(day: RestoreDay): string;
   expiryListHeader(mode: ResetModeKey): string;
   list(items: string[]): string;
 }
@@ -248,6 +250,9 @@ export interface SettingsMessages {
   glancePreset(preset: GlanceContent | "all" | "none"): string;
   /** What the list follows now, and that picking a metric by hand makes it a custom list. */
   glanceFollowNote(content: GlanceContent): string;
+  /** The same for the island and the widgets following the Limits tab, whose cards they show as
+   * the tab shows them: a card's rows behind Show more only while it is open. */
+  glanceFollowCardsNote: string;
   /** A view editor's one-line summary, beside its name. */
   glanceQuotaSummary(content: GlanceContent, metrics: number, accounts: number): string;
   glanceMetricsNone: string;
@@ -388,6 +393,15 @@ export interface GlanceMessages {
   notRunning: string;
   /** Unit suffixes the island's countdowns use, written like `format.duration` (`4 ngày 3 giờ`, `4d 3h`). */
   units: { day: string; hour: string; minute: string };
+  /**
+   * A day neither today nor tomorrow as a Unicode date pattern, which the island and the widgets
+   * draw in the device's zone the way `format.day` words it: `EEEEEE dd/MM` (`T2 05/10`),
+   * `EEE, MMM d` (`Mon, Oct 5`).
+   */
+  dayPattern: string;
+  /** The clock time as a Unicode date pattern, drawn the way `shortTime` words it on a 24- or
+   * 12-hour clock: `H:mm` (`8:05`), `h:mm a` (`8:05 SA`), `HH:mm` (`08:05`). */
+  clockPattern(twentyFourHour: boolean): string;
   /** What a reset widget or island section says while the Reset tab and reset notifications are off. */
   resetsOff: string;
   /** The same for a surface showing the Claude tracker, naming the Claude reset notifications. */

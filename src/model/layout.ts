@@ -452,6 +452,15 @@ export function glanceGroups(
   });
 }
 
+/**
+ * `groups` as the Hạn mức tab shows its cards now: a card's rows behind its show-more button only
+ * while that card is open (`LayoutDocument.openProviders`).
+ */
+export function cardsAsShown(groups: readonly ProviderMetrics[], openProviders: readonly string[]): ProviderMetrics[] {
+  const open = new Set(openProviders);
+  return groups.map((group) => (group.onDemand.length === 0 || open.has(group.provider.id) ? group : { ...group, onDemand: [] }));
+}
+
 /** Enabled providers that ship spend tiles: exactly what the Total Spend card aggregates. */
 export function spendCapableProviders(layout: LayoutDocument, catalog: readonly ProviderEntry[], isEnabled: IsEnabled): Provider[] {
   return orderedEntries(layout, catalog)

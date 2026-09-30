@@ -5,21 +5,24 @@
  * choose (the Hạn mức cards, the starred metrics or a hand-picked set). The Codex free-reset
  * tracker rides along while the Reset tab or reset notifications are on, loading the feeds they
  * need; the Claude tracker only while a surface or a wing reads it and the Reset tab or Claude reset
- * notifications are on. The hidden popup keeps running, so both stay live while it is closed.
- * Elsewhere the core has no glance and this does nothing.
+ * notifications are on. Each Codex and Claude account starts with the row its popup card starts
+ * with, which follows the same settings whichever tracker a surface shows. The hidden popup keeps
+ * running, so all of it stays live while it is closed. Elsewhere the core has no glance and this
+ * does nothing.
  */
 import { useEffect, useMemo, useRef } from "react";
 import { messagesFor } from "@/i18n";
 import { backend } from "@/lib/backend";
 import type { Provider, WidgetDescriptor } from "@/lib/types";
-import { buildGlance, isClaudeResetsWing, isSpecialWing, type GlanceWingChoice } from "@/model/glance";
+import { buildGlance, isClaudeResetsWing, isSpecialWing, type GlanceResetRow, type GlanceWingChoice } from "@/model/glance";
 import { buildClaudeGlanceResets } from "@/model/glanceClaudeResets";
 import { buildGlanceResets, parseResetFeeds } from "@/model/glanceResets";
+import { claudeResetRow, codexResetRow } from "@/model/glanceResetRows";
 import { parseClaudeResets } from "@/model/insights/claudeResets";
 import { feedOutdated, resetTrackerOutdated } from "@/model/insights/resets";
-import { brandOf, glanceGroups } from "@/model/layout";
+import { brandOf, glanceGroups, isLocalHistoryCard } from "@/model/layout";
 import { surfaceResetProvider } from "@/model/settings";
-import { cardIdentity } from "@/model/providerText";
+import { cardIdentity, providerBrand } from "@/model/providerText";
 import { widgetDataFor } from "@/model/widgetData";
 import { useClaudeAccountPlans } from "@/state/claudePlans";
 import { useDisplay, useIsEnabled, useWallClock } from "@/state/hooks";
@@ -97,7 +100,9 @@ export function useGlance(): void {
   );
 
   const claudeRead = island.resetsProvider === "claude" || widget.resetsProvider === "claude" || island.wings.some(isClaudeResetsWing);
-  const claudeTracking = supported && claudeRead && (showResetsTab || notifyClaudeResets);
+  const claudeFollowed = showResetsTab || notifyClaudeResets;
+  const claudeCards = (claudeAccounts?.length ?? 0) > 0;
+  const claudeTracking = supported && claudeFollowed && (claudeRead || claudeCards);
   useEffect(() => {
     if (claudeTracking) ensureFeed("claudeResets");
   }, [claudeTracking]);
@@ -106,11 +111,32 @@ export function useGlance(): void {
   const claudeStale = Boolean(claudeFeed?.stale || claudeError);
   const claudeResets = useMemo(
     () =>
-      claudeParsed
+      claudeParsed && claudeRead
         ? buildClaudeGlanceResets({ feed: claudeParsed, accounts: claudeAccounts ?? [], used: usedBankedResets, stale: claudeStale, now, language: display.language, timeFormat, theme })
         : null,
-    [claudeParsed, claudeAccounts, usedBankedResets, claudeStale, now, display.language, timeFormat, theme],
+    [claudeParsed, claudeRead, claudeAccounts, usedBankedResets, claudeStale, now, display.language, timeFormat, theme],
   );
+
+  const codexRow = useMemo(
+    () => (tracking ? codexResetRow(feeds.status, now, timeFormat, display.language, showResetsTab) : null),
+    [tracking, feeds, now, timeFormat, display.language, showResetsTab],
+  );
+  const resetRowFor = useMemo(() => {
+    const claudeResets = claudeFollowed ? (claudeParsed?.resets ?? null) : null;
+    return (provider: Provider): GlanceResetRow | null => {
+      if (isLocalHistoryCard(provider.id)) return null;
+      switch (providerBrand(provider)) {
+        case "codex":
+          return codexRow;
+        case "claude":
+          return claudeResets
+            ? claudeResetRow(claudeResets, engine?.providers[provider.id]?.snapshot?.plan, usedBankedResets, now, timeFormat, display.language, showResetsTab)
+            : null;
+        default:
+          return null;
+      }
+    };
+  }, [codexRow, claudeFollowed, claudeParsed, engine, usedBankedResets, now, timeFormat, display.language, showResetsTab]);
 
   const document = useMemo(() => {
     if (!supported) return null;
@@ -137,6 +163,8 @@ export function useGlance(): void {
       providerOf: (providerId) => providers.get(providerId),
       refreshedAt: (providerId) => engine?.providers[providerId]?.snapshot?.refreshedAt,
       refreshIntervalMs: engine?.refreshIntervalMs ?? DEFAULT_REFRESH_INTERVAL_MS,
+      openProviders: layout.openProviders,
+      resetRowFor,
       language: display.language,
       hour12: timeFormat === "auto" ? null : timeFormat === "12h",
       theme,
@@ -147,7 +175,7 @@ export function useGlance(): void {
       markArt,
       now,
     });
-  }, [supported, layout, catalog, isEnabled, engine, display, info, islandEnabled, island, widget, timeFormat, theme, alert, resets, claudeResets, markArt, now]);
+  }, [supported, layout, catalog, isEnabled, engine, display, info, islandEnabled, island, widget, timeFormat, theme, alert, resets, claudeResets, resetRowFor, markArt, now]);
 
   useEffect(() => {
     if (!ready || !document) return;

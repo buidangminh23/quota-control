@@ -56,6 +56,7 @@ export const en: Messages = {
     },
     restoresAt: (time, day) => `Back at ${time} · ${restoreDay(day)}`,
     timeOnDay: (time, day) => `${time} · ${restoreDay(day)}`,
+    day: restoreDay,
     expiryListHeader: (mode) => (mode === "relative" ? "Resets expire in:" : "Resets expire:"),
     list(items) {
       if (items.length <= 1) return items[0] ?? "";
@@ -315,6 +316,8 @@ export const en: Messages = {
         starred: "Following the metrics starred on the Limits tab. Click a metric below to pick your own.",
         custom: "Custom: only the checked metrics show, in the Limits tab's order.",
       })[content],
+    glanceFollowCardsNote:
+      "Following the Limits tab: accounts and metrics turned on there show here too, and the ones behind a card's Show more only while the card is open. Click a metric below to pick your own.",
     glanceQuotaSummary: (content, metrics, accounts) => {
       const count = metrics === 0 ? "No metric chosen" : `${metrics} ${metrics === 1 ? "metric" : "metrics"} · ${accounts} ${accounts === 1 ? "account" : "accounts"}`;
       return content === "custom" ? count : `${({ dashboard: "Like Limits", starred: "Starred" })[content]} · ${count}`;
@@ -489,6 +492,8 @@ export const en: Messages = {
     open: "Click to open Quota Control",
     notRunning: "Open Quota Control to show your limits here.",
     units: { day: "d", hour: "h", minute: "m" },
+    dayPattern: "EEE, MMM d",
+    clockPattern: (twentyFourHour) => (twentyFourHour ? "HH:mm" : "h:mm a"),
     resetsOff: "Turn on the Resets tab or reset notifications in Quota Control to see the forecast.",
     claudeResetsOff: "Turn on the Resets tab or Claude reset notifications in Quota Control to see the forecast.",
     upcoming: "Coming back",

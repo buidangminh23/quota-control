@@ -7,8 +7,9 @@ import type { PublicFeedName, PublicFeedSnapshot } from "@/lib/insightsTypes";
 import { MockBackend } from "@/lib/mockBackend";
 import { FEED_FIXTURES } from "@/lib/insightsFeedFixtures";
 import type { GlanceDocument } from "@/model/glance";
+import { setProviderOpen } from "@/model/layout";
 import { resetInsights } from "@/state/insights";
-import { updateSettings, useApp } from "@/state/store";
+import { updateLayout, updateSettings, useApp } from "@/state/store";
 
 vi.mock("@/strip/useTaskbarStrip", () => ({ useTaskbarStrip: () => {} }));
 
@@ -278,5 +279,65 @@ describe("the banked reset the Claude tracker counts down to", () => {
     );
     await waitFor(() => expect(api.latest?.claudeResets?.brand).toBe("claude"));
     expect(api.latest!.claudeResets!.upcoming).toBeUndefined();
+  });
+});
+
+describe("the row each Codex and Claude account starts with", () => {
+  const BANKED = "2102438800836489554";
+  const DEADLINE = "2026-10-22T23:59:59.000Z";
+
+  /** Inside the Claude catalog's banked reset (open until 22/10/2026), while the Codex status's untimed announcement of 26/09 is still on the card. */
+  beforeEach(() => vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-09-29T13:00:00Z") }));
+  afterEach(() => vi.useRealTimers());
+
+  const rowOf = (document: GlanceDocument | undefined, id: string) => document?.providers.find((provider) => provider.id === id)?.resetRow;
+
+  it("starts every Codex and Claude account with its card's row, on the island and in the widgets, whichever tracker they show", async () => {
+    const api = await start({});
+    await waitFor(() => expect(rowOf(api.latest, "claude@7c1e")).toBeDefined());
+    const document = api.latest!;
+    expect(rowOf(document, "codex@52d0")).toMatchObject({ tracker: "codex", title: "Reset free", author: "@thsottiaux", value: "chưa rõ giờ", opens: true });
+    for (const id of ["claude@7c1e", "claude@a93f"]) {
+      expect(rowOf(document, id)).toMatchObject({ tracker: "claude", title: "Lượt reset để dành", tone: "accent", author: "@ClaudeDevs", hideAt: DEADLINE, opens: true });
+    }
+    expect(document.widget.providers.map((provider) => provider.resetRow)).toEqual(document.providers.map((provider) => provider.resetRow));
+    expect(Object.keys(document.avatars ?? {}).sort()).toEqual(["@claudedevs", "@thsottiaux"]);
+    expect("claudeResets" in document).toBe(false);
+    expect(api.feedsAsked).toContain("claudeResets");
+  });
+
+  it("keeps the rows but opens nothing while the Reset tab is off, as the popup's rows do", async () => {
+    const api = await start({ showResetsTab: false });
+    await waitFor(() => expect(rowOf(api.latest, "claude@7c1e")).toBeDefined());
+    for (const id of ["codex@52d0", "claude@7c1e", "claude@a93f"]) {
+      const row = rowOf(api.latest, id)!;
+      expect("opens" in row, id).toBe(false);
+      expect(row.details, id).not.toContain(insightsFor("vi").freeResetOpenTab);
+    }
+  });
+
+  it("leaves the rows out, and the Claude feed unasked, while the Reset tab and the reset notifications are off", async () => {
+    const api = await start({ showResetsTab: false, notifyCodexResets: false, notifyClaudeResets: false });
+    await settle();
+    expect(api.latest!.providers.some((provider) => "resetRow" in provider)).toBe(false);
+    expect("avatars" in api.latest!).toBe(false);
+    expect(api.feedsAsked).not.toContain("claudeResets");
+  });
+
+  it("takes the banked reset off the Claude accounts once it is marked as used", async () => {
+    const api = await start({ usedBankedResets: [BANKED] });
+    await waitFor(() => expect(rowOf(api.latest, "codex@52d0")).toBeDefined());
+    await settle();
+    expect(rowOf(api.latest, "claude@7c1e")).toBeUndefined();
+    expect(rowOf(api.latest, "claude@a93f")).toBeUndefined();
+  });
+
+  it("lists a card's rows behind its show-more button only while the card is open in the popup", async () => {
+    const api = await start({});
+    const codex = () => api.latest?.providers.find((provider) => provider.id === "codex@52d0")?.metrics.map((metric) => metric.id);
+    await waitFor(() => expect(codex()).toEqual(["codex@52d0.session", "codex@52d0.weekly", "codex@52d0.rateLimitResets"]));
+    act(() => void updateLayout((layout) => setProviderOpen(layout, "codex@52d0", true), { undoable: false }));
+    await waitFor(() => expect(codex()).toContain("codex@52d0.spark"));
+    expect(api.latest!.widget.providers.find((provider) => provider.id === "codex@52d0")?.metrics.map((metric) => metric.id)).toEqual(codex());
   });
 });

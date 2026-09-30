@@ -9,8 +9,10 @@ import {
   resetAbsoluteLabel,
   restoreLabel,
   setDongRate,
+  setSystemClockPreference,
   shortTime,
   totalSpendRingCenter,
+  usesTwentyFourHour,
   type TotalSpendMetric,
 } from "./format";
 import { plainSpaces } from "./testHelpers";
@@ -194,6 +196,29 @@ describe("Formatters", () => {
     expect(deadlineLabel("limit", inTwoHours, "relative", now, "24h", "vi")).toBe("Hết hạn mức sau 2 giờ 6 phút");
     expect(deadlineLabel("limit", new Date(now.getTime() + 60_000), "relative", now, "24h", "vi")).toBe("Sắp hết hạn mức");
     expect(deadlineLabel("resetExpires", inTwoHours, "relative", now, "24h", "vi")).toBe("Hết hạn sau 2 giờ 6 phút");
+  });
+
+  it("says which clock shortTime draws, so the island and the widgets draw the same one", () => {
+    const at = new Date(2024, 5, 1, 18, 38);
+    const twelveHour = (text: string) => /CH|PM/.test(text);
+    try {
+      for (const preference of [null, true, false]) {
+        setSystemClockPreference(preference);
+        for (const format of ["auto", "12h", "24h"] as const) {
+          for (const language of ["vi", "en"] as const) {
+            expect(usesTwentyFourHour(format, language), `${preference} ${format} ${language}`).toBe(!twelveHour(shortTime(at, format, language)));
+          }
+        }
+      }
+      setSystemClockPreference(null);
+      expect(usesTwentyFourHour("auto", "vi")).toBe(true);
+      expect(usesTwentyFourHour("auto", "en")).toBe(false);
+      setSystemClockPreference(true);
+      expect(usesTwentyFourHour("auto", "en")).toBe(true);
+      expect(usesTwentyFourHour("12h", "en")).toBe(false);
+    } finally {
+      setSystemClockPreference(null);
+    }
   });
 
   it("honors the 12-hour and 24-hour time formats", () => {

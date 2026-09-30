@@ -130,6 +130,14 @@ export function setSystemClockPreference(uses24Hour: boolean | null): void {
   systemUses24Hour = uses24Hour;
 }
 
+/** Whether `shortTime` draws a 24-hour clock: the Time Format setting, else the system's preference, else the language's own. */
+export function usesTwentyFourHour(format: TimeFormat, language: Language): boolean {
+  if (format !== "auto") return format === "24h";
+  if (systemUses24Hour !== null) return systemUses24Hour;
+  const cycle = new Intl.DateTimeFormat(localeOf(language), { hour: "numeric" }).resolvedOptions().hourCycle;
+  return cycle === "h23" || cycle === "h24";
+}
+
 /** Short wall-clock time in the device's zone, honoring the Time Format setting (`5:30 PM` / `17:30`). */
 export function shortTime(date: Date, format: TimeFormat, language: Language, timeZone: string = deviceTimeZone()): string {
   const uses24Hour = format === "12h" ? false : format === "24h" ? true : systemUses24Hour;

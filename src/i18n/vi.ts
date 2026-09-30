@@ -81,6 +81,7 @@ export const vi: Messages = {
     },
     restoresAt: (time, day) => `Hồi lại lúc ${time} · ${restoreDay(day)}`,
     timeOnDay: (time, day) => `${time} · ${restoreDay(day)}`,
+    day: restoreDay,
     expiryListHeader: (mode) => (mode === "relative" ? "Các lượt đặt lại hết hạn sau:" : "Các lượt đặt lại hết hạn lúc:"),
     list: (items) => new Intl.ListFormat("vi", { type: "conjunction" }).format(items),
   },
@@ -353,6 +354,8 @@ export const vi: Messages = {
         starred: "Đang theo các chỉ số gắn sao ở tab Hạn mức. Bấm một chỉ số bên dưới để tự chọn.",
         custom: "Tự chọn: chỉ các chỉ số được đánh dấu mới hiện, theo thứ tự ở tab Hạn mức.",
       })[content],
+    glanceFollowCardsNote:
+      "Đang theo tab Hạn mức: tài khoản hay chỉ số bật thêm ở đó cũng tự hiện ở đây; chỉ số nằm sau nút Xem thêm của thẻ chỉ hiện khi thẻ đang mở. Bấm một chỉ số bên dưới để tự chọn.",
     glanceQuotaSummary: (content, metrics, accounts) => {
       const count = metrics === 0 ? "Chưa chọn chỉ số nào" : `${metrics} chỉ số · ${accounts} tài khoản`;
       return content === "custom" ? count : `${({ dashboard: "Như tab Hạn mức", starred: "Gắn sao" })[content]} · ${count}`;
@@ -527,6 +530,8 @@ export const vi: Messages = {
     open: "Bấm để mở Quota Control",
     notRunning: "Mở Quota Control để hiện hạn mức ở đây.",
     units: { day: " ngày", hour: " giờ", minute: " phút" },
+    dayPattern: "EEEEEE dd/MM",
+    clockPattern: (twentyFourHour) => (twentyFourHour ? "H:mm" : "h:mm a"),
     resetsOff: "Bật tab Reset hoặc thông báo reset trong Quota Control để xem dự báo.",
     claudeResetsOff: "Bật tab Reset hoặc thông báo khi Claude reset trong Quota Control để xem dự báo.",
     upcoming: "Sắp đặt lại",

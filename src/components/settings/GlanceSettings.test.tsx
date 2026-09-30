@@ -2,7 +2,8 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { setBackend } from "@/lib/backend";
 import { MockBackend } from "@/lib/mockBackend";
 import type { Platform } from "@/lib/types";
-import { updateSettings, useApp } from "@/state/store";
+import { setProviderOpen } from "@/model/layout";
+import { updateLayout, updateSettings, useApp } from "@/state/store";
 import { App } from "../../App";
 import { closeDialog } from "../ui/dialog";
 import { closeMenu } from "../ui/menu";
@@ -44,6 +45,34 @@ afterEach(async () => {
   cleanup();
   await act(() => new Promise((resolve) => setTimeout(resolve, 5)));
   act(() => useApp.setState({ screen: "dashboard", previousScreen: "dashboard", customizeProviderId: null, notice: null }));
+});
+
+describe("the limits the island and the widgets list", () => {
+  const FOLLOW_CARDS =
+    "Đang theo tab Hạn mức: tài khoản hay chỉ số bật thêm ở đó cũng tự hiện ở đây; chỉ số nằm sau nút Xem thêm của thẻ chỉ hiện khi thẻ đang mở. Bấm một chỉ số bên dưới để tự chọn.";
+  const FOLLOW = "Đang theo tab Hạn mức: tài khoản hay chỉ số bật thêm ở đó cũng tự hiện ở đây. Bấm một chỉ số bên dưới để tự chọn.";
+
+  it("follow the Limits tab's cards as the tab shows them, a card's show-more rows only while it is open", async () => {
+    await openSettings();
+    for (const title of ["Dynamic Island", "Widget màn hình"]) {
+      const surface = section(title);
+      const editor = within(surface).getByRole("button", { name: /^Hạn mức/ });
+      const count = () => Number(/(\d+) chỉ số/.exec(editor.textContent ?? "")?.[1]);
+      expect(within(surface).getByText(FOLLOW_CARDS)).toBeInTheDocument();
+      const collapsed = count();
+      act(() => void updateLayout((layout) => setProviderOpen(layout, "codex@52d0", true), { undoable: false }));
+      expect(count(), title).toBe(collapsed + 3);
+      act(() => void updateLayout((layout) => setProviderOpen(layout, "codex@52d0", false), { undoable: false }));
+      expect(count(), title).toBe(collapsed);
+    }
+  });
+
+  it("keeps the menu bar strip on every row the tab's cards hold", async () => {
+    await openSettings();
+    fireEvent.click(screen.getByRole("button", { name: /^Nội dung/ }));
+    expect(screen.getByText(FOLLOW)).toBeInTheDocument();
+    expect(screen.queryAllByText(FOLLOW_CARDS)).toHaveLength(2);
+  });
 });
 
 describe("whose reset tracker the island and the widgets show", () => {

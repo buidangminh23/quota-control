@@ -12,7 +12,7 @@ import { insightsFor } from "@/i18n/insights";
 import type { SettingsMessages } from "@/i18n/messages";
 import type { WidgetDescriptor } from "@/lib/types";
 import { SPECIAL_WINGS, type SpecialWing } from "@/model/glance";
-import { glanceCandidates, glanceGroups, type ProviderMetrics } from "@/model/layout";
+import { cardsAsShown, glanceCandidates, glanceGroups, type ProviderMetrics } from "@/model/layout";
 import { cardIdentity, providerBrand } from "@/model/providerText";
 import {
   ISLAND_LAYOUTS,
@@ -75,15 +75,20 @@ function useCandidates(): ProviderMetrics[] {
   return useMemo(() => glanceCandidates(layout, catalog, isEnabled), [layout, catalog, isEnabled]);
 }
 
-/** The metric ids a content choice shows now: what the tab or the stars hold, or the picked set. */
-function useShown(content: GlanceContent, metrics: readonly string[]): Set<string> {
+/**
+ * The metric ids a content choice shows now: what the tab or the stars hold, or the picked set. The
+ * island and the widgets (`followsCards`) show the tab's cards as the tab shows them, a card's rows
+ * behind its show-more button only while it is open.
+ */
+function useShown(content: GlanceContent, metrics: readonly string[], followsCards = false): Set<string> {
   const layout = useApp((state) => state.layout);
   const catalog = useApp((state) => state.catalog);
   const isEnabled = useIsEnabled();
-  return useMemo(
-    () => new Set(glanceGroups(content, metrics, layout, catalog, isEnabled).flatMap((group) => [...group.always, ...group.onDemand].map((descriptor) => descriptor.id))),
-    [content, metrics, layout, catalog, isEnabled],
-  );
+  return useMemo(() => {
+    const groups = glanceGroups(content, metrics, layout, catalog, isEnabled);
+    const shown = followsCards && content === "dashboard" ? cardsAsShown(groups, layout.openProviders) : groups;
+    return new Set(shown.flatMap((group) => [...group.always, ...group.onDemand].map((descriptor) => descriptor.id)));
+  }, [content, metrics, followsCards, layout, catalog, isEnabled]);
 }
 
 /** A small heading inside a settings card, splitting it into steps. */
@@ -146,8 +151,8 @@ interface QuotaValue {
 }
 
 /** One line saying what the limits list shows, for the closed editor. */
-function useQuotaSummary(value: QuotaValue, text: SettingsMessages): string {
-  const shown = useShown(value.content, value.metrics);
+function useQuotaSummary(value: QuotaValue, text: SettingsMessages, followsCards = false): string {
+  const shown = useShown(value.content, value.metrics, followsCards);
   const candidates = useCandidates();
   const accounts = candidates.filter((group) => group.always.some((descriptor) => shown.has(descriptor.id))).length;
   return text.glanceQuotaSummary(value.content, shown.size, accounts);
@@ -162,17 +167,20 @@ function QuotaEditor({
   value,
   onChange,
   shows,
+  followsCards = false,
   text,
   language,
 }: {
   value: QuotaValue;
   onChange: (patch: { content?: GlanceContent; metrics?: string[] }) => void;
   shows?: { value: GlanceSurfaceSettings; onChange: (patch: Partial<GlanceSurfaceSettings>) => void };
+  /** The island and the widgets, which show the Hạn mức tab's cards as the tab shows them. */
+  followsCards?: boolean;
   text: SettingsMessages;
   language: Language;
 }) {
   const candidates = useCandidates();
-  const shown = useShown(value.content, value.metrics);
+  const shown = useShown(value.content, value.metrics, followsCards);
   const offered = useMemo(() => candidates.flatMap((group) => group.always.map((descriptor) => descriptor.id)), [candidates]);
 
   const pick = (chosen: ReadonlySet<string>) => {
@@ -206,7 +214,7 @@ function QuotaEditor({
           {text.glancePreset("none")}
         </Chip>
       </ChipRow>
-      <p className="uc-settings-note is-flush">{text.glanceFollowNote(value.content)}</p>
+      <p className="uc-settings-note is-flush">{followsCards && value.content === "dashboard" ? text.glanceFollowCardsNote : text.glanceFollowNote(value.content)}</p>
       {candidates.length === 0 ? (
         <p className="uc-settings-note is-flush">{text.glanceMetricsNone}</p>
       ) : (
@@ -354,7 +362,7 @@ function ViewEditors({
   language: Language;
 }) {
   const [open, setOpen] = useState<IslandView | null>(views[0] ?? null);
-  const quotaSummary = useQuotaSummary(value, text);
+  const quotaSummary = useQuotaSummary(value, text, true);
   const provider = surfaceResetProvider(value.resetsProvider, useSettings());
   const resetsOn = RESET_PARTS.filter((part) => value.resetParts[part]).length;
   const summary = (view: IslandView): string => {
@@ -367,7 +375,7 @@ function ViewEditors({
       {views.map((view) => (
         <Disclosure key={view} title={text.glanceTabName(view, provider)} summary={summary(view)} open={open === view} onToggle={() => setOpen(open === view ? null : view)}>
           {scope ? <p className="uc-settings-note is-flush">{scope(view, provider)}</p> : null}
-          {view === "quota" ? <QuotaEditor value={value} onChange={onChange} shows={{ value, onChange }} text={text} language={language} /> : null}
+          {view === "quota" ? <QuotaEditor value={value} onChange={onChange} shows={{ value, onChange }} followsCards text={text} language={language} /> : null}
           {view === "resets" ? <ResetEditor value={value} onChange={onChange} text={text} language={language} /> : null}
           {view === "upcoming" ? <UpcomingEditor limit={value.upcomingLimit} onChange={(upcomingLimit) => onChange({ upcomingLimit })} text={text} /> : null}
         </Disclosure>

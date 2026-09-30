@@ -10,13 +10,16 @@ import { knownBrandColor } from "./totalSpend";
 import { messagesFor, type Language } from "@/i18n";
 import type { PlanTerm, Provider, WidgetDescriptor } from "@/lib/types";
 import { insightsFor } from "@/i18n/insights";
+import { usesTwentyFourHour, type TimeFormat } from "./format";
 import { COUNTDOWN_SPAN } from "./glanceResets";
-import { brandOf, type ProviderMetrics } from "./layout";
+import { resetRowAvatars } from "./glanceResetRows";
+import { brandOf, cardsAsShown, type ProviderMetrics } from "./layout";
+import { periodLabel } from "./menuBar";
 import { boundedTrailingText, isFreshSessionWindow, meterSeverity, meterState } from "./meterState";
 import { SOURCE_COLORS } from "./palette";
 import { PLAN_TERM_SOON_DAYS, planTermEnd } from "./planTerm";
 import { isOutdated } from "./providerText";
-import type { GlanceSurfaceSettings, IslandSettings, IslandStyle, IslandView, ResetParts, ResetProvider, ThemeSetting } from "./settings";
+import type { GlanceContent, GlanceSurfaceSettings, IslandSettings, IslandStyle, IslandView, ResetParts, ResetProvider, ThemeSetting } from "./settings";
 import { boundedHeadline, fraction, isBounded, menuBarValue, unboundedDetail, type WidgetData } from "./widgetData";
 
 export const GLANCE_VERSION = 1;
@@ -40,6 +43,12 @@ export interface GlanceMetric {
   detail?: string;
   /** A value that moves with the clock, which Swift ticks in place of `value` (island wings only). */
   countdown?: GlanceCountdown;
+  /** When the soonest of the row's reset credits expires (Codex's `Lượt đặt lại`), for the dot before
+   * its value: red within 48 hours, yellow within 7 days, blue otherwise, as the popup colors it. */
+  expiresAt?: string;
+  /** The limit window's short name (`5h`, `week`) the menu bar strip labels a reading with; only on
+   * the readings beside the notch. */
+  period?: string;
 }
 
 /**
@@ -88,6 +97,67 @@ export interface GlanceProvider {
   lightColor?: string;
   mark?: GlanceMark;
   metrics: GlanceMetric[];
+  /** The row the popup's card starts with: Codex's free reset, or Claude's banked reset for this
+   * card's plan. */
+  resetRow?: GlanceResetRow;
+}
+
+/**
+ * The row a Codex or Claude card starts with in the popup while its reset tracking is on: Codex's
+ * coming free reset (`FreeResetRow`) or the banked reset a Claude card's plan can still apply
+ * (`BankedResetRow`). What moves with the clock travels as moments and words, so the row only
+ * changes when the reset does: the countdown as a `GlanceCountdown`, and `{at}` in a caption for
+ * the clock time and day of `at` (`11:11 · ngày mai`), worded with `GlanceDocument.labels.days`
+ * when drawn.
+ */
+export interface GlanceResetRow {
+  /** Whose tracker the row stands for, and the Reset tab view pressing it opens. */
+  tracker: ResetProvider;
+  /** `Reset free`, `Có thể reset` (the site's watch), `Tặng lượt để dành`, `Lượt reset để dành`. */
+  title: string;
+  /** The value's color: `positive` for an announced Codex reset, `notice` for a watch, `accent` for a
+   * Claude banked reset; a countdown that has passed reads in the secondary color instead. */
+  tone: "positive" | "notice" | "accent";
+  /** The account whose picture sits before the title (`@thsottiaux`, `@ClaudeDevs`); one without a
+   * picture in `GlanceDocument.avatars` shows its initial. */
+  author: string;
+  /** The countdown (`sau {d}`, `còn {d}`), reading `after` once its moment has passed (`chờ xác nhận`). */
+  countdown?: GlanceCountdown;
+  /** The value when there is no countdown (`chưa rõ giờ`). */
+  value?: string;
+  /** Its time in the device's zone (`Lúc {at} · GMT+7`), or why there is none. */
+  caption: string;
+  /** The caption once the countdown has passed (`Hẹn {at} · GMT+7`). */
+  captionAfter?: string;
+  /** The moment `{at}` names. */
+  at?: string;
+  /** The poster's own day under an estimated time (`“Ngày mai” theo giờ Mỹ`). */
+  note?: string;
+  /** The post and how its time was read, the popup row's hover text. */
+  details: string;
+  /** When the row goes. */
+  hideAt: string;
+  /** Pressing the row opens the Reset tab at `tracker`, as the popup's row does while that tab is on. */
+  opens?: true;
+}
+
+/**
+ * A clock time with its day, as the popup words the moment a reset comes (`timeOnDayLabel`): `{t}`
+ * stands for the clock time in the Time Format setting and `{d}` for a day neither today nor
+ * tomorrow, which `date`, a Unicode date pattern in the document's locale, draws in the device's
+ * zone. The day is picked at the moment drawn, so the words stay right between documents.
+ */
+export interface GlanceDayWords {
+  /** `{t} · hôm nay`. */
+  today: string;
+  /** `{t} · ngày mai`. */
+  tomorrow: string;
+  /** `{t} · {d}`. */
+  other: string;
+  /** The clock time `{t}` for the Time Format setting: `H:mm` (`8:05`), `h:mm a` (`8:05 SA`), `HH:mm`. */
+  time: string;
+  /** `EEEEEE dd/MM` (`T2 05/10`), `EEE, MMM d` (`Mon, Oct 5`). */
+  date: string;
 }
 
 /**
@@ -252,6 +322,8 @@ export interface GlanceDocument {
     claudeResetsOff?: string;
     /** The plan-period corner's words, while an account the island or the widget lists has a term. */
     planTerm?: GlancePlanTermWords;
+    /** A reset's clock time with its day, for the reset rows and the limits coming back. */
+    days: GlanceDayWords;
   };
   /** The open island's accounts. */
   providers: GlanceProvider[];
@@ -264,6 +336,9 @@ export interface GlanceDocument {
    * chose it (a wing reading it needs no copy here); absent otherwise, and while the Reset tab and
    * Claude reset notifications are both off. */
   claudeResets?: GlanceResets;
+  /** The pictures before the reset rows' titles, as data URLs by lowercase handle, sent once each
+   * while a row names an account that has one. */
+  avatars?: Record<string, string>;
   alert?: GlanceAlert;
 }
 
@@ -506,6 +581,11 @@ export interface GlanceInput {
   refreshedAt: (providerId: string) => string | undefined;
   /** How often the core refreshes, which says when a reading is outdated. */
   refreshIntervalMs: number;
+  /** The cards open on the Hạn mức tab (`layout.openProviders`): a surface following that tab lists
+   * a card's rows behind its show-more button only while the card is open, as the tab shows them. */
+  openProviders: readonly string[];
+  /** The row a card starts with in the popup (`GlanceResetRow`), `null` for none; absent, no card has one. */
+  resetRowFor?: (provider: Provider) => GlanceResetRow | null;
   language: Language;
   /** Settings → Time Format as a 12-hour flag, `null` for the locale's own clock. */
   hour12: boolean | null;
@@ -529,6 +609,7 @@ const LOCALES: Readonly<Record<Language, string>> = { vi: "vi_VN", en: "en_US" }
 const DAY_MS = 86_400_000;
 const COUNT_PLACEHOLDER = "{n}";
 const DAY_PLACEHOLDER = "{d}";
+const TIME_PLACEHOLDER = "{t}";
 
 export function glanceMetric(id: string, data: WidgetData, now: Date): GlanceMetric {
   const bounded = isBounded(data);
@@ -546,6 +627,7 @@ export function glanceMetric(id: string, data: WidgetData, now: Date): GlanceMet
     const detail = boundedTrailingText(data, now);
     if (detail) metric.detail = detail;
   }
+  if (!bounded && data.hasData && data.expiriesAt.length > 0) metric.expiresAt = new Date(Math.min(...data.expiriesAt.map((date) => date.getTime()))).toISOString();
   return metric;
 }
 
@@ -591,6 +673,25 @@ export function glancePlanTermWords(language: Language): GlancePlanTermWords {
   };
 }
 
+/**
+ * The popup's words for a clock time and its day (`format.timeOnDay`) with `{t}` where the time
+ * goes and `{d}` where another day goes, read off the words the popup renders so the two never
+ * drift, with the patterns that draw the time as `shortTime` does for `timeFormat` and another day
+ * as `format.day` does.
+ */
+export function glanceDayWords(language: Language, timeFormat: TimeFormat): GlanceDayWords {
+  const messages = messagesFor(language);
+  const format = messages.format;
+  const today = format.day({ kind: "today" });
+  return {
+    today: format.timeOnDay(TIME_PLACEHOLDER, { kind: "today" }),
+    tomorrow: format.timeOnDay(TIME_PLACEHOLDER, { kind: "tomorrow" }),
+    other: format.timeOnDay(TIME_PLACEHOLDER, { kind: "today" }).replace(today, DAY_PLACEHOLDER),
+    time: messages.glance.clockPattern(usesTwentyFourHour(timeFormat, language)),
+    date: messages.glance.dayPattern,
+  };
+}
+
 export function buildGlance(input: GlanceInput): GlanceDocument {
   const messages = messagesFor(input.language);
   const text = messages.glance;
@@ -616,25 +717,32 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
     return entry;
   };
 
+  const periods = new Map<string, string>();
   const readings = (descriptors: readonly WidgetDescriptor[]): GlanceMetric[] =>
     descriptors.flatMap((descriptor) => {
       const data = input.dataFor(descriptor);
-      return data.hasData ? [glanceMetric(descriptor.id, data, input.now)] : [];
+      if (!data.hasData) return [];
+      const period = periodLabel(data.periodDurationMs);
+      if (period) periods.set(descriptor.id, period);
+      return [glanceMetric(descriptor.id, data, input.now)];
     });
 
-  const list = (groups: readonly ProviderMetrics[], problems: boolean): GlanceProvider[] =>
-    groups.flatMap((group) => {
+  const list = (groups: readonly ProviderMetrics[], content: GlanceContent, problems: boolean): GlanceProvider[] =>
+    (content === "dashboard" ? cardsAsShown(groups, input.openProviders) : groups).flatMap((group) => {
       const metrics = readings([...group.always, ...group.onDemand]);
       if (metrics.length === 0 && !problems) return [];
       if (metrics.length > 0) {
         const refreshed = Date.parse(input.refreshedAt(group.provider.id) ?? "");
         if (Number.isFinite(refreshed)) times.push(refreshed);
       }
-      return [provider(group.provider, metrics)];
+      const entry = provider(group.provider, metrics);
+      const row = input.resetRowFor?.(group.provider);
+      if (row) entry.resetRow = row;
+      return [entry];
     });
 
-  const islandProviders = list(input.island.groups, input.island.settings.showProblems).slice(0, ISLAND_PROVIDER_LIMIT);
-  const widgetProviders = list(input.widget.groups, input.widget.settings.showProblems);
+  const islandProviders = list(input.island.groups, input.island.settings.content, input.island.settings.showProblems).slice(0, ISLAND_PROVIDER_LIMIT);
+  const widgetProviders = list(input.widget.groups, input.widget.settings.content, input.widget.settings.showProblems);
 
   const document: GlanceDocument = {
     version: GLANCE_VERSION,
@@ -655,13 +763,14 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
       upcoming: text.upcoming,
       upcomingEmpty: text.upcomingEmpty,
       tabs: { ...text.tabs },
+      days: glanceDayWords(input.language, input.hour12 === null ? "auto" : input.hour12 ? "12h" : "24h"),
     },
     providers: islandProviders,
     island: {
       enabled: input.island.enabled,
       alerts: input.island.settings.alerts,
       style: input.island.settings.style,
-      wings: wings(input, islandProviders, provider),
+      wings: wings(input, islandProviders, provider, periods),
       expandOnHover: input.island.settings.expandOnHover,
       shows: shows(input.island.settings),
       empty: text.empty[input.island.settings.content],
@@ -693,6 +802,8 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
   if (input.theme !== "system") document.theme = input.theme;
   if (input.resets) document.resets = input.resets;
   if (input.claudeResets && (claudeIsland || claudeWidget)) document.claudeResets = input.claudeResets;
+  const avatars = resetRowAvatars([...islandProviders, ...widgetProviders]);
+  if (avatars) document.avatars = avatars;
   if (input.alert) document.alert = input.alert;
   return document;
 }
@@ -700,12 +811,14 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
 /**
  * The two readings beside the notch. A slot picked in Settings shows that metric, or that special
  * reading, while it has one; an automatic slot, or a pick without data, takes the next reading of the
- * island's accounts: each account's first metric, then a lone account's second.
+ * island's accounts: each account's first metric, then a lone account's second. A reading of a limit
+ * window carries the window's short name (`periods`, by metric), as the menu bar strip labels it.
  */
 function wings(
   input: GlanceInput,
   providers: readonly GlanceProvider[],
   make: (source: Provider, metrics: GlanceMetric[]) => GlanceProvider,
+  periods: ReadonlyMap<string, string>,
 ): GlanceProvider[] {
   const picked = input.island.wings.map((choice) => {
     if (!choice) return null;
@@ -713,7 +826,7 @@ function wings(
     const source = input.providerOf(choice.providerId);
     const data = input.dataFor(choice);
     if (!source || !data.hasData) return null;
-    return make(source, [glanceMetric(choice.id, data, input.now)]);
+    return make(source, [withPeriod(glanceMetric(choice.id, data, input.now), periodLabel(data.periodDurationMs))]);
   });
   const used = new Set(picked.flatMap((wing) => (wing ? [`${wing.id}|${wing.metrics[0]!.id}`] : [])));
   const firsts = providers.flatMap((entry) => (entry.metrics[0] ? [{ entry, metric: entry.metrics[0] }] : []));
@@ -726,9 +839,19 @@ function wings(
       continue;
     }
     const next = automatic.shift();
-    if (next) result.push({ ...next.entry, metrics: [next.metric] });
+    if (next) result.push(wingOf(next.entry, withPeriod(next.metric, periods.get(next.metric.id))));
   }
   return result;
+}
+
+function withPeriod(metric: GlanceMetric, period: string | null | undefined): GlanceMetric {
+  return period ? { ...metric, period } : metric;
+}
+
+/** An island account beside the notch: its header and one reading, without the row its card starts with. */
+function wingOf(entry: GlanceProvider, metric: GlanceMetric): GlanceProvider {
+  const { resetRow: _row, ...rest } = entry;
+  return { ...rest, metrics: [metric] };
 }
 
 /** The provider standing for the Codex free-reset tracker in a wing. */
@@ -808,5 +931,5 @@ function soonestReset(providers: readonly GlanceProvider[], now: Date, language:
     }
   }
   if (!soonest) return null;
-  return { ...soonest.entry, metrics: [{ ...soonest.metric, countdown: { at: soonest.metric.resetsAt!, text: messagesFor(language).glance.wingIn(COUNTDOWN_SPAN) } }] };
+  return wingOf(soonest.entry, { ...soonest.metric, countdown: { at: soonest.metric.resetsAt!, text: messagesFor(language).glance.wingIn(COUNTDOWN_SPAN) } });
 }
