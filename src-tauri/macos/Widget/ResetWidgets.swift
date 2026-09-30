@@ -305,6 +305,7 @@ struct ResetWidgetPager: View {
                     .environment(\.glanceResetFoldAction, GlanceResetFoldAction { fold, open, label in
                         AnyView(Button(intent: ToggleResetWidgetFold(key: foldKey(fold), open: !open)) { label }.buttonStyle(.plain))
                     })
+                    .environment(\.glanceResetNow, now)
                 }
             }
             .frame(width: size.width, height: height, alignment: .topLeading)
@@ -480,8 +481,6 @@ enum ResetWidgetPagination {
         switch element {
         case let .text(text, style):
             return split(text, card: card, width: width, height: height) { .text($0, style) }
-        case let .badge(text):
-            return split(text, card: card, width: width, height: height) { .badge($0) }
         case let .chances(chances):
             if chances.count > 1 {
                 return chances.flatMap { pieces(.chances([$0]), card: card, width: width, height: height) }

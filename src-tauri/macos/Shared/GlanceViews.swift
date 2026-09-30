@@ -208,11 +208,86 @@ enum GlanceResetTextStyle {
     case value
 }
 
+/// Words on a reset card that move with the clock, worded when the card is drawn at the moment
+/// the surface passes down (`glanceResetNow`: the island's clock, a widget entry's date). The cards,
+/// and the pages a widget cuts them into, then stay the same from one minute to the next, and a
+/// widget can give each change of the words a timeline entry of its own (`changes`).
+enum GlanceResetLiveText: Equatable {
+    /// A countdown's words: `Còn 3 giờ`, `Tải 5 phút trước`, `Vừa tải`.
+    case countdown(GlanceCountdown, GlanceUnits)
+    /// How long ago, in the Reset tab's relative words: `12 phút trước`, `3 ngày trước`.
+    case ago(Date, locale: String)
+    /// A countdown's words, then fixed ones: a scheduled card's `Thông báo 2 giờ trước · Chưa nói giờ cụ thể`.
+    case countdownThen(GlanceCountdown, GlanceUnits, String)
+    /// The time left to a stated time, then, once it has passed, how long ago it was.
+    case dueThenOverdue(GlanceCountdown, GlanceCountdown?, GlanceUnits)
+
+    func text(at now: Date) -> String {
+        switch self {
+        case let .countdown(countdown, units):
+            return countdown.text(now: now, units: units)
+        case let .ago(at, locale):
+            return GlanceResetLatestPresentation.ago(since: at, now: now, locale: locale)
+        case let .countdownThen(countdown, units, rest):
+            return countdown.text(now: now, units: units) + " · " + rest
+        case let .dueThenOverdue(due, overdue, units):
+            if due.at <= now, let overdue { return overdue.text(now: now, units: units) }
+            return due.text(now: now, units: units)
+        }
+    }
+
+    /// The moment the words count from or to.
+    private var anchor: Date {
+        switch self {
+        case let .countdown(countdown, _), let .countdownThen(countdown, _, _), let .dueThenOverdue(countdown, _, _):
+            return countdown.at
+        case let .ago(at, _):
+            return at
+        }
+    }
+
+    /// The moments after `now`, up to `end`, when the words change. Every change falls a whole
+    /// number of minutes from `anchor` (the words count minutes, then hours or days), so the words
+    /// are tried a second after each of those minutes and kept where they differ.
+    func changes(after now: Date, until end: Date) -> [Date] {
+        var moments: [Date] = []
+        var previous = text(at: now)
+        var minute = (now.timeIntervalSince(anchor) / 60).rounded(.down)
+        while true {
+            let moment = anchor.addingTimeInterval(minute * 60 + 1)
+            minute += 1
+            if moment <= now { continue }
+            if moment > end { break }
+            let words = text(at: moment)
+            if words != previous {
+                moments.append(moment)
+                previous = words
+            }
+        }
+        return moments
+    }
+}
+
+private struct GlanceResetNowKey: EnvironmentKey {
+    static var defaultValue: Date { Date() }
+}
+
+extension EnvironmentValues {
+    /// The moment reset cards word their moving words at (`GlanceResetLiveText`).
+    var glanceResetNow: Date {
+        get { self[GlanceResetNowKey.self] }
+        set { self[GlanceResetNowKey.self] = newValue }
+    }
+}
+
 enum GlanceResetElement {
     case text(String, GlanceResetTextStyle)
+    /// Words that move with the clock, in a text style.
+    case live(GlanceResetLiveText, GlanceResetTextStyle)
     /// Who posted, as a card names them: the picture (or the initial) and the handle.
     case author(GlanceResetAuthor, String)
-    case badge(String)
+    /// The latest reset's time since, big on a yellow tag.
+    case badge(GlanceResetLiveText)
     case chances([GlanceResetForecastChance])
     case meter(Double)
     case calendar(GlanceResetCalendar, Range<Int>, Range<Int>)
@@ -479,17 +554,16 @@ struct GlanceResetElementView: View {
     let availableWidth: CGFloat
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.glanceResetFoldAction) private var foldAction
+    @Environment(\.glanceResetNow) private var now
     private var palette: GlanceResetPalette { GlanceResetPalette(scheme: colorScheme) }
 
     @ViewBuilder
     var body: some View {
         switch element {
         case let .text(text, style):
-            Text(text)
-                .font(.system(size: Self.size(style), weight: style == .value ? .bold : style == .heading ? .semibold : .regular))
-                .foregroundStyle(style == .secondary || style == .rowPost ? Color.secondary : Color.primary)
-                .lineLimit(style == .post ? 4 : style == .rowPost ? 3 : nil)
-                .fixedSize(horizontal: false, vertical: true)
+            styled(text, style)
+        case let .live(text, style):
+            styled(text.text(at: now), style)
         case let .author(author, avatar):
             HStack(spacing: 6) {
                 GlanceResetAvatar(handle: author.handle, picture: avatar, size: 22)
@@ -500,7 +574,7 @@ struct GlanceResetElementView: View {
                     .minimumScaleFactor(0.8)
             }
         case let .badge(text):
-            Text(text)
+            Text(text.text(at: now))
                 .font(.system(size: 24, weight: .heavy))
                 .foregroundStyle(Color(red: 0.11, green: 0.11, blue: 0.12))
                 .fixedSize(horizontal: false, vertical: true)
@@ -614,6 +688,14 @@ struct GlanceResetElementView: View {
                 foldLabel(fold, label, open)
             }
         }
+    }
+
+    private func styled(_ text: String, _ style: GlanceResetTextStyle) -> some View {
+        Text(text)
+            .font(.system(size: Self.size(style), weight: style == .value ? .bold : style == .heading ? .semibold : .regular))
+            .foregroundStyle(style == .secondary || style == .rowPost ? Color.secondary : Color.primary)
+            .lineLimit(style == .post ? 4 : style == .rowPost ? 3 : nil)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private static func size(_ style: GlanceResetTextStyle) -> CGFloat {
@@ -829,6 +911,7 @@ struct GlanceResetContent: View {
                 AnyView(Button { toggle(fold) } label: { label }.buttonStyle(.plain))
             }
         })
+        .environment(\.glanceResetNow, now)
         .environment(\.colorScheme, resets.theme == "dark" ? .dark : resets.theme == "light" ? .light : colorScheme)
     }
 }
@@ -849,7 +932,7 @@ enum GlanceResetCards {
                 let author = latest.author.map { GlanceResetElement.author($0, presentation.avatar(for: $0)) }
                 var elements: [GlanceResetElement] = []
                 if latest.excerpt == nil, let author { elements.append(author) }
-                elements += [.badge(latest.ago(now: now, locale: presentation.locale)), .text(latest.meta, .secondary)]
+                elements += [.badge(.ago(latest.at, locale: presentation.locale)), .text(latest.meta, .secondary)]
                 if let excerpt = latest.excerpt {
                     var lines: [GlanceResetElement] = author.map { [$0] } ?? []
                     lines.append(.text(excerpt, .body))
@@ -864,12 +947,12 @@ enum GlanceResetCards {
             for status in presentation.statuses(at: now) {
                 let repeats = quoted && status.sameAsLatest == true
                 var elements: [GlanceResetElement] = []
-                let metadata = status.metadata(now: now, units: units)
-                if status.kind == "watch", metadata.count > 1 { elements.append(.text(metadata[0], .secondary)) }
+                let metadata = status.liveMetadata(units: units)
+                if status.kind == "watch", metadata.count > 1 { elements.append(metadata[0]) }
                 if let author = status.author, !repeats { elements.append(.author(author, presentation.avatar(for: author))) }
                 if let excerpt = status.excerpt, !repeats { elements.append(.text(excerpt, .post)) }
-                elements += (status.kind == "watch" && metadata.count > 1 ? Array(metadata.dropFirst()) : metadata).map { .text($0, .secondary) }
-                if let due = status.due(now: now, units: units) { elements.append(.text(due, .secondary)) }
+                elements += status.kind == "watch" && metadata.count > 1 ? Array(metadata.dropFirst()) : metadata
+                if let due = status.liveDue(units: units) { elements.append(due) }
                 if let url = status.url { elements.append(.link(url, words.openPost)) }
                 add(status.id, status.title, elements, accent: accent(status.kind))
             }
@@ -884,11 +967,12 @@ enum GlanceResetCards {
             if !elements.isEmpty { add("forecast", forecast.title, elements) }
         } else {
             if let latest = resets.latest {
-                add("latest", latest.label, [.badge(latest.since.text(now: now, units: units)), .text(latest.when, .secondary)])
+                add("latest", latest.label, [.badge(.countdown(latest.since, units)), .text(latest.when, .secondary)])
             }
             if let upcoming = resets.upcoming(at: now) {
                 let lines = upcoming.lines(now: now, units: units)
-                var elements: [GlanceResetElement] = [.text(lines.value, .heading), .text(lines.caption, .secondary)]
+                let value: GlanceResetElement = upcoming.countdown.map { .live(.countdown($0, units), .heading) } ?? .text(lines.value, .heading)
+                var elements: [GlanceResetElement] = [value, .text(lines.caption, .secondary)]
                 if let note = upcoming.note { elements.append(.text(note, .secondary)) }
                 add("upcoming", upcoming.title, elements, accent: upcoming.tone == .positive ? .green : GlanceResetPalette.orange)
             }
@@ -925,6 +1009,28 @@ enum GlanceResetCards {
             }
         }
         return cards
+    }
+
+    /// The moments after `now`, up to `end`, when a moving word on `resets`' cards changes, at most
+    /// one a minute: the last of each minute, by when every change in it has happened. A widget
+    /// gives each its own timeline entry, so the words move with the clock like the popup's.
+    static func ticks(resets: GlanceResets, units: GlanceUnits, after now: Date, until end: Date) -> [Date] {
+        var moments: [Date] = []
+        func collect(_ elements: [GlanceResetElement]) {
+            for element in elements {
+                switch element {
+                case let .live(text, _), let .badge(text):
+                    moments += text.changes(after: now, until: end)
+                case let .message(lines), let .row(lines):
+                    collect(lines)
+                default:
+                    break
+                }
+            }
+        }
+        collect(make(resets: resets, units: units, now: now).flatMap(\.elements))
+        let byMinute = Dictionary(grouping: moments) { ($0.timeIntervalSince1970 / 60).rounded(.down) }
+        return byMinute.values.compactMap { $0.max() }.sorted()
     }
 
     /// The Reset tab's history as one list: a row per reset between hairlines, its head line with

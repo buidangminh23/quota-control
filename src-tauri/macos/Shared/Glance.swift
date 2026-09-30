@@ -749,7 +749,9 @@ struct GlanceResetLatestPresentation: Decodable, Equatable {
     /// Said when no post announced it: the site recorded the reset itself.
     var observed: String? = nil
 
-    func ago(now: Date, locale: String) -> String {
+    /// How long ago `at` was at `now`, as the Reset tab's latest reset words it (`resetAgoText`):
+    /// in whole minutes, hours or days.
+    static func ago(since at: Date, now: Date, locale: String) -> String {
         let minutes = max(1, Int(floor(now.timeIntervalSince(at) / 60)))
         let hours = minutes / 60
         let formatter = RelativeDateTimeFormatter()
@@ -780,17 +782,17 @@ struct GlanceResetStatusCard: Decodable, Equatable, Identifiable {
     /// while it is drawn with it.
     var sameAsLatest: Bool? = nil
 
-    func metadata(now: Date, units: GlanceUnits) -> [String] {
-        guard kind == "scheduled", let announced, let scheduledMeta else { return meta }
-        return [announced.text(now: now, units: units) + " · " + scheduledMeta]
+    /// The card's meta lines: a scheduled card's first one says, as time passes, how long ago the
+    /// reset was announced; the others stay as the popup wrote them.
+    func liveMetadata(units: GlanceUnits) -> [GlanceResetElement] {
+        guard kind == "scheduled", let announced, let scheduledMeta else { return meta.map { .text($0, .secondary) } }
+        return [.live(.countdownThen(announced, units, scheduledMeta), .secondary)]
     }
 
-    func due(now: Date, units: GlanceUnits) -> String? {
-        guard let dueCountdown else { return due }
-        if dueCountdown.at <= now, let overdueCountdown {
-            return overdueCountdown.text(now: now, units: units)
-        }
-        return dueCountdown.text(now: now, units: units)
+    /// The time left to the card's stated time (or deadline), then how long it is past it.
+    func liveDue(units: GlanceUnits) -> GlanceResetElement? {
+        guard let dueCountdown else { return due.map { .text($0, .secondary) } }
+        return .live(.dueThenOverdue(dueCountdown, overdueCountdown, units), .secondary)
     }
 }
 

@@ -48,7 +48,7 @@ enum QuotaWidgetStyle {
 /// One widget kind: its style, the kind string WidgetKit stores placed widgets under, and the
 /// gallery wording. Kind strings never change, or placed widgets would turn blank.
 private func glanceConfiguration(kind: String, style: QuotaWidgetStyle) -> some WidgetConfiguration {
-    StaticConfiguration(kind: kind, provider: GlanceTimeline()) { entry in
+    StaticConfiguration(kind: kind, provider: GlanceTimeline(style: style)) { entry in
         GlanceWidgetEntryView(entry: entry, style: style)
     }
     .configurationDisplayName(WidgetText.name(style))
@@ -90,9 +90,15 @@ struct GlanceEntry: TimelineEntry {
 }
 
 struct GlanceTimeline: TimelineProvider {
+    var style: QuotaWidgetStyle = .details
+
     /// How often the widget looks again on its own; the app also reloads it whenever readings change.
     private static let refresh: TimeInterval = 15 * 60
-    private static let momentEntries = 8
+    /// How far ahead the reset tracker's moving words (how long ago, how long left) get entries of
+    /// their own, one a minute at most: a little past `refresh`, when the widget looks again. Every
+    /// entry is drawn ahead of time, so the span stays short.
+    private static let tickSpan: TimeInterval = 20 * 60
+    private static let momentEntries = 40
 
     func placeholder(in context: Context) -> GlanceEntry {
         GlanceEntry(date: Date(), document: .sample)
@@ -107,24 +113,42 @@ struct GlanceTimeline: TimelineProvider {
         let now = Date()
         let document = GlanceStore.load()
         var entries = [GlanceEntry(date: now, document: document)]
-        for moment in Self.moments(document, after: now).prefix(Self.momentEntries) {
+        for moment in Self.moments(document, after: now, style: style).prefix(Self.momentEntries) {
             entries.append(GlanceEntry(date: moment, document: document))
         }
         completion(Timeline(entries: entries, policy: .after(now.addingTimeInterval(Self.refresh))))
     }
 
     /// The moments after `now` when something drawn changes on its own, soonest first: a limit
-    /// comes back, a countdown of the reset tracker the widget chose ends or its row goes away, or
-    /// the readings turn stale.
-    static func moments(_ document: GlanceDocument?, after now: Date) -> [Date] {
+    /// comes back or the readings turn stale, and on a widget drawing the reset tracker it chose, a
+    /// countdown of the tracker ends, a row goes away, or a word moving with the clock changes.
+    static func moments(_ document: GlanceDocument?, after now: Date, style: QuotaWidgetStyle) -> [Date] {
         guard let document else { return [] }
         var moments = Set(GlanceUpcomingLimit.list(document.widget.providers, now: now).map(\.at))
-        moments.formUnion(document.forWidget.resetMoments(after: now))
+        if style.drawsResets(document) {
+            let widget = document.forWidget
+            moments.formUnion(widget.resetMoments(after: now))
+            if let resets = widget.resets {
+                moments.formUnion(GlanceResetCards.ticks(resets: resets, units: widget.labels.units, after: now, until: now.addingTimeInterval(tickSpan)))
+            }
+        }
         let stale = document.generatedAt.addingTimeInterval(GlanceStaleness.after)
         if stale > now {
             moments.insert(stale)
         }
         return moments.sorted()
+    }
+}
+
+extension QuotaWidgetStyle {
+    /// Whether the style draws the reset tracker: the reset widgets always, the Overview when
+    /// Settings gave it the reset part.
+    func drawsResets(_ document: GlanceDocument) -> Bool {
+        switch self {
+        case .codexResets, .resetCalendar: return true
+        case .overview: return document.widget.has(.resets)
+        case .details, .rings, .compact, .upcoming: return false
+        }
     }
 }
 
