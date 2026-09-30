@@ -7,8 +7,9 @@
  * need: with the notifications alone that is the status, so the tracker keeps the latest and the
  * announced reset and none of what the history gives, which the popup then shows nowhere either.
  * The Claude tracker rides along only while a surface or a wing reads it and the Reset tab or
- * Claude reset notifications are on. The hidden popup keeps running, so both stay live while it
- * is closed.
+ * Claude reset notifications are on. A tracker that is on but has nothing yet sends the Reset
+ * tab's own line instead (loading, or could not load). The hidden popup keeps running, so both
+ * stay live while it is closed.
  * Elsewhere the core has no glance and this does nothing.
  */
 import { useEffect, useMemo, useRef } from "react";
@@ -17,7 +18,7 @@ import { backend } from "@/lib/backend";
 import type { Provider, WidgetDescriptor } from "@/lib/types";
 import { buildGlance, isClaudeResetsWing, isSpecialWing, type GlanceWingChoice } from "@/model/glance";
 import { buildClaudeGlanceResets } from "@/model/glanceClaudeResets";
-import { buildGlanceResets, parseResetFeeds } from "@/model/glanceResets";
+import { buildGlanceResets, parseResetFeeds, trackerPending } from "@/model/glanceResets";
 import { dailyReliability } from "@/model/insights/claudePresentation";
 import { parseClaudeResets } from "@/model/insights/claudeResets";
 import { feedOutdated, resetTrackerOutdated } from "@/model/insights/resets";
@@ -103,6 +104,13 @@ export function useGlance(): void {
     () => (tracking ? buildGlanceResets({ feeds, stale, now, language: display.language, timeFormat, theme, reliability, withHistory: showResetsTab }) : null),
     [tracking, feeds, stale, now, display.language, timeFormat, theme, reliability, showResetsTab],
   );
+  const resetsPending = useMemo(
+    () =>
+      tracking && !resets
+        ? trackerPending([{ snapshot: statusFeed, error: statusError }, ...(showResetsTab ? [{ snapshot: historyFeed, error: historyError }] : [])], display.language)
+        : null,
+    [tracking, resets, statusFeed, statusError, showResetsTab, historyFeed, historyError, display.language],
+  );
 
   const claudeRead = island.resetsProvider === "claude" || widget.resetsProvider === "claude" || island.wings.some(isClaudeResetsWing);
   const claudeTracking = supported && claudeRead && (showResetsTab || notifyClaudeResets);
@@ -118,6 +126,10 @@ export function useGlance(): void {
         ? buildClaudeGlanceResets({ feed: claudeParsed, accounts: claudeAccounts ?? [], used: usedBankedResets, stale: claudeStale, now, language: display.language, timeFormat, theme })
         : null,
     [claudeParsed, claudeAccounts, usedBankedResets, claudeStale, now, display.language, timeFormat, theme],
+  );
+  const claudeResetsPending = useMemo(
+    () => (claudeTracking && !claudeResets ? trackerPending([{ snapshot: claudeFeed, error: claudeError }], display.language) : null),
+    [claudeTracking, claudeResets, claudeFeed, claudeError, display.language],
   );
 
   const document = useMemo(() => {
@@ -149,11 +161,13 @@ export function useGlance(): void {
       appName: info?.name ?? messagesFor(display.language).chrome.appName,
       alert,
       resets,
+      resetsPending,
       claudeResets,
+      claudeResetsPending,
       markArt,
       now,
     });
-  }, [supported, layout, catalog, isEnabled, engine, display, info, islandEnabled, island, widget, timeFormat, alert, resets, claudeResets, markArt, now]);
+  }, [supported, layout, catalog, isEnabled, engine, display, info, islandEnabled, island, widget, timeFormat, alert, resets, resetsPending, claudeResets, claudeResetsPending, markArt, now]);
 
   useEffect(() => {
     if (!ready || !document) return;

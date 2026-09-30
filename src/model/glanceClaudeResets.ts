@@ -43,10 +43,12 @@ export function pendingBanked(resets: readonly ClaudeReset[], accounts: readonly
   return openBanked(resets, now).filter((reset) => !applied.has(reset.id) && concerns(reset, accounts));
 }
 
-/** The tracker for the glance document; `null` while the feed records no reset (limit changes alone are none). */
-export function buildClaudeGlanceResets(input: ClaudeGlanceResetsInput): GlanceResets | null {
+/**
+ * The tracker for the glance document. A feed that records no reset yet (limit changes alone are
+ * none) still gives one, with no reset card, as the Reset tab still shows its Claude view then.
+ */
+export function buildClaudeGlanceResets(input: ClaudeGlanceResetsInput): GlanceResets {
   const { feed, accounts, used, now, language, timeFormat } = input;
-  if (feed.resets.length === 0) return null;
   const text = insightsFor(language);
   const plans = [...new Set(accounts.filter((plan): plan is ClaudePlan => plan !== null))];
   const presentation = buildClaudePresentation({ feed, codex: [], plans, accounts, used, now, language, timeFormat });

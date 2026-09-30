@@ -143,6 +143,26 @@ describe("the glance document the popup sends", () => {
     expect(api.feedsAsked).not.toContain("codexResets");
   });
 
+  it("says the Codex feeds could not be loaded, in the Reset tab's words, while neither has a copy", async () => {
+    const api = await start({}, (backend) => {
+      backend.feedStates.codexResetStatus = { body: null, error: "HTTP 500" };
+      backend.feedStates.codexResets = { body: null, error: "HTTP 502" };
+    });
+    await waitFor(() => expect(api.latest?.resetsPending).toEqual({ text: "Chưa tải được: HTTP 500", failed: true }));
+    expect("resets" in api.latest!).toBe(false);
+    expect(api.latest!.labels.resetsOff).toBe("Bật tab Reset hoặc thông báo reset trong Quota Control để xem dự báo.");
+  });
+
+  it("says the Claude feed could not be loaded in place of its tracker, for the surface showing it", async () => {
+    const api = await start({ island: { resetsProvider: "claude" }, notifyClaudeResets: false }, (backend) => {
+      backend.feedStates.claudeResets = { body: null, error: "offline" };
+    });
+    await waitFor(() => expect(api.latest?.claudeResetsPending).toEqual({ text: "Chưa tải được: offline", failed: true }));
+    expect("claudeResets" in api.latest!).toBe(false);
+    expect(api.latest!.resets?.brand).toBe("codex");
+    expect("resetsPending" in api.latest!).toBe(false);
+  });
+
   it("carries the Reset tab's self-check under the Codex chances once the history is long enough to try", async () => {
     const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
     const post = (id: string, days: number) => ({ id, reset_type: "regular", announced_at: ago(days), text: `Codex reset ${id}.`, source: { type: "x_post", author: "thsottiaux", url: `https://x.com/thsottiaux/status/${id}` } });

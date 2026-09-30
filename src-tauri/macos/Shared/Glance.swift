@@ -21,15 +21,20 @@ struct GlanceDocument: Decodable, Equatable {
     /// The Codex free-reset tracker; absent while the Reset tab and reset notifications are both off.
     /// In a surface's copy (`forIsland`, `forWidget`) it is the tracker that surface chose.
     var resets: GlanceResets?
+    /// What a reset view says in place of the Codex tracker while it is on but has nothing yet; in a
+    /// surface's copy, for the tracker that surface chose.
+    var resetsPending: GlanceResetsPending?
     /// The Claude reset tracker, sent while the island or the widget chose it; absent otherwise, and
     /// while the Reset tab and Claude reset notifications are both off.
     var claudeResets: GlanceResets?
+    /// `resetsPending` for the Claude tracker.
+    var claudeResetsPending: GlanceResetsPending?
     var alert: GlanceAlert?
 
     static let supportedVersion = 1
 
     private enum CodingKeys: String, CodingKey {
-        case version, generatedAt, locale, hour12, labels, providers, island, widget, resets, claudeResets, alert
+        case version, generatedAt, locale, hour12, labels, providers, island, widget, resets, resetsPending, claudeResets, claudeResetsPending, alert
     }
 
     init(
@@ -42,7 +47,9 @@ struct GlanceDocument: Decodable, Equatable {
         island: GlanceIsland,
         widget: GlanceWidgetContent,
         resets: GlanceResets? = nil,
+        resetsPending: GlanceResetsPending? = nil,
         claudeResets: GlanceResets? = nil,
+        claudeResetsPending: GlanceResetsPending? = nil,
         alert: GlanceAlert?
     ) {
         self.version = version
@@ -54,7 +61,9 @@ struct GlanceDocument: Decodable, Equatable {
         self.island = island
         self.widget = widget
         self.resets = resets
+        self.resetsPending = resetsPending
         self.claudeResets = claudeResets
+        self.claudeResetsPending = claudeResetsPending
         self.alert = alert
     }
 
@@ -70,7 +79,9 @@ struct GlanceDocument: Decodable, Equatable {
         widget = try container.decodeIfPresent(GlanceWidgetContent.self, forKey: .widget)
             ?? GlanceWidgetContent(providers: providers, shows: .all, empty: labels.empty)
         resets = try? container.decodeIfPresent(GlanceResets.self, forKey: .resets)
+        resetsPending = try? container.decodeIfPresent(GlanceResetsPending.self, forKey: .resetsPending)
         claudeResets = try? container.decodeIfPresent(GlanceResets.self, forKey: .claudeResets)
+        claudeResetsPending = try? container.decodeIfPresent(GlanceResetsPending.self, forKey: .claudeResetsPending)
         alert = try container.decodeIfPresent(GlanceAlert.self, forKey: .alert)
     }
 
@@ -124,7 +135,7 @@ struct GlanceDocument: Decodable, Equatable {
     }
 
     /// The document with `resets` as `provider`'s tracker showing only `parts`; for Claude the reset
-    /// view is named after the Claude tracker and, while it is off, says what turns it on.
+    /// view is named after the Claude tracker and, while it has nothing, says why in its own words.
     private func showing(_ provider: GlanceResetsProvider, parts: GlanceResetParts) -> GlanceDocument {
         var copy = self
         switch provider {
@@ -132,6 +143,7 @@ struct GlanceDocument: Decodable, Equatable {
             copy.resets = resets?.showing(parts)
         case .claude:
             copy.resets = claudeResets?.showing(parts)
+            copy.resetsPending = claudeResetsPending
             copy.labels.tabs.resets = claudeResetsTitle
             if let off = labels.claudeResetsOff { copy.labels.resetsOff = off }
         }
@@ -708,6 +720,14 @@ struct GlanceResets: Decodable, Equatable {
         if !parts.rhythm { copy.rhythm = nil }
         return copy
     }
+}
+
+/// The Reset tab's own line for a tracker that is on but has nothing yet (see `GlanceResetsPending`
+/// in `src/model/glance.ts`): still loading, or could not load.
+struct GlanceResetsPending: Decodable, Equatable {
+    var text: String
+    /// The feeds could not be loaded, which the Reset tab says in the notice color.
+    var failed: Bool?
 }
 
 struct GlanceResetAuthor: Decodable, Equatable {

@@ -9,8 +9,20 @@ import { PROVIDER_MARKS } from "@/assets/providerMarks";
 import resetAvatar from "@/assets/thsottiaux.webp?inline";
 import type { Language } from "@/i18n";
 import { insightsFor, type InsightsMessages } from "@/i18n/insights";
+import type { PublicFeedSnapshot } from "@/lib/insightsTypes";
 import { compactDuration, shortTime, timeOnDayLabel, type TimeFormat } from "./format";
-import type { GlanceCountdown, GlanceResetAuthor, GlanceResetCalendar, GlanceResetLatestPresentation, GlanceResetPresentation, GlanceResetRhythm, GlanceResets, GlanceResetStatusCard, GlanceUpcomingReset } from "./glance";
+import type {
+  GlanceCountdown,
+  GlanceResetAuthor,
+  GlanceResetCalendar,
+  GlanceResetLatestPresentation,
+  GlanceResetPresentation,
+  GlanceResetRhythm,
+  GlanceResets,
+  GlanceResetsPending,
+  GlanceResetStatusCard,
+  GlanceUpcomingReset,
+} from "./glance";
 import {
   announcementPattern,
   activeWatch,
@@ -70,6 +82,18 @@ export interface GlanceResetsInput {
    * the rhythm, the statistics and the history rather than work them out from a single reset.
    */
   withHistory?: boolean;
+}
+
+/**
+ * What the Reset tab says in place of a tracker it has nothing of yet, for the island and the
+ * widgets to say the same: `Đang tải…` until each feed the tracker reads has answered, then
+ * `Chưa tải được: …` with the first feed's error, which the tab draws in the notice color.
+ */
+export function trackerPending(feeds: readonly { snapshot: PublicFeedSnapshot | undefined; error?: string }[], language: Language): GlanceResetsPending {
+  const text = insightsFor(language);
+  if (feeds.some((feed) => feed.snapshot === undefined)) return { text: text.loading };
+  const error = feeds.map((feed) => feed.snapshot?.error ?? feed.error).find(Boolean);
+  return { text: text.failed(error ?? ""), failed: true };
 }
 
 export function resetAgoText(date: Date, now: Date, language: Language): string {

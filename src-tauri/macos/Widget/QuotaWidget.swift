@@ -207,6 +207,14 @@ enum WidgetText {
         vietnamese ? "Mở Quota Control để hiện hạn mức ở đây." : "Open Quota Control to show your limits here."
     }
 
+    /// What a reset widget says in place of the tracker the widget chose: the Reset tab's own line
+    /// while the tracker is on but has nothing yet (`failed` once it could not load), else what
+    /// turns the tracker on.
+    static func resetsMessage(_ document: GlanceDocument) -> (text: String, failed: Bool) {
+        if let pending = document.resetsPending { return (pending.text, pending.failed == true) }
+        return (resetsOff(document), false)
+    }
+
     /// What a reset widget says while the tracker the widget chose is off.
     static func resetsOff(_ document: GlanceDocument) -> String {
         if !document.labels.resetsOff.isEmpty { return document.labels.resetsOff }
@@ -312,7 +320,8 @@ struct GlanceWidgetView: View {
             if let resets = document.resets {
                 CodexResetsLayout(document: document, resets: resets, family: family, now: now, size: size)
             } else {
-                WidgetMessage(text: WidgetText.resetsOff(document), symbol: "arrow.counterclockwise.circle")
+                let message = WidgetText.resetsMessage(document)
+                WidgetMessage(text: message.text, symbol: "arrow.counterclockwise.circle", failed: message.failed)
             }
         case .resetCalendar:
             if let resets = document.resets, let calendar = resets.calendar {
@@ -320,7 +329,8 @@ struct GlanceWidgetView: View {
             } else if let resets = document.resets {
                 CodexResetsLayout(document: document, resets: resets, family: family, now: now, size: size)
             } else {
-                WidgetMessage(text: WidgetText.resetsOff(document), symbol: "calendar")
+                let message = WidgetText.resetsMessage(document)
+                WidgetMessage(text: message.text, symbol: "calendar", failed: message.failed)
             }
         }
     }

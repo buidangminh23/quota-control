@@ -186,7 +186,8 @@ export interface GlanceDocument {
     noData: string;
     more: string;
     units: { day: string; hour: string; minute: string };
-    /** What a reset widget or section says while its tracker is off (`resets` or `claudeResets` absent). */
+    /** What a reset widget or section says while its tracker is off (`resets` or `claudeResets`
+     * absent, and no `resetsPending` or `claudeResetsPending` saying it is on its way). */
     resetsOff: string;
     /** `Sắp đặt lại`: the heading of the next limits to come back. */
     upcoming: string;
@@ -208,11 +209,25 @@ export interface GlanceDocument {
    * absent while the Reset tab and reset notifications are both off, and with the notifications
    * alone only what its status says, without the history. */
   resets?: GlanceResets;
+  /** What a reset surface says in place of the Codex tracker while it is on but has nothing yet;
+   * absent otherwise. */
+  resetsPending?: GlanceResetsPending;
   /** The Claude reset tracker (claude-resets.com), for the island or the widget when its Settings
    * chose it (a wing reading it needs no copy here); absent otherwise, and while the Reset tab and
    * Claude reset notifications are both off. */
   claudeResets?: GlanceResets;
+  /** `resetsPending` for the Claude tracker, sent while a surface shows it. */
+  claudeResetsPending?: GlanceResetsPending;
   alert?: GlanceAlert;
+}
+
+/**
+ * The Reset tab's own line for a tracker that is on but has nothing to show yet: `Đang tải…` until
+ * its feeds answer, or `Chưa tải được: …`, which the tab draws in the notice color (`failed`).
+ */
+export interface GlanceResetsPending {
+  text: string;
+  failed?: boolean;
 }
 
 /**
@@ -457,9 +472,13 @@ export interface GlanceInput {
   alert: GlanceAlert | null;
   /** The Codex free-reset tracker (`buildGlanceResets`), `null` while it is off or has no data. */
   resets: GlanceResets | null;
+  /** Why a Codex tracker that is on has no data yet (`trackerPending`); taken only without one. */
+  resetsPending?: GlanceResetsPending | null;
   /** The Claude reset tracker (`buildClaudeGlanceResets`), `null` or absent while neither a surface
    * nor a wing uses it, it is off or it has no data. */
   claudeResets?: GlanceResets | null;
+  /** Why a Claude tracker that is on has no data yet; taken only without one, for a surface showing it. */
+  claudeResetsPending?: GlanceResetsPending | null;
   /** The official color logos drawn so far (`useMarkArt`), base64 PNG by brand; optional. */
   markArt?: Readonly<Record<string, string>>;
   now: Date;
@@ -583,7 +602,11 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
   }
   if (input.hour12 !== null) document.hour12 = input.hour12;
   if (input.resets) document.resets = input.resets;
-  if (input.claudeResets && (claudeIsland || claudeWidget)) document.claudeResets = input.claudeResets;
+  else if (input.resetsPending) document.resetsPending = input.resetsPending;
+  if (claudeIsland || claudeWidget) {
+    if (input.claudeResets) document.claudeResets = input.claudeResets;
+    else if (input.claudeResetsPending) document.claudeResetsPending = input.claudeResetsPending;
+  }
   if (input.alert) document.alert = input.alert;
   return document;
 }

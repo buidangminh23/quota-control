@@ -32,10 +32,16 @@ beforeEach(() => setSystemTimeZone("Asia/Saigon"));
 afterEach(() => setSystemTimeZone(null));
 
 describe("buildClaudeGlanceResets", () => {
-  it("is absent until the feed records a reset: limit changes alone are none", () => {
-    expect(build(feedOf([]))).toBeNull();
-    expect(build(feedOf([event({ id: "p1", kind: "policy", scope: "paid plans", note: "Raised the weekly limits." })]))).toBeNull();
-    expect(build(feedOf([event({ id: "r1" })]))).not.toBeNull();
+  it("keeps a feed without resets as a tracker with no reset card, as the Reset tab keeps its Claude view", () => {
+    for (const feed of [feedOf([]), feedOf([event({ id: "p1", kind: "policy", scope: "paid plans", note: "Raised the weekly limits." })])]) {
+      const resets = build(feed);
+      expect(resets).toMatchObject({ title: "Reset Claude", brand: "claude", forecast: [] });
+      for (const key of ["latest", "upcoming", "calendar", "rhythm", "wait", "median"] as const) expect(resets[key], key).toBeUndefined();
+      expect(resets.presentation).toMatchObject({ statuses: [], stats: [], history: [], forecast: { chances: [] } });
+      expect(resets.presentation?.latest).toBeUndefined();
+      expect(resets.presentation?.method).toEqual(insightsFor("vi").claude.method);
+    }
+    expect(build(feedOf([event({ id: "r1" })])).latest?.at).toBe("2026-09-20T10:00:00.000Z");
   });
 
   it("words the tracker like the Codex one, with the Claude mark, color and site", () => {

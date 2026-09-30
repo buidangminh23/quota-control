@@ -11,10 +11,17 @@ extension GlanceView {
         case .upcoming: return !GlanceUpcomingLimit.list(document.providers, now: now).isEmpty
         }
     }
+
+    /// Whether the view says, as the popup's tab does, that its data is on its way or could not
+    /// load: the reset view while its tracker is on but has nothing yet.
+    func isPending(in document: GlanceDocument) -> Bool {
+        self == .resets && document.resets == nil && document.resetsPending != nil
+    }
 }
 
 /// What the open island draws: behind a tab bar, the one tab picked (the first with something to
-/// show until one is clicked), in full; stacked, every chosen view that has something to show.
+/// show until one is clicked), in full; stacked, every chosen view that has something to show or
+/// says why it has nothing yet.
 struct IslandPlan: Equatable {
     /// The tab bar, empty when there is none.
     var tabs: [GlanceView]
@@ -30,12 +37,12 @@ struct IslandPlan: Equatable {
                 ?? chosen[0]
             return IslandPlan(tabs: chosen, sections: [active], selected: active)
         }
-        return IslandPlan(tabs: [], sections: chosen.filter { $0.hasContent(in: document, now: now) }, selected: nil)
+        return IslandPlan(tabs: [], sections: chosen.filter { $0.hasContent(in: document, now: now) || $0.isPending(in: document) }, selected: nil)
     }
 
     /// Whether the open island has anything at all to show.
     static func hasContent(_ document: GlanceDocument, now: Date) -> Bool {
-        document.island.tabs.contains { $0.hasContent(in: document, now: now) }
+        document.island.tabs.contains { $0.hasContent(in: document, now: now) || $0.isPending(in: document) }
     }
 }
 
@@ -182,25 +189,27 @@ struct IslandDetails: View {
         }
     }
 
-    private func emptyLine(_ text: String) -> some View {
-        Text(text)
+    private func emptyLine(_ line: (text: String, failed: Bool)) -> some View {
+        Text(line.text)
             .font(.system(size: 12))
-            .foregroundStyle(IslandInk.label)
+            .foregroundStyle(line.failed ? IslandInk.warning : IslandInk.label)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 20)
             .padding(.top, 10)
     }
 
-    /// Why a view (or, `nil`, the whole island) has nothing to show.
-    private func emptyText(_ section: GlanceView?) -> String {
+    /// Why a view (or, `nil`, the whole island) has nothing to show; the reset view says what the
+    /// Reset tab says while its tracker loads, in the notice color once it could not load.
+    private func emptyText(_ section: GlanceView?) -> (text: String, failed: Bool) {
         let fallback = document.island.empty ?? document.labels.empty
         switch section ?? (document.island.tabs.count == 1 ? document.island.tabs[0] : nil) {
         case .resets:
-            return document.labels.resetsOff.isEmpty ? fallback : document.labels.resetsOff
+            if let pending = document.resetsPending { return (pending.text, pending.failed == true) }
+            return (document.labels.resetsOff.isEmpty ? fallback : document.labels.resetsOff, false)
         case .upcoming:
-            return document.labels.upcomingEmpty.isEmpty ? fallback : document.labels.upcomingEmpty
+            return (document.labels.upcomingEmpty.isEmpty ? fallback : document.labels.upcomingEmpty, false)
         case .quota, .none:
-            return fallback
+            return (fallback, false)
         }
     }
 

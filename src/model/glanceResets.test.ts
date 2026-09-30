@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setSystemTimeZone } from "@/model/timeZone";
 import { insightsFor } from "@/i18n/insights";
 import type { GlanceResets } from "./glance";
-import { addHistory, buildGlanceResets, buildResetPresentation, parseResetFeeds, POST_EXCERPT_LENGTH, resetAgoText, type GlanceResetsInput, type ResetFeeds } from "./glanceResets";
+import { addHistory, buildGlanceResets, buildResetPresentation, parseResetFeeds, POST_EXCERPT_LENGTH, resetAgoText, trackerPending, type GlanceResetsInput, type ResetFeeds } from "./glanceResets";
 
 /** Friday 25/09/2026 10:00 in Vietnam. */
 const NOW = new Date("2026-09-25T03:00:00Z");
@@ -378,6 +378,19 @@ describe("the words the island's and widgets' reset cards add", () => {
         expect(words, `${language}: ${phrase}`).toContain(`"${phrase}"`);
       }
     }
+  });
+});
+
+describe("trackerPending", () => {
+  const snapshot = (body: string | null, error: string | null = null) => ({ name: "codexResetStatus" as const, body, fetchedAt: null, checkedAt: null, verifiedAt: null, error, stale: false });
+
+  it("says what the Reset tab says in place of a tracker it has nothing of yet", () => {
+    const vi = insightsFor("vi");
+    expect(trackerPending([{ snapshot: snapshot(null) }, { snapshot: undefined }], "vi")).toEqual({ text: vi.loading });
+    expect(trackerPending([{ snapshot: undefined, error: "offline" }], "vi")).toEqual({ text: vi.loading });
+    expect(trackerPending([{ snapshot: snapshot(null) }, { snapshot: snapshot(null, "HTTP 500") }], "vi")).toEqual({ text: "Chưa tải được: HTTP 500", failed: true });
+    expect(trackerPending([{ snapshot: snapshot(null), error: "ipc" }, { snapshot: snapshot(null, "HTTP 500") }], "vi")).toEqual({ text: "Chưa tải được: ipc", failed: true });
+    expect(trackerPending([{ snapshot: snapshot(null) }], "en")).toEqual({ text: "Could not load the data.", failed: true });
   });
 });
 

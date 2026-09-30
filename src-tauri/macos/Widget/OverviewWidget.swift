@@ -11,11 +11,13 @@ enum ResetsSummaryStyle {
     case column
 }
 
-/// The reset tracker in brief, or the words saying it is off.
+/// The reset tracker in brief, or the words saying why there is none: it is still loading, could not
+/// load, or is off.
 struct ResetsSummary: View {
     let document: GlanceDocument
     let now: Date
     let style: ResetsSummaryStyle
+    @Environment(\.colorScheme) private var colorScheme
 
     private var units: GlanceUnits { document.labels.units }
 
@@ -23,6 +25,7 @@ struct ResetsSummary: View {
         if let resets = document.resets {
             summary(resets)
         } else {
+            let message = WidgetText.resetsMessage(document)
             VStack(alignment: .leading, spacing: 5) {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Image(systemName: "arrow.counterclockwise.circle")
@@ -32,9 +35,9 @@ struct ResetsSummary: View {
                         .font(.system(size: WidgetScale.title, weight: .semibold))
                         .lineLimit(1)
                 }
-                Text(WidgetText.resetsOff(document))
+                Text(message.text)
                     .font(.system(size: WidgetScale.caption))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(message.failed ? GlanceResetPalette(scheme: colorScheme).noticeText : Color.secondary)
                     .lineLimit(4)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -109,6 +112,7 @@ struct OverviewLayout: View {
     let family: WidgetFamily
     let now: Date
     let size: CGSize
+    @Environment(\.colorScheme) private var colorScheme
 
     private var parts: [GlanceView] { document.widget.tabs }
 
@@ -234,9 +238,10 @@ struct OverviewLayout: View {
                     }
                 }
             } else {
-                Text(WidgetText.resetsOff(document))
+                let message = WidgetText.resetsMessage(document)
+                Text(message.text)
                     .font(.system(size: WidgetScale.caption))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(message.failed ? GlanceResetPalette(scheme: colorScheme).noticeText : Color.secondary)
                     .lineLimit(3)
             }
         case .upcoming:

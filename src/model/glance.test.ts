@@ -2,7 +2,18 @@ import { createHash } from "node:crypto";
 import { fixtureCatalog, fixtureSnapshots } from "@/lib/fixtures";
 import { FEED_FIXTURES } from "@/lib/insightsFeedFixtures";
 import type { ProviderSnapshot } from "@/lib/types";
-import { buildGlance, CLAUDE_RESETS_PROVIDER_ID, CODEX_RESETS_PROVIDER_ID, glanceMetric, GLANCE_VERSION, isClaudeResetsWing, type GlanceAlert, type GlanceResets, type GlanceWingChoice } from "./glance";
+import {
+  buildGlance,
+  CLAUDE_RESETS_PROVIDER_ID,
+  CODEX_RESETS_PROVIDER_ID,
+  glanceMetric,
+  GLANCE_VERSION,
+  isClaudeResetsWing,
+  type GlanceAlert,
+  type GlanceResets,
+  type GlanceResetsPending,
+  type GlanceWingChoice,
+} from "./glance";
 import { buildClaudeGlanceResets } from "./glanceClaudeResets";
 import { buildGlanceResets, parseResetFeeds } from "./glanceResets";
 import { dailyReliability } from "./insights/claudePresentation";
@@ -32,11 +43,13 @@ interface Options {
   wings?: [GlanceWingChoice, GlanceWingChoice];
   hour12?: boolean | null;
   resets?: GlanceResets | null;
+  resetsPending?: GlanceResetsPending | null;
   claudeResets?: GlanceResets | null;
+  claudeResetsPending?: GlanceResetsPending | null;
   markArt?: Readonly<Record<string, string>>;
 }
 
-function glance({ display = DEFAULT_DISPLAY, data = snapshots, alert = null, island = {}, widget = {}, wings = [null, null], hour12 = null, resets = null, claudeResets, markArt }: Options = {}) {
+function glance({ display = DEFAULT_DISPLAY, data = snapshots, alert = null, island = {}, widget = {}, wings = [null, null], hour12 = null, resets = null, resetsPending, claudeResets, claudeResetsPending, markArt }: Options = {}) {
   const islandSettings = { ...DEFAULT_SETTINGS.island, ...island };
   const widgetSettings = { ...DEFAULT_SETTINGS.widget, ...widget };
   const groups = (content: GlanceContent, metrics: readonly string[]) => glanceGroups(content, metrics, layout, catalog, () => true);
@@ -55,7 +68,9 @@ function glance({ display = DEFAULT_DISPLAY, data = snapshots, alert = null, isl
     appName: "Quota Control",
     alert,
     resets,
+    resetsPending,
     claudeResets,
+    claudeResetsPending,
     markArt,
     now: NOW_GLANCE,
   });
@@ -305,6 +320,18 @@ describe("island sections and labels", () => {
     expect(glance({ resets: TRACKER }).resets).toBe(TRACKER);
   });
 
+  it("says what the Reset tab says in place of a tracker that is on but has nothing yet", () => {
+    const loading = { text: "Đang tải…" };
+    const failed = { text: "Chưa tải được: HTTP 500", failed: true };
+    expect(glance({ resetsPending: loading }).resetsPending).toBe(loading);
+    expect("resetsPending" in glance({ resets: TRACKER, resetsPending: loading })).toBe(false);
+    expect("resetsPending" in glance()).toBe(false);
+    const claude = glance({ island: { resetsProvider: "claude" }, resets: TRACKER, claudeResetsPending: failed });
+    expect(claude.claudeResetsPending).toBe(failed);
+    expect(claude.labels.resetsOff).toBe("Bật tab Reset hoặc thông báo reset trong Quota Control để xem dự báo.");
+    expect("claudeResetsPending" in glance({ island: { resetsProvider: "claude" }, claudeResets: CLAUDE_TRACKER, claudeResetsPending: failed })).toBe(false);
+    expect("claudeResetsPending" in glance({ wings: ["claude-resets:next", null], claudeResetsPending: failed })).toBe(false);
+  });
 });
 
 describe("special wings", () => {
