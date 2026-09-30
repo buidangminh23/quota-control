@@ -19,9 +19,27 @@ extension GlanceView {
     }
 }
 
+/// The island's last picked tab, kept in the app's defaults so a restart or an update reopens it;
+/// a tab that is no longer chosen falls back to the first one with something to show.
+enum IslandTabMemory {
+    private static let key = "island.selectedTab"
+
+    static func load(_ defaults: UserDefaults = .standard) -> GlanceView? {
+        defaults.string(forKey: key).flatMap(GlanceView.init(rawValue:))
+    }
+
+    static func save(_ tab: GlanceView?, _ defaults: UserDefaults = .standard) {
+        if let tab {
+            defaults.set(tab.rawValue, forKey: key)
+        } else {
+            defaults.removeObject(forKey: key)
+        }
+    }
+}
+
 /// What the open island draws: behind a tab bar, the one tab picked (the first with something to
 /// show until one is clicked), in full; stacked, every chosen view that has something to show or
-/// says why it has nothing yet.
+/// says why it has nothing yet, the reset view first so its forecast is not below every account.
 struct IslandPlan: Equatable {
     /// The tab bar, empty when there is none.
     var tabs: [GlanceView]
@@ -37,7 +55,8 @@ struct IslandPlan: Equatable {
                 ?? chosen[0]
             return IslandPlan(tabs: chosen, sections: [active], selected: active)
         }
-        return IslandPlan(tabs: [], sections: chosen.filter { $0.hasContent(in: document, now: now) || $0.isPending(in: document) }, selected: nil)
+        let shown = chosen.filter { $0.hasContent(in: document, now: now) || $0.isPending(in: document) }
+        return IslandPlan(tabs: [], sections: shown.filter { $0 == .resets } + shown.filter { $0 != .resets }, selected: nil)
     }
 
     /// Whether the open island has anything at all to show.

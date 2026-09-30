@@ -441,8 +441,11 @@ final class IslandModel: ObservableObject {
     @Published var budget = IslandBudget.full
     /// The widest reading beside the notch, which both wings take so the notch stays centered.
     @Published var wingContent: CGFloat = 0
-    /// The tab last clicked on the open island; it stays picked while the island closes and opens.
-    @Published var selectedTab: GlanceView?
+    /// The tab last clicked on the open island; it stays picked while the island closes and opens,
+    /// and across restarts and updates, so the island reopens where it was left.
+    @Published var selectedTab: GlanceView? = IslandTabMemory.load() {
+        didSet { IslandTabMemory.save(selectedTab) }
+    }
     /// The reset view's folds as last clicked, kept here so the open island is measured with them.
     @Published var resetFolds = GlanceResetFolds(foldsLists: true)
     /// Where the open island's tabs sit, in the panel's top-left coordinates.
