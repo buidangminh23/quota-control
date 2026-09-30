@@ -32,11 +32,6 @@ extension GlanceProvider {
     var markTint: Color { color.uppercased() == "#FFFFFF" ? .primary : tint }
 }
 
-extension GlanceResets {
-    /// The tracker's mark color, the text color when the brand is white.
-    var markTint: Color { color.uppercased() == "#FFFFFF" ? .primary : tint }
-}
-
 extension GlanceCountdown {
     /// The words with the span drawn as text WidgetKit keeps counting by itself, or the words for a
     /// countdown that has already passed. The timeline adds an entry at `at`, so the switch happens

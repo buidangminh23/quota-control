@@ -679,6 +679,9 @@ struct GlanceResets: Decodable, Equatable {
 
     var tint: Color { Color(glanceHex: color) ?? .white }
 
+    /// The tracker's mark color, the text color when the brand is white.
+    var markTint: Color { color.uppercased() == "#FFFFFF" ? .primary : tint }
+
     /// The announced reset while it is still to be shown at `now`.
     func upcoming(at now: Date) -> GlanceUpcomingReset? {
         guard let upcoming, upcoming.hideAt > now else { return nil }

@@ -285,8 +285,11 @@ struct ResetWidgetPager: View {
         let foldKey = { (fold: GlanceResetFold) in "reset-\(fold.rawValue).\(namespace)\(tracker).\(family.rawValue)" }
         let folds = GlanceResetFolds(methodOpen: UserDefaults.standard.bool(forKey: foldKey(.method)))
         let cards = GlanceResetCards.make(resets: resets, units: document.labels.units, now: now, folds: folds)
-        let fragments = ResetWidgetPagination.pages(cards, width: size.width, height: height)
-        let pages = ResetWidgetPagination.spreads(fragments, width: size.width, height: height)
+        let roomy = family == .systemLarge || family == .systemExtraLarge
+        let headed: Set<String> = roomy ? Set([cards.first?.id, initialCard].compactMap { $0 }) : []
+        let heading = roomy ? ResetWidgetPagination.headingSpace(resets, width: size.width) : 0
+        let fragments = ResetWidgetPagination.pages(cards, width: size.width, height: height, heading: heading, headed: headed)
+        let pages = ResetWidgetPagination.spreads(fragments, width: size.width, height: height, heading: heading, headed: headed)
         let initial = initialCard.flatMap { id in pages.firstIndex(where: { $0.contains(where: { $0.id.hasPrefix(id + "|") || $0.id == id }) }) }.map { prefixPages.count + $0 } ?? 0
         let stored = UserDefaults.standard.object(forKey: key) == nil ? initial : UserDefaults.standard.integer(forKey: key)
         let count = prefixPages.count + pages.count
@@ -297,8 +300,12 @@ struct ResetWidgetPager: View {
                 if index < prefixPages.count {
                     prefixPages[index]
                 } else if index - prefixPages.count < pages.count {
+                    let page = pages[index - prefixPages.count]
                     VStack(alignment: .leading, spacing: 8) {
-                        ForEach(pages[index - prefixPages.count]) { card in
+                        if let first = page.first, ResetWidgetPagination.opens(first, headed) {
+                            ResetsHeader(resets: resets)
+                        }
+                        ForEach(page) { card in
                             GlanceResetCardView(card: card, availableWidth: size.width)
                         }
                     }
@@ -341,8 +348,40 @@ struct ResetWidgetPager: View {
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .frame(height: 22)
-            UpdatedFooter(document: document, now: now)
+            HStack(alignment: .bottom, spacing: 6) {
+                UpdatedFooter(document: document, now: now)
+                if !roomy && index >= prefixPages.count {
+                    Spacer(minLength: 4)
+                    ResetsFooterName(resets: resets, showsTitle: family != .systemSmall)
+                }
+            }
         }
+    }
+}
+
+/// The tracker's mark and name beside the update time: how a small or medium widget, whose pages
+/// have no room for the heading a large one opens with, says whose resets it shows on every page.
+/// A small widget keeps the mark alone, so the update time is not cut.
+struct ResetsFooterName: View {
+    let resets: GlanceResets
+    var showsTitle = true
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ProviderMark(mark: resets.mark)
+                .foregroundStyle(resets.markTint)
+                .frame(width: 9, height: 9)
+            if showsTitle {
+                Text(resets.title)
+                    .font(.system(size: WidgetScale.footnote, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(resets.title)
+        .frame(height: WidgetScale.footerHeight - 4, alignment: .bottom)
+        .padding(.top, 4)
     }
 }
 
@@ -386,11 +425,14 @@ enum ResetWidgetPagination {
     private static var keys: [String] = []
     private static var spreadCache: [String: [[GlanceResetCardData]]] = [:]
 
-    static func pages(_ cards: [GlanceResetCardData], width: CGFloat, height: CGFloat) -> [GlanceResetCardData] {
-        let key = "\(width)|\(height)|\(String(reflecting: cards).hashValue)"
+    /// The cards cut into fragments that each fit a page `height` high; the `headed` ones, whose
+    /// page opens with the tracker's heading, into fragments that leave it `heading` of room.
+    static func pages(_ cards: [GlanceResetCardData], width: CGFloat, height pageHeight: CGFloat, heading: CGFloat = 0, headed: Set<String> = []) -> [GlanceResetCardData] {
+        let key = "\(width)|\(pageHeight)|\(heading)|\(headed.sorted())|\(String(reflecting: cards).hashValue)"
         if let saved = cache[key] { return saved }
         var result: [GlanceResetCardData] = []
         for card in cards {
+            let height = headed.contains(card.id) ? pageHeight - heading : pageHeight
             let needsPartition = card.elements.contains { element in
                 switch element {
                 case let .chances(chances): return width < 250 && chances.count > 1
@@ -431,14 +473,35 @@ enum ResetWidgetPagination {
         return result
     }
 
-    static func spreads(_ fragments: [GlanceResetCardData], width: CGFloat, height: CGFloat) -> [[GlanceResetCardData]] {
-        let key = "\(width)|\(height)|\(String(reflecting: fragments).hashValue)"
+    /// Whether `fragment` is where one of the `headed` cards starts, whose page opens with the
+    /// tracker's heading.
+    static func opens(_ fragment: GlanceResetCardData, _ headed: Set<String>) -> Bool {
+        headed.contains { fragment.id == $0 || fragment.id == $0 + "|0" }
+    }
+
+    /// The room the tracker's heading takes at the top of a page, with the gap under it.
+    static func headingSpace(_ resets: GlanceResets, width: CGFloat) -> CGFloat {
+        let view = ResetsHeader(resets: resets).frame(width: width).fixedSize(horizontal: false, vertical: true)
+        return ceil(NSHostingController(rootView: view).sizeThatFits(in: CGSize(width: width, height: 1_000)).height) + 8
+    }
+
+    /// The fragments laid onto pages in order, each page as full as it takes. A `headed` card
+    /// starts a page of its own, which opens with the tracker's heading (`heading` high), like the
+    /// top of the Reset tab: the first card, and the card a widget opens on.
+    static func spreads(_ fragments: [GlanceResetCardData], width: CGFloat, height: CGFloat, heading: CGFloat = 0, headed: Set<String> = []) -> [[GlanceResetCardData]] {
+        let key = "\(width)|\(height)|\(heading)|\(headed.sorted())|\(String(reflecting: fragments).hashValue)"
         if let saved = spreadCache[key] { return saved }
         var result: [[GlanceResetCardData]] = []
         var current: [GlanceResetCardData] = []
         var used: CGFloat = 0
         for fragment in fragments {
             let measured = measuredHeight(fragment, width: width)
+            if opens(fragment, headed) {
+                if !current.isEmpty { result.append(current) }
+                current = [fragment]
+                used = heading + measured
+                continue
+            }
             let required = measured + (current.isEmpty ? 0 : 8)
             if !current.isEmpty && used + required > height - 4 {
                 result.append(current)

@@ -124,7 +124,7 @@ struct IslandDetails: View {
         VStack(alignment: .leading, spacing: 0) {
             Color.clear.frame(height: topInset)
             if let active = plan.selected, !plan.tabs.isEmpty {
-                IslandTabBar(tabs: plan.tabs, selected: active, labels: document.labels.tabs)
+                IslandTabBar(tabs: plan.tabs, selected: active, labels: document.labels.tabs, resets: document.resets)
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
                     .padding(.bottom, 4)
@@ -160,7 +160,7 @@ struct IslandDetails: View {
                         .padding(.vertical, 12)
                 }
                 if section.hasContent(in: document, now: now) {
-                    content(section)
+                    content(section, named: plan.tabs.isEmpty)
                         .padding(.horizontal, 20)
                         .padding(.top, index == 0 ? 10 : 0)
                 } else {
@@ -171,8 +171,9 @@ struct IslandDetails: View {
         .padding(.bottom, 2)
     }
 
+    /// A view's content; `named`, the reset view names its tracker itself, as no tab bar does.
     @ViewBuilder
-    private func content(_ section: GlanceView) -> some View {
+    private func content(_ section: GlanceView, named: Bool) -> some View {
         switch section {
         case .quota:
             IslandQuotaSection(document: document, now: now, budget: budget, availableWidth: max(1, availableWidth - 40))
@@ -181,7 +182,7 @@ struct IslandDetails: View {
                 IslandResetsSection(
                     resets: resets, labels: document.labels, now: now, budget: budget,
                     availableWidth: max(1, availableWidth - 40 - NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)),
-                    folds: resetFolds, onFold: onResetFold
+                    folds: resetFolds, onFold: onResetFold, showsHeading: named
                 )
             }
         case .upcoming:
@@ -239,38 +240,48 @@ struct IslandDetails: View {
     }
 }
 
-/// The open island's tabs as a segmented bar; the picked one lit. A click lands through the
-/// island's own click handling, which finds the tab by the frames reported here.
+/// The open island's tabs as a segmented bar; the picked one lit, the reset tab led by its
+/// tracker's mark as the Reset tab's switch shows it. A click lands through the island's own click
+/// handling, which finds the tab by the frames reported here.
 struct IslandTabBar: View {
     let tabs: [GlanceView]
     let selected: GlanceView
     let labels: GlanceTabLabels
+    /// The tracker the reset tab shows, whose mark leads its name.
+    var resets: GlanceResets? = nil
 
     var body: some View {
         HStack(spacing: 2) {
             ForEach(tabs, id: \.self) { tab in
                 let on = tab == selected
-                Text(labels.name(tab))
-                    .font(.system(size: 11.5, weight: on ? .semibold : .medium))
-                    .foregroundStyle(on ? Color.white : IslandInk.caption)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-                    .padding(.horizontal, 8)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 24)
-                    .background(
-                        Capsule()
-                            .fill(Color.white.opacity(on ? 0.17 : 0))
-                    )
-                    .contentShape(Capsule())
-                    .background(
-                        GeometryReader { proxy in
-                            Color.clear.preference(
-                                key: IslandTabFrames.self,
-                                value: [tab: proxy.frame(in: .named(IslandTabFrames.space))]
-                            )
-                        }
-                    )
+                HStack(spacing: 4) {
+                    if tab == .resets, let resets {
+                        ProviderMark(mark: resets.mark)
+                            .foregroundStyle(resets.tint)
+                            .frame(width: 11, height: 11)
+                    }
+                    Text(labels.name(tab))
+                        .font(.system(size: 11.5, weight: on ? .semibold : .medium))
+                        .foregroundStyle(on ? Color.white : IslandInk.caption)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                }
+                .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity)
+                .frame(height: 24)
+                .background(
+                    Capsule()
+                        .fill(Color.white.opacity(on ? 0.17 : 0))
+                )
+                .contentShape(Capsule())
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: IslandTabFrames.self,
+                            value: [tab: proxy.frame(in: .named(IslandTabFrames.space))]
+                        )
+                    }
+                )
             }
         }
         .padding(3)
@@ -468,10 +479,12 @@ struct IslandResetsSection: View {
     var availableWidth: CGFloat = 340
     var folds = GlanceResetFolds(foldsHistory: true)
     var onFold: ((GlanceResetFold) -> Void)?
+    /// Names the tracker above the cards, for an island without a tab bar to name it.
+    var showsHeading = false
 
     var body: some View {
         let scheme = resets.theme == "dark" ? ColorScheme.dark : resets.theme == "light" ? .light : systemScheme
-        GlanceResetContent(resets: resets, units: labels.units, now: now, availableWidth: max(1, availableWidth - 16), folds: folds, onFold: onFold)
+        GlanceResetContent(resets: resets, units: labels.units, now: now, availableWidth: max(1, availableWidth - 16), folds: folds, onFold: onFold, showsHeading: showsHeading)
             .padding(8)
             .background(GlanceResetPalette(scheme: scheme).background)
             .clipShape(RoundedRectangle(cornerRadius: 14))

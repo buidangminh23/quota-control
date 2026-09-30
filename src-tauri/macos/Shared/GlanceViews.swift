@@ -890,6 +890,27 @@ struct GlanceResetElementView: View {
     }
 }
 
+/// Whose resets a reset view shows, named at its top as the Reset tab's switch names them: the
+/// tracker's mark in its color beside its title.
+struct GlanceResetHeading: View {
+    let resets: GlanceResets
+    var markSize: CGFloat = 14
+    var fontSize: CGFloat = 12
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ProviderMark(mark: resets.mark)
+                .foregroundStyle(resets.markTint)
+                .frame(width: markSize, height: markSize)
+            Text(resets.title)
+                .font(.system(size: fontSize, weight: .semibold))
+                .foregroundStyle(Color.primary)
+                .lineLimit(1)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
 struct GlanceResetContent: View {
     @Environment(\.colorScheme) private var colorScheme
     let resets: GlanceResets
@@ -900,9 +921,14 @@ struct GlanceResetContent: View {
     var folds = GlanceResetFolds()
     /// Opens or closes a fold; without it the folds' rows are drawn and do nothing.
     var onFold: ((GlanceResetFold) -> Void)? = nil
+    /// Names the tracker above the cards, where nothing else around the view does.
+    var showsHeading = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if showsHeading {
+                GlanceResetHeading(resets: resets)
+            }
             ForEach(GlanceResetCards.make(resets: resets, units: units, now: now, folds: folds)) { card in
                 GlanceResetCardView(card: card, availableWidth: availableWidth)
             }
