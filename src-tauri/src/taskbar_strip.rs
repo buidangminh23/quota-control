@@ -738,12 +738,13 @@ mod platform {
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, FindWindowExW,
         FindWindowW, GW_CHILD, GetMessageW, GetParent, GetWindow, GetWindowRect, HWND_TOP,
         IDC_ARROW, IsChild, IsWindow, LoadCursorW, MA_NOACTIVATE, MSG, PostMessageW,
-        RegisterClassExW, RegisterWindowMessageW, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE,
-        SWP_NOSIZE, SWP_SHOWWINDOW, SendMessageW, SetTimer, SetWindowPos, TranslateMessage,
-        ULW_ALPHA, UpdateLayeredWindow, WM_APP, WM_DISPLAYCHANGE, WM_LBUTTONDOWN, WM_LBUTTONUP,
-        WM_MOUSEACTIVATE, WM_NCDESTROY, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW,
-        WS_CHILD, WS_CLIPSIBLINGS, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOPARENTNOTIFY,
-        WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE, WindowFromPoint,
+        RegisterClassExW, RegisterWindowMessageW, SWP_ASYNCWINDOWPOS, SWP_HIDEWINDOW,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SendMessageW, SetTimer,
+        SetWindowPos, TranslateMessage, ULW_ALPHA, UpdateLayeredWindow, WM_APP, WM_DISPLAYCHANGE,
+        WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_NCDESTROY, WM_RBUTTONUP,
+        WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_CHILD, WS_CLIPSIBLINGS, WS_EX_LAYERED,
+        WS_EX_NOACTIVATE, WS_EX_NOPARENTNOTIFY, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+        WS_VISIBLE, WindowFromPoint,
     };
 
     use windows::Win32::System::Com::{
@@ -752,7 +753,7 @@ mod platform {
     };
     use windows::Win32::UI::Accessibility::{
         CUIAutomation, IUIAutomation, IUIAutomation2, IUIAutomationCacheRequest,
-        IUIAutomationCondition, TreeScope_Children, UIA_AutomationIdPropertyId,
+        IUIAutomationCondition, TreeScope_Descendants, UIA_AutomationIdPropertyId,
         UIA_BoundingRectanglePropertyId, UIA_ClassNamePropertyId, UIA_NamePropertyId,
     };
     use windows::core::Interface;
@@ -1104,6 +1105,7 @@ mod platform {
         frame: Option<RECT>,
         /// The app's own notification-area button.
         slot: Option<RECT>,
+        apps: Option<RECT>,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1277,13 +1279,14 @@ mod platform {
         let mut tray: Option<RECT> = None;
         let mut frame = None;
         let mut slot = None;
+        let mut apps = None;
         unsafe {
             let root = automation
                 .client
                 .ElementFromHandle(windows::Win32::Foundation::HWND(site))
                 .ok()?;
             let children = root
-                .FindAllBuildCache(TreeScope_Children, &automation.all, &automation.cache)
+                .FindAllBuildCache(TreeScope_Descendants, &automation.all, &automation.cache)
                 .ok()?;
             for index in 0..children.Length().ok()? {
                 let Ok(child) = children.GetElement(index) else {
@@ -1304,6 +1307,14 @@ mod platform {
                     bottom: bounds.bottom,
                 };
                 let class = class.to_string();
+                let id = child.CachedAutomationId().ok().map(|id| id.to_string());
+                if class.starts_with("Taskbar.TaskListButton")
+                    || id.as_deref().is_some_and(|id| {
+                        id.starts_with("Appid:") || matches!(id, "StartButton" | "SearchButton")
+                    })
+                {
+                    apps = Some(apps.map_or(rect, |apps| union(apps, rect)));
+                }
                 if class.starts_with(TRAY_CLASS_PREFIX) {
                     tray = Some(tray.map_or(rect, |tray| union(tray, rect)));
                     let is_slot = child
@@ -1322,7 +1333,13 @@ mod platform {
             tray: tray?,
             frame,
             slot,
+            apps,
         })
+    }
+
+    fn placement_covers_apps(placement: (i32, i32, i32, i32), apps: RECT) -> bool {
+        let (x, y, width, height) = placement;
+        x < apps.right && x + width > apps.left && y < apps.bottom && y + height > apps.top
     }
 
     impl Islands {
@@ -1578,7 +1595,25 @@ mod platform {
             if self.islands.key != previous_key {
                 self.slot = None;
                 self.slot_misses = 0;
-                self.slot_request = None;
+            }
+            if layout.is_none() {
+                unsafe {
+                    SetWindowPos(
+                        window.strip,
+                        HWND_TOP,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_ASYNCWINDOWPOS
+                            | SWP_NOMOVE
+                            | SWP_NOSIZE
+                            | SWP_NOACTIVATE
+                            | SWP_HIDEWINDOW,
+                    );
+                }
+                self.placed = None;
+                return;
             }
             let button = layout
                 .and_then(|layout| layout.slot)
@@ -1653,7 +1688,28 @@ mod platform {
             }
             let bitmap = self.composed.as_ref().map_or(content, |(_, bitmap)| bitmap);
             let placement = (x, y, bitmap.width as i32, bitmap.height as i32);
-            if self.placed != Some(placement) || !self.painted {
+            let covered = layout
+                .and_then(|layout| layout.apps)
+                .map(|apps| to_client(taskbar.hwnd, apps))
+                .is_some_and(|apps| placement_covers_apps(placement, apps));
+            if covered {
+                unsafe {
+                    SetWindowPos(
+                        window.strip,
+                        HWND_TOP,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_ASYNCWINDOWPOS
+                            | SWP_NOMOVE
+                            | SWP_NOSIZE
+                            | SWP_NOACTIVATE
+                            | SWP_HIDEWINDOW,
+                    );
+                }
+                self.placed = None;
+            } else if self.placed != Some(placement) || !self.painted {
                 unsafe {
                     SetWindowPos(
                         window.strip,
@@ -2191,7 +2247,54 @@ mod platform {
                 },
                 frame: None,
                 slot: None,
+                apps: None,
             }
+        }
+
+        #[test]
+        fn a_tray_resize_waits_for_its_layout_without_reusing_old_coordinates() {
+            let (reader, _events) = reader();
+            let original = taskbar();
+            let key = LayoutKey::new(&original, 0);
+            let mut islands = Islands {
+                reader,
+                generation: 0,
+                key: Some(key),
+                sample: None,
+                last: Some((layout(), Instant::now(), key)),
+                reach: None,
+            };
+            let mut resized = taskbar();
+            resized.notify_left -= 400;
+            assert!(islands.layout(&resized).is_none());
+            let resized_key = LayoutKey::new(&resized, 0);
+            islands.reader.mailbox.lock().unwrap().result = Some(LayoutResult {
+                key,
+                layout: Some(layout()),
+                read: Instant::now(),
+            });
+            assert!(islands.layout(&resized).is_none());
+            islands.reader.mailbox.lock().unwrap().result = Some(LayoutResult {
+                key: resized_key,
+                layout: Some(layout()),
+                read: Instant::now(),
+            });
+            assert!(islands.layout(&resized).is_some());
+        }
+
+        #[test]
+        fn strip_placement_cannot_cover_start_search_or_application_buttons() {
+            let apps = RECT {
+                left: 193,
+                top: 4,
+                right: 733,
+                bottom: 52,
+            };
+            assert!(placement_covers_apps((590, 7, 440, 42), apps));
+            assert!(placement_covers_apps((280, 4, 440, 48), apps));
+            assert!(!placement_covers_apps((733, 7, 440, 42), apps));
+            assert!(!placement_covers_apps((0, 7, 193, 42), apps));
+            assert!(!placement_covers_apps((300, 52, 440, 42), apps));
         }
 
         #[test]
