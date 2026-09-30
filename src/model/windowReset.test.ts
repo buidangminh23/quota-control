@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { EngineState, MetricLine, ProgressLine } from "@/lib/types";
-import { nextWindowReset, rollOverPassedWindows } from "./windowReset";
+import { makeWidget } from "./testHelpers";
+import { nextWindowReset, rolledOverReading, rollOverPassedWindows } from "./windowReset";
 
 const now = new Date("2026-09-27T06:10:01Z");
 
@@ -54,6 +55,14 @@ describe("rollOverPassedWindows", () => {
     const rolled = rollOverPassedWindows(state, now);
     expect(rolled).not.toBe(state);
     expect(rolled.providers.codex).toBe(state.providers.codex);
+  });
+});
+
+describe("rolledOverReading", () => {
+  it("reads a row as its window rolled over, nothing used and no countdown, and leaves the row itself alone", () => {
+    const row = makeWidget("Session", "percent", 82, 100, { resetsAt: new Date("2026-09-27T06:10:00Z"), periodDurationMs: 5 * 3_600_000 });
+    expect(rolledOverReading(row)).toEqual({ ...row, used: 0, resetsAt: null });
+    expect(row).toMatchObject({ used: 82, resetsAt: new Date("2026-09-27T06:10:00Z") });
   });
 });
 

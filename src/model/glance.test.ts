@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { accountDescriptors, fixtureCatalog, fixtureSnapshots } from "@/lib/fixtures";
+import { messagesFor } from "@/i18n";
+import { accountDescriptors, fixtureCatalog, fixtureEngineState, fixtureSnapshots } from "@/lib/fixtures";
 import { FEED_FIXTURES } from "@/lib/insightsFeedFixtures";
 import type { Provider, ProviderSnapshot } from "@/lib/types";
 import {
@@ -7,8 +8,11 @@ import {
   CLAUDE_RESETS_PROVIDER_ID,
   CODEX_RESETS_PROVIDER_ID,
   glanceMetric,
+  glancePaceWords,
   glancePlanTerm,
   glancePlanTermWords,
+  glanceResetAbsoluteWords,
+  glanceRestoreWords,
   GLANCE_VERSION,
   isClaudeResetsWing,
   type GlanceAlert,
@@ -19,19 +23,22 @@ import {
   type GlanceResets,
   type GlanceWingChoice,
 } from "./glance";
+import { resetAbsoluteLabel, restoreLabel, shortTime, timeOnDayLabel } from "./format";
 import { buildClaudeGlanceResets } from "./glanceClaudeResets";
 import { claudeResetRow, codexResetRow } from "./glanceResetRows";
 import { buildGlanceResets, parseResetFeeds } from "./glanceResets";
 import { parseClaudeResets } from "./insights/claudeResets";
 import { parseResetStatus } from "./insights/resets";
 import { glanceGroups, reconcileLayout } from "./layout";
+import { boundedTrailingText, meterSeverity, meterState } from "./meterState";
 import { barKind, platformKey } from "./platform";
 import { cardIdentity, providerBrand } from "./providerText";
 import { DEFAULT_SETTINGS, type GlanceContent, type IslandSettings, type ThemeSetting } from "./settings";
 import { planTermLines } from "./planTermLines";
 import { makeWidget, NOW, resetsAt, WEEK_SECONDS } from "./testHelpers";
 import { calendarDaysBetween, setSystemTimeZone } from "./timeZone";
-import { DEFAULT_DISPLAY, widgetDataFor, type DisplayOptions } from "./widgetData";
+import { boundedHeadline, DEFAULT_DISPLAY, fraction, menuBarValue, widgetDataFor, type DisplayOptions } from "./widgetData";
+import { rollOverPassedWindows } from "./windowReset";
 
 const FETCHED = Date.UTC(2026, 8, 26, 3);
 const NOW_GLANCE = new Date(FETCHED + 60_000);
@@ -97,6 +104,7 @@ function glance({
     refreshIntervalMs: REFRESH_INTERVAL_MS,
     openProviders,
     resetRowFor,
+    display,
     language: display.language,
     hour12,
     theme,
@@ -276,6 +284,120 @@ describe("the rows of each account", () => {
     const english = { ...DEFAULT_DISPLAY, language: "en" as const };
     expect(glance({ display: english }).labels.days).toEqual({ today: "{t} · today", tomorrow: "{t} · tomorrow", other: "{t} · {d}", time: "h:mm a", date: "EEE, MMM d" });
     expect(glance({ display: english, hour12: false }).labels.days.time).toBe("HH:mm");
+  });
+});
+
+describe("a limit's reset words, pace and reset", () => {
+  beforeEach(() => setSystemTimeZone("Asia/Saigon"));
+  afterEach(() => setSystemTimeZone(null));
+
+  const counting = (document: GlanceDocument) =>
+    document.widget.providers.flatMap((entry) => entry.metrics.filter((metric) => metric.resetsAt).map((metric) => ({ entry, metric })));
+
+  it("carries the words a limit's row says when it comes back, in the Reset Times setting's form", () => {
+    const countdown = glance();
+    expect(countdown.labels).toMatchObject({ resetsIn: "Đặt lại sau", resetsSoon: "Sắp đặt lại", restoresAt: "Hồi lại lúc {at}" });
+    expect("resetAbsolute" in countdown.labels).toBe(false);
+    expect("resetDisplay" in countdown).toBe(false);
+    const exact = glance({ display: { ...DEFAULT_DISPLAY, resetDisplayMode: "absolute" } });
+    expect(exact.resetDisplay).toBe("absolute");
+    expect("restoresAt" in exact.labels).toBe(false);
+    expect(exact.labels.resetAbsolute).toEqual({ today: "Đặt lại lúc {t} hôm nay", tomorrow: "Đặt lại lúc {t} ngày mai", other: "Đặt lại lúc {t} ngày {d}", time: "H:mm", date: "d/M" });
+    const english = { ...DEFAULT_DISPLAY, language: "en" as const };
+    expect(glance({ display: english }).labels).toMatchObject({ resetsSoon: "Resets soon", restoresAt: "Back at {at}" });
+    expect(glance({ display: { ...english, resetDisplayMode: "absolute" }, hour12: true }).labels.resetAbsolute).toEqual({
+      today: "Resets today at {t}",
+      tomorrow: "Resets tomorrow at {t}",
+      other: "Resets {d} at {t}",
+      time: "h:mm a",
+      date: "MMM d",
+    });
+  });
+
+  it("fills in to the popup's own reset words at any moment, the way the island and the widgets fill them", () => {
+    const base = Date.UTC(2026, 8, 30, 7, 30);
+    const moments = [base, Date.UTC(2026, 8, 30, 16, 59, 30), Date.UTC(2026, 9, 4, 23, 10)];
+    const offsets = [30_000, 299_000, 3_600_000, 34_200_000, 86_340_000, 86_400_000, 3 * 86_400_000, 10 * 86_400_000 + 7_200_000];
+    for (const language of ["vi", "en"] as const) {
+      const restore = glanceRestoreWords(language);
+      for (const timeFormat of ["12h", "24h", "auto"] as const) {
+        const words = glanceResetAbsoluteWords(language, timeFormat);
+        for (const moment of moments) {
+          const now = new Date(moment);
+          for (const offset of offsets) {
+            const at = new Date(moment + offset);
+            const days = calendarDaysBetween(now, at);
+            const exact = (days <= 0 ? words.today : days === 1 ? words.tomorrow : words.other)
+              .replace("{t}", shortTime(at, timeFormat, language))
+              .replace("{d}", messagesFor(language).format.monthDay(at));
+            expect(exact).toBe(resetAbsoluteLabel(at, now, timeFormat, language));
+            expect(restore.replace("{at}", timeOnDayLabel(at, now, timeFormat, language))).toBe(restoreLabel(at, now, timeFormat, language));
+          }
+        }
+      }
+    }
+  });
+
+  it("carries the reading each limit rolls over to at its reset, as the popup shows the window the moment it does", () => {
+    const engine = fixtureEngineState(FETCHED);
+    for (const display of [DEFAULT_DISPLAY, { ...DEFAULT_DISPLAY, language: "en" as const, displayMode: "used" as const }]) {
+      const limits = counting(glance({ display }));
+      expect(limits.length).toBeGreaterThan(4);
+      for (const { entry, metric } of limits) {
+        const resetAt = new Date(metric.resetsAt!);
+        const after = new Date(resetAt.getTime() + 1000);
+        const rolled = rollOverPassedWindows(engine, resetAt).providers[entry.id]!.snapshot;
+        const data = widgetDataFor(descriptors.get(metric.id)!, rolled, display);
+        const severity = meterSeverity(meterState(data, after));
+        expect(metric.after, metric.id).toEqual({
+          value: menuBarValue(data),
+          headline: boundedHeadline(data),
+          fraction: fraction(data),
+          detail: boundedTrailingText(data, after) ?? undefined,
+          ...(severity === "normal" ? {} : { severity }),
+        });
+      }
+    }
+    const codex = glance().widget.providers.find((entry) => entry.id === "codex@52d0")!;
+    expect(codex.metrics.find((metric) => metric.id === "codex@52d0.session")!.after).toEqual({ value: "100%", headline: "Còn 100%", fraction: 1, detail: "Đặt lại sau 5 giờ" });
+  });
+
+  it("carries what a limit's pace note and tick are worked out from, and the notes' words while one does", () => {
+    const document = glance();
+    const codex = document.widget.providers.find((entry) => entry.id === "codex@52d0")!;
+    expect(codex.metrics.find((metric) => metric.id === "codex@52d0.session")!.pace).toEqual({ used: 0.82, period: 5 * 3_600_000 });
+    expect(codex.metrics.find((metric) => metric.id === "codex@52d0.rateLimitResets")!.pace).toBeUndefined();
+    const fresh = document.widget.providers.find((entry) => entry.id === "claude@a93f")!.metrics.find((metric) => metric.id === "claude@a93f.session")!;
+    expect(fresh).toMatchObject({ detail: "Chưa bắt đầu" });
+    expect(fresh.pace).toBeUndefined();
+    expect(fresh.after).toBeUndefined();
+    expect(document.labels.pace).toEqual({ limitReached: "Đã hết hạn mức", spare: "Dư ~{n}%", leftAtReset: "Còn ~{n}% khi đặt lại" });
+    expect(glance({ display: { ...DEFAULT_DISPLAY, language: "en" } }).labels.pace).toEqual({ limitReached: "Limit reached", spare: "~{n}% spare", leftAtReset: "~{n}% left at reset" });
+    const codexSnapshot = snapshots["codex@52d0"]!;
+    const unpaced = glance({ data: { "codex@52d0": { ...codexSnapshot, lines: codexSnapshot.lines.filter((line) => line.type !== "progress") } } });
+    expect(unpaced.widget.providers.flatMap((entry) => entry.metrics).some((metric) => metric.pace)).toBe(false);
+    expect("pace" in unpaced.labels).toBe(false);
+  });
+
+  it("fills the pace notes' figure to the popup's words", () => {
+    for (const language of ["vi", "en"] as const) {
+      const words = glancePaceWords(language);
+      const meter = messagesFor(language).meter;
+      expect(words.limitReached).toBe(meter.limitReached);
+      for (const figure of [1, 8, 40, 100]) {
+        expect(words.spare.replace("{n}", String(figure))).toBe(meter.spare(figure));
+        expect(words.leftAtReset.replace("{n}", String(figure))).toBe(meter.leftAtReset(figure));
+      }
+    }
+  });
+
+  it("carries Always Show Pacing and Used/Left only while they differ from the default", () => {
+    const plain = glance();
+    expect("alwaysShowPacing" in plain).toBe(false);
+    expect("displayMode" in plain).toBe(false);
+    const tuned = glance({ display: { ...DEFAULT_DISPLAY, alwaysShowPacing: true, displayMode: "used" } });
+    expect(tuned.alwaysShowPacing).toBe(true);
+    expect(tuned.displayMode).toBe("used");
   });
 });
 
@@ -459,6 +581,7 @@ describe("the account header", () => {
         refreshedAt: () => snapshot.refreshedAt,
         refreshIntervalMs: REFRESH_INTERVAL_MS,
         openProviders: [],
+        display: DEFAULT_DISPLAY,
         language: "vi",
         hour12: null,
         theme: "system",
@@ -770,12 +893,15 @@ describe("a document for someone who never chose Claude", () => {
    * Codex and Claude accounts start with (`resetRow`, with their pictures in `avatars`), the
    * collapsed Codex card leaving its Spark and Credits rows behind the show-more button, the reset
    * credits' expiry (`expiresAt`), the window's name beside the notch (`period` on the wings) and
-   * the words for a clock time and its day (`labels.days`).
+   * the words for a clock time and its day (`labels.days`). The rows' moving words: what a limit's
+   * pace note and tick are worked out from (`pace`, with the notes' words in `labels.pace`), the
+   * reading it rolls over to at its reset (`after`), and the countdown's last five minutes and the
+   * line under it (`labels.resetsSoon`, `labels.restoresAt`).
    */
   const PINNED: Readonly<Record<string, string>> = {
-    defaults: "76875b9c777134c37782a622a41e2d42dbad796f3194e49e0eaedd49c1a51a84",
-    wings: "b49a75b5aae72f06a4361baf52366c0686ac70a95b93733f1e2ac715aed7c98b",
-    tuned: "a0605a9273e31108fc01055bea1c78123e704c9254c40373f4f4fdad98b8abf0",
+    defaults: "1e09a838741208e0fc1fb92bd7fb5f0be54bf1ad0540897f5ab384d32d664a0b",
+    wings: "e556c00ae425f971c0512d3d545fe6f81eb7d58c7e7ae213d14d28a0a78bd8b2",
+    tuned: "181777f9585540c18086e8554ed4455a2fc4288e59ca49fe6c3c4a03150418bc",
   };
   const digest = (document: object) => createHash("sha256").update(JSON.stringify(document)).digest("hex");
   /** The document without the one thing added since: the announcement the latest reset's card quotes. */
@@ -823,12 +949,29 @@ describe("glance metric", () => {
     expect(metric.detail).toBeUndefined();
   });
 
+  it("carries the pace a limit counts down with, and a limit used up whatever its reset", () => {
+    const period = WEEK_SECONDS * 1000;
+    const weekly = glanceMetric("claude.weekly", makeWidget("Weekly", "percent", 95, 100, { resetsAt: resetsAt(0.5, WEEK_SECONDS), periodDurationMs: period }), NOW);
+    expect(weekly.pace).toEqual({ used: 0.95, period });
+    expect(weekly.after).toMatchObject({ headline: "0% used", fraction: 0 });
+    const spent = glanceMetric("claude.weekly", makeWidget("Weekly", "percent", 100, 100, { resetsAt: resetsAt(0.5, WEEK_SECONDS), periodDurationMs: period }), NOW);
+    expect(spent.pace).toEqual({ spent: true });
+    const extra = glanceMetric("claude.extra", makeWidget("Extra usage spent", "dollars", 50, 50), NOW);
+    expect(extra.pace).toEqual({ spent: true });
+    expect(extra.after).toBeUndefined();
+    const unused = glanceMetric("claude.weekly", makeWidget("Weekly", "percent", 0, 100, { resetsAt: resetsAt(0.5, WEEK_SECONDS), periodDurationMs: period }), NOW);
+    expect(unused.pace).toBeUndefined();
+    expect(unused.after).toBeDefined();
+  });
+
   it("gives text rows no meter and no pace color", () => {
     const data = makeWidget("Today", "dollars", 0, null, { values: [{ kind: "dollars", number: 4.08, estimated: false }] });
     const metric = glanceMetric("claude.today", data, NOW);
     expect(metric.fraction).toBeNull();
     expect(metric.severity).toBe("none");
     expect(metric.headline).toContain("4.08");
+    expect(metric.pace).toBeUndefined();
+    expect(metric.after).toBeUndefined();
   });
 });
 

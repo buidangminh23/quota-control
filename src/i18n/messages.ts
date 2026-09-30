@@ -399,6 +399,11 @@ export interface GlanceMessages {
    * `EEE, MMM d` (`Mon, Oct 5`).
    */
   dayPattern: string;
+  /**
+   * A day neither today nor tomorrow as `format.monthDay` names it in a reset's exact time
+   * (`Đặt lại lúc 13:05 ngày 5/10`), as a Unicode date pattern: `d/M` (`5/10`), `MMM d` (`Oct 5`).
+   */
+  monthDayPattern: string;
   /** The clock time as a Unicode date pattern, drawn the way `shortTime` words it on a 24- or
    * 12-hour clock: `H:mm` (`8:05`), `h:mm a` (`8:05 SA`), `HH:mm` (`08:05`). */
   clockPattern(twentyFourHour: boolean): string;

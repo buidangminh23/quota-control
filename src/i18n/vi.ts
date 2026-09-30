@@ -531,6 +531,7 @@ export const vi: Messages = {
     notRunning: "Mở Quota Control để hiện hạn mức ở đây.",
     units: { day: " ngày", hour: " giờ", minute: " phút" },
     dayPattern: "EEEEEE dd/MM",
+    monthDayPattern: "d/M",
     clockPattern: (twentyFourHour) => (twentyFourHour ? "H:mm" : "h:mm a"),
     resetsOff: "Bật tab Reset hoặc thông báo reset trong Quota Control để xem dự báo.",
     claudeResetsOff: "Bật tab Reset hoặc thông báo khi Claude reset trong Quota Control để xem dự báo.",

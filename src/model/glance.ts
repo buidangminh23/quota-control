@@ -3,24 +3,29 @@
  * decodes it). Each surface lists the account cards and metrics its Settings choose (the Hạn mức
  * cards, the starred metrics, or a hand-picked set), exactly as the popup reads them: every headline,
  * meter fill, pace color and reset time is worked out and localized here, following Used/Left, so the
- * Swift side only lays it out and ticks the countdowns.
+ * Swift side only lays it out. What moves with the clock travels as moments with the popup's words
+ * and the inputs of its pace verdict, which Swift fills in at the moment it draws, as the popup does
+ * at every tick: the countdowns in the Reset Times setting's form, a limit's pace note and even-pace
+ * tick, and the reading a window rolls over to at its reset.
  */
 import { PROVIDER_MARKS, type ProviderMark } from "@/assets/providerMarks";
 import { knownBrandColor } from "./totalSpend";
 import { messagesFor, type Language } from "@/i18n";
+import type { When } from "@/i18n/messages";
 import type { PlanTerm, Provider, WidgetDescriptor } from "@/lib/types";
 import { insightsFor } from "@/i18n/insights";
 import { usesTwentyFourHour, type TimeFormat } from "./format";
 import { COUNTDOWN_SPAN } from "./glanceResets";
-import { resetRowAvatars } from "./glanceResetRows";
+import { MOMENT_PLACEHOLDER, resetRowAvatars } from "./glanceResetRows";
 import { brandOf, cardsAsShown, type ProviderMetrics } from "./layout";
 import { periodLabel } from "./menuBar";
-import { boundedTrailingText, isFreshSessionWindow, meterSeverity, meterState } from "./meterState";
+import { boundedTrailingText, isFreshSessionWindow, meterSeverity, meterState, type MeterState } from "./meterState";
 import { SOURCE_COLORS } from "./palette";
 import { PLAN_TERM_SOON_DAYS, planTermEnd } from "./planTerm";
 import { isOutdated } from "./providerText";
 import type { GlanceContent, GlanceSurfaceSettings, IslandSettings, IslandStyle, IslandView, ResetParts, ResetProvider, ThemeSetting } from "./settings";
-import { boundedHeadline, fraction, isBounded, menuBarValue, unboundedDetail, type WidgetData } from "./widgetData";
+import { boundedHeadline, fraction, isBounded, menuBarValue, unboundedDetail, type DisplayOptions, type WidgetData } from "./widgetData";
+import { rolledOverReading } from "./windowReset";
 
 export const GLANCE_VERSION = 1;
 /** The open island lists at most this many accounts (in two columns); the widget decides what fits
@@ -49,6 +54,52 @@ export interface GlanceMetric {
   /** The limit window's short name (`5h`, `week`) the menu bar strip labels a reading with; only on
    * the readings beside the notch. */
   period?: string;
+  /** What the row's pace note and even-pace tick are worked out from; absent on a row that can show
+   * neither. */
+  pace?: GlancePace;
+  /** The reading once `resetsAt` has passed; only on a limit counting down. */
+  after?: GlanceAfterReset;
+}
+
+/**
+ * What a limit's pace note and even-pace tick (`meterState`, `paceTick`) are worked out from at the
+ * moment they are drawn, as the popup works them out each time it renders: `spent` for a limit used
+ * up, which reads `Đã hết hạn mức` beside a flame whatever the time; for a limit counting down, the
+ * share of it used and its window's length, the window starting that long before `resetsAt`. The
+ * verdict, its figure and the tick move with the clock, so they travel as these inputs and the
+ * document only changes when a reading does.
+ */
+export interface GlancePace {
+  spent?: true;
+  /** The share of the limit used, unrounded: `used / limit`. */
+  used?: number;
+  /** The window's length in milliseconds. */
+  period?: number;
+}
+
+/**
+ * A limit's reading once its reset has passed, as the popup shows the window the moment it rolls
+ * over (`rollOverPassedWindows`): nothing used and no countdown, so `Còn 100%` with the next
+ * period's words. The widgets draw it from the reset on, until the app writes the next reading.
+ */
+export interface GlanceAfterReset {
+  value: string;
+  headline: string;
+  fraction: number;
+  /** `Đặt lại sau 5 giờ`, `Chưa bắt đầu`. */
+  detail?: string;
+  /** The meter's color when it is not the normal one. */
+  severity?: GlanceSeverity;
+}
+
+/** The words of the pace note on a limit's title line (`PaceWarning`), `{n}` for its figure. */
+export interface GlancePaceWords {
+  /** A limit used up, after a flame: `Đã hết hạn mức`. */
+  limitReached: string;
+  /** A limit close to running out, the share it will have left at reset: `Dư ~{n}%`. */
+  spare: string;
+  /** A limit on a healthy pace while Always Show Pacing is on: `Còn ~{n}% khi đặt lại`. */
+  leftAtReset: string;
 }
 
 /**
@@ -296,12 +347,32 @@ export interface GlanceDocument {
   /** Settings → Theme when it is not System: every widget draws in it, as the whole popup does (the
    * island keeps its black). */
   theme?: "light" | "dark";
+  /** Settings → Reset Times when it is Exact Time: a limit's row says when it comes back
+   * (`labels.resetAbsolute`) instead of counting down; absent for Countdown. */
+  resetDisplay?: "absolute";
+  /** Settings → Always Show Pacing while it is on: a limit on a healthy pace also carries its tick and
+   * `Còn ~40% khi đặt lại`, not only one close to its limit. */
+  alwaysShowPacing?: true;
+  /** Settings → Used/Left when it is Used: the even-pace tick then sits at the share of the window gone
+   * by, as the meters fill with the share used; absent for Left. */
+  displayMode?: "used";
   labels: {
     title: string;
     empty: string;
     updated: string;
     resetsIn: string;
     resetting: string;
+    /** A limit's reset text in its last five minutes, as the popup's rows say it: `Sắp đặt lại`. */
+    resetsSoon: string;
+    /** Countdown: the line under a limit's countdown with the moment it comes back, `{at}` standing
+     * for its clock time and day as `days` words them: `Hồi lại lúc {at}`. Absent in Exact Time. */
+    restoresAt?: string;
+    /** Exact Time: a limit's reset text, `{t}` standing for the clock time and `{d}` for a day neither
+     * today nor tomorrow as `date` draws it: `Đặt lại lúc {t} hôm nay`, `Resets {d} at {t}`. Absent in
+     * Countdown. */
+    resetAbsolute?: GlanceDayWords;
+    /** The pace notes' words, while a limit carries a pace (`GlanceMetric.pace`). */
+    pace?: GlancePaceWords;
     open: string;
     notRunning: string;
     noData: string;
@@ -586,6 +657,9 @@ export interface GlanceInput {
   openProviders: readonly string[];
   /** The row a card starts with in the popup (`GlanceResetRow`), `null` for none; absent, no card has one. */
   resetRowFor?: (provider: Provider) => GlanceResetRow | null;
+  /** The popup's settings its rows follow beyond the language: Used/Left, Reset Times and Always
+   * Show Pacing. */
+  display: Pick<DisplayOptions, "displayMode" | "resetDisplayMode" | "alwaysShowPacing">;
   language: Language;
   /** Settings → Time Format as a 12-hour flag, `null` for the locale's own clock. */
   hour12: boolean | null;
@@ -610,17 +684,20 @@ const DAY_MS = 86_400_000;
 const COUNT_PLACEHOLDER = "{n}";
 const DAY_PLACEHOLDER = "{d}";
 const TIME_PLACEHOLDER = "{t}";
+/** A figure no pace note writes on its own, put in its words to find where `{n}` goes. */
+const FIGURE_SENTINEL = 7919;
 
 export function glanceMetric(id: string, data: WidgetData, now: Date): GlanceMetric {
   const bounded = isBounded(data);
   const counting = bounded && data.resetsAt !== null && data.subtitleOverride === undefined && !isFreshSessionWindow(data, now);
+  const state = bounded ? meterState(data, now) : null;
   const metric: GlanceMetric = {
     id,
     label: data.title,
     value: menuBarValue(data),
     headline: bounded ? boundedHeadline(data) : unboundedDetail(data),
     fraction: bounded ? fraction(data) : null,
-    severity: bounded ? (meterSeverity(meterState(data, now)) ?? "none") : "none",
+    severity: state ? (meterSeverity(state) ?? "none") : "none",
   };
   if (counting && data.resetsAt) metric.resetsAt = data.resetsAt.toISOString();
   else if (bounded) {
@@ -628,7 +705,32 @@ export function glanceMetric(id: string, data: WidgetData, now: Date): GlanceMet
     if (detail) metric.detail = detail;
   }
   if (!bounded && data.hasData && data.expiriesAt.length > 0) metric.expiresAt = new Date(Math.min(...data.expiriesAt.map((date) => date.getTime()))).toISOString();
+  const pace = state ? glancePace(data, state, counting) : null;
+  if (pace) metric.pace = pace;
+  if (counting) metric.after = glanceAfterReset(data, now);
   return metric;
+}
+
+/**
+ * `GlanceMetric.pace`: `spent` for a limit used up; for a limit counting down whose window the popup
+ * can pace (something used, the window's length known), the share used and that length.
+ */
+function glancePace(data: WidgetData, state: MeterState, counting: boolean): GlancePace | null {
+  if (state.kind === "spent") return { spent: true };
+  if (!counting || data.limit === null || !(data.limit > 0) || !(data.used > 0)) return null;
+  if (data.periodDurationMs === undefined || !(data.periodDurationMs > 0)) return null;
+  return { used: data.used / data.limit, period: data.periodDurationMs };
+}
+
+/** `GlanceMetric.after`: the row as the popup reads it once its window has rolled over. */
+function glanceAfterReset(data: WidgetData, now: Date): GlanceAfterReset {
+  const rolled = rolledOverReading(data);
+  const after: GlanceAfterReset = { value: menuBarValue(rolled), headline: boundedHeadline(rolled), fraction: fraction(rolled) };
+  const detail = boundedTrailingText(rolled, now);
+  if (detail) after.detail = detail;
+  const severity = meterSeverity(meterState(rolled, now)) ?? "none";
+  if (severity !== "normal") after.severity = severity;
+  return after;
 }
 
 function shows(settings: GlanceSurfaceSettings): GlanceShows {
@@ -692,9 +794,45 @@ export function glanceDayWords(language: Language, timeFormat: TimeFormat): Glan
   };
 }
 
+/**
+ * The popup's exact reset time (`resetAbsoluteLabel`, what a limit's row says in Exact Time) with
+ * `{t}` where the clock time goes and `{d}` where a day neither today nor tomorrow goes, read off
+ * the words the popup renders, with the patterns that draw the time as `shortTime` does for
+ * `timeFormat` and that day as `format.monthDay` does.
+ */
+export function glanceResetAbsoluteWords(language: Language, timeFormat: TimeFormat): GlanceDayWords {
+  const messages = messagesFor(language);
+  const resets = (when: When) => messages.format.deadline("resets", when);
+  return {
+    today: resets({ kind: "today", time: TIME_PLACEHOLDER }),
+    tomorrow: resets({ kind: "tomorrow", time: TIME_PLACEHOLDER }),
+    other: resets({ kind: "on", date: DAY_PLACEHOLDER, time: TIME_PLACEHOLDER }),
+    time: messages.glance.clockPattern(usesTwentyFourHour(timeFormat, language)),
+    date: messages.glance.monthDayPattern,
+  };
+}
+
+/**
+ * The popup's line under a reset countdown (`restoreLabel`) with `{at}` where the moment goes, as
+ * `glanceDayWords` words a clock time and its day: `Hồi lại lúc {at}`.
+ */
+export function glanceRestoreWords(language: Language): string {
+  const format = messagesFor(language).format;
+  const today = { kind: "today" } as const;
+  return format.restoresAt(TIME_PLACEHOLDER, today).replace(format.timeOnDay(TIME_PLACEHOLDER, today), MOMENT_PLACEHOLDER);
+}
+
+/** The popup's pace notes (`PaceWarning`) with `{n}` where the figure goes, read off its words. */
+export function glancePaceWords(language: Language): GlancePaceWords {
+  const meter = messagesFor(language).meter;
+  const figure = (words: string) => words.replace(String(FIGURE_SENTINEL), COUNT_PLACEHOLDER);
+  return { limitReached: meter.limitReached, spare: figure(meter.spare(FIGURE_SENTINEL)), leftAtReset: figure(meter.leftAtReset(FIGURE_SENTINEL)) };
+}
+
 export function buildGlance(input: GlanceInput): GlanceDocument {
   const messages = messagesFor(input.language);
   const text = messages.glance;
+  const timeFormat: TimeFormat = input.hour12 === null ? "auto" : input.hour12 ? "12h" : "24h";
   const times: number[] = [];
 
   const provider = (source: Provider, metrics: GlanceMetric[]): GlanceProvider => {
@@ -754,6 +892,7 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
       updated: text.updated,
       resetsIn: text.resetsIn,
       resetting: text.resetting,
+      resetsSoon: messages.format.deadline("resets", { kind: "soon" }),
       open: text.open,
       notRunning: text.notRunning,
       noData: messages.meter.noData,
@@ -763,7 +902,7 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
       upcoming: text.upcoming,
       upcomingEmpty: text.upcomingEmpty,
       tabs: { ...text.tabs },
-      days: glanceDayWords(input.language, input.hour12 === null ? "auto" : input.hour12 ? "12h" : "24h"),
+      days: glanceDayWords(input.language, timeFormat),
     },
     providers: islandProviders,
     island: {
@@ -798,6 +937,17 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
     document.labels.claudeResetsOff = text.claudeResetsOff;
   }
   if ([...islandProviders, ...widgetProviders].some((entry) => entry.term)) document.labels.planTerm = glancePlanTermWords(input.language);
+  if (input.display.resetDisplayMode === "absolute") {
+    document.resetDisplay = "absolute";
+    document.labels.resetAbsolute = glanceResetAbsoluteWords(input.language, timeFormat);
+  } else {
+    document.labels.restoresAt = glanceRestoreWords(input.language);
+  }
+  if ([...islandProviders, ...widgetProviders, ...document.island.wings].some((entry) => entry.metrics.some((metric) => metric.pace))) {
+    document.labels.pace = glancePaceWords(input.language);
+  }
+  if (input.display.alwaysShowPacing) document.alwaysShowPacing = true;
+  if (input.display.displayMode === "used") document.displayMode = "used";
   if (input.hour12 !== null) document.hour12 = input.hour12;
   if (input.theme !== "system") document.theme = input.theme;
   if (input.resets) document.resets = input.resets;

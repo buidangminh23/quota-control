@@ -165,6 +165,7 @@ export function useGlance(): void {
       refreshIntervalMs: engine?.refreshIntervalMs ?? DEFAULT_REFRESH_INTERVAL_MS,
       openProviders: layout.openProviders,
       resetRowFor,
+      display,
       language: display.language,
       hour12: timeFormat === "auto" ? null : timeFormat === "12h",
       theme,

@@ -493,6 +493,7 @@ export const en: Messages = {
     notRunning: "Open Quota Control to show your limits here.",
     units: { day: "d", hour: "h", minute: "m" },
     dayPattern: "EEE, MMM d",
+    monthDayPattern: "MMM d",
     clockPattern: (twentyFourHour) => (twentyFourHour ? "HH:mm" : "h:mm a"),
     resetsOff: "Turn on the Resets tab or reset notifications in Quota Control to see the forecast.",
     claudeResetsOff: "Turn on the Resets tab or Claude reset notifications in Quota Control to see the forecast.",

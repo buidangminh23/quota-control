@@ -5,6 +5,7 @@
  * current one, not even offline or while its provider is backed off.
  */
 import type { EngineState, ProgressLine, ProviderRuntimeState } from "@/lib/types";
+import type { WidgetData } from "./widgetData";
 
 function resetTime(line: ProgressLine): number | null {
   if (!line.resetsAt) return null;
@@ -16,6 +17,15 @@ function rolledOver(line: ProgressLine): ProgressLine {
   const fresh: ProgressLine = { ...line, used: 0 };
   delete fresh.resetsAt;
   return fresh;
+}
+
+/**
+ * A row's reading once its window has rolled over, as `rollOverPassedWindows` leaves its line:
+ * nothing used and no countdown. The island and the widgets draw it from the reset time on, before
+ * the next reading reaches them.
+ */
+export function rolledOverReading(data: WidgetData): WidgetData {
+  return { ...data, used: 0, resetsAt: null };
 }
 
 function rollOverRuntime(runtime: ProviderRuntimeState, now: number): ProviderRuntimeState {
