@@ -1139,9 +1139,11 @@ struct GlanceResetContent: View {
     var onFold: ((GlanceResetFold) -> Void)? = nil
     /// Names the tracker above the cards, where nothing else around the view does.
     var showsHeading = false
+    /// The room between the cards: the popup's section gap, tighter in Compact on the island.
+    var spacing: CGFloat = 12
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: spacing) {
             if showsHeading {
                 GlanceResetHeading(resets: resets)
             }
@@ -1356,6 +1358,23 @@ enum GlanceResetCards {
         case "scheduled": return .green
         case "banked": return .blue
         default: return nil
+        }
+    }
+}
+
+extension View {
+    /// Draws every change at once while `still`, as the popup stops its transitions under Reduce
+    /// Animations: no animation reaches the view, and its text and numbers swap instead of rolling.
+    @ViewBuilder
+    func glanceStill(_ still: Bool) -> some View {
+        if still {
+            contentTransition(.identity)
+                .transaction { transaction in
+                    transaction.animation = nil
+                    transaction.disablesAnimations = true
+                }
+        } else {
+            self
         }
     }
 }

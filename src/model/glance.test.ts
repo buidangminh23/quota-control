@@ -36,7 +36,7 @@ import { glanceGroups, reconcileLayout } from "./layout";
 import { boundedTrailingText, meterSeverity, meterState } from "./meterState";
 import { barKind, platformKey } from "./platform";
 import { cardIdentity, providerBrand } from "./providerText";
-import { DEFAULT_SETTINGS, type GlanceContent, type IslandSettings, type ResetProvider, type ThemeSetting } from "./settings";
+import { DEFAULT_SETTINGS, type DensitySetting, type GlanceContent, type IslandSettings, type ResetProvider, type ThemeSetting } from "./settings";
 import { planTermLines } from "./planTermLines";
 import { makeWidget, NOW, resetsAt, WEEK_SECONDS } from "./testHelpers";
 import { calendarDaysBetween, setSystemTimeZone } from "./timeZone";
@@ -67,6 +67,8 @@ interface Options {
   resetsTab?: ResetProvider;
   markArt?: Readonly<Record<string, string>>;
   theme?: ThemeSetting;
+  reduceAnimations?: boolean;
+  density?: DensitySetting;
   now?: Date;
   /** The refresh error each provider's runtime carries beside its last good snapshot. */
   errors?: Readonly<Record<string, string>>;
@@ -90,6 +92,8 @@ function glance({
   resetsTab,
   markArt,
   theme = "system",
+  reduceAnimations = DEFAULT_SETTINGS.reduceAnimations,
+  density = DEFAULT_SETTINGS.density,
   now = NOW_GLANCE,
   errors = {},
   openProviders = layout.openProviders,
@@ -117,6 +121,8 @@ function glance({
     language: display.language,
     hour12,
     theme,
+    reduceAnimations,
+    density,
     appName: "Quota Control",
     alert,
     resets,
@@ -609,6 +615,18 @@ describe("the account header", () => {
     const plain = single({ id: "mystery@1", displayName: "Mystery", icon: "mystery" });
     expect(plain.color).toBe("#FFFFFF");
     expect("lightColor" in plain).toBe(false);
+  });
+
+  it("carries Reduce Animations only while it is on, so the island and widgets stop animating as the popup does", () => {
+    expect("reduceMotion" in glance()).toBe(false);
+    expect("reduceMotion" in glance({ reduceAnimations: false })).toBe(false);
+    expect(glance({ reduceAnimations: true }).reduceMotion).toBe(true);
+  });
+
+  it("carries Compact density only while it is picked, so the open island tightens as the popup does", () => {
+    expect("density" in glance()).toBe(false);
+    expect("density" in glance({ density: "regular" })).toBe(false);
+    expect(glance({ density: "compact" }).density).toBe("compact");
   });
 
   it("carries the app's theme for every widget, and nothing while it follows the Mac", () => {

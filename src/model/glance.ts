@@ -23,7 +23,7 @@ import { boundedTrailingText, isFreshSessionWindow, meterSeverity, meterState, t
 import { SOURCE_COLORS } from "./palette";
 import { PLAN_TERM_SOON_DAYS, planTermEnd } from "./planTerm";
 import { isOutdated } from "./providerText";
-import type { GlanceContent, GlanceSurfaceSettings, IslandSettings, IslandStyle, IslandView, ResetParts, ResetProvider, ThemeSetting } from "./settings";
+import type { DensitySetting, GlanceContent, GlanceSurfaceSettings, IslandSettings, IslandStyle, IslandView, ResetParts, ResetProvider, ThemeSetting } from "./settings";
 import { boundedHeadline, fraction, isBounded, menuBarValue, unboundedDetail, type DisplayOptions, type WidgetData } from "./widgetData";
 import { rolledOverReading } from "./windowReset";
 
@@ -369,6 +369,13 @@ export interface GlanceDocument {
   /** Settings → Theme when it is not System: every widget draws in it, as the whole popup does (the
    * island keeps its black). */
   theme?: "light" | "dark";
+  /** Settings → Reduce Animations while it is on: the island opens, closes and changes its numbers
+   * without animating and the widgets swap entries at once, as the popup stops its transitions;
+   * absent while it is off (the surfaces still follow the Mac's own Reduce Motion). */
+  reduceMotion?: true;
+  /** Settings → Density when it is Compact: the open island tightens its accounts, rows and reset
+   * panel by the popup's compact sizes; absent for Default. */
+  density?: "compact";
   /** Settings → Reset Times when it is Exact Time: a limit's row says when it comes back
    * (`labels.resetAbsolute`) instead of counting down; absent for Countdown. */
   resetDisplay?: "absolute";
@@ -750,6 +757,10 @@ export interface GlanceInput {
   hour12: boolean | null;
   /** Settings → Theme. */
   theme: ThemeSetting;
+  /** Settings → Reduce Animations; off when left out. */
+  reduceAnimations?: boolean;
+  /** Settings → Density; Default when left out. */
+  density?: DensitySetting;
   appName: string;
   alert: GlanceAlert | null;
   /** The Codex free-reset tracker (`buildGlanceResets`), `null` while it is off or has no data. */
@@ -1042,6 +1053,8 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
   if (input.display.displayMode === "used") document.displayMode = "used";
   if (input.hour12 !== null) document.hour12 = input.hour12;
   if (input.theme !== "system") document.theme = input.theme;
+  if (input.reduceAnimations) document.reduceMotion = true;
+  if (input.density === "compact") document.density = "compact";
   if (input.resets) document.resets = input.resets;
   else if (input.resetsPending) document.resetsPending = input.resetsPending;
   if (claudeIsland || claudeWidget) {

@@ -64,6 +64,8 @@ export function useGlance(): void {
   );
   const timeFormat = useApp((state) => state.settings.timeFormat);
   const theme = useApp((state) => state.settings.theme);
+  const reduceAnimations = useApp((state) => state.settings.reduceAnimations);
+  const density = useApp((state) => state.settings.density);
   const notifyCodexResets = useApp((state) => state.settings.notifyCodexResets);
   const notifyClaudeResets = useApp((state) => state.settings.notifyClaudeResets);
   const usedBankedResets = useApp((state) => state.settings.usedBankedResets);
@@ -207,6 +209,8 @@ export function useGlance(): void {
       language: display.language,
       hour12: timeFormat === "auto" ? null : timeFormat === "12h",
       theme,
+      reduceAnimations,
+      density,
       appName: info?.name ?? messagesFor(display.language).chrome.appName,
       alert,
       resets,
@@ -217,7 +221,7 @@ export function useGlance(): void {
       markArt,
       now,
     });
-  }, [supported, layout, catalog, isEnabled, engine, display, info, islandEnabled, island, widget, timeFormat, theme, alert, resets, resetsPending, claudeResets, claudeResetsPending, resetsTab, resetRowFor, markArt, now]);
+  }, [supported, layout, catalog, isEnabled, engine, display, info, islandEnabled, island, widget, timeFormat, theme, reduceAnimations, density, alert, resets, resetsPending, claudeResets, claudeResetsPending, resetsTab, resetRowFor, markArt, now]);
 
   useEffect(() => {
     if (!ready || !document) return;

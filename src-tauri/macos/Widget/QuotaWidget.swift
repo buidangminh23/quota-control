@@ -337,6 +337,7 @@ struct GlanceWidgetView: View {
         if let document = entry.document {
             layout(document, size: size)
                 .environment(\.locale, document.resolvedLocale)
+                .glanceStill(document.reducesMotion)
         } else {
             WidgetMessage(text: WidgetText.notRunning)
         }
