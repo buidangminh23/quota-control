@@ -337,12 +337,13 @@ export const vi: Messages = {
     glanceTabs: (surface) => (surface === "island" ? "Các tab hiện khi mở" : "Widget Tổng quan gồm"),
     glanceTabsNote: (surface) =>
       surface === "island"
-        ? "Bấm để bật hoặc tắt tab, luôn giữ ít nhất một tab. Mỗi tab tuỳ chỉnh riêng ở danh sách bên dưới."
-        : "Chọn những phần ghép trong widget Tổng quan. Các widget riêng lẻ luôn theo tuỳ chỉnh của từng phần bên dưới.",
+        ? "Bấm để bật hoặc tắt tab, luôn giữ ít nhất một tab. Bật cả Reset Codex và Reset Claude thì hai dự báo nằm chung một tab Reset. Mỗi tab tuỳ chỉnh riêng ở danh sách bên dưới."
+        : "Chọn những phần ghép trong widget Tổng quan; bật cả Reset Codex và Reset Claude thì phần Reset hiện cả hai. Các widget riêng lẻ theo tuỳ chỉnh của từng phần bên dưới.",
     glanceWidgetScope: (view) =>
       ({
         quota: "Áp dụng cho widget Chi tiết, Vòng tròn, Gọn và Tổng quan.",
-        resets: "Áp dụng cho widget Reset, Lịch reset và Tổng quan.",
+        resets:
+          "Áp dụng cho widget Reset, Lịch reset và Tổng quan đang để Như trong Quota Control. Muốn một widget hiện riêng Codex, Claude hoặc Cả hai thì bấm chuột phải vào widget đó rồi chọn sửa widget.",
         upcoming: "Áp dụng cho widget Sắp đặt lại và Tổng quan.",
       })[view],
     glanceTabOff: "Tab đang tắt",

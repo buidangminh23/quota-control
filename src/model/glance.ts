@@ -453,7 +453,8 @@ export interface GlanceDocument {
     upcomingEmpty: string;
     /** The open island's tab names, as the popup's tabs read. */
     tabs: Record<IslandView, string>;
-    /** The reset view's name while a surface shows the Claude tracker; absent otherwise. */
+    /** The reset view's name while a surface shows the Claude tracker, or a placed widget asked for
+     * it; absent otherwise. A widget asking for the tracker takes it as the answer. */
     claudeResetsTab?: string;
     /** What that view says while the Claude tracker is off, naming Claude's notifications; absent
      * otherwise, like `claudeResetsTab`. */
@@ -478,8 +479,8 @@ export interface GlanceDocument {
    * absent otherwise. */
   resetsPending?: GlanceResetsPending;
   /** The Claude reset tracker (claude-resets.com), for the island or the widget when its Settings
-   * chose it or both trackers (a wing reading it needs no copy here); absent otherwise, and while
-   * the Reset tab and Claude reset notifications are both off. */
+   * chose it or both trackers, or a placed widget asked for it (a wing reading it needs no copy
+   * here); absent otherwise, and while the Reset tab and Claude reset notifications are both off. */
   claudeResets?: GlanceResets;
   /** `resetsPending` for the Claude tracker, sent while a surface shows it. */
   claudeResetsPending?: GlanceResetsPending;
@@ -851,6 +852,9 @@ export interface GlanceInput {
   /** The tracker the Reset tab shows (Codex while the tab is hidden), which the `resets:` wings
    * read; Codex when left out. */
   resetsTab?: ResetProvider;
+  /** The trackers placed widgets asked for (`showResets`), each set in its own Edit Widget: the
+   * document carries them, with their words, whatever the widgets' Settings choice says. */
+  widgetAsks?: readonly ResetProvider[];
   /** The official color logos drawn so far (`useMarkArt`), base64 PNG by brand; optional. */
   markArt?: Readonly<Record<string, string>>;
   /** Whether the app can spend a Codex limit reset (`backend().redeemLimitReset`), which puts the
@@ -1167,7 +1171,7 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
   const islandResets = input.island.settings.resetsProvider;
   const widgetResets = input.widget.settings.resetsProvider;
   const claudeIsland = readsClaudeResets(islandResets);
-  const claudeWidget = readsClaudeResets(widgetResets);
+  const claudeWidget = readsClaudeResets(widgetResets) || (input.widgetAsks ?? []).includes("claude");
   if (islandResets === "claude" || islandResets === "both") document.island.resetsProvider = islandResets;
   if (widgetResets === "claude" || widgetResets === "both") document.widget.resetsProvider = widgetResets;
   if (claudeIsland || claudeWidget) {

@@ -15,13 +15,17 @@ import { SPECIAL_WINGS, type SpecialWing } from "@/model/glance";
 import { cardsAsShown, glanceCandidates, glanceGroups, type ProviderMetrics } from "@/model/layout";
 import { cardIdentity, providerBrand } from "@/model/providerText";
 import {
+  GLANCE_CHIPS,
+  glanceChipOn,
   ISLAND_LAYOUTS,
   ISLAND_STYLES,
   ISLAND_VIEWS,
   RESET_PARTS,
   SURFACE_RESET_PROVIDERS,
   surfaceResetProvider,
+  toggleGlanceChip,
   UPCOMING_LIMITS,
+  type GlanceChip,
   type GlanceContent,
   type GlanceSurfaceSettings,
   type IslandSettings,
@@ -126,19 +130,43 @@ function Disclosure({ title, summary, open, onToggle, children }: { title: strin
   );
 }
 
-/** The views as chips, kept in the popup's tab order, the reset view named after `provider`'s tracker; the last one on cannot be switched off. */
-function TabChips({ tabs, provider, onChange, text }: { tabs: readonly IslandView[]; provider: SurfaceResets; onChange: (tabs: IslandView[]) => void; text: SettingsMessages }) {
-  const toggle = (view: IslandView, on: boolean) => {
-    const next = ISLAND_VIEWS.filter((candidate) => (candidate === view ? on : tabs.includes(candidate)));
-    if (next.length > 0) onChange(next);
-  };
+/** A view chip's name: the reset view's two chips are named after their trackers. */
+function chipName(chip: GlanceChip, provider: SurfaceResets, text: SettingsMessages): string {
+  if (chip === "codexResets") return text.glanceTabName("resets", "codex");
+  if (chip === "claudeResets") return text.glanceTabName("resets", "claude");
+  return text.glanceTabName(chip, provider);
+}
+
+/**
+ * The views as chips, kept in the popup's tab order, Codex's and Claude's reset trackers each a chip
+ * of their own: both on, the reset view shows both. The last chip on cannot be switched off.
+ */
+function TabChips({
+  value,
+  provider,
+  onChange,
+  text,
+}: {
+  value: GlanceSurfaceSettings;
+  provider: SurfaceResets;
+  onChange: (patch: Partial<GlanceSurfaceSettings>) => void;
+  text: SettingsMessages;
+}) {
   return (
     <>
-      {ISLAND_VIEWS.map((view) => {
-        const on = tabs.includes(view);
+      {GLANCE_CHIPS.map((chip) => {
+        const on = glanceChipOn(chip, value.tabs, provider);
         return (
-          <Chip key={view} checked={on} disabled={on && tabs.length === 1} onChange={(value) => toggle(view, value)}>
-            {text.glanceTabName(view, provider)}
+          <Chip
+            key={chip}
+            checked={on}
+            disabled={on && !toggleGlanceChip(chip, false, value.tabs, provider)}
+            onChange={(checked) => {
+              const patch = toggleGlanceChip(chip, checked, value.tabs, provider);
+              if (patch) onChange(patch);
+            }}
+          >
+            {chipName(chip, provider, text)}
           </Chip>
         );
       })}
@@ -467,7 +495,7 @@ export function IslandSection() {
 
           <SubHeading>{text.glanceGroup("open")}</SubHeading>
           <ChipRow label={text.glanceTabs("island")} note={text.glanceTabsNote("island")}>
-            <TabChips tabs={island.tabs} provider={surfaceResetProvider(island.resetsProvider, settings)} onChange={(tabs) => patchIsland({ tabs })} text={text} />
+            <TabChips value={island} provider={surfaceResetProvider(island.resetsProvider, settings)} onChange={patchIsland} text={text} />
           </ChipRow>
           {island.tabs.length > 1 ? (
             <Row label={text.islandLayout} note={text.islandLayoutNote(island.layout)}>
@@ -500,7 +528,7 @@ export function WidgetSection() {
       </Row>
       <p className="uc-settings-note">{text.desktopWidgetKindsNote}</p>
       <ChipRow label={text.glanceTabs("widget")} note={text.glanceTabsNote("widget")}>
-        <TabChips tabs={widget.tabs} provider={surfaceResetProvider(widget.resetsProvider, settings)} onChange={(tabs) => patchWidget({ tabs })} text={text} />
+        <TabChips value={widget} provider={surfaceResetProvider(widget.resetsProvider, settings)} onChange={patchWidget} text={text} />
       </ChipRow>
       <SubHeading>{text.glanceGroup("content")}</SubHeading>
       <ViewEditors views={ISLAND_VIEWS} value={widget} onChange={patchWidget} scope={text.glanceWidgetScope} text={text} language={settings.language} />

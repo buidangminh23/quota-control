@@ -299,12 +299,13 @@ export const en: Messages = {
     glanceTabs: (surface) => (surface === "island" ? "Tabs When Open" : "Overview Widget Shows"),
     glanceTabsNote: (surface) =>
       surface === "island"
-        ? "Click to turn a tab on or off; at least one stays on. Each tab has its own options in the list below."
-        : "Choose the parts the Overview widget combines. The single widgets always follow each part's options below.",
+        ? "Click to turn a tab on or off; at least one stays on. With both Codex Resets and Claude Resets on, the two forecasts share one Resets tab. Each tab has its own options in the list below."
+        : "Choose the parts the Overview widget combines; with both Codex Resets and Claude Resets on, its reset part shows both. The single widgets follow each part's options below.",
     glanceWidgetScope: (view) =>
       ({
         quota: "Applies to the Details, Rings, Compact and Overview widgets.",
-        resets: "Applies to the Resets, Reset Calendar and Overview widgets.",
+        resets:
+          "Applies to the Resets, Reset Calendar and Overview widgets left on As in Quota Control. To have one widget show Codex, Claude or Both on its own, right-click it and choose to edit the widget.",
         upcoming: "Applies to the Coming Back and Overview widgets.",
       })[view],
     glanceTabOff: "Tab off",

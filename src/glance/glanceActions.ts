@@ -4,6 +4,8 @@
  * the mark back, or open the Reset tab on a tracker. The surface has already asked the user to
  * confirm, in the popup's own words; the core only relays the request (`glance-action`), and the
  * popup does it with the code its own buttons run, so the result is the same wherever it was pressed.
+ * A widget also asks, unprompted, for a reset tracker its own Edit Widget chose that the document it
+ * reads does not carry (`showResets`).
  */
 import { messagesFor } from "@/i18n";
 import { backend } from "@/lib/backend";
@@ -13,17 +15,19 @@ import { RESET_PROVIDERS, type ResetProvider } from "@/model/settings";
 import { setBankedUsed } from "@/state/bankedResets";
 import { selectDashboardTab, showNotice, updateSettings, useApp } from "@/state/store";
 import { announceOnIsland } from "./alerts";
+import { askWidgetResets } from "./widgetResets";
 
 export type GlanceAction =
   | { kind: "redeemLimitReset"; providerId: string }
   | { kind: "markBankedReset"; resetId: string; used: boolean }
-  | { kind: "openResets"; provider: ResetProvider };
+  | { kind: "openResets"; provider: ResetProvider }
+  | { kind: "showResets"; provider: ResetProvider };
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
-/** The request as sent, or `null` for anything else: only these three shapes are ever acted on. */
+/** The request as sent, or `null` for anything else: only these four shapes are ever acted on. */
 export function parseGlanceAction(value: unknown): GlanceAction | null {
   const request = record(value);
   if (!request) return null;
@@ -35,7 +39,8 @@ export function parseGlanceAction(value: unknown): GlanceAction | null {
         ? { kind: "markBankedReset", resetId: request.resetId, used: request.used }
         : null;
     case "openResets":
-      return (RESET_PROVIDERS as readonly unknown[]).includes(request.provider) ? { kind: "openResets", provider: request.provider as ResetProvider } : null;
+    case "showResets":
+      return (RESET_PROVIDERS as readonly unknown[]).includes(request.provider) ? { kind: request.kind, provider: request.provider as ResetProvider } : null;
     default:
       return null;
   }
@@ -78,6 +83,9 @@ export async function performGlanceAction(action: GlanceAction): Promise<void> {
     case "openResets":
       updateSettings({ resetsProvider: action.provider });
       selectDashboardTab("resets");
+      return;
+    case "showResets":
+      askWidgetResets(action.provider);
       return;
   }
 }

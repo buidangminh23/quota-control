@@ -6,9 +6,10 @@
  * tracker rides along while the Reset tab or reset notifications are on, loading the feeds they
  * need: with the notifications alone that is the status, so the tracker keeps the latest and the
  * announced reset and none of what the history gives, which the popup then shows nowhere either.
- * The Claude tracker rides along only while a surface or a wing reads it and the Reset tab or
- * Claude reset notifications are on, with the Codex history for its comparison while the Reset tab
- * has that loaded; a `resets:` wing reads whichever tracker the Reset tab shows. A tracker that is
+ * The Claude tracker rides along only while a surface, a wing or a placed widget set to it in its
+ * own Edit Widget (`widgetResets`) reads it and the Reset tab or Claude reset notifications are on,
+ * with the Codex history for its comparison while the Reset tab has that loaded; a `resets:` wing
+ * reads whichever tracker the Reset tab shows. A tracker that is
  * on but has nothing yet sends the Reset tab's own line instead (loading, or could not load). Each
  * Codex and Claude account starts with the row its popup card starts with, which follows the same
  * settings whichever tracker a surface shows. The hidden popup keeps running, so all of it stays
@@ -36,6 +37,7 @@ import { ensureFeed, useInsights } from "@/state/insights";
 import { useApp } from "@/state/store";
 import { useIslandAlert } from "./alerts";
 import { useMarkArt } from "./markArt";
+import { useWidgetResetAsks } from "./widgetResets";
 
 /** Pace colors move with the clock; a minute is fine enough for the island and the widget. */
 const CLOCK_MS = 60_000;
@@ -69,6 +71,7 @@ export function useGlance(): void {
   const notifyCodexResets = useApp((state) => state.settings.notifyCodexResets);
   const notifyClaudeResets = useApp((state) => state.settings.notifyClaudeResets);
   const usedBankedResets = useApp((state) => state.settings.usedBankedResets);
+  const widgetAsks = useWidgetResetAsks((state) => state.asked);
   const tracking = showResetsTab || notifyCodexResets;
   const statusFeed = useInsights((state) => state.feeds.codexResetStatus);
   const historyFeed = useInsights((state) => state.feeds.codexResets);
@@ -122,7 +125,10 @@ export function useGlance(): void {
   );
 
   const claudeRead =
-    readsClaudeResets(island.resetsProvider) || readsClaudeResets(widget.resetsProvider) || island.wings.some((id) => isClaudeResetsWing(followedWing(id, resetsTab)));
+    readsClaudeResets(island.resetsProvider) ||
+    readsClaudeResets(widget.resetsProvider) ||
+    widgetAsks.includes("claude") ||
+    island.wings.some((id) => isClaudeResetsWing(followedWing(id, resetsTab)));
   const claudeFollowed = showResetsTab || notifyClaudeResets;
   const claudeCards = (claudeAccounts?.length ?? 0) > 0;
   const claudeTracking = supported && claudeFollowed && (claudeRead || claudeCards);
@@ -218,11 +224,12 @@ export function useGlance(): void {
       claudeResets,
       claudeResetsPending,
       resetsTab,
+      widgetAsks,
       markArt,
       redeemsResets: typeof backend().redeemLimitReset === "function",
       now,
     });
-  }, [supported, layout, catalog, isEnabled, engine, display, info, islandEnabled, island, widget, timeFormat, theme, reduceAnimations, density, alert, resets, resetsPending, claudeResets, claudeResetsPending, resetsTab, resetRowFor, markArt, now]);
+  }, [supported, layout, catalog, isEnabled, engine, display, info, islandEnabled, island, widget, timeFormat, theme, reduceAnimations, density, alert, resets, resetsPending, claudeResets, claudeResetsPending, resetsTab, widgetAsks, resetRowFor, markArt, now]);
 
   useEffect(() => {
     if (!ready || !document) return;

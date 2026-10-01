@@ -3,6 +3,7 @@ import { setBackend } from "@/lib/backend";
 import { MockBackend } from "@/lib/mockBackend";
 import { useApp } from "@/state/store";
 import { parseGlanceAction, performGlanceAction, startGlanceActions } from "./glanceActions";
+import { useWidgetResetAsks } from "./widgetResets";
 
 const FRESH = useApp.getState();
 
@@ -20,13 +21,17 @@ function codexAccount(): string {
   return id;
 }
 
-beforeEach(() => useApp.setState(FRESH, true));
+beforeEach(() => {
+  useApp.setState(FRESH, true);
+  useWidgetResetAsks.setState({ asked: [] });
+});
 
 describe("parseGlanceAction", () => {
-  it("accepts only the three requests the surfaces send", () => {
+  it("accepts only the four requests the surfaces send", () => {
     expect(parseGlanceAction({ kind: "redeemLimitReset", providerId: "codex@5aef39" })).toEqual({ kind: "redeemLimitReset", providerId: "codex@5aef39" });
     expect(parseGlanceAction({ kind: "markBankedReset", resetId: "2102438800836489554", used: true })).toEqual({ kind: "markBankedReset", resetId: "2102438800836489554", used: true });
     expect(parseGlanceAction({ kind: "openResets", provider: "claude" })).toEqual({ kind: "openResets", provider: "claude" });
+    expect(parseGlanceAction({ kind: "showResets", provider: "claude" })).toEqual({ kind: "showResets", provider: "claude" });
     for (const value of [
       null,
       "redeemLimitReset",
@@ -36,6 +41,8 @@ describe("parseGlanceAction", () => {
       { kind: "markBankedReset", resetId: "x y", used: true },
       { kind: "markBankedReset", resetId: "1", used: "yes" },
       { kind: "openResets", provider: "gemini" },
+      { kind: "showResets", provider: "both" },
+      { kind: "showResets" },
       { kind: "deleteEverything" },
     ]) {
       expect(parseGlanceAction(value)).toBeNull();
@@ -75,6 +82,17 @@ describe("performGlanceAction", () => {
     await act(() => performGlanceAction({ kind: "openResets", provider: "claude" }));
     expect(useApp.getState().settings.resetsProvider).toBe("claude");
     expect(useApp.getState().settings.dashboardTab).toBe("resets");
+  });
+
+  it("carries the tracker a placed widget asks for, once, without touching the settings", async () => {
+    await ready();
+    const settings = useApp.getState().settings;
+    await performGlanceAction({ kind: "showResets", provider: "claude" });
+    await performGlanceAction({ kind: "showResets", provider: "claude" });
+    expect(useWidgetResetAsks.getState().asked).toEqual(["claude"]);
+    await performGlanceAction({ kind: "showResets", provider: "codex" });
+    expect(useWidgetResetAsks.getState().asked).toEqual(["codex", "claude"]);
+    expect(useApp.getState().settings).toBe(settings);
   });
 });
 

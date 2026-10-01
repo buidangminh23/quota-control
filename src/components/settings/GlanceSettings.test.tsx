@@ -15,7 +15,10 @@ vi.mock("@/strip/useTaskbarStrip", () => ({ useTaskbarStrip: () => {} }));
 
 const CODEX_OFF = "Chưa có số liệu: bật tab Reset hoặc thông báo khi Codex reset.";
 const CLAUDE_OFF = "Chưa có số liệu: bật tab Reset hoặc thông báo khi Claude reset.";
-const RESETS_SCOPE = "Áp dụng cho widget Reset, Lịch reset và Tổng quan.";
+const RESETS_SCOPE =
+  "Áp dụng cho widget Reset, Lịch reset và Tổng quan đang để Như trong Quota Control. Muốn một widget hiện riêng Codex, Claude hoặc Cả hai thì bấm chuột phải vào widget đó rồi chọn sửa widget.";
+const RESETS_SCOPE_EN =
+  "Applies to the Resets, Reset Calendar and Overview widgets left on As in Quota Control. To have one widget show Codex, Claude or Both on its own, right-click it and choose to edit the widget.";
 const CLAUDE_WINGS = [
   "Reset Claude · Hạn dùng lượt để dành",
   "Reset Claude · Khả năng 24 giờ tới",
@@ -91,12 +94,14 @@ describe("whose reset tracker the island and the widgets show", () => {
     const widget = section("Widget màn hình");
     for (const surface of [island, widget]) {
       expect(within(surface).getByRole("checkbox", { name: "Reset Codex" })).toBeChecked();
+      expect(within(surface).getByRole("checkbox", { name: "Reset Claude" })).not.toBeChecked();
       fireEvent.click(within(surface).getByRole("button", { name: /^Reset Codex/ }));
       expect(within(surface).getByText("Reset của")).toBeInTheDocument();
       expect(within(surface).getByRole("radio", { name: "Như tab Reset" })).toBeChecked();
       expect(within(surface).getByRole("radio", { name: "Codex" })).not.toBeChecked();
       expect(within(surface).getByRole("radio", { name: "Claude" })).not.toBeChecked();
-      expect(within(surface).queryByText(/Reset Claude|của Claude/)).not.toBeInTheDocument();
+      expect(within(surface).queryByRole("button", { name: /^Reset Claude/ })).not.toBeInTheDocument();
+      expect(within(surface).queryByText(/của Claude/)).not.toBeInTheDocument();
       expect(within(surface).queryByText(CODEX_OFF)).not.toBeInTheDocument();
     }
     expect(within(widget).getByText(RESETS_SCOPE)).toBeInTheDocument();
@@ -111,6 +116,7 @@ describe("whose reset tracker the island and the widgets show", () => {
     act(() => updateSettings({ resetsProvider: "claude" }));
     for (const surface of [island, widget]) {
       expect(within(surface).getByRole("checkbox", { name: "Reset Claude" })).toBeChecked();
+      expect(within(surface).getByRole("checkbox", { name: "Reset Codex" })).not.toBeChecked();
       fireEvent.click(within(surface).getByRole("button", { name: /^Reset Claude/ }));
       expect(within(surface).getByRole("radio", { name: "Như tab Reset" })).toBeChecked();
     }
@@ -149,10 +155,12 @@ describe("whose reset tracker the island and the widgets show", () => {
     expect(within(island).getByRole("radio", { name: "Codex" })).not.toBeChecked();
     expect(within(island).getByRole("checkbox", { name: "Reset Claude" })).toBeChecked();
     expect(within(island).getByRole("button", { name: /^Reset Claude/ })).toHaveAttribute("aria-expanded", "true");
-    expect(within(island).queryByText("Reset Codex")).not.toBeInTheDocument();
+    expect(within(island).getByRole("checkbox", { name: "Reset Codex" })).not.toBeChecked();
+    expect(within(island).queryByRole("button", { name: /^Reset Codex/ })).not.toBeInTheDocument();
     expect(within(widget).getByRole("checkbox", { name: "Reset Codex" })).toBeChecked();
     expect(within(widget).getByRole("button", { name: /^Reset Codex/ })).toBeInTheDocument();
-    expect(within(widget).queryByText("Reset Claude")).not.toBeInTheDocument();
+    expect(within(widget).getByRole("checkbox", { name: "Reset Claude" })).not.toBeChecked();
+    expect(within(widget).queryByRole("button", { name: /^Reset Claude/ })).not.toBeInTheDocument();
 
     await act(() => new Promise((resolve) => setTimeout(resolve, 5)));
     const saved = await api.loadDocument<{ island: { resetsProvider?: string }; widget: { resetsProvider?: string } }>("settings");
@@ -177,9 +185,12 @@ describe("whose reset tracker the island and the widgets show", () => {
     expect(within(widget).getByRole("checkbox", { name: "Reset Claude" })).toBeChecked();
     expect(within(widget).getByRole("button", { name: /^Reset Claude/ })).toHaveAttribute("aria-expanded", "true");
     expect(within(widget).getByText(RESETS_SCOPE)).toBeInTheDocument();
-    expect(within(widget).queryByText(/Reset Codex|Lịch reset Codex|cả ba/)).not.toBeInTheDocument();
+    expect(within(widget).getByRole("checkbox", { name: "Reset Codex" })).not.toBeChecked();
+    expect(within(widget).queryByRole("button", { name: /^Reset Codex/ })).not.toBeInTheDocument();
+    expect(within(widget).queryByText(/Lịch reset Codex|cả ba/)).not.toBeInTheDocument();
     expect(within(island).getByRole("checkbox", { name: "Reset Codex" })).toBeChecked();
-    expect(within(island).queryByText("Reset Claude")).not.toBeInTheDocument();
+    expect(within(island).getByRole("checkbox", { name: "Reset Claude" })).not.toBeChecked();
+    expect(within(island).queryByRole("button", { name: /^Reset Claude/ })).not.toBeInTheDocument();
   });
 
   it("lets a surface show both trackers, naming its reset view like the Reset tab, until it picks one again", async () => {
@@ -194,7 +205,8 @@ describe("whose reset tracker the island and the widgets show", () => {
     expect(useApp.getState().settings.widget.resetsProvider).toBe("both");
     expect(useApp.getState().settings.island.resetsProvider).toBe("app");
     expect(within(widget).getByRole("radio", { name: "Cả hai" })).toBeChecked();
-    expect(within(widget).getByRole("checkbox", { name: "Reset" })).toBeChecked();
+    expect(within(widget).getByRole("checkbox", { name: "Reset Codex" })).toBeChecked();
+    expect(within(widget).getByRole("checkbox", { name: "Reset Claude" })).toBeChecked();
     expect(within(widget).getByRole("button", { name: /^Reset/ })).toHaveAttribute("aria-expanded", "true");
     expect(within(island).getByRole("checkbox", { name: "Reset Codex" })).toBeChecked();
     await act(() => new Promise((resolve) => setTimeout(resolve, 5)));
@@ -209,6 +221,57 @@ describe("whose reset tracker the island and the widgets show", () => {
 
     fireEvent.click(within(widget).getByRole("radio", { name: "Claude" }));
     expect(within(widget).getByRole("checkbox", { name: "Reset Claude" })).toBeChecked();
+    expect(within(widget).getByRole("checkbox", { name: "Reset Codex" })).not.toBeChecked();
+  });
+
+  it("turns either tracker on and off from its own chip, both on sharing one reset view", async () => {
+    const api = await openSettings();
+    const island = section("Dynamic Island");
+    fireEvent.click(within(island).getByRole("checkbox", { name: "Reset Claude" }));
+    expect(useApp.getState().settings.island.resetsProvider).toBe("both");
+    expect(useApp.getState().settings.island.tabs).toEqual(["quota", "resets", "upcoming"]);
+    expect(within(island).getByRole("checkbox", { name: "Reset Codex" })).toBeChecked();
+    expect(within(island).getByRole("checkbox", { name: "Reset Claude" })).toBeChecked();
+    expect(within(island).getByRole("button", { name: /^Reset\s*Đủ mọi phần/ })).toBeInTheDocument();
+
+    fireEvent.click(within(island).getByRole("checkbox", { name: "Reset Codex" }));
+    expect(useApp.getState().settings.island.resetsProvider).toBe("claude");
+    expect(within(island).getByRole("checkbox", { name: "Reset Codex" })).not.toBeChecked();
+    expect(within(island).getByRole("button", { name: /^Reset Claude/ })).toBeInTheDocument();
+
+    fireEvent.click(within(island).getByRole("checkbox", { name: "Reset Claude" }));
+    expect(useApp.getState().settings.island.tabs).toEqual(["quota", "upcoming"]);
+    expect(within(island).getByRole("checkbox", { name: "Reset Codex" })).not.toBeChecked();
+    expect(within(island).getByRole("checkbox", { name: "Reset Claude" })).not.toBeChecked();
+    expect(within(island).queryByRole("button", { name: /^Reset/ })).not.toBeInTheDocument();
+
+    fireEvent.click(within(island).getByRole("checkbox", { name: "Reset Codex" }));
+    expect(useApp.getState().settings.island.tabs).toEqual(["quota", "resets", "upcoming"]);
+    expect(useApp.getState().settings.island.resetsProvider).toBe("codex");
+    expect(useApp.getState().settings.widget.resetsProvider).toBe("app");
+    await act(() => new Promise((resolve) => setTimeout(resolve, 5)));
+    const saved = await api.loadDocument<{ island: { resetsProvider?: string; tabs?: string[] } }>("settings");
+    expect(saved?.island).toMatchObject({ resetsProvider: "codex", tabs: ["quota", "resets", "upcoming"] });
+  });
+
+  it("keeps the last view on, whichever tracker chips hold it", async () => {
+    await openSettings();
+    const widget = section("Widget màn hình");
+    fireEvent.click(within(widget).getByRole("checkbox", { name: "Hạn mức" }));
+    fireEvent.click(within(widget).getByRole("checkbox", { name: "Sắp đặt lại" }));
+    expect(useApp.getState().settings.widget.tabs).toEqual(["resets"]);
+    expect(within(widget).getByRole("checkbox", { name: "Reset Codex" })).toBeDisabled();
+    expect(within(widget).getByRole("checkbox", { name: "Reset Claude" })).toBeEnabled();
+
+    fireEvent.click(within(widget).getByRole("checkbox", { name: "Reset Claude" }));
+    expect(useApp.getState().settings.widget.resetsProvider).toBe("both");
+    expect(within(widget).getByRole("checkbox", { name: "Reset Codex" })).toBeEnabled();
+    expect(within(widget).getByRole("checkbox", { name: "Reset Claude" })).toBeEnabled();
+
+    fireEvent.click(within(widget).getByRole("checkbox", { name: "Reset Codex" }));
+    expect(useApp.getState().settings.widget.resetsProvider).toBe("claude");
+    expect(useApp.getState().settings.widget.tabs).toEqual(["resets"]);
+    expect(within(widget).getByRole("checkbox", { name: "Reset Claude" })).toBeDisabled();
   });
 
   it("says a tracker has no data only while the Reset tab and that tracker's notifications are both off", async () => {
@@ -269,18 +332,21 @@ describe("whose reset tracker the island and the widgets show", () => {
     fireEvent.click(within(island).getByRole("button", { name: /^Codex Resets/ }));
     expect(within(island).getByText("Resets of")).toBeInTheDocument();
     expect(within(island).getByRole("radio", { name: "As in the Reset tab" })).toBeChecked();
+    expect(within(island).getByRole("checkbox", { name: "Claude Resets" })).not.toBeChecked();
     fireEvent.click(within(island).getByRole("radio", { name: "Both" }));
-    expect(within(island).getByRole("checkbox", { name: "Resets" })).toBeChecked();
+    expect(within(island).getByRole("checkbox", { name: "Codex Resets" })).toBeChecked();
+    expect(within(island).getByRole("checkbox", { name: "Claude Resets" })).toBeChecked();
     fireEvent.click(within(island).getByRole("radio", { name: "Claude" }));
     expect(within(island).getByRole("checkbox", { name: "Claude Resets" })).toBeChecked();
+    expect(within(island).getByRole("checkbox", { name: "Codex Resets" })).not.toBeChecked();
     expect(within(island).getByRole("button", { name: /^Claude Resets/ })).toBeInTheDocument();
     act(() => updateSettings({ showResetsTab: false, notifyClaudeResets: false }));
     expect(within(island).getByText("No data yet: turn on the Resets tab or Claude reset notifications.")).toBeInTheDocument();
 
     fireEvent.click(within(widget).getByRole("button", { name: /^Codex Resets/ }));
-    expect(within(widget).getByText("Applies to the Resets, Reset Calendar and Overview widgets.")).toBeInTheDocument();
+    expect(within(widget).getByText(RESETS_SCOPE_EN)).toBeInTheDocument();
     fireEvent.click(within(widget).getByRole("radio", { name: "Claude" }));
-    expect(within(widget).getByText("Applies to the Resets, Reset Calendar and Overview widgets.")).toBeInTheDocument();
+    expect(within(widget).getByText(RESETS_SCOPE_EN)).toBeInTheDocument();
 
     fireEvent.click(within(island).getByRole("button", { name: "Left of the Notch: Automatic" }));
     expect(screen.getByRole("menuitemcheckbox", { name: "Codex Resets · Next Free Reset" })).toBeInTheDocument();

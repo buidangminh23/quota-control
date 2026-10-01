@@ -14,6 +14,7 @@ import { parseResets } from "@/model/insights/resets";
 import { setProviderOpen } from "@/model/layout";
 import { resetInsights } from "@/state/insights";
 import { updateLayout, updateSettings, useApp } from "@/state/store";
+import { useWidgetResetAsks } from "./widgetResets";
 
 vi.mock("@/strip/useTaskbarStrip", () => ({ useTaskbarStrip: () => {} }));
 
@@ -67,6 +68,7 @@ async function settle(): Promise<void> {
 
 beforeEach(() => {
   useApp.setState(FRESH, true);
+  useWidgetResetAsks.setState({ asked: [] });
   resetInsights();
 });
 
@@ -210,6 +212,32 @@ describe("the glance document the popup sends", () => {
       backend.feedStates.codexResetStatus = { body: null, error: "HTTP 500", stale: false };
     });
     await waitFor(() => expect(api.latest?.resets?.stale).toBe(insightsFor("vi").staleNote));
+  });
+
+  it("carries the Claude tracker once a placed widget asks for it, leaving the settings as they were", async () => {
+    const api = await start({ notifyClaudeResets: false });
+    await settle();
+    expect("claudeResets" in api.latest!).toBe(false);
+    expect("claudeResetsTab" in api.latest!.labels).toBe(false);
+    act(() => api.glanceAction({ kind: "showResets", provider: "claude" }));
+    await waitFor(() => expect(api.latest?.claudeResets?.brand).toBe("claude"));
+    const document = api.latest!;
+    expect(document.labels.claudeResetsTab).toBe("Reset Claude");
+    expect(document.resets?.brand).toBe("codex");
+    expect("resetsProvider" in document.island).toBe(false);
+    expect("resetsProvider" in document.widget).toBe(false);
+    expect(useApp.getState().settings.widget.resetsProvider).toBe("app");
+    expect(useApp.getState().settings.island.resetsProvider).toBe("app");
+  });
+
+  it("answers a widget asking for the Claude tracker while it is off with its name alone", async () => {
+    const api = await start({ showResetsTab: false, notifyClaudeResets: false });
+    await settle();
+    act(() => api.glanceAction({ kind: "showResets", provider: "claude" }));
+    await waitFor(() => expect(api.latest?.labels.claudeResetsTab).toBe("Reset Claude"));
+    await settle();
+    expect("claudeResets" in api.latest!).toBe(false);
+    expect(api.feedsAsked).not.toContain("claudeResets");
   });
 
   it("follows Claude reset notifications alone when the Reset tab is off", async () => {

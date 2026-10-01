@@ -42,10 +42,16 @@ const REQUEST_CLOCK_SKEW_SECONDS: i64 = 5;
 const MAX_REQUEST_BYTES: u64 = 4096;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const REQUEST_POLL: std::time::Duration = std::time::Duration::from_secs(1);
-/// What the island and the widgets may ask of the popup; `src/glance/glanceActions.ts` checks the
-/// rest of each request before doing anything.
+/// What the island and the widgets may ask of the popup, a widget's unprompted ask for the reset
+/// tracker its own Edit Widget chose (`showResets`) among them; `src/glance/glanceActions.ts` checks
+/// the rest of each request before doing anything.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-const ACTION_KINDS: &[&str] = &["redeemLimitReset", "markBankedReset", "openResets"];
+const ACTION_KINDS: &[&str] = &[
+    "redeemLimitReset",
+    "markBankedReset",
+    "openResets",
+    "showResets",
+];
 
 #[derive(Default)]
 pub struct Glance {
@@ -316,6 +322,7 @@ mod tests {
         assert_eq!(action(redeem.clone()), Some(redeem));
         assert!(action(json!({"kind": "openResets", "provider": "claude"})).is_some());
         assert!(action(json!({"kind": "markBankedReset", "resetId": "7", "used": true})).is_some());
+        assert!(action(json!({"kind": "showResets", "provider": "claude"})).is_some());
         assert!(action(json!({"kind": "wipe"})).is_none());
         assert!(action(json!({"providerId": "codex@1"})).is_none());
         assert!(action(json!("redeemLimitReset")).is_none());

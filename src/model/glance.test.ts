@@ -78,6 +78,8 @@ interface Options {
   resetRowFor?: (provider: Provider) => GlanceResetRow | null;
   /** Whether the app can spend a Codex limit reset; off by default, as for the pinned documents. */
   redeemsResets?: boolean;
+  /** The trackers placed widgets asked for in their own Edit Widget; none by default. */
+  widgetAsks?: readonly ResetProvider[];
 }
 
 function glance({
@@ -102,6 +104,7 @@ function glance({
   openProviders = layout.openProviders,
   resetRowFor,
   redeemsResets,
+  widgetAsks,
 }: Options = {}) {
   const islandSettings = { ...DEFAULT_SETTINGS.island, ...island };
   const widgetSettings = { ...DEFAULT_SETTINGS.widget, ...widget };
@@ -136,6 +139,7 @@ function glance({
     ...(resetsTab ? { resetsTab } : {}),
     markArt,
     ...(redeemsResets === undefined ? {} : { redeemsResets }),
+    ...(widgetAsks ? { widgetAsks } : {}),
     now,
   });
 }
@@ -844,6 +848,26 @@ describe("the Claude reset tracker", () => {
     for (const choice of ["codex", "claude"] as const) {
       expect("resetsBothTab" in glance({ island: { resetsProvider: choice }, widget: { resetsProvider: choice }, resets: TRACKER, claudeResets: CLAUDE_TRACKER }).labels).toBe(false);
     }
+  });
+
+  it("rides along for a placed widget that asked for it, whatever the Settings choices say", () => {
+    const document = glance({ resets: TRACKER, claudeResets: CLAUDE_TRACKER, widgetAsks: ["claude"] });
+    expect(document.island.resetsProvider).toBeUndefined();
+    expect(document.widget.resetsProvider).toBeUndefined();
+    expect(document.resets).toBe(TRACKER);
+    expect(document.claudeResets).toBe(CLAUDE_TRACKER);
+    expect(document.labels).toMatchObject({ claudeResetsTab: "Reset Claude", tabs: { resets: "Reset Codex" } });
+    expect(document.labels.claudeResetsOff).toBe("Bật tab Reset hoặc thông báo khi Claude reset trong Quota Control để xem dự báo.");
+    expect("resetsBothTab" in document.labels).toBe(false);
+    const pending: GlanceResetsPending = { text: "Đang tải…" };
+    expect(glance({ resets: TRACKER, claudeResets: null, claudeResetsPending: pending, widgetAsks: ["claude"] }).claudeResetsPending).toBe(pending);
+    const off = glance({ resets: TRACKER, claudeResets: null, widgetAsks: ["claude"] });
+    expect("claudeResets" in off).toBe(false);
+    expect(off.labels.claudeResetsTab).toBe("Reset Claude");
+    const codexOnly = glance({ resets: TRACKER, claudeResets: CLAUDE_TRACKER, widgetAsks: ["codex"] });
+    expect("claudeResets" in codexOnly).toBe(false);
+    expect(codexOnly.labels.claudeResetsTab).toBeUndefined();
+    expect(JSON.stringify(codexOnly)).toBe(JSON.stringify(glance({ resets: TRACKER, claudeResets: CLAUDE_TRACKER })));
   });
 
   it("tells the Claude wings apart from every other wing", () => {

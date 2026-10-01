@@ -89,6 +89,49 @@ export const ISLAND_STYLES: readonly IslandStyle[] = ["percent", "ring", "bar"];
  * limits to come back. */
 export type IslandView = "quota" | "resets" | "upcoming";
 export const ISLAND_VIEWS: readonly IslandView[] = ["quota", "resets", "upcoming"];
+/**
+ * The views as Settings offers them, one chip each: the limits, Codex's reset tracker, Claude's, the
+ * limits coming back. The two tracker chips share the one reset view, which shows both trackers
+ * while both are on.
+ */
+export type GlanceChip = "quota" | "codexResets" | "claudeResets" | "upcoming";
+export const GLANCE_CHIPS: readonly GlanceChip[] = ["quota", "codexResets", "claudeResets", "upcoming"];
+const TRACKER_CHIPS: Readonly<Record<ResetProvider, GlanceChip>> = { codex: "codexResets", claude: "claudeResets" };
+
+function chipView(chip: GlanceChip): IslandView {
+  return chip === "codexResets" || chip === "claudeResets" ? "resets" : chip;
+}
+
+function chipTracker(chip: GlanceChip): ResetProvider | null {
+  return chip === "codexResets" ? "codex" : chip === "claudeResets" ? "claude" : null;
+}
+
+/** Whether `chip` is on for a surface showing `tabs`, its reset view drawing `shown`. */
+export function glanceChipOn(chip: GlanceChip, tabs: readonly IslandView[], shown: SurfaceResets): boolean {
+  const tracker = chipTracker(chip);
+  return tabs.includes(chipView(chip)) && (!tracker || shown === tracker || shown === "both");
+}
+
+/**
+ * A surface's views and reset choice once `chip` is turned on or off, or `null` when that would
+ * leave the surface without a view. A tracker chip turned on shows its tracker, or both while the
+ * other one is on; turned off it leaves the other tracker, or takes the reset view away.
+ */
+export function toggleGlanceChip(
+  chip: GlanceChip,
+  on: boolean,
+  tabs: readonly IslandView[],
+  shown: SurfaceResets,
+): { tabs: IslandView[]; resetsProvider?: SurfaceResetProvider } | null {
+  const view = chipView(chip);
+  const tracker = chipTracker(chip);
+  const other = tracker === null ? null : tracker === "codex" ? "claude" : "codex";
+  const otherOn = other !== null && glanceChipOn(TRACKER_CHIPS[other], tabs, shown);
+  if (tracker && on) return { tabs: ISLAND_VIEWS.filter((candidate) => candidate === view || tabs.includes(candidate)), resetsProvider: otherOn ? "both" : tracker };
+  if (other && otherOn && !on) return { tabs: [...tabs], resetsProvider: other };
+  const next = ISLAND_VIEWS.filter((candidate) => (candidate === view ? on : tabs.includes(candidate)));
+  return next.length > 0 ? { tabs: next } : null;
+}
 /** How the open island shows several chosen views: one at a time behind a tab bar, or stacked. */
 export type IslandLayout = "separate" | "combined";
 export const ISLAND_LAYOUTS: readonly IslandLayout[] = ["separate", "combined"];

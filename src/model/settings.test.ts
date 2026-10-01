@@ -2,6 +2,9 @@ import {
   anyNotificationEnabled,
   DEFAULT_SETTINGS,
   enabledProvidersOf,
+  GLANCE_CHIPS,
+  glanceChipOn,
+  ISLAND_VIEWS,
   mergeSettingsDocument,
   parseSettings,
   readsClaudeResets,
@@ -10,6 +13,9 @@ import {
   surfaceResetProvider,
   taskbarDisplayOf,
   taskbarDisplayPatch,
+  toggleGlanceChip,
+  type IslandView,
+  type SurfaceResets,
 } from "./settings";
 
 describe("parseSettings", () => {
@@ -184,6 +190,50 @@ describe("glance surfaces", () => {
     expect(readsClaudeResets("codex")).toBe(false);
     expect(readsClaudeResets("app")).toBe(false);
     expect(resetsTabProvider({ resetsProvider: "claude", showResetsTab: false })).toBe("codex");
+  });
+});
+
+describe("the view chips of a glance surface", () => {
+  const SHOWN: readonly SurfaceResets[] = ["codex", "claude", "both"];
+  const TABS: readonly IslandView[][] = [[], ["quota"], ["resets"], ["upcoming"], ["quota", "resets"], ["resets", "upcoming"], ["quota", "upcoming"], [...ISLAND_VIEWS]];
+
+  it("name each tracker of the reset view on its own chip", () => {
+    expect(GLANCE_CHIPS).toEqual(["quota", "codexResets", "claudeResets", "upcoming"]);
+    expect(SHOWN.map((shown) => [glanceChipOn("codexResets", ["resets"], shown), glanceChipOn("claudeResets", ["resets"], shown)])).toEqual([
+      [true, false],
+      [false, true],
+      [true, true],
+    ]);
+    expect(glanceChipOn("codexResets", ["quota"], "codex")).toBe(false);
+  });
+
+  it("turn a tracker on beside the other as both, and off back to the other", () => {
+    expect(toggleGlanceChip("claudeResets", true, ["quota", "resets"], "codex")).toEqual({ tabs: ["quota", "resets"], resetsProvider: "both" });
+    expect(toggleGlanceChip("codexResets", false, ["quota", "resets"], "both")).toEqual({ tabs: ["quota", "resets"], resetsProvider: "claude" });
+    expect(toggleGlanceChip("claudeResets", false, ["quota", "resets", "upcoming"], "claude")).toEqual({ tabs: ["quota", "upcoming"] });
+    expect(toggleGlanceChip("codexResets", true, ["quota", "upcoming"], "claude")).toEqual({ tabs: ["quota", "resets", "upcoming"], resetsProvider: "codex" });
+    expect(toggleGlanceChip("upcoming", true, ["resets"], "both")).toEqual({ tabs: ["resets", "upcoming"] });
+  });
+
+  it("flip only the chip pressed, and refuse only to turn off the last one on", () => {
+    for (const tabs of TABS.filter((list) => list.length > 0)) {
+      for (const shown of SHOWN) {
+        const before = GLANCE_CHIPS.map((chip) => glanceChipOn(chip, tabs, shown));
+        GLANCE_CHIPS.forEach((chip, index) => {
+          const label = `${chip} ${tabs.join("+")} ${shown}`;
+          const patch = toggleGlanceChip(chip, !before[index], tabs, shown);
+          if (!patch) {
+            expect(before[index], label).toBe(true);
+            expect(before.filter(Boolean), label).toHaveLength(1);
+            return;
+          }
+          const after = (patch.resetsProvider ?? shown) as SurfaceResets;
+          expect(patch.tabs, label).toEqual(ISLAND_VIEWS.filter((view) => patch.tabs.includes(view)));
+          expect(patch.tabs.length, label).toBeGreaterThan(0);
+          expect(GLANCE_CHIPS.map((other) => glanceChipOn(other, patch.tabs, after)), label).toEqual(before.map((on, at) => (at === index ? !on : on)));
+        });
+      }
+    }
   });
 });
 
