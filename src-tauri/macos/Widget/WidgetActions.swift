@@ -110,20 +110,24 @@ enum WidgetRequests {
         GlanceStore.folderURL.appendingPathComponent("requests", isDirectory: true)
     }
 
-    /// Written under a dot name first and renamed after, so the app never reads half a request.
+    /// A button's request, under a name of its own.
     static func write(_ request: GlanceActionRequest, now: Date = Date()) throws {
+        try write(payload: request.payload, name: UUID().uuidString.lowercased(), now: now)
+    }
+
+    /// Written under a dot name first and renamed after, so the app never reads half a request; a
+    /// request under the same `name` the app has not read yet is replaced.
+    static func write(payload: [String: Any], name: String, now: Date = Date()) throws {
         let body: [String: Any] = [
             "requestedAt": ISO8601DateFormatter().string(from: now),
-            "action": request.payload,
+            "action": payload,
         ]
         let data = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
-        let name = UUID().uuidString.lowercased()
         let partial = folderURL.appendingPathComponent(".\(name).json", isDirectory: false)
         let complete = folderURL.appendingPathComponent("\(name).json", isDirectory: false)
         try data.write(to: partial)
-        do {
-            try FileManager.default.moveItem(at: partial, to: complete)
-        } catch {
+        guard rename(partial.path, complete.path) == 0 else {
+            let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
             try? FileManager.default.removeItem(at: partial)
             throw error
         }

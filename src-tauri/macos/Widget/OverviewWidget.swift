@@ -1,7 +1,7 @@
 import SwiftUI
 import WidgetKit
 
-/// How much of the reset tracker an overview has room for.
+/// How much of the reset tracker an overview, or a widget showing both trackers at once, has room for.
 enum ResetsSummaryStyle {
     /// A narrow column: the announced reset or the chance of one, and the time since the last.
     case narrow
@@ -9,6 +9,12 @@ enum ResetsSummaryStyle {
     case band
     /// A tall column: the announced reset, the last one and the three chances.
     case column
+    /// Half a medium widget: the heading, the announced reset or the chance of one with the longer
+    /// spans in a line, and the time since the last.
+    case pair
+    /// Half a small widget: the mark beside the announced reset or the chance of one, then the
+    /// countdown or the time since the last.
+    case line
 }
 
 /// The reset tracker in brief, or the words saying why there is none: it is still loading, could not
@@ -19,11 +25,9 @@ struct ResetsSummary: View {
     let style: ResetsSummaryStyle
     @Environment(\.colorScheme) private var colorScheme
 
-    private var units: GlanceUnits { document.labels.units }
-
     var body: some View {
         if let resets = document.resets {
-            summary(resets)
+            ResetsSummaryBody(resets: resets, units: document.labels.units, now: now, style: style)
         } else {
             let message = WidgetText.resetsMessage(document)
             VStack(alignment: .leading, spacing: 5) {
@@ -44,68 +48,12 @@ struct ResetsSummary: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
-
-    @ViewBuilder
-    private func summary(_ resets: GlanceResets) -> some View {
-        let upcoming = resets.upcoming(at: now)
-        switch style {
-        case .narrow:
-            VStack(alignment: .leading, spacing: 6) {
-                ResetsHeader(resets: resets)
-                if let upcoming {
-                    AnnouncedResetBlock(upcoming: upcoming, units: units, now: now, valueSize: 13)
-                } else {
-                    ChanceHero(resets: resets)
-                }
-                Spacer(minLength: 0)
-                if let latest = resets.latest {
-                    latest.since.live(now: now, units: units)
-                        .font(.glance(size: WidgetScale.caption))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        case .band:
-            VStack(alignment: .leading, spacing: 7) {
-                ResetsHeader(resets: resets, showsSource: true)
-                HStack(alignment: .top, spacing: WidgetScale.columnSpacing + 4) {
-                    VStack(alignment: .leading, spacing: 7) {
-                        if let upcoming {
-                            AnnouncedResetBlock(upcoming: upcoming, units: units, now: now, valueSize: 13.5)
-                        }
-                        if let latest = resets.latest {
-                            LatestResetBlock(latest: latest, tint: resets.tint, units: units, now: now, valueSize: upcoming == nil ? 13.5 : WidgetScale.caption, showsWhen: upcoming == nil)
-                                .foregroundStyle(upcoming == nil ? Color.primary : Color.secondary)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    ChanceBars(resets: resets, spacing: 5)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-        case .column:
-            VStack(alignment: .leading, spacing: WidgetScale.blockSpacing) {
-                ResetsHeader(resets: resets)
-                if let upcoming {
-                    AnnouncedResetBlock(upcoming: upcoming, units: units, now: now, valueSize: 13.5)
-                }
-                if let latest = resets.latest {
-                    LatestResetBlock(latest: latest, tint: resets.tint, units: units, now: now)
-                }
-                ChanceBars(resets: resets, spacing: 5)
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        }
-    }
 }
 
 /// The parts Settings chose for the Overview (the accounts' limits in the compact form, the summary
 /// of the reset tracker the widget chose, the limits coming back next), laid out for the widget's
 /// size: side by side on the wide sizes, stacked on the large one. A part left out gives its room to
-/// the others.
+/// the others. With both trackers, a page shows both at once before each tracker's pages.
 struct OverviewLayout: View {
     let document: GlanceDocument
     let providers: [GlanceProvider]
@@ -119,13 +67,15 @@ struct OverviewLayout: View {
     var body: some View {
         let shown = document.shownResets(document.widget.resetsProvider)
         if parts.contains(.resets), shown.contains(where: { $0.resets != nil }) {
-            ResetWidgetPager(
-                document: document, shown: shown, family: family, now: now, size: size,
-                namespace: "overview", prefixPages: parts.filter { $0 != .resets }.map { part in
-                    AnyView(pane(part, width: size.width, style: .band, showsAccounts: true)
-                        .frame(width: size.width, height: max(40, size.height - 46), alignment: .topLeading))
-                }
-            )
+            let page = ResetWidgetPager.pageSize(size)
+            let others = parts.filter { $0 != .resets }.map { part in
+                AnyView(pane(part, width: size.width, style: .band, showsAccounts: true)
+                    .frame(width: page.width, height: page.height, alignment: .topLeading))
+            }
+            let both = shown.count > 1
+                ? [AnyView(ResetsBothPage(document: document, shown: shown, family: family, now: now).frame(width: page.width, height: page.height, alignment: .topLeading))]
+                : []
+            ResetWidgetPager(document: document, shown: shown, family: family, now: now, size: size, namespace: "overview", prefixPages: others + both)
         } else {
             VStack(alignment: .leading, spacing: 0) {
                 switch family {

@@ -4,8 +4,9 @@ import WidgetKit
 /// The desktop and Notification Center widgets. They read `glance.json`, which Quota Control writes
 /// next to its settings whenever a reading changes and then asks WidgetKit to reload, so they list
 /// the accounts and metrics Settings → Widget chooses, worded exactly like the popup. Three styles
-/// show the limits, one the limits coming back next, two the reset tracker Settings chose (Codex's
-/// or Claude's) and one an overview of both. Countdowns tick on their own; when the app is closed
+/// show the limits, one the limits coming back next, two a reset tracker and one an overview of
+/// both. Each widget drawing a reset tracker picks it in its own Edit Widget: Codex's, Claude's,
+/// both at once, or the one Settings chose. Countdowns tick on their own; when the app is closed
 /// the widgets keep their last readings and say how old they are.
 @main
 struct QuotaControlWidgets: WidgetBundle {
@@ -31,7 +32,7 @@ enum QuotaWidgetStyle {
     case overview
     /// The limits coming back next, soonest first.
     case upcoming
-    /// The reset tracker Settings chose: Codex's free-reset tracker, or Claude's.
+    /// The reset tracker the widget chose: Codex's free-reset tracker, Claude's, or both.
     case codexResets
     /// That tracker's reset calendar and rhythm.
     case resetCalendar
@@ -56,6 +57,18 @@ private func glanceConfiguration(kind: String, style: QuotaWidgetStyle) -> some 
     .supportedFamilies(style.families)
 }
 
+/// A widget kind that draws a reset tracker, with an Edit Widget choosing which
+/// (`ResetWidgetConfiguration`). It keeps the kind string it had before the choice, so a widget
+/// placed then stays and shows what Settings chose, the choice's default.
+private func resetConfiguration(kind: String, style: QuotaWidgetStyle) -> some WidgetConfiguration {
+    AppIntentConfiguration(kind: kind, intent: ResetWidgetConfiguration.self, provider: ResetTimeline(style: style)) { entry in
+        GlanceWidgetEntryView(entry: entry, style: style)
+    }
+    .configurationDisplayName(WidgetText.name(style))
+    .description(WidgetText.description(style))
+    .supportedFamilies(style.families)
+}
+
 struct QuotaDetailsWidget: Widget {
     var body: some WidgetConfiguration { glanceConfiguration(kind: "QuotaControlUsage", style: .details) }
 }
@@ -69,7 +82,7 @@ struct QuotaCompactWidget: Widget {
 }
 
 struct QuotaOverviewWidget: Widget {
-    var body: some WidgetConfiguration { glanceConfiguration(kind: "QuotaControlOverview", style: .overview) }
+    var body: some WidgetConfiguration { resetConfiguration(kind: "QuotaControlOverview", style: .overview) }
 }
 
 struct QuotaUpcomingWidget: Widget {
@@ -77,16 +90,18 @@ struct QuotaUpcomingWidget: Widget {
 }
 
 struct CodexResetsWidget: Widget {
-    var body: some WidgetConfiguration { glanceConfiguration(kind: "QuotaControlCodexResets", style: .codexResets) }
+    var body: some WidgetConfiguration { resetConfiguration(kind: "QuotaControlCodexResets", style: .codexResets) }
 }
 
 struct ResetCalendarWidget: Widget {
-    var body: some WidgetConfiguration { glanceConfiguration(kind: "QuotaControlResetCalendar", style: .resetCalendar) }
+    var body: some WidgetConfiguration { resetConfiguration(kind: "QuotaControlResetCalendar", style: .resetCalendar) }
 }
 
 struct GlanceEntry: TimelineEntry {
     let date: Date
     let document: GlanceDocument?
+    /// The reset tracker the widget's own Edit Widget chose; `nil` for the one Settings chose.
+    var choice: GlanceResetsProvider? = nil
 }
 
 struct GlanceTimeline: TimelineProvider {
@@ -108,22 +123,36 @@ struct GlanceTimeline: TimelineProvider {
     }
 
     func getSnapshot(in context: Context, completion: @escaping (GlanceEntry) -> Void) {
-        let document = GlanceStore.load()
-        completion(GlanceEntry(date: Date(), document: document ?? (context.isPreview ? .sample : nil)))
+        completion(Self.snapshot(style: style, choice: nil, preview: context.isPreview))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<GlanceEntry>) -> Void) {
+        completion(Self.timeline(style: style, choice: nil))
+    }
+
+    /// The widget now, for the gallery and the Edit Widget preview, which show the sample before the
+    /// app has written any readings.
+    static func snapshot(style: QuotaWidgetStyle, choice: GlanceResetsProvider?, preview: Bool) -> GlanceEntry {
+        let document = GlanceStore.load().map { WidgetResetsAsk.answering($0, choice: choice) }
+        return GlanceEntry(date: Date(), document: document ?? (preview ? .sample : nil), choice: choice)
+    }
+
+    /// The widget now and at every moment ahead when something drawn changes on its own. A widget
+    /// still waiting for the tracker it asked the app for looks again soon.
+    static func timeline(style: QuotaWidgetStyle, choice: GlanceResetsProvider?) -> Timeline<GlanceEntry> {
         let now = Date()
-        let document = GlanceStore.load()
-        var entries = [GlanceEntry(date: now, document: document)]
-        var moments = Array(Self.moments(document, after: now, style: style).prefix(Self.momentEntries))
+        let stored = GlanceStore.load()
+        let waiting = stored.map { WidgetResetsAsk.awaits($0, choice: choice) } ?? false
+        let document = stored.map { WidgetResetsAsk.answering($0, choice: choice) }
+        var entries = [GlanceEntry(date: now, document: document, choice: choice)]
+        var moments = Array(Self.moments(document, after: now, style: style, choice: choice).prefix(Self.momentEntries))
         if let change = WidgetPendingAction.nextChange(after: now), !moments.contains(change) {
             moments = (moments + [change]).sorted()
         }
         for moment in moments {
-            entries.append(GlanceEntry(date: moment, document: document))
+            entries.append(GlanceEntry(date: moment, document: document, choice: choice))
         }
-        completion(Timeline(entries: entries, policy: .after(now.addingTimeInterval(Self.refresh))))
+        return Timeline(entries: entries, policy: .after(now.addingTimeInterval(waiting ? WidgetResetsAsk.retry : Self.refresh)))
     }
 
     /// The moments after `now` when something drawn changes on its own, soonest first: a limit
@@ -134,7 +163,7 @@ struct GlanceTimeline: TimelineProvider {
     /// lại`, a pace note's figure or verdict changes); on a widget drawing the reset tracker it
     /// chose, a countdown of the tracker ends, a row goes away, or a word moving with the clock
     /// changes.
-    static func moments(_ document: GlanceDocument?, after now: Date, style: QuotaWidgetStyle) -> [Date] {
+    static func moments(_ document: GlanceDocument?, after now: Date, style: QuotaWidgetStyle, choice: GlanceResetsProvider? = nil) -> [Date] {
         guard let document else { return [] }
         var moments = Set(GlanceUpcomingLimit.list(document.widget.providers, now: now).map(\.at))
         if style.drawsLimits(document) {
@@ -143,7 +172,7 @@ struct GlanceTimeline: TimelineProvider {
             moments.formUnion(document.rowTicks(document.widget.providers, after: now, until: now.addingTimeInterval(tickSpan)))
         }
         if style.drawsResets(document) {
-            let widget = document.forWidget
+            let widget = document.forWidget(choice)
             for resets in widget.shownResets(widget.widget.resetsProvider).compactMap(\.resets) {
                 moments.formUnion(GlanceDocument.resetMoments(of: resets, after: now))
                 moments.formUnion(GlanceResetCards.ticks(resets: resets, units: widget.labels.units, after: now, until: now.addingTimeInterval(tickSpan)))
@@ -154,6 +183,23 @@ struct GlanceTimeline: TimelineProvider {
             moments.insert(stale)
         }
         return moments.sorted()
+    }
+}
+
+/// The timeline of a widget that draws a reset tracker, the one its own Edit Widget chose.
+struct ResetTimeline: AppIntentTimelineProvider {
+    var style: QuotaWidgetStyle
+
+    func placeholder(in context: Context) -> GlanceEntry {
+        GlanceEntry(date: Date(), document: .sample)
+    }
+
+    func snapshot(for configuration: ResetWidgetConfiguration, in context: Context) async -> GlanceEntry {
+        GlanceTimeline.snapshot(style: style, choice: configuration.provider, preview: context.isPreview)
+    }
+
+    func timeline(for configuration: ResetWidgetConfiguration, in context: Context) async -> Timeline<GlanceEntry> {
+        GlanceTimeline.timeline(style: style, choice: configuration.provider)
     }
 }
 
@@ -224,9 +270,9 @@ enum WidgetText {
     /// language, as the last document it wrote says, else in the Mac's.
     static let vietnamese: Bool = GlanceStore.load()?.isVietnamese ?? (Locale.preferredLanguages.first?.hasPrefix("vi") ?? false)
 
-    /// A widget's name in the gallery. The reset widgets show whichever tracker Settings chose, so
-    /// they are named after the popup's Reset tab, not after Codex; their kind strings keep the
-    /// Codex names they were placed under.
+    /// A widget's name in the gallery. The reset widgets show whichever tracker their Edit Widget or
+    /// Settings chose, so they are named after the popup's Reset tab, not after Codex; their kind
+    /// strings keep the Codex names they were placed under.
     static func name(_ style: QuotaWidgetStyle) -> String {
         switch style {
         case .details: return vietnamese ? "Chi tiết" : "Details"
@@ -251,25 +297,43 @@ enum WidgetText {
             return vietnamese ? "Mỗi chỉ số một dòng, xem được nhiều tài khoản nhất." : "One line per metric, the most accounts at once."
         case .overview:
             return vietnamese
-                ? "Hạn mức các tài khoản cùng dự báo reset của Codex hoặc Claude và các hạn mức sắp đặt lại."
-                : "Your limits beside the Codex or Claude reset forecast and the limits coming back next."
+                ? "Hạn mức các tài khoản cùng dự báo reset của Codex, Claude hoặc cả hai và các hạn mức sắp đặt lại."
+                : "Your limits beside the Codex, Claude or both reset forecasts and the limits coming back next."
         case .upcoming:
             return vietnamese
                 ? "Các hạn mức sắp được đặt lại, sớm nhất lên trước, kèm giờ đặt lại."
                 : "The limits coming back next, soonest first, with their reset times."
         case .codexResets:
             return vietnamese
-                ? "Reset của Codex hoặc Claude như tab Reset: lần reset gần nhất, reset đã báo và khả năng có reset."
-                : "Codex or Claude resets as in the Reset tab: the latest reset, announced ones and the chance of one."
+                ? "Reset của Codex, Claude hoặc cả hai cùng lúc như tab Reset: lần reset gần nhất, reset đã báo và khả năng có reset."
+                : "Codex, Claude or both resets at once, as in the Reset tab: the latest reset, announced ones and the chance of one."
         case .resetCalendar:
             return vietnamese
-                ? "Lịch reset 20 tuần qua của Codex hoặc Claude và thói quen thông báo theo thứ, theo giờ."
-                : "Codex or Claude resets in the last 20 weeks and when announcements land, by weekday and hour."
+                ? "Lịch reset 20 tuần qua của Codex, Claude hoặc cả hai và thói quen thông báo theo thứ, theo giờ."
+                : "Codex, Claude or both resets in the last 20 weeks and when announcements land, by weekday and hour."
         }
     }
 
     static var notRunning: String {
         vietnamese ? "Mở Quota Control để hiện hạn mức ở đây." : "Open Quota Control to show your limits here."
+    }
+
+    /// A choice in the Edit Widget of the widgets drawing a reset tracker (`WidgetResetsChoice`):
+    /// the tracker Settings chose (`nil`), Codex's, Claude's, or both, worded like Settings' choice.
+    static func resetsChoice(_ provider: GlanceResetsProvider?) -> String {
+        switch provider {
+        case nil: return vietnamese ? "Như trong Quota Control" : "As in Quota Control"
+        case .codex: return "Codex"
+        case .claude: return "Claude"
+        case .both: return vietnamese ? "Cả hai" : "Both"
+        }
+    }
+
+    /// What a widget set to the Claude tracker says while the app is still to send it.
+    static func claudeOnItsWay(_ document: GlanceDocument) -> String {
+        document.isVietnamese
+            ? "Đang lấy dự báo reset Claude từ Quota Control…"
+            : "Getting the Claude reset forecast from Quota Control…"
     }
 
     /// What a reset widget says in place of the tracker the widget chose: the Reset tab's own line
@@ -356,10 +420,10 @@ struct GlanceWidgetView: View {
                 .overlay {
                     ZStack {
                         if style.drawsAccountRows(document) {
-                            WidgetRedeemConfirmation(document: document.forWidget, now: entry.date)
+                            WidgetRedeemConfirmation(document: document.forWidget(entry.choice), now: entry.date)
                         }
                         if style.drawsResets(document) {
-                            WidgetBankedConfirmation(document: document.forWidget, now: entry.date)
+                            WidgetBankedConfirmation(document: document.forWidget(entry.choice), now: entry.date)
                         }
                     }
                 }
@@ -375,7 +439,7 @@ struct GlanceWidgetView: View {
     @ViewBuilder
     private func layout(_ full: GlanceDocument, size: CGSize) -> some View {
         let now = entry.date
-        let document = full.forWidget.reading(at: now)
+        let document = full.forWidget(entry.choice).reading(at: now)
         let providers = document.widget.visibleProviders
         switch style {
         case .details, .rings, .compact:

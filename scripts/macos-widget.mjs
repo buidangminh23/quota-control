@@ -116,7 +116,10 @@ function build(options) {
   const sdk = capture("xcrun", ["--sdk", "macosx", "--show-sdk-path"]);
   const sources = [...swiftFiles("Shared"), ...swiftFiles("Widget")];
   const protocolList = join(work, "intent-protocols.json");
-  writeFileSync(protocolList, JSON.stringify(["AppIntent", "AppEntity", "AppEnum", "AppShortcutsProvider"]));
+  writeFileSync(
+    protocolList,
+    JSON.stringify(["AppIntent", "EntityQuery", "AppEntity", "TransientEntity", "AppEnum", "AppShortcutsProvider", "AppIntentsPackage", "DynamicOptionsProvider"]),
+  );
   const constantFiles = [];
   const slices = architectures(options.arch).map((arch) => {
     const output = join(work, `${NAME}-${arch}`);

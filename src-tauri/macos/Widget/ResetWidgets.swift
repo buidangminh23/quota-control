@@ -196,6 +196,7 @@ struct ChanceHero: View {
 
 /// The reset tracker the widget chose, Codex's or Claude's: the announced (or banked) reset or the
 /// chance of one, how long since the last, and with room the wait so far, the calendar and the rhythm.
+/// With both, the first page shows both at once (`ResetsBothPage`), then each tracker's pages.
 struct CodexResetsLayout: View {
     let document: GlanceDocument
     /// The tracker the widget chose, or with both, the Codex one then the Claude one.
@@ -205,7 +206,10 @@ struct CodexResetsLayout: View {
     let size: CGSize
 
     var body: some View {
-        ResetWidgetPager(document: document, shown: shown, family: family, now: now, size: size, namespace: "resets")
+        ResetWidgetPager(
+            document: document, shown: shown, family: family, now: now, size: size, namespace: "resets",
+            prefixPages: shown.count > 1 ? [AnyView(ResetsBothPage(document: document, shown: shown, family: family, now: now))] : []
+        )
     }
 
 }
@@ -213,7 +217,8 @@ struct CodexResetsLayout: View {
 // MARK: Reset calendar widget
 
 /// The reset calendar as big as the widget allows, with its legend and, with room, the rhythm by
-/// weekday and hour and the last reset.
+/// weekday and hour and the last reset. With both, the first page shows both calendars at once
+/// (`ResetCalendarsBothPage`), then each tracker's pages.
 struct ResetCalendarLayout: View {
     let document: GlanceDocument
     /// The tracker the widget chose, or with both, the Codex one then the Claude one.
@@ -223,7 +228,14 @@ struct ResetCalendarLayout: View {
     let size: CGSize
 
     var body: some View {
-        ResetWidgetPager(document: document, shown: shown, family: family, now: now, size: size, namespace: "calendar", initialCard: "calendar")
+        if shown.count > 1 {
+            ResetWidgetPager(
+                document: document, shown: shown, family: family, now: now, size: size, namespace: "calendar",
+                prefixPages: [AnyView(ResetCalendarsBothPage(document: document, shown: shown, family: family, now: now, size: ResetWidgetPager.pageSize(size)))]
+            )
+        } else {
+            ResetWidgetPager(document: document, shown: shown, family: family, now: now, size: size, namespace: "calendar", initialCard: "calendar")
+        }
     }
 
 }
@@ -307,8 +319,13 @@ struct ResetWidgetPager: View {
     var initialCard: String?
     var prefixPages: [AnyView] = []
 
+    /// The room a page has: the widget without the page buttons and the footer under it.
+    static func pageSize(_ size: CGSize) -> CGSize {
+        CGSize(width: size.width, height: max(40, size.height - 46))
+    }
+
     var body: some View {
-        let height = max(40, size.height - 46)
+        let height = Self.pageSize(size).height
         let tracker = document.widget.resetsProvider == .codex ? "" : ".\(document.widget.resetsProvider.rawValue)"
         let key = "reset-page.\(namespace)\(tracker).\(family.rawValue)"
         let parts = self.parts(tracker: tracker)
