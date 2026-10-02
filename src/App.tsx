@@ -4,9 +4,10 @@
  * keyboard shortcuts (Esc, Enter, Ctrl+Tab, Ctrl+R, Ctrl+,, Ctrl+Z, Ctrl+Q) and keeps the taskbar and
  * notifications live.
  */
-import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { messagesFor } from "@/i18n";
 import { backend } from "@/lib/backend";
+import { usePopupHeight } from "@/lib/usePopupHeight";
 import { useUsageNotifications } from "@/notify/useUsageNotifications";
 import { useTaskbarStrip } from "@/strip/useTaskbarStrip";
 import { startGlanceActions } from "@/glance/glanceActions";
@@ -114,29 +115,6 @@ function useKeyboard(): void {
   }, []);
 }
 
-function usePopupHeight(topRef: RefObject<HTMLElement | null>, contentRef: RefObject<HTMLElement | null>, footerRef: RefObject<HTMLElement | null>, view: string): void {
-  const last = useRef(0);
-  useLayoutEffect(() => {
-    let frame = 0;
-    const report = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        const total = Math.ceil((topRef.current?.offsetHeight ?? 0) + (contentRef.current?.offsetHeight ?? 0) + (footerRef.current?.offsetHeight ?? 0));
-        if (total <= 0 || total === last.current) return;
-        last.current = total;
-        void backend().resizePopup(total).catch((error: unknown) => console.error("Resizing the popup failed", error));
-      });
-    };
-    const observer = new ResizeObserver(report);
-    for (const ref of [topRef, contentRef, footerRef]) if (ref.current) observer.observe(ref.current);
-    report();
-    return () => {
-      cancelAnimationFrame(frame);
-      observer.disconnect();
-    };
-  }, [topRef, contentRef, footerRef, view]);
-}
-
 function ScreenContent({ screen }: { screen: Screen }) {
   switch (screen) {
     case "dashboard":
@@ -196,7 +174,7 @@ export function App() {
 
   useDocumentAttributes();
   useKeyboard();
-  usePopupHeight(topRef, contentRef, footerRef, view);
+  usePopupHeight(topRef, contentRef, footerRef, view, visible);
   useTaskbarStrip();
   useGlance();
   useUsageNotifications();
@@ -208,11 +186,11 @@ export function App() {
   return (
     <div className="uc-shell" data-screen={screen}>
       {screen !== "dashboard" ? (
-        <div ref={topRef}>
+        <div ref={topRef} className="uc-chrome">
           <TopBar screen={screen} />
         </div>
       ) : tabbed ? (
-        <div ref={topRef}>
+        <div ref={topRef} className="uc-chrome">
           <DashboardTabs tabs={tabs} tab={tab} />
         </div>
       ) : null}
@@ -222,7 +200,7 @@ export function App() {
         </div>
       </main>
       {screen !== "customize" ? (
-        <div ref={footerRef}>
+        <div ref={footerRef} className="uc-chrome">
           <Footer screen={screen} />
         </div>
       ) : notice ? (

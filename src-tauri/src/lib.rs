@@ -565,12 +565,51 @@ fn position_popup(app: &AppHandle) -> Result<(), String> {
     }
     .or(window.primary_monitor().map_err(safe_error)?);
     if let Some(monitor) = monitor {
-        let size = window.outer_size().map_err(safe_error)?;
+        let outer = window.outer_size().map_err(safe_error)?;
+        let inner = window.inner_size().map_err(safe_error)?;
+        let fitted = popup_fitted_inner_size(
+            inner,
+            outer,
+            monitor.work_area().size,
+            monitor.scale_factor(),
+        );
+        if fitted != inner {
+            window.set_size(fitted).map_err(safe_error)?;
+        }
+        let size = PhysicalSize::new(
+            fitted
+                .width
+                .saturating_add(outer.width.saturating_sub(inner.width)),
+            fitted
+                .height
+                .saturating_add(outer.height.saturating_sub(inner.height)),
+        );
         window
             .set_position(popup_origin(anchor, *monitor.work_area(), size))
             .map_err(safe_error)?;
     }
     Ok(())
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
+fn popup_fitted_inner_size(
+    inner: PhysicalSize<u32>,
+    outer: PhysicalSize<u32>,
+    work_area: PhysicalSize<u32>,
+    scale: f64,
+) -> PhysicalSize<u32> {
+    let margin = (16.0 * scale).ceil() as u32;
+    let maximum = |area: u32, frame: u32| area.saturating_sub(margin).saturating_sub(frame).max(1);
+    PhysicalSize::new(
+        inner.width.min(maximum(
+            work_area.width,
+            outer.width.saturating_sub(inner.width),
+        )),
+        inner.height.min(maximum(
+            work_area.height,
+            outer.height.saturating_sub(inner.height),
+        )),
+    )
 }
 
 /// macOS works in global points throughout: displays may mix backing scales, tao reads a monitor
@@ -830,6 +869,40 @@ mod tests {
         assert_eq!((origin.x, origin.y), (1584, 219));
         let tall = PhysicalSize::new(336, 1100);
         assert_eq!(popup_origin(Some(strip()), work_area(), tall).y, 0);
+    }
+
+    #[test]
+    fn a_popup_opened_on_a_shorter_monitor_keeps_its_footer_inside_the_work_area() {
+        let inner = PhysicalSize::new(320, 1400);
+        let outer = PhysicalSize::new(336, 1409);
+        let fitted = popup_fitted_inner_size(inner, outer, work_area().size, 1.0);
+        assert_eq!(fitted, PhysicalSize::new(320, 999));
+        let size = PhysicalSize::new(fitted.width + 16, fitted.height + 9);
+        let origin = popup_origin(Some(strip()), work_area(), size);
+        assert!(origin.y >= work_area().position.y);
+        assert!(origin.y + size.height as i32 <= work_area().size.height as i32);
+        assert_eq!(
+            popup_fitted_inner_size(fitted, size, work_area().size, 1.0),
+            fitted
+        );
+    }
+
+    #[test]
+    fn popup_fit_accounts_for_dpi_and_keeps_small_windows_unchanged() {
+        let inner = PhysicalSize::new(480, 1600);
+        let outer = PhysicalSize::new(504, 1614);
+        assert_eq!(
+            popup_fitted_inner_size(inner, outer, PhysicalSize::new(1920, 1024), 1.5),
+            PhysicalSize::new(480, 986)
+        );
+        assert_eq!(
+            popup_fitted_inner_size(POPUP, POPUP, work_area().size, 1.0),
+            POPUP
+        );
+        assert_eq!(
+            popup_fitted_inner_size(inner, outer, PhysicalSize::new(10, 10), 1.0),
+            PhysicalSize::new(1, 1)
+        );
     }
 
     #[test]

@@ -70,6 +70,8 @@ pub fn resize_popup(app: AppHandle, height: f64) -> Result<(), String> {
     let window = app
         .get_webview_window("popup")
         .ok_or("Popup is unavailable")?;
+    #[cfg(not(target_os = "macos"))]
+    crate::position_popup(&app)?;
     let scale = window.scale_factor().map_err(safe_error)?;
     let maximum = window
         .current_monitor()
