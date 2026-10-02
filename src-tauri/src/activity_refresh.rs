@@ -12,6 +12,7 @@
 //! as long each time it refuses again. A brand's history on this computer is read from its own
 //! logs, so it keeps [`LOCAL_GAP`] whatever the provider says.
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -22,7 +23,7 @@ use uc_engine::{Engine, RefreshOutcome};
 use crate::service::BackendService;
 
 /// How often the session logs are looked at, on multiples of it on the clock.
-const TICK: Duration = Duration::from_secs(5);
+const TICK: Duration = Duration::from_secs(1);
 /// The most log entries one look visits.
 const BUDGET: usize = 50_000;
 /// The shortest time between two readings of a brand's history on this computer while its logs
@@ -292,67 +293,132 @@ impl Watch {
     }
 }
 
+#[derive(Default)]
+struct ReadTask {
+    task: Option<tokio::task::JoinHandle<Vec<RefreshOutcome>>>,
+}
+
+impl ReadTask {
+    fn start(&mut self, read: impl Future<Output = Vec<RefreshOutcome>> + Send + 'static) {
+        if self.task.is_none() {
+            self.task = Some(tokio::spawn(read));
+        }
+    }
+
+    async fn completed(&mut self) -> Option<Vec<RefreshOutcome>> {
+        if !self.task.as_ref().is_some_and(|task| task.is_finished()) {
+            return None;
+        }
+        Some(self.task.take()?.await.unwrap_or_default())
+    }
+
+    fn running(&self) -> bool {
+        self.task.is_some()
+    }
+}
+
+impl Drop for ReadTask {
+    fn drop(&mut self) {
+        if let Some(task) = &self.task {
+            task.abort();
+        }
+    }
+}
+
+#[derive(Default)]
+struct BrandReads {
+    accounts: ReadTask,
+    history: ReadTask,
+    pending_accounts: bool,
+}
+
+impl BrandReads {
+    async fn update(&mut self, engine: Arc<Engine>, watch: &mut Watch, now: Seconds) {
+        if let Some(outcomes) = self.accounts.completed().await {
+            if held_back(&outcomes) {
+                watch.waiting = true;
+                watch.accounts.pending |= self.pending_accounts;
+            } else {
+                let pending = watch.accounts.pending;
+                watch.answered(now);
+                watch.accounts.pending = pending;
+            }
+        }
+        self.history.completed().await;
+        let brand = watch.brand;
+        let accounts = enabled_cards(&engine, |id| brand.owns_account(id));
+        let refused = accounts.iter().any(|id| engine.rate_limited(id));
+        let previous_history = (watch.history.pending, watch.history.read_at);
+        let plan = watch.plan(now, refused);
+        if plan.history && self.history.running() {
+            (watch.history.pending, watch.history.read_at) = previous_history;
+        }
+        if let Some(quiet) = plan.quiet {
+            tracing::warn!(
+                target: "refresh",
+                "{brand:?} refused a reading for asking too often: its accounts are read every {} minutes for {} minutes",
+                QUIET_PACE.as_secs() / 60,
+                quiet.as_secs() / 60
+            );
+        }
+        if let Some(reading) = plan.accounts.filter(|_| !self.accounts.running()) {
+            if !watch.waiting && !accounts.is_empty() {
+                let why = match reading.why {
+                    Why::InUse => "in use here",
+                    Why::Steady => "on the clock",
+                    Why::Refused => "after a refusal",
+                };
+                tracing::info!(target: "refresh", "{brand:?} {why}: reading {} cards again", accounts.len());
+            }
+            let engine = engine.clone();
+            self.accounts
+                .start(async move { read_cards(&engine, accounts, reading.every).await });
+            self.pending_accounts = watch.accounts.pending;
+            watch.accounts.pending = false;
+        }
+        if plan.history && !self.history.running() {
+            let history = enabled_cards(&engine, |id| brand.owns_history(id));
+            self.history
+                .start(async move { read_cards(&engine, history, LOCAL_GAP).await });
+        }
+    }
+}
+
 pub async fn run(app: AppHandle) {
     let home = uc_core::paths::home_dir();
     let claude =
         uc_core::paths::env_path("CLAUDE_CONFIG_DIR").unwrap_or_else(|| home.join(".claude"));
     let codex = uc_core::paths::env_path("CODEX_HOME").unwrap_or_else(|| home.join(".codex"));
     let started = Some(clock());
-    let mut watches = vec![
+    let watches = [
         Watch::new(Brand::Claude, vec![claude.join("projects")], 4, started),
         Watch::new(Brand::Codex, vec![codex.join("sessions")], 5, started),
     ];
+    let mut tasks = tokio::task::JoinSet::new();
+    for watch in watches {
+        tasks.spawn(run_watch(app.clone(), watch));
+    }
+    while tasks.join_next().await.is_some() {}
+}
+
+async fn run_watch(app: AppHandle, mut watch: Watch) {
+    let mut reads = BrandReads::default();
     loop {
         tokio::time::sleep(until_next_tick()).await;
         let looked = tauri::async_runtime::spawn_blocking(move || {
-            for watch in &mut watches {
-                if watch.look() {
-                    watch.used();
-                }
+            if watch.look() {
+                watch.used();
             }
-            watches
+            watch
         })
         .await;
         let Ok(looked) = looked else {
             return;
         };
-        watches = looked;
+        watch = looked;
         let now = clock();
         let engine = app.state::<BackendService>().engine();
-        for watch in &mut watches {
-            let brand = watch.brand;
-            let accounts = enabled_cards(&engine, |id| brand.owns_account(id));
-            let refused = accounts.iter().any(|id| engine.rate_limited(id));
-            let plan = watch.plan(now, refused);
-            if let Some(quiet) = plan.quiet {
-                tracing::warn!(
-                    target: "refresh",
-                    "{brand:?} refused a reading for asking too often: its accounts are read every {} minutes for {} minutes",
-                    QUIET_PACE.as_secs() / 60,
-                    quiet.as_secs() / 60
-                );
-            }
-            if let Some(reading) = plan.accounts {
-                if !watch.waiting && !accounts.is_empty() {
-                    let why = match reading.why {
-                        Why::InUse => "in use here",
-                        Why::Steady => "on the clock",
-                        Why::Refused => "after a refusal",
-                    };
-                    tracing::info!(target: "refresh", "{brand:?} {why}: reading {} cards again", accounts.len());
-                }
-                let outcomes = read_cards(&engine, accounts, reading.every).await;
-                if held_back(&outcomes) {
-                    watch.waiting = true;
-                } else {
-                    watch.answered(now);
-                }
-            }
-            if plan.history {
-                let history = enabled_cards(&engine, |id| brand.owns_history(id));
-                read_cards(&engine, history, LOCAL_GAP).await;
-            }
-        }
+        reads.update(engine, &mut watch, now).await;
     }
 }
 
@@ -435,6 +501,131 @@ fn visit(dir: &Path, depth: usize, budget: &mut usize, newest: &mut Option<Syste
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use uc_core::{Provider, ProviderRuntime, ProviderSnapshot, RefreshContext, WidgetDescriptor};
+
+    struct BlockingProvider {
+        provider: Provider,
+        blocked: bool,
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ProviderRuntime for BlockingProvider {
+        fn provider(&self) -> &Provider {
+            &self.provider
+        }
+
+        fn widget_descriptors(&self) -> Vec<WidgetDescriptor> {
+            Vec::new()
+        }
+
+        async fn refresh(&self, _: RefreshContext) -> ProviderSnapshot {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.blocked {
+                std::future::pending::<()>().await;
+            }
+            ProviderSnapshot::make(&self.provider, None, Vec::new(), chrono::Utc::now())
+        }
+
+        async fn has_local_credentials(&self) -> bool {
+            true
+        }
+    }
+
+    fn blocked_engine(
+        blocked_id: &str,
+    ) -> (tempfile::TempDir, Arc<Engine>, Vec<Arc<BlockingProvider>>) {
+        let directory = tempfile::tempdir().unwrap();
+        let providers: Vec<_> = [
+            "claude@fixture",
+            "codex@fixture",
+            "claude-local",
+            "codex-local",
+        ]
+        .into_iter()
+        .map(|id| {
+            Arc::new(BlockingProvider {
+                provider: Provider::new(id, id),
+                blocked: id == blocked_id,
+                calls: AtomicUsize::new(0),
+            })
+        })
+        .collect();
+        let config = uc_engine::EngineConfig::default();
+        let cache = uc_engine::SnapshotCache::new(
+            directory.path().join("cache.json"),
+            config.refresh_interval,
+        );
+        let engine = Arc::new(Engine::new(
+            providers
+                .iter()
+                .cloned()
+                .map(|provider| provider as Arc<dyn ProviderRuntime>)
+                .collect(),
+            cache,
+            config,
+        ));
+        (directory, engine, providers)
+    }
+
+    async fn wait_for_snapshot(engine: &Engine, id: &str) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !engine.snapshots().contains_key(id) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("an independent reading completes while another remains blocked");
+    }
+
+    #[tokio::test]
+    async fn blocked_claude_accounts_do_not_delay_codex_accounts() {
+        let (_directory, engine, providers) = blocked_engine("claude@fixture");
+        let mut claude = watch(Brand::Claude, None);
+        let mut codex = watch(Brand::Codex, None);
+        let mut claude_reads = BrandReads::default();
+        let mut codex_reads = BrandReads::default();
+        claude_reads.update(engine.clone(), &mut claude, NOON).await;
+        codex_reads.update(engine.clone(), &mut codex, NOON).await;
+        wait_for_snapshot(&engine, "codex@fixture").await;
+        assert!(claude_reads.accounts.completed().await.is_none());
+        assert_eq!(providers[0].calls.load(Ordering::SeqCst), 1);
+        assert_eq!(providers[1].calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn blocked_account_reads_leave_history_and_log_observation_running() {
+        let (_directory, engine, providers) = blocked_engine("claude@fixture");
+        let mut claude = watch(Brand::Claude, None);
+        claude.used();
+        let mut reads = BrandReads::default();
+        reads.update(engine.clone(), &mut claude, NOON).await;
+        wait_for_snapshot(&engine, "claude-local").await;
+        claude.used();
+        reads.update(engine.clone(), &mut claude, NOON + 5).await;
+        assert!(reads.accounts.completed().await.is_none());
+        assert!(claude.history.pending);
+        assert_eq!(providers[0].calls.load(Ordering::SeqCst), 1);
+        assert_eq!(providers[2].calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn blocked_history_does_not_delay_accounts_or_lose_pending_history() {
+        let (_directory, engine, providers) = blocked_engine("codex-local");
+        let mut codex = watch(Brand::Codex, None);
+        codex.used();
+        let mut reads = BrandReads::default();
+        reads.update(engine.clone(), &mut codex, NOON).await;
+        wait_for_snapshot(&engine, "codex@fixture").await;
+        codex.used();
+        reads.update(engine.clone(), &mut codex, NOON + 30).await;
+        assert!(reads.history.completed().await.is_none());
+        assert!(codex.history.pending);
+        assert_eq!(codex.history.read_at, Some(NOON));
+        assert_eq!(providers[3].calls.load(Ordering::SeqCst), 1);
+    }
 
     const HOUR: Duration = Duration::from_secs(3600);
     /// A full hour on the clock.

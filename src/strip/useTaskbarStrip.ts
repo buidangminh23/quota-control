@@ -4,7 +4,7 @@
  * glyph, and pushes it only when the picture actually changed. The hidden popup keeps running, so the
  * taskbar updates while the popup is closed.
  */
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { messagesFor } from "@/i18n";
 import { backend } from "@/lib/backend";
 import { markArt } from "@/glance/markArt";
@@ -75,8 +75,18 @@ export function useTaskbarStrip(): void {
   const systemDark = useSystemDark();
   const lastKey = useRef<string | null>(null);
   const queue = useRef<Promise<void>>(Promise.resolve());
+  const retry = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mounted = useRef(false);
+  const [retryAttempt, setRetryAttempt] = useState(0);
 
   useEffect(() => watchTaskbarInfo(), []);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (retry.current !== null) clearTimeout(retry.current);
+    };
+  }, []);
 
   const content = useMemo(() => {
     const groups = glanceGroups(strip.content, strip.metrics, layout, catalog, isEnabled);
@@ -103,12 +113,16 @@ export function useTaskbarStrip(): void {
     else output = { kind: "bars", content, color, style, tooltip };
     const key = outputKey(output);
     if (key === lastKey.current) return;
+    if (retry.current !== null) clearTimeout(retry.current);
     lastKey.current = key;
     queue.current = queue.current
       .then(() => apply(output, appName))
       .catch((error: unknown) => {
         lastKey.current = null;
         console.error("Updating the taskbar failed", error);
+        if (mounted.current) {
+          retry.current = setTimeout(() => setRetryAttempt((attempt) => attempt + 1), 5_000);
+        }
       });
-  }, [ready, content, showStrip, iconStyle, taskbar, systemDark, display.language, info]);
+  }, [ready, content, showStrip, iconStyle, taskbar, systemDark, display.language, info, retryAttempt]);
 }

@@ -784,6 +784,8 @@ mod platform {
     /// UI Automation id of every notification-area icon button; [`SLOT_NAME`] tells the app's apart.
     const SLOT_AUTOMATION_ID: &str = "NotifyItemIcon";
     const AUTOMATION_TIMEOUT_MS: u32 = 1000;
+    const AUTOMATION_RETRY_PASSES: u8 = 3;
+    const SLOT_RECOVERY_GRACE: Duration = Duration::from_secs(10);
     /// Maximum age of a cached notification-area layout from the current display generation.
     const LAYOUT_GRACE: Duration = Duration::from_secs(10);
     /// Passes in a row without the widened button before the strip leaves it, so a button being laid
@@ -1162,7 +1164,8 @@ mod platform {
                         return;
                     }
                     {
-                        let automation = create_automation();
+                        let mut automation = create_automation();
+                        let mut failed_reads = 0_u8;
                         if automation.is_none() {
                             tracing::warn!("taskbar layout UI Automation is unavailable");
                         }
@@ -1172,9 +1175,21 @@ mod platform {
                                 .ok()
                                 .and_then(|mut mailbox| mailbox.request.take());
                             let Some(key) = key else { continue };
+                            if automation.is_none() {
+                                automation = create_automation();
+                            }
                             let layout = automation.as_ref().and_then(|automation| {
                                 read_layout(automation, key.taskbar as HWND)
                             });
+                            failed_reads = if layout.is_some() {
+                                0
+                            } else {
+                                failed_reads.saturating_add(1)
+                            };
+                            if failed_reads >= AUTOMATION_RETRY_PASSES {
+                                automation = None;
+                                failed_reads = 0;
+                            }
                             if let Ok(mut mailbox) = worker_mailbox.lock() {
                                 mailbox.result = Some(LayoutResult {
                                     key,
@@ -1449,6 +1464,7 @@ mod platform {
         request: Option<u32>,
         wanted: Option<u32>,
         unheld: u8,
+        hidden_since: Option<Instant>,
     }
 
     impl SlotStretch {
@@ -1457,11 +1473,31 @@ mod platform {
             self.unheld = 0;
         }
 
+        fn hidden(&mut self, now: Instant) -> bool {
+            let since = *self.hidden_since.get_or_insert(now);
+            now.duration_since(since) >= SLOT_RECOVERY_GRACE
+        }
+
         fn tray(&mut self, wanted: Option<u32>, held: bool, visible: bool) -> TraySlot {
+            self.tray_at(wanted, held, visible, Instant::now())
+        }
+
+        fn tray_at(
+            &mut self,
+            wanted: Option<u32>,
+            held: bool,
+            visible: bool,
+            now: Instant,
+        ) -> TraySlot {
             let Some(wanted) = wanted else {
                 *self = Self::default();
                 return TraySlot::Icon;
             };
+            if visible {
+                self.hidden_since = None;
+            } else if self.hidden(now) {
+                return TraySlot::Icon;
+            }
             if self.wanted != Some(wanted) {
                 self.wanted = Some(wanted);
                 self.unheld = 0;
@@ -1559,6 +1595,8 @@ mod platform {
 
         fn taskbar_changed(&mut self, _restarted: bool) {
             self.islands.forget();
+            self.painted = false;
+            self.placed = None;
             self.slot = None;
             self.slot_misses = 0;
             self.stretch.retry();
@@ -1644,6 +1682,9 @@ mod platform {
                     );
                 }
                 self.placed = None;
+                if self.stretch.hidden(Instant::now()) {
+                    self.cover(TraySlot::Icon);
+                }
                 return;
             }
             let button = layout
@@ -2264,15 +2305,41 @@ mod platform {
         }
 
         #[test]
-        fn hidden_strip_keeps_its_slot_request_through_a_long_layout_delay() {
+        fn hidden_strip_keeps_its_slot_request_only_through_a_bounded_layout_delay() {
             let mut stretch = SlotStretch::default();
-            let expanded = stretch.tray(Some(440), false, false);
+            let started = Instant::now();
+            let expanded = stretch.tray_at(Some(440), false, false, started);
             assert!(matches!(expanded, TraySlot::Clear { .. }));
-            for _ in 0..1000 {
-                assert_eq!(stretch.tray(Some(440), false, false), expanded);
-            }
-            assert_eq!(stretch.tray(Some(440), true, true), expanded);
+            assert_eq!(
+                stretch.tray_at(Some(440), false, false, started + SLOT_RECOVERY_GRACE / 2),
+                expanded
+            );
+            assert_eq!(
+                stretch.tray_at(Some(440), false, false, started + SLOT_RECOVERY_GRACE),
+                TraySlot::Icon
+            );
+            assert_eq!(stretch.request, Some(next_slot_width(None, 440)));
+            assert_eq!(
+                stretch.tray_at(Some(440), true, true, started + SLOT_RECOVERY_GRACE),
+                expanded
+            );
             assert_eq!(stretch.unheld, 0);
+            assert_eq!(stretch.hidden_since, None);
+        }
+
+        #[test]
+        fn missing_layout_releases_a_clear_slot_even_without_a_new_frame() {
+            let mut stretch = SlotStretch::default();
+            let expanded = stretch.tray(Some(440), true, true);
+            let started = Instant::now();
+            assert!(!stretch.hidden(started));
+            assert!(!stretch.hidden(started + SLOT_RECOVERY_GRACE / 2));
+            assert!(stretch.hidden(started + SLOT_RECOVERY_GRACE));
+            assert!(stretch.hidden(started + SLOT_RECOVERY_GRACE * 20));
+            stretch.retry();
+            assert!(stretch.hidden(started + SLOT_RECOVERY_GRACE * 21));
+            assert_eq!(stretch.tray(Some(440), true, true), expanded);
+            assert!(!stretch.hidden(started + SLOT_RECOVERY_GRACE * 22));
         }
 
         #[test]
