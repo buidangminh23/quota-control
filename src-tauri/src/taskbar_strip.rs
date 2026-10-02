@@ -1271,6 +1271,14 @@ mod platform {
             self.distrust_fill();
         }
 
+        fn taskbar_changed(&mut self, restarted: bool) {
+            if restarted {
+                self.forget();
+            } else {
+                self.distrust_fill();
+            }
+        }
+
         fn layout(&mut self, taskbar: &Taskbar) -> Option<Layout> {
             let key = LayoutKey::new(taskbar, self.generation);
             if self.key != Some(key) {
@@ -1528,6 +1536,7 @@ mod platform {
         composed: Option<(Composition, Bitmap)>,
         islands: Islands,
         painted: bool,
+        paint_failed: bool,
         placed: Option<(i32, i32, i32, i32)>,
         /// The widened notification-area button the strip covers, in taskbar client coordinates.
         slot: Option<RECT>,
@@ -1593,13 +1602,16 @@ mod platform {
             }
         }
 
-        fn taskbar_changed(&mut self, _restarted: bool) {
-            self.islands.forget();
+        fn taskbar_changed(&mut self, restarted: bool) {
+            self.islands.taskbar_changed(restarted);
             self.painted = false;
-            self.placed = None;
-            self.slot = None;
-            self.slot_misses = 0;
-            self.stretch.retry();
+            if restarted {
+                tracing::info!("taskbar strip invalidated after Explorer restart");
+                self.placed = None;
+                self.slot = None;
+                self.slot_misses = 0;
+                self.stretch.retry();
+            }
             self.sync();
         }
 
@@ -1662,10 +1674,16 @@ mod platform {
             let previous_key = self.islands.key;
             let layout = self.islands.layout(taskbar);
             if self.islands.key != previous_key {
+                if previous_key.is_some() {
+                    tracing::info!("taskbar strip layout invalidated by changed taskbar geometry");
+                }
                 self.slot = None;
                 self.slot_misses = 0;
             }
             if layout.is_none() {
+                if self.placed.is_some() {
+                    tracing::warn!("taskbar strip hidden while awaiting a matching layout");
+                }
                 unsafe {
                     SetWindowPos(
                         window.strip,
@@ -1765,6 +1783,9 @@ mod platform {
                 .map(|apps| to_client(taskbar.hwnd, apps))
                 .is_some_and(|apps| placement_covers_apps(placement, apps));
             if covered {
+                if self.placed.is_some() {
+                    tracing::warn!("taskbar strip hidden to protect application buttons");
+                }
                 unsafe {
                     SetWindowPos(
                         window.strip,
@@ -1812,7 +1833,16 @@ mod platform {
             }
             style_tooltip(window, &taskbar.info);
             if !self.painted {
-                self.painted = paint(window.strip, bitmap);
+                let result = paint(window.strip, bitmap);
+                self.painted = result.is_ok();
+                if let Err(error) = result {
+                    if !self.paint_failed {
+                        tracing::warn!("taskbar strip repaint failed; retrying the frame: {error}");
+                    }
+                } else if self.paint_failed {
+                    tracing::info!("taskbar strip repaint recovered");
+                }
+                self.paint_failed = !self.painted;
                 update_tooltip(window, &bitmap.tooltip);
             }
             let tray = self.tray_for(wanted);
@@ -1852,6 +1882,7 @@ mod platform {
                 }
             }
             self.painted = false;
+            self.paint_failed = false;
             self.placed = None;
         }
 
@@ -2005,8 +2036,8 @@ mod platform {
         };
     }
 
-    /// Blit the premultiplied frame into the layered window; `true` when the window took it.
-    fn paint(hwnd: HWND, bitmap: &Bitmap) -> bool {
+    /// Blit the premultiplied frame into the layered window.
+    fn paint(hwnd: HWND, bitmap: &Bitmap) -> std::io::Result<()> {
         unsafe {
             let screen = GetDC(std::ptr::null_mut());
             let memory = CreateCompatibleDC(screen);
@@ -2029,7 +2060,7 @@ mod platform {
                 std::ptr::null_mut(),
                 0,
             );
-            let mut painted = false;
+            let mut painted = Err(std::io::Error::last_os_error());
             if !dib.is_null() && !bits.is_null() {
                 std::ptr::copy_nonoverlapping(
                     bitmap.bgra.as_ptr(),
@@ -2048,7 +2079,7 @@ mod platform {
                     SourceConstantAlpha: 255,
                     AlphaFormat: AC_SRC_ALPHA as u8,
                 };
-                painted = UpdateLayeredWindow(
+                let uploaded = UpdateLayeredWindow(
                     hwnd,
                     screen,
                     std::ptr::null(),
@@ -2059,12 +2090,11 @@ mod platform {
                     &blend,
                     ULW_ALPHA,
                 ) != 0;
-                if !painted {
-                    tracing::warn!(
-                        "taskbar strip paint failed: {}",
-                        std::io::Error::last_os_error()
-                    );
-                }
+                painted = if uploaded {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                };
                 SelectObject(memory, previous);
                 DeleteObject(dib);
             }
@@ -2237,6 +2267,7 @@ mod platform {
                 composed: None,
                 islands: Islands::new(),
                 painted: false,
+                paint_failed: false,
                 placed: None,
                 slot: None,
                 slot_misses: 0,
@@ -2527,7 +2558,93 @@ mod platform {
                 reach: None,
             };
             assert!(islands.layout(&taskbar()).is_some());
-            islands.forget();
+            islands.taskbar_changed(true);
+            assert!(islands.layout(&taskbar()).is_none());
+        }
+
+        #[test]
+        fn repeated_soft_notifications_keep_matching_layout_and_refresh_fill() {
+            let (reader, _events) = reader();
+            let key = LayoutKey::new(&taskbar(), 0);
+            let read = Instant::now();
+            let mut islands = Islands {
+                reader,
+                generation: 0,
+                key: Some(key),
+                sample: Some(ColorSample {
+                    at: (1460, 920),
+                    fill: Fill::new([20, 20, 20], true),
+                    taken: read,
+                }),
+                last: Some((layout(), read, key)),
+                reach: Some((4, 4)),
+            };
+            for _ in 0..100 {
+                islands.taskbar_changed(false);
+                assert!(islands.layout(&taskbar()).is_some());
+                assert_eq!(islands.key, Some(key));
+                assert_eq!(islands.generation, 0);
+                assert_eq!(islands.reach, Some((4, 4)));
+                assert_eq!(islands.last.unwrap().1, read);
+                assert!(!islands.sample.as_ref().unwrap().fill.settled);
+            }
+            islands.sample.as_mut().unwrap().fill.read([240, 240, 240]);
+            assert_eq!(islands.sample.as_ref().unwrap().fill.color, [240, 240, 240]);
+        }
+
+        #[test]
+        fn soft_notifications_cannot_reuse_changed_physical_geometry() {
+            let original = taskbar();
+            let key = LayoutKey::new(&original, 0);
+            let mut variants = Vec::new();
+            let mut changed = taskbar();
+            changed.hwnd = 2_isize as HWND;
+            variants.push(changed);
+            changed = taskbar();
+            changed.origin.1 += 40;
+            variants.push(changed);
+            changed = taskbar();
+            changed.notify_left -= 400;
+            variants.push(changed);
+            changed = taskbar();
+            changed.width += 450;
+            variants.push(changed);
+            changed = taskbar();
+            changed.height += 10;
+            variants.push(changed);
+            changed = taskbar();
+            changed.info.scale = 1.5;
+            variants.push(changed);
+            for changed in variants {
+                let (reader, _events) = reader();
+                let mut islands = Islands {
+                    reader,
+                    generation: 0,
+                    key: Some(key),
+                    sample: None,
+                    last: Some((layout(), Instant::now(), key)),
+                    reach: Some((4, 4)),
+                };
+                islands.taskbar_changed(false);
+                assert!(islands.layout(&changed).is_none());
+                assert_eq!(islands.reach, None);
+                assert_eq!(islands.last.map(|(_, _, key)| key), None);
+            }
+        }
+
+        #[test]
+        fn soft_notifications_do_not_extend_the_layout_grace() {
+            let (reader, _events) = reader();
+            let key = LayoutKey::new(&taskbar(), 0);
+            let mut islands = Islands {
+                reader,
+                generation: 0,
+                key: Some(key),
+                sample: None,
+                last: Some((layout(), Instant::now() - LAYOUT_GRACE, key)),
+                reach: None,
+            };
+            islands.taskbar_changed(false);
             assert!(islands.layout(&taskbar()).is_none());
         }
 
