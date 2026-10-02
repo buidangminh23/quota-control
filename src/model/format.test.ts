@@ -1,13 +1,18 @@
 import { roundHalfAwayFromZero } from "./decimal";
 import {
+  clockCountdown,
   compactDuration,
   deadlineLabel,
+  FINAL_COUNTDOWN_SECONDS,
   formatCostPerMtok,
   formatNumber,
   formatValue,
   hourWindowLabel,
   resetAbsoluteLabel,
+  resetCountdownLabel,
+  resetMomentLabel,
   restoreLabel,
+  secondsUntil,
   setDongRate,
   setSystemClockPreference,
   shortTime,
@@ -175,6 +180,52 @@ describe("Formatters", () => {
     expect(plainSpaces(restoreLabel(new Date(2026, 8, 27, 9, 5), now, "12h", "en"))).toBe("Back at 9:05 AM · tomorrow");
     expect(restoreLabel(now, now, "24h", "vi")).toBeNull();
     expect(restoreLabel(new Date(now.getTime() - 1000), now, "24h", "vi")).toBeNull();
+  });
+
+  it("counts whole seconds left, a second that has begun as a whole one, and never below zero", () => {
+    const now = new Date(2026, 9, 2, 16, 4);
+    const left = (milliseconds: number) => secondsUntil(new Date(now.getTime() + milliseconds), now);
+    expect([left(300_000), left(299_001), left(299_000), left(1), left(0), left(-1), left(-60_000)]).toEqual([300, 300, 299, 1, 0, 0, 0]);
+    expect([300, 299.2, 299, 61, 60, 59.5, 1, 0.001, 0, -4].map(clockCountdown)).toEqual(["05:00", "05:00", "04:59", "01:01", "01:00", "01:00", "00:01", "00:01", "00:00", "00:00"]);
+  });
+
+  it("counts a reset down to the second through its last five minutes only", () => {
+    const now = new Date(2026, 9, 2, 16, 4);
+    const label = (milliseconds: number, language: "vi" | "en" = "vi") => resetCountdownLabel(new Date(now.getTime() + milliseconds), now, language);
+    expect(FINAL_COUNTDOWN_SECONDS).toBe(300);
+    expect(label(3_600_000)).toBe("Đặt lại sau 1 giờ");
+    expect(label(300_001)).toBe("Đặt lại sau 6 phút");
+    expect(label(300_000)).toBe("Đặt lại sau 05:00");
+    expect(label(299_000)).toBe("Đặt lại sau 04:59");
+    expect(label(1_000)).toBe("Đặt lại sau 00:01");
+    expect(label(400)).toBe("Đặt lại sau 00:01");
+    expect(label(0)).toBe("Sắp đặt lại");
+    expect(label(-90_000)).toBe("Sắp đặt lại");
+    expect(label(299_000, "en")).toBe("Resets in 04:59");
+    expect(label(300_001, "en")).toBe("Resets in 6m");
+    expect(label(-1, "en")).toBe("Resets soon");
+    expect(resetCountdownLabel(new Date(Number.NaN), now, "vi")).toBeNull();
+  });
+
+  it("keeps calling the last five minutes soon everywhere else a deadline is worded", () => {
+    const now = new Date(2026, 9, 2, 16, 4);
+    const inFourMinutes = new Date(now.getTime() + 240_000);
+    expect(deadlineLabel("resets", inFourMinutes, "relative", now, "24h", "vi")).toBe("Sắp đặt lại");
+    expect(deadlineLabel("limit", inFourMinutes, "relative", now, "12h", "en")).toBe("Limit soon");
+    expect(deadlineLabel("resetExpires", inFourMinutes, "relative", now, "24h", "vi")).toBe("Sắp hết hạn");
+    expect(deadlineLabel("resets", new Date(now.getTime() + 300_001), "relative", now, "24h", "vi")).toBe("Đặt lại sau 6 phút");
+  });
+
+  it("names the exact moment a limit resets beside its reading", () => {
+    const now = new Date(2026, 8, 26, 12);
+    expect(resetMomentLabel(new Date(2026, 8, 26, 18, 38), now, "24h", "vi")).toBe("Đặt lại lúc 18:38 · hôm nay");
+    expect(resetMomentLabel(new Date(2026, 8, 27, 9, 5), now, "24h", "vi")).toBe("Đặt lại lúc 9:05 · ngày mai");
+    expect(resetMomentLabel(new Date(2026, 9, 2, 13, 5), now, "24h", "vi")).toBe("Đặt lại lúc 13:05 · T6 02/10");
+    expect(plainSpaces(resetMomentLabel(new Date(2026, 9, 2, 13, 5), now, "12h", "en"))).toBe("Resets at 1:05 PM · Fri, Oct 2");
+    expect(plainSpaces(resetMomentLabel(new Date(2026, 8, 27, 9, 5), now, "12h", "en"))).toBe("Resets at 9:05 AM · tomorrow");
+    expect(resetMomentLabel(new Date(2026, 8, 26, 18, 38), now, "24h", "en")).toBe("Resets at 18:38 · today");
+    expect(resetMomentLabel(now, now, "24h", "vi")).toBeNull();
+    expect(resetMomentLabel(new Date(now.getTime() - 1000), now, "24h", "vi")).toBeNull();
   });
 
   it("buckets absolute labels by local day in Vietnamese", () => {

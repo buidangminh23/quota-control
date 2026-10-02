@@ -197,6 +197,16 @@
   font-weight: 600;
 }
 
+/* The reset countdown at the end of the title line: it keeps its full width (its digits change every
+   second near the reset), so a long title gives way instead. */
+.uc-row-countdown {
+  flex: none;
+  margin-left: auto;
+  font-size: var(--uc-support-size);
+  color: var(--uc-secondary);
+  white-space: nowrap;
+}
+
 .uc-row-warning {
   display: inline-flex;
   align-items: center;
@@ -256,11 +266,29 @@
   color: var(--uc-secondary);
 }
 
-.uc-row-readout {
+/* The exact reset moment beside a reading. On a line too narrow for all of it the lead-in ("Đặt lại
+   lúc") wraps onto a line above the one in view, so the time and the day stay whole; only when
+   those alone do not fit is the end cut. It sits by its own box, not its baseline, which a wrapped
+   line would move. */
+.uc-row-moment {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-content: flex-end;
+  align-self: flex-end;
+  height: 1.25em;
+  line-height: 1.25;
+}
+
+.uc-row-moment-lead {
+  flex: none;
+  white-space: pre;
+}
+
+.uc-row-moment-time {
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .uc-row-restore {

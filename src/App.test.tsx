@@ -78,14 +78,26 @@ describe("popup", () => {
     expect(screen.getByText(/Cập nhật sau/)).toBeInTheDocument();
   });
 
-  it("puts the exact restore time under each reset countdown, but not beside Exact Time", async () => {
+  it("counts each limit down on its title line with the exact moment beside its reading, whatever Reset Times says", async () => {
     await renderApp();
     const work = screen.getByRole("region", { name: "Claude · Công ty" });
-    const countdowns = within(work).getAllByText(/^Đặt lại sau /);
-    expect(within(work).getAllByText(/^Hồi lại lúc \d{1,2}:\d{2} · /)).toHaveLength(countdowns.length);
-    fireEvent.click(countdowns[0]!);
-    expect(within(work).getAllByText(/^Đặt lại lúc /)).toHaveLength(countdowns.length);
+    const placed = () => {
+      const countdowns = within(work).getAllByText(/^Đặt lại sau /);
+      const moments = within(work).getAllByText((_content, element) =>
+        element?.classList.contains("uc-row-moment") === true && /^Đặt lại lúc \d{1,2}:\d{2} · /.test(element.textContent ?? ""),
+      );
+      for (const countdown of countdowns) expect(countdown.parentElement).toHaveClass("uc-row-label");
+      for (const moment of moments) expect(moment.parentElement).toHaveClass("uc-row-primary");
+      return { countdowns: countdowns.length, moments: moments.length };
+    };
+    const counted = placed();
+    expect(counted.countdowns).toBeGreaterThan(1);
+    expect(counted.moments).toBe(counted.countdowns);
     expect(within(work).queryByText(/^Hồi lại lúc /)).not.toBeInTheDocument();
+    act(() => updateSettings({ resetDisplayMode: "absolute" }));
+    expect(placed()).toEqual(counted);
+    act(() => updateSettings({ resetDisplayMode: "relative" }));
+    expect(placed()).toEqual(counted);
   });
 
   it("shows a limit window whose reset has passed as reset before the next reading comes in", async () => {

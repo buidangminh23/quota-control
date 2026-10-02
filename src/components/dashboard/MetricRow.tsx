@@ -1,12 +1,26 @@
 /**
- * One metric inside a provider card (upstream `WidgetRowView`). A bounded metric is a label line with
- * the pace warning, a capsule meter, a headline/reset line and, under a countdown, the exact time the
- * limit comes back; an unbounded one is a single line with the value right-aligned, which reveals a
- * hover detail when there is more to show.
+ * One metric inside a provider card (upstream `WidgetRowView`). A bounded metric is a title line with
+ * the countdown to its reset, a capsule meter, then its reading with the exact moment it resets; both
+ * reset texts keep their place whatever Reset Times is set to, and the countdown steps every second
+ * through its last five minutes. An unbounded metric is a single line with the value right-aligned,
+ * which reveals a hover detail when there is more to show.
  */
 import type { Language } from "@/i18n";
 import { messagesFor } from "@/i18n";
-import { meterState, meterTooltip, meterSeverity, spareText, boundedTrailingText, hasResetLabel, resetTooltip, restoreText, hasMeterStyleToggle, meterStyleTooltip, type MeterState } from "@/model/meterState";
+import {
+  boundedDetailText,
+  boundedDetailTooltip,
+  boundedResetMoment,
+  hasMeterStyleToggle,
+  hasResetLabel,
+  meterSeverity,
+  meterState,
+  meterStyleTooltip,
+  meterTooltip,
+  resetCountdownText,
+  spareText,
+  type MeterState,
+} from "@/model/meterState";
 import {
   expirySeverity,
   hasModelBreakdown,
@@ -18,10 +32,11 @@ import {
   unknownModelTooltip,
   type WidgetData,
 } from "@/model/widgetData";
+import { useFinalCountdown } from "@/state/hooks";
 import { updateSettings } from "@/state/store";
 import { HoverPopover } from "../ui/hoverPopover";
 import { FlameIcon, WarningTriangle } from "../ui/icons";
-import { tooltipProps } from "../ui/tooltip";
+import { clippedTooltipProps, tooltipProps, truncatedTooltipProps } from "../ui/tooltip";
 import { ModelBreakdownDetail, ResetsDetail } from "./details";
 import { Meter } from "./Meter";
 import { Sparkline } from "./Sparkline";
@@ -47,50 +62,57 @@ export function MetricRow({ data, now, condensedTop, interactive = true }: Metri
   return <UnboundedRow data={data} now={now} condensedTop={condensedTop} interactive={interactive} />;
 }
 
-function toggleResetDisplay(data: WidgetData): void {
-  updateSettings({ resetDisplayMode: data.resetDisplayMode === "relative" ? "absolute" : "relative" });
-}
-
 function toggleMeterStyle(data: WidgetData): void {
   updateSettings({ displayMode: data.displayMode === "remaining" ? "used" : "remaining" });
 }
 
+/**
+ * The pace note has the title line to itself only on a row with no reset words there; beside a
+ * countdown it is the countdown's and the meter's tooltip. The exact moment is drawn in two parts so
+ * a line too narrow for it leaves out its lead-in before it cuts the time or the day.
+ */
 function BoundedRow({ data, now, interactive }: { data: WidgetData; now: Date; interactive: boolean }) {
-  const state = meterState(data, now);
+  const clock = useFinalCountdown(hasResetLabel(data, now) ? data.resetsAt : null, now);
+  const state = meterState(data, clock);
   const language = data.language;
-  const trailing = boundedTrailingText(data, now);
-  const restore = restoreText(data, now);
-  const resetToggle = interactive && hasResetLabel(data, now);
+  const countdown = resetCountdownText(data, clock);
+  const detail = boundedDetailText(data, clock);
+  const detailTooltip = boundedDetailTooltip(data, clock);
+  const moment = boundedResetMoment(data, clock);
   const styleToggle = interactive && hasMeterStyleToggle(data);
   return (
     <div className="uc-row is-bounded">
       <div className="uc-row-label">
-        <span className="uc-row-title uc-truncate">{data.title}</span>
-        <PaceWarning data={data} state={state} language={language} />
+        <span className="uc-row-title uc-truncate" {...truncatedTooltipProps(data.title)}>
+          {data.title}
+        </span>
+        {countdown ? (
+          <span className="uc-row-countdown uc-num" {...tooltipProps(meterTooltip(state, language))}>
+            {countdown}
+          </span>
+        ) : (
+          <PaceWarning data={data} state={state} language={language} />
+        )}
       </div>
-      <Meter data={data} state={state} now={now} />
-      <div className="uc-row-readout">
-        <div className="uc-row-primary">
-          {styleToggle ? (
-            <button type="button" className="uc-row-headline uc-num" onClick={() => toggleMeterStyle(data)} {...tooltipProps(meterStyleTooltip(data))}>
-              {headline(data)}
-            </button>
-          ) : (
-            <span className="uc-row-headline uc-num">{headline(data)}</span>
-          )}
-          {trailing ? (
-            resetToggle ? (
-              <button type="button" className="uc-row-trailing uc-num" onClick={() => toggleResetDisplay(data)} {...tooltipProps(resetTooltip(data, now))}>
-                {trailing}
-              </button>
-            ) : (
-              <span className="uc-row-trailing uc-num" {...tooltipProps(resetTooltip(data, now))}>
-                {trailing}
-              </span>
-            )
-          ) : null}
-        </div>
-        {restore ? <div className="uc-row-restore uc-num">{restore}</div> : null}
+      <Meter data={data} state={state} now={clock} />
+      <div className="uc-row-primary">
+        {styleToggle ? (
+          <button type="button" className="uc-row-headline uc-num" onClick={() => toggleMeterStyle(data)} {...tooltipProps(meterStyleTooltip(data))}>
+            {headline(data)}
+          </button>
+        ) : (
+          <span className="uc-row-headline uc-num">{headline(data)}</span>
+        )}
+        {moment ? (
+          <span className="uc-row-trailing uc-row-moment uc-num" {...clippedTooltipProps(moment.text)}>
+            <span className="uc-row-moment-lead">{moment.lead}</span>
+            <span className="uc-row-moment-time">{moment.moment}</span>
+          </span>
+        ) : detail ? (
+          <span className="uc-row-trailing uc-num" {...(detailTooltip ? tooltipProps(detailTooltip) : truncatedTooltipProps(detail))}>
+            {detail}
+          </span>
+        ) : null}
       </div>
     </div>
   );

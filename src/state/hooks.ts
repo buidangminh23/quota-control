@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { messagesFor, type Language, type Messages } from "@/i18n";
 import type { BarKind, PlatformKey } from "@/i18n/messages";
+import { FINAL_COUNTDOWN_SECONDS } from "@/model/format";
 import type { IsEnabled } from "@/model/layout";
 import { barKind, platformKey } from "@/model/platform";
 import type { AppSettings, DashboardTab } from "@/model/settings";
@@ -101,6 +102,45 @@ export function useNow(intervalMs = 30_000): Date {
     return () => clearInterval(timer);
   }, [visible, intervalMs]);
   return now;
+}
+
+/** Longest single wait for a countdown's last stretch, so time lost to sleep or a clock change is caught up. */
+const COUNTDOWN_MAX_WAIT_MS = 60 * 60_000;
+
+/**
+ * The clock a row counting down to `deadline` reads: the caller's `now` until the last
+ * `FINAL_COUNTDOWN_SECONDS`, then the wall clock, re-read as each second left ends, so the row steps
+ * `05:00`, `04:59`, … on time and stops at the deadline. Every wake works the time left out from the
+ * wall clock again, so a late timer or a reopened popup lands on the right second. Only the row
+ * holding the hook draws each second, only while the popup is visible, and nothing is asked of a
+ * provider.
+ */
+export function useFinalCountdown(deadline: Date | null, now: Date): Date {
+  const visible = useApp((state) => state.popupVisible);
+  const target = deadline === null ? Number.NaN : deadline.getTime();
+  const [reading, setReading] = useState<Date | null>(null);
+  useEffect(() => {
+    if (!visible || !Number.isFinite(target)) {
+      setReading(null);
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const read = () => {
+      const current = Date.now();
+      const left = target - current;
+      const untilFinal = left - FINAL_COUNTDOWN_SECONDS * 1000;
+      if (untilFinal > 0) {
+        setReading(null);
+        timer = setTimeout(read, Math.min(untilFinal, COUNTDOWN_MAX_WAIT_MS));
+        return;
+      }
+      setReading(new Date(current));
+      if (left > 0) timer = setTimeout(read, left % 1000 || 1000);
+    };
+    read();
+    return () => clearTimeout(timer);
+  }, [visible, target]);
+  return reading !== null && reading.getTime() > now.getTime() ? reading : now;
 }
 
 /**

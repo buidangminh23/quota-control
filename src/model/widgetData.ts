@@ -319,20 +319,28 @@ export function boundedSubtitle(data: WidgetData, now: Date): string | null {
     const label = deadlineLabel("resets", data.resetsAt, "relative", now, data.timeFormat, language);
     if (label) return label;
   }
-  if (data.periodDurationMs !== undefined) {
-    const duration = compactDuration(data.periodDurationMs / 1000, language);
-    if (duration) return messagesFor(language).format.deadline("resets", { kind: "in", duration });
-  }
+  return resetCadenceLabel(data) ?? limitContextLabel(data);
+}
+
+/** How long a window runs, said the way a countdown is (`Resets in 5h`): its reset words before it has a reset time. */
+export function resetCadenceLabel(data: WidgetData): string | null {
+  if (data.periodDurationMs === undefined) return null;
+  const duration = compactDuration(data.periodDurationMs / 1000, data.language);
+  return duration === null ? null : messagesFor(data.language).format.deadline("resets", { kind: "in", duration });
+}
+
+/** What a limit is a limit of, for a row with no reset to speak of: `$20 limit`, `requests`. */
+export function limitContextLabel(data: WidgetData): string | null {
   switch (data.kind) {
     case "percent":
       return null;
     case "dollars": {
       if (data.limit === null) return null;
       const digits = Math.round(data.limit) === data.limit ? 0 : 2;
-      return messagesFor(language).meter.dollarLimit(currency(data.limit, digits, language), data.limitNoun);
+      return messagesFor(data.language).meter.dollarLimit(currency(data.limit, digits, data.language), data.limitNoun);
     }
     case "count":
-      return data.countSuffix ? translate(data.countSuffix, language) : null;
+      return data.countSuffix ? translate(data.countSuffix, data.language) : null;
   }
 }
 

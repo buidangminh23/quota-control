@@ -1,5 +1,8 @@
 import { evaluatePace, secondsToRunOut } from "./pace";
+import { setSystemClockPreference } from "./format";
 import {
+  boundedDetailText,
+  boundedDetailTooltip,
   boundedTrailingText,
   hasResetLabel,
   isFreshSessionWindow,
@@ -8,12 +11,12 @@ import {
   meterStyleTooltip,
   meterTooltip,
   paceTick,
-  resetTooltip,
-  restoreText,
+  resetCountdownText,
   spareText,
   type MeterState,
 } from "./meterState";
 import { makeWidget, NOW, plainSpaces, resetsAt, WEEK_SECONDS } from "./testHelpers";
+import { setSystemTimeZone } from "./timeZone";
 import type { DisplayMode, WidgetData } from "./widgetData";
 
 const now = NOW;
@@ -225,7 +228,7 @@ describe("meter severity", () => {
 });
 
 describe("reset display", () => {
-  it("honors the mode in trailing text and the opposite in the tooltip", () => {
+  it("honors the mode in the one-phrase text a notification says", () => {
     const current = new Date();
     const data = makeWidget("Weekly", "percent", 50, 100, {
       resetsAt: new Date(current.getTime() + (4 * 24 + 17) * 3_600_000),
@@ -233,11 +236,9 @@ describe("reset display", () => {
     });
     expect(hasResetLabel(data, current)).toBe(true);
     expect(boundedTrailingText(data, current)?.startsWith("Resets in ")).toBe(true);
-    expect(resetTooltip(data, current)?.startsWith("Resets ")).toBe(true);
-    expect(resetTooltip(data, current)?.startsWith("Resets in ")).toBe(false);
     const absolute = { ...data, resetDisplayMode: "absolute" as const };
     expect(boundedTrailingText(absolute, current)?.startsWith("Resets in ")).toBe(false);
-    expect(resetTooltip(absolute, current)?.startsWith("Resets in ")).toBe(true);
+    expect(boundedTrailingText(absolute, current)?.startsWith("Resets ")).toBe(true);
   });
 
   it("reads Not started for a fresh zero-usage session and suppresses pacing", () => {
@@ -251,7 +252,9 @@ describe("reset display", () => {
     });
     expect(boundedTrailingText(data, at)).toBe("Not started");
     expect(hasResetLabel(data, at)).toBe(false);
-    expect(resetTooltip(data, at)).toBe(FRESH_SESSION_TOOLTIP);
+    expect(resetCountdownText(data, at)).toBeNull();
+    expect(boundedDetailText(data, at)).toBe("Not started");
+    expect(boundedDetailTooltip(data, at)).toBe(FRESH_SESSION_TOOLTIP);
     const state = meterState(data, at);
     expect(state).toEqual(level("normal"));
     expect(paceTick(data, state, at)).toBeNull();
@@ -297,8 +300,10 @@ describe("reset display", () => {
   it("falls back to limit context without a reset date", () => {
     const data = makeWidget("Credits", "dollars", 12, 20, { resetDisplayMode: "absolute" });
     expect(hasResetLabel(data, now)).toBe(false);
-    expect(resetTooltip(data, now)).toBeNull();
+    expect(boundedDetailTooltip(data, now)).toBeNull();
     expect(boundedTrailingText(data, now)).toBe("$20 limit");
+    expect(resetCountdownText(data, now)).toBeNull();
+    expect(boundedDetailText(data, now)).toBe("$20 limit");
   });
 
   it("flips the Used/Left reading in the meter style tooltip", () => {
@@ -330,18 +335,8 @@ describe("meter copy in Vietnamese", () => {
     const state = meterState(data, current);
     expect(state.kind === "runningOut" && state.eta?.startsWith("Hết hạn mức sau ")).toBe(true);
     expect(boundedTrailingText(data, current)?.startsWith("Đặt lại sau ")).toBe(true);
-    expect(resetTooltip(data, current)?.startsWith("Đặt lại lúc ")).toBe(true);
-  });
-
-  it("adds the exact restore time under a countdown only", () => {
-    const current = new Date(2026, 8, 26, 12);
-    const data = vi(makeWidget("Weekly", "percent", 50, 100, { resetsAt: new Date(2026, 9, 2, 13, 5), periodDurationMs: week * 1000 }));
-    expect(boundedTrailingText(data, current)).toBe("Đặt lại sau 6 ngày 1 giờ");
-    expect(restoreText(data, current)).toBe("Hồi lại lúc 13:05 · T6 02/10");
-    expect(restoreText({ ...data, resetDisplayMode: "absolute" }, current)).toBeNull();
-    expect(restoreText({ ...data, resetsAt: null }, current)).toBeNull();
-    expect(restoreText({ ...data, hasData: false }, current)).toBeNull();
-    expect(restoreText({ ...data, subtitleOverride: "Paused" }, current)).toBeNull();
+    expect(resetCountdownText(data, current)?.startsWith("Đặt lại sau ")).toBe(true);
+    expect(boundedDetailText(data, current)?.startsWith("Đặt lại lúc ")).toBe(true);
   });
 
   it("explains a fresh session and missing data in Vietnamese", () => {
@@ -354,8 +349,11 @@ describe("meter copy in Vietnamese", () => {
       }),
     );
     expect(boundedTrailingText(fresh, at)).toBe("Chưa bắt đầu");
-    expect(resetTooltip(fresh, at)).toBe("Phiên chỉ bắt đầu sau khi bạn gửi tin nhắn đầu tiên.");
+    expect(boundedDetailText(fresh, at)).toBe("Chưa bắt đầu");
+    expect(boundedDetailTooltip(fresh, at)).toBe("Phiên chỉ bắt đầu sau khi bạn gửi tin nhắn đầu tiên.");
     expect(boundedTrailingText({ ...fresh, hasData: false }, at)).toBe("Không có dữ liệu");
+    expect(boundedDetailText({ ...fresh, hasData: false }, at)).toBe("Không có dữ liệu");
+    expect(boundedDetailTooltip({ ...fresh, hasData: false }, at)).toBeNull();
   });
 
   it("states the limit and flips the reading in Vietnamese", () => {
@@ -363,5 +361,115 @@ describe("meter copy in Vietnamese", () => {
     expect(plainSpaces(boundedTrailingText(credits, now))).toBe("Hạn mức 20 $");
     expect(meterStyleTooltip(vi(makeWidget("Weekly", "percent", 5, 100, { displayMode: "remaining" })))).toBe("Đã dùng 5%");
     expect(meterStyleTooltip(vi(makeWidget("Weekly", "percent", 5, 100)))).toBe("Còn 95%");
+  });
+});
+
+describe("the reset countdown and exact moment of a row", () => {
+  const SECOND = 1000;
+  const inZone = (zone: string, body: () => void): void => {
+    setSystemTimeZone(zone);
+    try {
+      body();
+    } finally {
+      setSystemTimeZone(null);
+    }
+  };
+  const session = (current: Date, leftMs: number, extra: Partial<WidgetData> = {}): WidgetData =>
+    makeWidget("Session", "percent", 40, 100, { language: "vi", timeFormat: "24h", resetsAt: new Date(current.getTime() + leftMs), periodDurationMs: 5 * 3_600_000, ...extra });
+  const weekly = (current: Date, leftMs: number, extra: Partial<WidgetData> = {}): WidgetData =>
+    makeWidget("Weekly", "percent", 28, 100, { language: "vi", timeFormat: "24h", resetsAt: new Date(current.getTime() + leftMs), periodDurationMs: week * 1000, ...extra });
+
+  it("keeps the compact duration above five minutes and counts the last five to the second", () => {
+    const current = new Date(2026, 9, 2, 16, 4);
+    const cases: Array<[number, string]> = [
+      [2 * 3_600_000 + 34 * 60_000, "Đặt lại sau 2 giờ 34 phút"],
+      [6 * 60 * SECOND, "Đặt lại sau 6 phút"],
+      [300 * SECOND + 1, "Đặt lại sau 6 phút"],
+      [300 * SECOND, "Đặt lại sau 05:00"],
+      [299 * SECOND + 1, "Đặt lại sau 05:00"],
+      [299 * SECOND, "Đặt lại sau 04:59"],
+      [136 * SECOND, "Đặt lại sau 02:16"],
+      [60 * SECOND, "Đặt lại sau 01:00"],
+      [59 * SECOND + 400, "Đặt lại sau 01:00"],
+      [SECOND + 1, "Đặt lại sau 00:02"],
+      [SECOND, "Đặt lại sau 00:01"],
+      [1, "Đặt lại sau 00:01"],
+    ];
+    for (const row of [session, weekly]) {
+      for (const [left, expected] of cases) expect(resetCountdownText(row(current, left), current), `${left} ms left`).toBe(expected);
+    }
+    expect(resetCountdownText(weekly(current, 25 * 3_600_000), current)).toBe("Đặt lại sau 1 ngày 1 giờ");
+    expect(resetCountdownText(session(current, 299 * SECOND, { language: "en" }), current)).toBe("Resets in 04:59");
+    expect(resetCountdownText(session(current, 2 * 3_600_000 + 34 * 60_000, { language: "en" }), current)).toBe("Resets in 2h 34m");
+  });
+
+  it("never counts below zero or says the limit is back once the moment has passed", () => {
+    const current = new Date(2026, 9, 2, 16, 4);
+    for (const left of [0, -1, -SECOND, -3_600_000]) {
+      const data = session(current, left);
+      expect(resetCountdownText(data, current), `${left} ms left`).toBe("Sắp đặt lại");
+      expect(resetCountdownText({ ...data, language: "en" }, current)).toBe("Resets soon");
+      expect(boundedDetailText(data, current), `${left} ms left`).toBeNull();
+      expect(meterState(data, current).kind).not.toBe("noData");
+      expect(data.used).toBe(40);
+    }
+    expect(resetCountdownText(session(current, 0, { resetsAt: new Date(Number.NaN) }), current)).toBeNull();
+  });
+
+  it("names the exact moment beside the reading, by the clock setting and the day in the device zone", () => {
+    const current = new Date(Date.UTC(2026, 9, 2, 9, 4));
+    inZone("Asia/Saigon", () => {
+      const today = session(current, 299 * SECOND);
+      expect(boundedDetailText(today, current)).toBe("Đặt lại lúc 16:08 · hôm nay");
+      expect(plainSpaces(boundedDetailText({ ...today, timeFormat: "12h" }, current))).toBe("Đặt lại lúc 4:08 CH · hôm nay");
+      expect(plainSpaces(boundedDetailText({ ...today, language: "en", timeFormat: "12h" }, current))).toBe("Resets at 4:08 PM · today");
+      expect(boundedDetailText({ ...today, language: "en", timeFormat: "24h" }, current)).toBe("Resets at 16:08 · today");
+      const beforeMidnight = new Date(Date.UTC(2026, 9, 2, 16, 58));
+      const overnight = weekly(beforeMidnight, 4 * 60_000);
+      expect(resetCountdownText(overnight, beforeMidnight)).toBe("Đặt lại sau 04:00");
+      expect(boundedDetailText(overnight, beforeMidnight)).toBe("Đặt lại lúc 0:02 · ngày mai");
+      expect(boundedDetailText(overnight, new Date(Date.UTC(2026, 9, 2, 17, 0)))).toBe("Đặt lại lúc 0:02 · hôm nay");
+      expect(boundedDetailText(weekly(current, 6 * 86_400_000 + 3_600_000), current)).toBe("Đặt lại lúc 17:04 · T5 08/10");
+    });
+    inZone("America/Los_Angeles", () => {
+      expect(boundedDetailText(session(current, 299 * SECOND), current)).toBe("Đặt lại lúc 2:08 · hôm nay");
+    });
+    try {
+      setSystemClockPreference(false);
+      inZone("Asia/Saigon", () => {
+        expect(plainSpaces(boundedDetailText(session(current, 299 * SECOND, { timeFormat: "auto" }), current))).toBe("Đặt lại lúc 4:08 CH · hôm nay");
+      });
+    } finally {
+      setSystemClockPreference(null);
+    }
+  });
+
+  it("keeps both texts in place whatever Reset Times is saved as", () => {
+    const current = new Date(2026, 8, 26, 12);
+    const data = weekly(current, 0, { resetsAt: new Date(2026, 9, 2, 13, 5) });
+    for (const resetDisplayMode of ["relative", "absolute"] as const) {
+      const row = { ...data, resetDisplayMode };
+      expect(resetCountdownText(row, current)).toBe("Đặt lại sau 6 ngày 1 giờ");
+      expect(boundedDetailText(row, current)).toBe("Đặt lại lúc 13:05 · T6 02/10");
+      expect(boundedDetailTooltip(row, current)).toBeNull();
+    }
+    const final = { ...session(current, 136 * SECOND), resetDisplayMode: "absolute" as const };
+    expect(resetCountdownText(final, current)).toBe("Đặt lại sau 02:16");
+    expect(boundedDetailText(final, current)).toBe("Đặt lại lúc 12:02 · hôm nay");
+  });
+
+  it("leaves a row without a reset to count down with its status beside the reading", () => {
+    const current = new Date(2026, 8, 26, 12);
+    const data = weekly(current, 0, { resetsAt: new Date(2026, 9, 2, 13, 5) });
+    const noData = { ...data, hasData: false };
+    expect([resetCountdownText(noData, current), boundedDetailText(noData, current)]).toEqual([null, "Không có dữ liệu"]);
+    const paused = { ...data, subtitleOverride: "Paused" };
+    expect([resetCountdownText(paused, current), boundedDetailText(paused, current)]).toEqual([null, "Paused"]);
+    const rolledOver = { ...data, used: 0, resetsAt: null };
+    expect([resetCountdownText(rolledOver, current), boundedDetailText(rolledOver, current)]).toEqual(["Đặt lại sau 7 ngày 0 giờ", null]);
+    expect(boundedTrailingText(rolledOver, current)).toBe("Đặt lại sau 7 ngày 0 giờ");
+    const credits = makeWidget("Credits", "dollars", 12, 20, { language: "vi" });
+    expect(resetCountdownText(credits, current)).toBeNull();
+    expect(plainSpaces(boundedDetailText(credits, current))).toBe("Hạn mức 20 $");
   });
 });

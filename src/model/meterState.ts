@@ -6,13 +6,15 @@
  * off the share used, never the displayed fraction, so color and copy never flip with Used/Left.
  */
 import { messagesFor, translate, type Language } from "@/i18n";
-import { deadlineLabel, resetAbsoluteLabel, resetRelativeLabel, restoreLabel } from "./format";
+import { deadlineLabel, resetAbsoluteLabel, resetCountdownLabel, resetMoment, resetRelativeLabel, type ResetMoment } from "./format";
 import { evaluatePace, minimumElapsed, secondsToRunOut } from "./pace";
 import {
   boundedSubtitle,
   formatWidgetValue,
   isBounded,
+  limitContextLabel,
   type MeterSeverity,
+  resetCadenceLabel,
   roundedAtDisplayPrecision,
   type WidgetData,
 } from "./widgetData";
@@ -155,7 +157,11 @@ function resetLabel(data: WidgetData, resetsAt: Date, now: Date, absolute: boole
     : resetRelativeLabel(resetsAt, now, data.timeFormat, data.language);
 }
 
-/** Trailing text on the bounded row, honoring Countdown/Exact Time. */
+/**
+ * A bounded metric's reset or status in one phrase, honoring Countdown/Exact Time: what a notification
+ * and a glance row without a reset time say. The popup's row splits it in two (`resetCountdownText`,
+ * `boundedDetailText`).
+ */
 export function boundedTrailingText(data: WidgetData, now: Date): string | null {
   const meter = messagesFor(data.language).meter;
   if (!data.hasData) return meter.noData;
@@ -165,22 +171,49 @@ export function boundedTrailingText(data: WidgetData, now: Date): string | null 
   return boundedSubtitle(data, now);
 }
 
-/** Whether the trailing text is a concrete reset countdown (a click flips Countdown/Exact Time). */
+/** Whether the row counts down to a concrete reset time. */
 export function hasResetLabel(data: WidgetData, now: Date): boolean {
   return data.hasData && data.subtitleOverride === undefined && data.resetsAt !== null && !isFreshSessionWindow(data, now);
 }
 
-/** The line under a reset countdown with the exact time the limit comes back; Exact Time already shows it. */
-export function restoreText(data: WidgetData, now: Date): string | null {
-  if (data.resetDisplayMode === "absolute" || !hasResetLabel(data, now) || !data.resetsAt) return null;
-  return restoreLabel(data.resetsAt, now, data.timeFormat, data.language);
+/** Whether the row says a status of its own (no data, the provider's words, `Not started`) rather than a reset. */
+function hasStatusText(data: WidgetData, now: Date): boolean {
+  return !data.hasData || data.subtitleOverride !== undefined || isFreshSessionWindow(data, now);
 }
 
-/** The opposite reset format from the one shown, or the "Not started" explanation. */
-export function resetTooltip(data: WidgetData, now: Date): string | null {
-  if (isFreshSessionWindow(data, now)) return messagesFor(data.language).meter.freshSessionTooltip;
-  if (!hasResetLabel(data, now) || !data.resetsAt) return null;
-  return resetLabel(data, data.resetsAt, now, data.resetDisplayMode !== "absolute");
+/**
+ * The reset words on a bounded row's title line, in the same place whatever Reset Times is set to: the
+ * countdown to the limit's reset, to the second through its last five minutes, or how long its window
+ * runs while it has no reset time yet. `null` where the row says a status instead.
+ */
+export function resetCountdownText(data: WidgetData, now: Date): string | null {
+  if (hasStatusText(data, now)) return null;
+  return data.resetsAt ? resetCountdownLabel(data.resetsAt, now, data.language) : resetCadenceLabel(data);
+}
+
+/**
+ * The text beside a bounded row's reading, under the meter: the exact moment its limit resets (nothing
+ * once that has passed), or with no reset to name, the row's status or what the limit is a limit of.
+ */
+export function boundedDetailText(data: WidgetData, now: Date): string | null {
+  const meter = messagesFor(data.language).meter;
+  if (!data.hasData) return meter.noData;
+  if (data.subtitleOverride !== undefined) return translate(data.subtitleOverride, data.language);
+  if (isFreshSessionWindow(data, now)) return meter.notStarted;
+  if (data.resetsAt) return boundedResetMoment(data, now)?.text ?? null;
+  return resetCadenceLabel(data) === null ? limitContextLabel(data) : null;
+}
+
+/** The exact reset moment `boundedDetailText` names, in its parts; `null` where the row says something else there. */
+export function boundedResetMoment(data: WidgetData, now: Date): ResetMoment | null {
+  if (hasStatusText(data, now) || !data.resetsAt) return null;
+  return resetMoment(data.resetsAt, now, data.timeFormat, data.language);
+}
+
+/** Why a session reads `Not started`: the one detail that needs explaining. */
+export function boundedDetailTooltip(data: WidgetData, now: Date): string | null {
+  if (!data.hasData || data.subtitleOverride !== undefined || !isFreshSessionWindow(data, now)) return null;
+  return messagesFor(data.language).meter.freshSessionTooltip;
 }
 
 /** Whether the headline is a flippable Used/Left reading. */

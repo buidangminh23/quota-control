@@ -57,6 +57,7 @@ export const en: Messages = {
       const prefix = VERBS[verb];
       return value.kind === "in" ? `${prefix} in ${value.duration}` : `${prefix} ${when(value)}`;
     },
+    resetsAt: (time, day) => `Resets at ${time} · ${restoreDay(day)}`,
     restoresAt: (time, day) => `Back at ${time} · ${restoreDay(day)}`,
     timeOnDay: (time, day) => `${time} · ${restoreDay(day)}`,
     day: restoreDay,

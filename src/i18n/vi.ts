@@ -82,6 +82,7 @@ export const vi: Messages = {
       if (value.kind === "in") return `${phrases.lead} sau ${value.duration}`;
       return `${phrases.lead} lúc ${when(value)}`;
     },
+    resetsAt: (time, day) => `Đặt lại lúc ${time} · ${restoreDay(day)}`,
     restoresAt: (time, day) => `Hồi lại lúc ${time} · ${restoreDay(day)}`,
     timeOnDay: (time, day) => `${time} · ${restoreDay(day)}`,
     day: restoreDay,

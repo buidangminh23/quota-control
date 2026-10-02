@@ -33,7 +33,9 @@ export interface FormatMessages {
   calendarDate(date: Date): string;
   when(when: When): string;
   deadline(verb: DeadlineVerb, when: When): string;
-  /** The line under a reset countdown, e.g. `Hồi lại lúc 13:05 · T6 02/10`. */
+  /** The exact moment a limit resets, beside its reading in the popup: `Đặt lại lúc 13:05 · T6 02/10` / `Resets at 1:05 PM · tomorrow`. */
+  resetsAt(time: string, day: RestoreDay): string;
+  /** The line under a reset countdown on the island and the widgets, e.g. `Hồi lại lúc 13:05 · T6 02/10`. */
   restoresAt(time: string, day: RestoreDay): string;
   /** A clock time and its day, e.g. `13:05 · T6 02/10` / `1:05 PM · tomorrow`. */
   timeOnDay(time: string, day: RestoreDay): string;

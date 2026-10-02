@@ -80,6 +80,22 @@ export function truncatedTooltipProps(text: string): Partial<TooltipProps> {
   };
 }
 
+/**
+ * Like `truncatedTooltipProps`, for a one-line element that also lets whole words wrap out of sight
+ * when it runs out of room: `text` shows while any of it is hidden either way.
+ */
+export function clippedTooltipProps(text: string): Partial<TooltipProps> {
+  return {
+    onPointerEnter: (event) => {
+      const element = event.currentTarget;
+      const clipped = element.scrollWidth > element.clientWidth || element.scrollHeight > element.clientHeight + 1;
+      if ((event.pointerType === "mouse" || event.pointerType === "pen") && clipped) showTooltip(text, element.getBoundingClientRect());
+    },
+    onPointerLeave: hideTooltip,
+    onPointerDown: hideTooltip,
+  };
+}
+
 /** Event props that show `text` over the element; nothing when `text` is empty. */
 export function tooltipProps(text: string | null | undefined): Partial<TooltipProps> {
   if (!text) return NO_TOOLTIP;

@@ -157,11 +157,27 @@ export function restoreDayOf(date: Date, now: Date, relative = true): RestoreDay
   return dayDiff <= 0 ? { kind: "today" } : dayDiff === 1 ? { kind: "tomorrow" } : { kind: "on", date };
 }
 
+/** The last stretch before a deadline: a relative label calls it soon, a limit's row counts it down to the second. */
+export const FINAL_COUNTDOWN_SECONDS = 5 * 60;
+
+/** Whole seconds left until `date`, a second that has begun counting as a whole one; `0` once it has passed. */
+export function secondsUntil(date: Date, now: Date): number {
+  const left = date.getTime() - now.getTime();
+  return left > 0 ? Math.ceil(left / 1000) : 0;
+}
+
+/** Minutes and seconds on a clock face, the same in every language: `05:00`, `04:59`, `00:01`. */
+export function clockCountdown(seconds: number): string {
+  const whole = Math.max(0, Math.ceil(seconds));
+  const twoDigits = (value: number) => String(value).padStart(2, "0");
+  return `${twoDigits(Math.floor(whole / 60))}:${twoDigits(whole % 60)}`;
+}
+
 /** The structured "when" of a deadline, or `null` when the duration is not finite. */
 export function whenOf(date: Date, mode: ResetDisplayMode, now: Date, timeFormat: TimeFormat, language: Language): When | null {
   const seconds = (date.getTime() - now.getTime()) / 1000;
   if (mode === "relative") {
-    if (seconds <= 5 * 60) return { kind: "soon" };
+    if (seconds <= FINAL_COUNTDOWN_SECONDS) return { kind: "soon" };
     const duration = compactDuration(seconds, language);
     return duration === null ? null : { kind: "in", duration };
   }
@@ -200,7 +216,51 @@ export function resetAbsoluteLabel(resetsAt: Date, now: Date, timeFormat: TimeFo
   return deadlineLabel("resets", resetsAt, "absolute", now, timeFormat, language);
 }
 
-/** The exact wall-clock moment a limit comes back, e.g. `Hồi lại lúc 13:05 · T6 02/10`; `null` once it has passed. */
+/**
+ * The countdown on a limit's title line: `Đặt lại sau 2 giờ 34 phút`, and through the last five minutes
+ * to the second, `Đặt lại sau 04:59`. Once the moment has passed it says `Sắp đặt lại`, never a time
+ * below zero; `null` for a date that is not one.
+ */
+export function resetCountdownLabel(resetsAt: Date, now: Date, language: Language): string | null {
+  const left = (resetsAt.getTime() - now.getTime()) / 1000;
+  if (!Number.isFinite(left)) return null;
+  const format = messagesFor(language).format;
+  if (left <= 0) return format.deadline("resets", { kind: "soon" });
+  if (left <= FINAL_COUNTDOWN_SECONDS) return format.deadline("resets", { kind: "in", duration: clockCountdown(left) });
+  const duration = compactDuration(left, language);
+  return duration === null ? null : format.deadline("resets", { kind: "in", duration });
+}
+
+/** The exact moment a limit resets as its row words it, split where a line too narrow for all of it lets go. */
+export interface ResetMoment {
+  /** The whole phrase: `Đặt lại lúc 13:05 · T6 02/10`. */
+  text: string;
+  /** Its words before the clock time, with their space: `Đặt lại lúc `; empty where a language puts none there. */
+  lead: string;
+  /** The clock time and its day: `13:05 · T6 02/10`. */
+  moment: string;
+}
+
+/** The exact wall-clock moment a limit resets, beside its reading; `null` once it has passed. */
+export function resetMoment(resetsAt: Date, now: Date, timeFormat: TimeFormat, language: Language): ResetMoment | null {
+  if (!(resetsAt.getTime() > now.getTime())) return null;
+  const format = messagesFor(language).format;
+  const time = shortTime(resetsAt, timeFormat, language);
+  const day = restoreDayOf(resetsAt, now);
+  const text = format.resetsAt(time, day);
+  const moment = format.timeOnDay(time, day);
+  return text.endsWith(moment) ? { text, lead: text.slice(0, text.length - moment.length), moment } : { text, lead: "", moment: text };
+}
+
+/** `resetMoment` as one phrase, e.g. `Đặt lại lúc 13:05 · T6 02/10`. */
+export function resetMomentLabel(resetsAt: Date, now: Date, timeFormat: TimeFormat, language: Language): string | null {
+  return resetMoment(resetsAt, now, timeFormat, language)?.text ?? null;
+}
+
+/**
+ * The line the island and the widgets put under a reset countdown (`labels.restoresAt` of the glance
+ * document), e.g. `Hồi lại lúc 13:05 · T6 02/10`; `null` once the moment has passed.
+ */
 export function restoreLabel(resetsAt: Date, now: Date, timeFormat: TimeFormat, language: Language): string | null {
   if (!(resetsAt.getTime() > now.getTime())) return null;
   return messagesFor(language).format.restoresAt(shortTime(resetsAt, timeFormat, language), restoreDayOf(resetsAt, now));
