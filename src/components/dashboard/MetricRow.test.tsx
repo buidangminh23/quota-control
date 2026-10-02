@@ -72,6 +72,25 @@ describe("a limit's row", () => {
     expect(week.meter.querySelector<HTMLElement>(".uc-meter-fill")?.style.width).toBe("72%");
   });
 
+  it("draws the exact moment as its lead-in and its time, so a narrow line can drop the first and keep the second whole", () => {
+    show(session(2 * HOUR + 34 * MINUTE + 30 * SECOND), weekly(6 * 24 * HOUR + HOUR, { language: "en" }));
+    const partsOf = (title: string) => {
+      const moment = rowOf(title).row.querySelector<HTMLElement>(".uc-row-primary > .uc-row-moment")!;
+      return { classes: Array.from(moment.children).map((part) => part.className), texts: Array.from(moment.children).map((part) => part.textContent), whole: moment.textContent };
+    };
+    expect(partsOf("Phiên 5h")).toEqual({
+      classes: ["uc-row-moment-lead", "uc-row-moment-time"],
+      texts: ["Đặt lại lúc ", "18:38 · hôm nay"],
+      whole: "Đặt lại lúc 18:38 · hôm nay",
+    });
+    expect(partsOf("Tuần")).toEqual({
+      classes: ["uc-row-moment-lead", "uc-row-moment-time"],
+      texts: ["Resets at ", "17:04 · Thu, Oct 8"],
+      whole: "Resets at 17:04 · Thu, Oct 8",
+    });
+    expect(document.querySelectorAll(".uc-row-moment")).toHaveLength(2);
+  });
+
   it("keeps both texts where they are, once each, when Reset Times is saved as Exact Time", () => {
     show(session(2 * HOUR + 34 * MINUTE + 30 * SECOND, { resetDisplayMode: "absolute" }), weekly(25 * HOUR + 55 * MINUTE, { resetDisplayMode: "absolute", language: "en", timeFormat: "12h" }));
     const five = rowOf("Phiên 5h");

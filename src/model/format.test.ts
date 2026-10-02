@@ -10,6 +10,7 @@ import {
   hourWindowLabel,
   resetAbsoluteLabel,
   resetCountdownLabel,
+  resetMoment,
   resetMomentLabel,
   restoreLabel,
   secondsUntil,
@@ -226,6 +227,25 @@ describe("Formatters", () => {
     expect(resetMomentLabel(new Date(2026, 8, 26, 18, 38), now, "24h", "en")).toBe("Resets at 18:38 · today");
     expect(resetMomentLabel(now, now, "24h", "vi")).toBeNull();
     expect(resetMomentLabel(new Date(now.getTime() - 1000), now, "24h", "vi")).toBeNull();
+  });
+
+  it("splits the exact moment into its lead-in and the time with its day, which together are the whole phrase", () => {
+    const now = new Date(2026, 8, 26, 12);
+    expect(resetMoment(new Date(2026, 9, 2, 13, 5), now, "24h", "vi")).toEqual({ text: "Đặt lại lúc 13:05 · T6 02/10", lead: "Đặt lại lúc ", moment: "13:05 · T6 02/10" });
+    expect(resetMoment(new Date(2026, 8, 26, 18, 38), now, "24h", "en")).toEqual({ text: "Resets at 18:38 · today", lead: "Resets at ", moment: "18:38 · today" });
+    for (const language of ["vi", "en"] as const) {
+      for (const timeFormat of ["12h", "24h"] as const) {
+        for (const resetsAt of [new Date(2026, 8, 26, 23, 59), new Date(2026, 8, 27, 0, 0), new Date(2026, 9, 2, 13, 5)]) {
+          const parts = resetMoment(resetsAt, now, timeFormat, language)!;
+          expect(parts.lead + parts.moment).toBe(parts.text);
+          expect(parts.text).toBe(resetMomentLabel(resetsAt, now, timeFormat, language));
+          expect(parts.lead).toMatch(/\S $/);
+          expect(parts.moment).toMatch(/^\d{1,2}:\d{2}/);
+        }
+      }
+    }
+    expect(resetMoment(now, now, "24h", "vi")).toBeNull();
+    expect(resetMoment(new Date(now.getTime() - 1), now, "12h", "en")).toBeNull();
   });
 
   it("buckets absolute labels by local day in Vietnamese", () => {

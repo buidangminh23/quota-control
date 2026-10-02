@@ -3,6 +3,7 @@ import { setSystemClockPreference } from "./format";
 import {
   boundedDetailText,
   boundedDetailTooltip,
+  boundedResetMoment,
   boundedTrailingText,
   hasResetLabel,
   isFreshSessionWindow,
@@ -456,6 +457,20 @@ describe("the reset countdown and exact moment of a row", () => {
     const final = { ...session(current, 136 * SECOND), resetDisplayMode: "absolute" as const };
     expect(resetCountdownText(final, current)).toBe("Đặt lại sau 02:16");
     expect(boundedDetailText(final, current)).toBe("Đặt lại lúc 12:02 · hôm nay");
+  });
+
+  it("hands the row the exact moment in two parts, and none where the row says something else there", () => {
+    const current = new Date(2026, 8, 26, 12);
+    const data = weekly(current, 0, { resetsAt: new Date(2026, 9, 2, 13, 5) });
+    expect(boundedResetMoment(data, current)).toEqual({ text: "Đặt lại lúc 13:05 · T6 02/10", lead: "Đặt lại lúc ", moment: "13:05 · T6 02/10" });
+    expect(boundedResetMoment(data, current)?.text).toBe(boundedDetailText(data, current));
+    expect(boundedResetMoment({ ...data, language: "en" }, current)).toEqual({ text: "Resets at 13:05 · Fri, Oct 2", lead: "Resets at ", moment: "13:05 · Fri, Oct 2" });
+    expect(boundedResetMoment({ ...data, hasData: false }, current)).toBeNull();
+    expect(boundedResetMoment({ ...data, subtitleOverride: "Paused" }, current)).toBeNull();
+    expect(boundedResetMoment({ ...data, resetsAt: null }, current)).toBeNull();
+    expect(boundedResetMoment(data, new Date(2026, 9, 2, 13, 5))).toBeNull();
+    const fresh = session(current, 2 * 3_600_000, { used: 0, sessionStartSignal: "zeroUsage" });
+    expect([boundedResetMoment(fresh, current), boundedDetailText(fresh, current)]).toEqual([null, "Chưa bắt đầu"]);
   });
 
   it("leaves a row without a reset to count down with its status beside the reading", () => {
