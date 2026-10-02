@@ -410,9 +410,13 @@ export function acknowledgeUpdate(): void {
   void backend().acknowledgeUpdate?.().catch(logFailure("Acknowledging the update"));
 }
 
+let accountReloadGeneration = 0;
+
 export async function reloadAccounts(): Promise<void> {
+  const generation = ++accountReloadGeneration;
   try {
     const [accounts, removedLogins] = await Promise.all([backend().listAccounts(), backend().listRemovedLogins()]);
+    if (generation !== accountReloadGeneration) return;
     set({ accounts, removedLogins });
   } catch (error) {
     logFailure("Listing accounts")(error);
