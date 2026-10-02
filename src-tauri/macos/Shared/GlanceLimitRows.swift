@@ -16,6 +16,7 @@ struct GlanceAfterReset: Decodable, Equatable {
     var headline: String
     var fraction: Double
     var detail: String? = nil
+    var cadence: String? = nil
     var severity: GlanceSeverity? = nil
 }
 
@@ -162,6 +163,7 @@ extension GlanceMetric {
             copy.headline = after.headline
             copy.fraction = after.fraction
             copy.detail = after.detail
+            copy.cadence = after.cadence
             copy.severity = after.severity ?? .normal
             copy.resetsAt = nil
             copy.pace = nil
@@ -211,6 +213,7 @@ extension GlanceDocument {
             resetting: labels.resetting,
             soon: labels.resetsSoon,
             restoresAt: labels.restoresAt,
+            resetMoment: labels.resetMoment,
             absolute: labels.resetAbsolute,
             days: labels.days,
             units: labels.units,
@@ -219,9 +222,9 @@ extension GlanceDocument {
         )
     }
 
-    /// The reset text of `metric`'s row at `now` as the popup's row says it, `short` without its
-    /// verb; where reset times are switched off only a detail that is not one (`Chưa bắt đầu`,
-    /// `Hạn mức 50 $`), which the popup's row shows in the same place.
+    /// The reset text of `metric` at `now` in the Reset Times setting's form, for a line with room for
+    /// one reset text only (a compact line, a ring), `short` without its verb; where reset times are
+    /// switched off only a detail that is not one (`Chưa bắt đầu`, `Hạn mức 50 $`).
     func resetText(for metric: GlanceMetric, now: Date, showsReset: Bool = true, short: Bool = false) -> String? {
         guard let at = metric.resetsAt else { return metric.detail }
         guard showsReset else { return nil }
@@ -229,33 +232,100 @@ extension GlanceDocument {
         return short ? wording.span(at, now: now) : wording.line(at, now: now)
     }
 
-    /// The line under `metric`'s countdown with the moment it comes back, where the popup's row has
-    /// one: in Countdown, while the reset is ahead.
-    func restoreText(for metric: GlanceMetric, now: Date, showsReset: Bool = true) -> String? {
-        guard showsReset, let at = metric.resetsAt else { return nil }
-        return resetWording.restore(at, now: now)
+    /// The words at the right of `metric`'s title line at `now`, as the popup's row puts them there
+    /// whatever Reset Times says (`resetCountdownText`): the countdown to its reset, to the second
+    /// through its last five minutes, `short` without its verb; for a limit with no reset time yet, how
+    /// long its window runs. Nothing for a row saying a status instead, or with reset times switched off.
+    func countdownText(for metric: GlanceMetric, now: Date, showsReset: Bool = true, short: Bool = false) -> String? {
+        guard showsReset else { return nil }
+        if let at = metric.resetsAt { return resetWording.countdown(at, now: now, short: short) }
+        guard let cadence = metric.cadence else { return nil }
+        return short ? Self.withoutLead(cadence, lead: labels.resetsIn) : cadence
+    }
+
+    /// The words at the right of `metric`'s reading at `now` (`boundedDetailText`): the exact moment it
+    /// resets, `short` without its lead-in, nothing once that has passed; for a row without a reset
+    /// time, its status or what the limit is a limit of, which shows even with reset times switched off.
+    func momentText(for metric: GlanceMetric, now: Date, showsReset: Bool = true, short: Bool = false) -> String? {
+        guard let at = metric.resetsAt else { return metric.cadence == nil ? metric.detail : nil }
+        guard showsReset else { return nil }
+        return resetWording.resetMoment(at, now: now, short: short)
+    }
+
+    /// The resets of `providers`' limits that count down to the second at some moment from `now` on:
+    /// a surface drawing those rows redraws each second from five minutes before each until it.
+    func finalCountdowns(_ providers: [GlanceProvider], now: Date) -> [Date] {
+        providers.flatMap { provider in provider.metrics.compactMap { metric in
+            guard metric.fraction != nil, let at = metric.resetsAt, at > now else { return nil }
+            return at
+        } }
+    }
+
+    /// `text` without `lead` and the space after it: `5 giờ` of `Đặt lại sau 5 giờ`.
+    private static func withoutLead(_ text: String, lead: String) -> String {
+        guard !lead.isEmpty, text.hasPrefix(lead + " ") else { return text }
+        return String(text.dropFirst(lead.count + 1))
     }
 }
 
-/// When a limit comes back, worded as the popup's rows word it at a moment (`boundedTrailingText`,
-/// `restoreText`), in the Reset Times setting's form. Countdown: `Đặt lại sau 2 giờ 5 phút` over
-/// `Hồi lại lúc 13:05 · ngày mai`; Exact Time: `Đặt lại lúc 13:05 ngày mai`. In the last five minutes
-/// the countdown says `Sắp đặt lại`. A document from before these words counts down to the end and
-/// then says `Đang đặt lại…`, as it did.
+/// When a limit comes back, worded as the popup words it at a moment. A limit's row says it twice
+/// whatever Reset Times says (`countdown`, `resetMoment`): `Đặt lại sau 2 giờ 5 phút` on its title
+/// line, through the last five minutes `Đặt lại sau 04:59`, and `Đặt lại lúc 13:05 · ngày mai` beside
+/// its reading. A line with room for one reset text (`line`, `span`) says it in the Reset Times
+/// setting's form: Countdown `Đặt lại sau 2 giờ 5 phút`, in the last five minutes `Sắp đặt lại`;
+/// Exact Time `Đặt lại lúc 13:05 ngày mai`. A document from before these words counts down to the
+/// end and then says `Đang đặt lại…`, as it did.
 struct GlanceResetWording {
     var exact: Bool
     var resetsIn: String
     var resetting: String
     var soon: String?
     var restoresAt: String?
+    var resetMoment: String? = nil
     var absolute: GlanceDayWords?
     var days: GlanceDayWords?
     var units: GlanceUnits
     var locale: Locale
     var hour12: Bool?
 
-    /// The last stretch before a reset that the popup's countdown calls soon.
+    /// The last stretch before a reset that a one-line reset text calls soon and a limit's row counts
+    /// down to the second (`FINAL_COUNTDOWN_SECONDS`).
     static let soonSpan: TimeInterval = 5 * 60
+
+    /// Whether a reset at `at` is in its last five minutes at `now`, its row counting each second.
+    static func isFinal(_ at: Date, now: Date) -> Bool {
+        let left = at.timeIntervalSince(now)
+        return left > 0 && left <= soonSpan
+    }
+
+    /// The whole seconds left of `left`, a second begun counting as a whole one, as minutes and seconds
+    /// on a clock face (`clockCountdown`): `05:00`, `04:59`, `00:01`; never below `00:00`.
+    static func clock(_ left: TimeInterval) -> String {
+        let whole = left > 0 ? Int(left.rounded(.up)) : 0
+        return String(format: "%02d:%02d", whole / 60, whole % 60)
+    }
+
+    /// The countdown on a limit's title line at `now` (`resetCountdownLabel`): `Đặt lại sau 2 giờ 5
+    /// phút`, in the last five minutes `Đặt lại sau 04:59`, once the moment has passed `Sắp đặt lại`;
+    /// `short` without its verb.
+    func countdown(_ at: Date, now: Date, short: Bool = false) -> String {
+        let left = at.timeIntervalSince(now)
+        if left <= 0 { return soon ?? resetting }
+        let span = left <= Self.soonSpan ? Self.clock(left) : GlanceFormat.countdown(to: at, from: now, units: units)
+        return short ? span : "\(resetsIn) \(span)"
+    }
+
+    /// The exact moment beside a limit's reading (`resetMoment`): `Đặt lại lúc 13:05 · ngày mai`,
+    /// `short` its clock time and day alone; nothing once it has passed. A document from before these
+    /// words names it the way its Reset Times setting did.
+    func resetMoment(_ at: Date, now: Date, short: Bool = false) -> String? {
+        guard at > now else { return nil }
+        let when = moment(at, now: now)
+        if short { return when }
+        if let resetMoment { return resetMoment.replacingOccurrences(of: GlanceResetRow.momentPlaceholder, with: when) }
+        if exact, let absolute { return absolute.label(at, now: now, locale: locale) }
+        return restore(at, now: now) ?? when
+    }
 
     /// A limit's reset text at `now` for a reset at `at`.
     func line(_ at: Date, now: Date) -> String {
@@ -294,8 +364,11 @@ struct GlanceResetWording {
     }
 
     /// Everything the wording draws for a reset at `at` at `now`, to tell when it changes.
+    /// The countdown of the last five minutes counts on its own (a timer on a widget, each second on
+    /// the island), so its words stand for all of it.
     fileprivate func words(_ at: Date, now: Date) -> [String] {
-        [line(at, now: now), span(at, now: now), restore(at, now: now) ?? ""]
+        let countdown = Self.isFinal(at, now: now) ? "final" : self.countdown(at, now: now)
+        return [line(at, now: now), span(at, now: now), countdown, resetMoment(at, now: now) ?? ""]
     }
 }
 
@@ -308,13 +381,15 @@ extension GlanceDocument {
     /// own: a limit's countdown steps (each minute in its last day, each hour before) or turns to
     /// `Sắp đặt lại`, its restore line or exact time names another day, its pace note's figure or
     /// verdict moves, a reset row's countdown steps. At most one a minute: the last of each minute, by
-    /// when every change in it has happened. A widget gives each its own timeline entry, so the words
-    /// move with the clock as the popup's do, which reads them every 30 seconds.
+    /// when every change in it has happened; and besides those, five minutes before each limit's reset,
+    /// when its countdown starts counting each second on its own, and the reset itself. A widget gives
+    /// each its own timeline entry, so the words move with the clock as the popup's do.
     func rowTicks(_ providers: [GlanceProvider], after now: Date, until end: Date, calendar: Calendar = .current) -> [Date] {
         let wording = resetWording
         let pacing = self.pacing
         let midnight = GlanceDays.nextMidnight(after: now, calendar: calendar)
         var moments: [Date] = []
+        var finals: [Date] = []
         for provider in providers {
             if let row = provider.resetRow(at: now), let countdown = row.countdown, countdown.at > now {
                 moments += GlanceTicks.changes(after: now, until: min(end, countdown.at), anchor: countdown.at) {
@@ -324,6 +399,7 @@ extension GlanceDocument {
             for metric in provider.metrics {
                 guard let at = metric.resetsAt, at > now else { continue }
                 let last = min(end, at)
+                finals += [at.addingTimeInterval(-GlanceResetWording.soonSpan), at].filter { $0 > now && $0 <= end }
                 moments += GlanceTicks.changes(after: now, until: last, anchor: at, also: [midnight].compactMap { $0 }) {
                     wording.words(at, now: $0).joined(separator: "\n")
                 }
@@ -335,7 +411,7 @@ extension GlanceDocument {
                 }
             }
         }
-        return GlanceTicks.lastPerMinute(moments)
+        return Array(Set(GlanceTicks.lastPerMinute(moments) + finals)).sorted()
     }
 }
 
@@ -412,5 +488,57 @@ struct GlancePaceNoteView: View {
                 .lineLimit(1)
         }
         .fixedSize()
+    }
+}
+
+/// When a surface drawing limit rows redraws: every `interval` from its start, and through the last
+/// five minutes before each of `deadlines`, as each second left ends (`useFinalCountdown`), so the
+/// countdown steps `05:00`, `04:59`, … `00:01` on time and turns at the deadline itself. Each moment
+/// is worked out from the deadline, not from the previous one, so a late redraw lands on the right
+/// second; with no deadline in its last five minutes it redraws every `interval` only.
+struct GlanceCountdownSchedule: TimelineSchedule {
+    var deadlines: [Date]
+    var interval: TimeInterval = 30
+
+    /// Past each second's turn by this much, so the time left read then has just dropped below it.
+    static let settle: TimeInterval = 0.02
+    /// How far ahead the next redraw must be, so a moment the schedule gave never comes back as its
+    /// own next one through rounding.
+    private static let margin: TimeInterval = 0.001
+
+    func entries(from start: Date, mode: TimelineScheduleMode) -> Entries {
+        Entries(cursor: start, start: start, deadlines: deadlines, interval: max(1, interval))
+    }
+
+    /// The moment after `moment` this schedule redraws at.
+    func next(after moment: Date, start: Date) -> Date {
+        Self.next(after: moment, start: start, deadlines: deadlines, interval: max(1, interval))
+    }
+
+    fileprivate static func next(after moment: Date, start: Date, deadlines: [Date], interval: TimeInterval) -> Date {
+        let steps = (moment.timeIntervalSince(start) / interval).rounded(.down) + 1
+        var soonest = start.addingTimeInterval(steps * interval)
+        for deadline in deadlines {
+            let ahead = deadline.timeIntervalSince(moment) + settle
+            guard ahead > margin else { continue }
+            let secondsLeft = min((ahead - margin).rounded(.up) - 1, GlanceResetWording.soonSpan)
+            guard secondsLeft >= 0 else { continue }
+            let tick = deadline.addingTimeInterval(settle - secondsLeft)
+            if tick > moment, tick < soonest { soonest = tick }
+        }
+        return soonest
+    }
+
+    struct Entries: Sequence, IteratorProtocol {
+        var cursor: Date
+        let start: Date
+        let deadlines: [Date]
+        let interval: TimeInterval
+
+        mutating func next() -> Date? {
+            let current = cursor
+            cursor = GlanceCountdownSchedule.next(after: current, start: start, deadlines: deadlines, interval: interval)
+            return current
+        }
     }
 }

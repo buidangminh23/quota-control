@@ -14,6 +14,7 @@ import {
   glancePlanTermWords,
   glanceExpiryWords,
   glanceResetAbsoluteWords,
+  glanceResetMomentWords,
   glanceRestoreWords,
   GLANCE_VERSION,
   isClaudeResetsWing,
@@ -26,7 +27,7 @@ import {
   type GlanceResetsPending,
   type GlanceWingChoice,
 } from "./glance";
-import { resetAbsoluteLabel, restoreLabel, shortTime, timeOnDayLabel, whenLabel } from "./format";
+import { resetAbsoluteLabel, resetMoment, restoreLabel, shortTime, timeOnDayLabel, whenLabel } from "./format";
 import { buildClaudeGlanceResets } from "./glanceClaudeResets";
 import { claudeResetRow, codexResetRow } from "./glanceResetRows";
 import { buildGlanceResets, parseResetFeeds } from "./glanceResets";
@@ -34,7 +35,7 @@ import { dailyReliability } from "./insights/claudePresentation";
 import { parseClaudeResets } from "./insights/claudeResets";
 import { parseResetStatus } from "./insights/resets";
 import { glanceGroups, reconcileLayout } from "./layout";
-import { boundedTrailingText, meterSeverity, meterState } from "./meterState";
+import { boundedTrailingText, meterSeverity, meterState, resetCountdownText } from "./meterState";
 import { barKind, platformKey } from "./platform";
 import { cardIdentity, providerBrand } from "./providerText";
 import { DEFAULT_SETTINGS, type DensitySetting, type GlanceContent, type IslandSettings, type ResetProvider, type ThemeSetting } from "./settings";
@@ -430,6 +431,39 @@ describe("a limit's reset words, pace and reset", () => {
     });
   });
 
+  it("carries the words beside a limit's reading in either Reset Times setting, as the popup's row says its exact reset moment", () => {
+    for (const display of [DEFAULT_DISPLAY, { ...DEFAULT_DISPLAY, resetDisplayMode: "absolute" as const }]) {
+      expect(glance({ display }).labels.resetMoment).toBe("Đặt lại lúc {at}");
+      expect(glance({ display: { ...display, language: "en" } }).labels.resetMoment).toBe("Resets at {at}");
+    }
+    const moments = [Date.UTC(2026, 8, 30, 7, 30), Date.UTC(2026, 8, 30, 16, 59, 30), Date.UTC(2026, 9, 4, 23, 10)];
+    const offsets = [1_000, 299_000, 300_000, 3_600_000, 34_200_000, 86_400_000, 3 * 86_400_000];
+    for (const language of ["vi", "en"] as const) {
+      const words = glanceResetMomentWords(language);
+      for (const timeFormat of ["12h", "24h", "auto"] as const) {
+        for (const moment of moments) {
+          const now = new Date(moment);
+          for (const offset of offsets) {
+            const at = new Date(moment + offset);
+            expect(words.replace("{at}", timeOnDayLabel(at, now, timeFormat, language))).toBe(resetMoment(at, now, timeFormat, language)?.text);
+          }
+        }
+      }
+    }
+  });
+
+  it("carries the countdown words of a limit with no reset time yet apart from its status, as the popup's row places them", () => {
+    const document = glance();
+    const metrics = document.widget.providers.flatMap((entry) => entry.metrics);
+    for (const metric of metrics) {
+      if (metric.resetsAt) expect("cadence" in metric, metric.id).toBe(false);
+      if (metric.cadence) expect(metric.detail, metric.id).toBe(metric.cadence);
+    }
+    const fresh = metrics.find((metric) => metric.id === "claude@a93f.session")!;
+    expect(fresh).toMatchObject({ detail: "Chưa bắt đầu" });
+    expect("cadence" in fresh).toBe(false);
+  });
+
   it("fills in to the popup's own reset words at any moment, the way the island and the widgets fill them", () => {
     const base = Date.UTC(2026, 8, 30, 7, 30);
     const moments = [base, Date.UTC(2026, 8, 30, 16, 59, 30), Date.UTC(2026, 9, 4, 23, 10)];
@@ -470,12 +504,13 @@ describe("a limit's reset words, pace and reset", () => {
           headline: boundedHeadline(data),
           fraction: fraction(data),
           detail: boundedTrailingText(data, after) ?? undefined,
+          cadence: resetCountdownText(data, after) ?? undefined,
           ...(severity === "normal" ? {} : { severity }),
         });
       }
     }
     const codex = glance().widget.providers.find((entry) => entry.id === "codex@52d0")!;
-    expect(codex.metrics.find((metric) => metric.id === "codex@52d0.session")!.after).toEqual({ value: "100%", headline: "Còn 100%", fraction: 1, detail: "Đặt lại sau 5 giờ" });
+    expect(codex.metrics.find((metric) => metric.id === "codex@52d0.session")!.after).toEqual({ value: "100%", headline: "Còn 100%", fraction: 1, detail: "Đặt lại sau 5 giờ", cadence: "Đặt lại sau 5 giờ" });
   });
 
   it("carries what a limit's pace note and tick are worked out from, and the notes' words while one does", () => {
@@ -1125,11 +1160,32 @@ describe("a document for someone who never chose Claude", () => {
    * is gone (the island and the widgets word it from `at`), a scheduled card keeps only its fixed
    * meta line (`statuses[].meta`, no `due`), and the meters are rounded to the whole percent they
    * show (`forecast.chances[].fraction`, `forecast.waitFraction`).
+   * The limit rows then moved their reset words as the popup's row did (0.3.29): the exact moment
+   * beside each reading in either Reset Times setting (`labels.resetMoment`) and, on a limit with no
+   * reset time yet, the countdown words of its title line apart from its status (`cadence`, also on
+   * `after`). `BEFORE_ROW_MOMENTS` pins the documents without those, to show nothing else moved.
    */
   const PINNED: Readonly<Record<string, string>> = {
+    defaults: "88010db18da5d18f015d43a45c4e92cc45e5ecd4975eb57bc4b5e2d9296caacc",
+    wings: "620b582f17736808c78dcacd10918770d56cd0679f65b4730f62fea92c2c50f5",
+    tuned: "0d0c1e363fd22d9c320d67ab1709e2c425188664705917a8b62171c638c49346",
+  };
+  const BEFORE_ROW_MOMENTS: Readonly<Record<string, string>> = {
     defaults: "9eadcd8a63238ab3ef93c58efa116b5297b47f4dda4f20f3fb47a1cef297cb63",
     wings: "e2e15cb7d9652811e33f5235dcced660e55f6299ea18f21b4d32654403cfbe4a",
     tuned: "8618b464fccc3324d33718ea7d8b109de98703a96ee877337b2c02232c15a40c",
+  };
+  /** The document without the limit rows' reset words added in 0.3.29. */
+  const withoutRowMoments = (document: ReturnType<typeof glance>) => {
+    const copy = JSON.parse(JSON.stringify(document)) as ReturnType<typeof glance>;
+    delete copy.labels.resetMoment;
+    for (const entry of [...copy.providers, ...copy.widget.providers, ...copy.island.wings]) {
+      for (const metric of entry.metrics) {
+        delete metric.cadence;
+        if (metric.after) delete metric.after.cadence;
+      }
+    }
+    return copy;
   };
   const digest = (document: object) => createHash("sha256").update(JSON.stringify(document)).digest("hex");
   /** The document without what was added to it since: the announcement the latest reset's card
@@ -1147,7 +1203,7 @@ describe("a document for someone who never chose Claude", () => {
     return copy;
   };
 
-  it("stays byte for byte what 0.3.16 sent apart from the quoted announcement, the fetch time and what it took over from the popup, even with a Claude tracker at hand", () => {
+  it("stays byte for byte what 0.3.16 sent apart from the quoted announcement, the fetch time and what it took over from the popup (up to the limit rows' reset words of 0.3.29), even with a Claude tracker at hand", () => {
     const tracker = claude();
     expect(tracker).not.toBeNull();
     for (const [name, options] of Object.entries(scenarios())) {
@@ -1156,6 +1212,12 @@ describe("a document for someone who never chose Claude", () => {
       expect(document.resets?.presentation?.fetched?.at, name).toBe(new Date(FETCHED).toISOString());
       expect(digest(unquoted(document)), name).toBe(PINNED[name]);
       expect(digest(unquoted(glance({ ...options, claudeResets: tracker }))), name).toBe(PINNED[name]);
+    }
+  });
+
+  it("differs from what it was before the limit rows moved their reset words only by those words", () => {
+    for (const [name, options] of Object.entries(scenarios())) {
+      expect(digest(withoutRowMoments(unquoted(glance(options)))), name).toBe(BEFORE_ROW_MOMENTS[name]);
     }
   });
 

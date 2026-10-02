@@ -451,10 +451,9 @@ struct IslandQuotaSection: View {
         let all = document.visibleProviders
         let shown = Array(all.prefix(budget.maxAccounts ?? all.count))
         let perAccount = budget.perAccount
-        let restores = document.island.shows.resets && document.labels.restoresAt != nil && !document.resetWording.exact
         VStack(alignment: .leading, spacing: IslandDensity.of(document).quotaGap) {
             if shown.count > 1 && availableWidth >= 620 {
-                let split = Self.balancedSplit(shown, perAccount: perAccount, shows: document.island.shows, restores: restores, redeems: redeems, now: now)
+                let split = Self.balancedSplit(shown, perAccount: perAccount, shows: document.island.shows, redeems: redeems, now: now)
                 HStack(alignment: .top, spacing: 18) {
                     column(Array(shown[..<split]), document: document, perAccount: perAccount)
                     column(Array(shown[split...]), document: document, perAccount: perAccount)
@@ -466,6 +465,20 @@ struct IslandQuotaSection: View {
                 IslandMoreLine(text: more(all.count - shown.count))
             }
         }
+    }
+
+    /// The resets of the limit rows this section draws for `budget` at `now`, which it counts down to
+    /// the second through their last five minutes.
+    static func countdowns(_ document: GlanceDocument, budget: IslandBudget, now: Date) -> [Date] {
+        let read = document.reading(at: now)
+        guard read.island.shows.resets else { return [] }
+        let all = read.visibleProviders
+        let shown = all.prefix(budget.maxAccounts ?? all.count).map { provider in
+            var copy = provider
+            copy.metrics = Array(provider.metrics.prefix(budget.perAccount))
+            return copy
+        }
+        return read.finalCountdowns(Array(shown), now: now)
     }
 
     private func more(_ count: Int) -> String {
@@ -483,13 +496,12 @@ struct IslandQuotaSection: View {
     }
 
     /// Where the second column starts: keeps the accounts in reading order, top to bottom and
-    /// left to right, with the two columns as close in height as the accounts allow. `restores`: a
-    /// limit counting down has the line with the moment it comes back under it.
+    /// left to right, with the two columns as close in height as the accounts allow.
     static func balancedSplit(
-        _ providers: [GlanceProvider], perAccount: Int, shows: GlanceShows, restores: Bool = false,
+        _ providers: [GlanceProvider], perAccount: Int, shows: GlanceShows,
         redeems: IslandRedeemState = IslandRedeemState(), now: Date
     ) -> Int {
-        let weights = providers.map { weight($0, perAccount: perAccount, shows: shows, restores: restores, redeems: redeems, now: now) }
+        let weights = providers.map { weight($0, perAccount: perAccount, shows: shows, redeems: redeems, now: now) }
         let total = weights.reduce(0, +)
         var best = (index: 1, tallest: CGFloat.infinity)
         var left: CGFloat = 0
@@ -504,9 +516,9 @@ struct IslandQuotaSection: View {
     }
 
     /// The rough height of one account, in lines: the plan period's corner takes the email's line
-    /// when there is none; a limit's headline shares its line with the reset countdown, and the
-    /// moment it comes back takes a smaller line under them.
-    private static func weight(_ provider: GlanceProvider, perAccount: Int, shows: GlanceShows, restores: Bool, redeems: IslandRedeemState, now: Date) -> CGFloat {
+    /// when there is none; a limit's title shares its line with the reset countdown and its headline
+    /// with the moment it resets.
+    private static func weight(_ provider: GlanceProvider, perAccount: Int, shows: GlanceShows, redeems: IslandRedeemState, now: Date) -> CGFloat {
         var lines: CGFloat = 1.3
         if (shows.account && provider.account != nil) || provider.term != nil { lines += 0.9 }
         if let row = provider.resetRow(at: now) { lines += row.note == nil ? 2.1 : 3 }
@@ -514,7 +526,6 @@ struct IslandQuotaSection: View {
         for metric in provider.metrics.prefix(perAccount) {
             lines += 1.2
             if metric.fraction != nil { lines += 1.5 }
-            if restores, metric.resetsAt != nil { lines += 0.8 }
             if metric.redeem != nil { lines += redeems.phase(for: metric, now: now) == .confirming ? 8 : 1.9 }
         }
         if provider.metrics.count > perAccount { lines += 1 }
@@ -654,11 +665,13 @@ struct IslandAccountHeader: View {
 }
 
 /// One reading as the popup's row reads it (`metric` read at `now`). A limit: its title in bold with
-/// its pace note at the other end, over the meter, which alone carries the pace color and the
-/// even-pace tick; then its headline in the text color with when it comes back on the right in the
-/// secondary color, in the Reset Times setting's form, and under a countdown the moment it comes
-/// back. Where reset times are switched off, a detail that is not one still shows. A metric without a
-/// limit: its title with its value on the right, after the expiry dot of a reset credit.
+/// the countdown to its reset at the other end, to the second through its last five minutes, over the
+/// meter, which alone carries the pace color and the even-pace tick; then its headline in the text
+/// color with the exact moment it resets on the right, both reset texts in the same place whatever
+/// Reset Times says. The pace note takes the countdown's place only on a row without one (a status, or
+/// reset times switched off); beside a countdown it is the countdown's tooltip, as in the popup. Where
+/// reset times are switched off, a detail that is not one still shows. A metric without a limit: its
+/// title with its value on the right, after the expiry dot of a reset credit.
 struct IslandMetricRow: View {
     let metric: GlanceMetric
     let document: GlanceDocument
@@ -676,36 +689,35 @@ struct IslandMetricRow: View {
             VStack(alignment: .leading, spacing: density.lineGap) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     title
-                    if let note = metric.note {
+                    if let countdown = document.countdownText(for: metric, now: now, showsReset: showsReset) {
+                        Spacer(minLength: 6)
+                        Text(countdown)
+                            .font(.glance(size: density.support))
+                            .foregroundStyle(ink.caption)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .fixedSize()
+                            .help(ifAny: metric.note?.text)
+                    } else if let note = metric.note {
                         Spacer(minLength: 6)
                         GlancePaceNoteView(note: note, severity: metric.severity, onDark: ink.dark, size: density.note)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 GlanceMeter(fraction: fraction, severity: metric.severity, onDark: ink.dark, height: density.meter, tick: metric.tick)
-                VStack(alignment: .trailing, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        headline
-                        if let reset = document.resetText(for: metric, now: now, showsReset: showsReset) {
-                            Spacer(minLength: 8)
-                            Text(reset)
-                                .font(.glance(size: density.support))
-                                .foregroundStyle(ink.caption)
-                                .monospacedDigit()
-                                .lineLimit(1)
-                                .truncationMode(.tail)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    headline
+                    if let moment = document.momentText(for: metric, now: now, showsReset: showsReset) {
+                        Spacer(minLength: 8)
+                        ViewThatFits(in: .horizontal) {
+                            momentLine(moment)
+                            if let short = document.momentText(for: metric, now: now, showsReset: showsReset, short: true) {
+                                momentLine(short)
+                            }
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    if let restore = document.restoreText(for: metric, now: now, showsReset: showsReset) {
-                        Text(restore)
-                            .font(.glance(size: density.caption))
-                            .foregroundStyle(ink.faint)
-                            .monospacedDigit()
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         } else {
             VStack(alignment: .leading, spacing: 6) {
@@ -719,6 +731,17 @@ struct IslandMetricRow: View {
                 }
             }
         }
+    }
+
+    /// The exact moment beside the reading; the shorter form leaves out its lead-in before the line
+    /// cuts the time or the day, as the popup's row does.
+    private func momentLine(_ text: String) -> some View {
+        Text(text)
+            .font(.glance(size: density.support))
+            .foregroundStyle(ink.caption)
+            .monospacedDigit()
+            .lineLimit(1)
+            .truncationMode(.tail)
     }
 
     private var title: some View {
@@ -736,6 +759,14 @@ struct IslandMetricRow: View {
             .monospacedDigit()
             .lineLimit(1)
             .fixedSize()
+    }
+}
+
+private extension View {
+    /// `text` as the view's tooltip, where there is one.
+    @ViewBuilder
+    func help(ifAny text: String?) -> some View {
+        if let text { help(text) } else { self }
     }
 }
 

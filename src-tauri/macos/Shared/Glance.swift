@@ -291,6 +291,9 @@ struct GlanceLabels: Decodable, Equatable {
     var restoresAt: String? = nil
     /// Exact Time: a limit's reset text, `Đặt lại lúc {t} hôm nay`, worded like the day words.
     var resetAbsolute: GlanceDayWords? = nil
+    /// A limit's exact reset moment beside its reading in either Reset Times setting, `{at}` standing
+    /// for its clock time and day (`Đặt lại lúc {at}`); a document from before it has none.
+    var resetMoment: String? = nil
     /// The pace notes' words, sent while a limit carries a pace.
     var pace: GlancePaceWords? = nil
     var open: String
@@ -322,7 +325,7 @@ struct GlanceLabels: Decodable, Equatable {
     var days: GlanceDayWords?
 
     private enum CodingKeys: String, CodingKey {
-        case title, empty, updated, resetsIn, resetting, resetsSoon, restoresAt, resetAbsolute, pace, open, notRunning, noData, more, units, resetsOff, upcoming, upcomingEmpty, tabs, claudeResetsTab, claudeResetsOff, resetsBothTab, planTerm, days
+        case title, empty, updated, resetsIn, resetting, resetsSoon, restoresAt, resetAbsolute, resetMoment, pace, open, notRunning, noData, more, units, resetsOff, upcoming, upcomingEmpty, tabs, claudeResetsTab, claudeResetsOff, resetsBothTab, planTerm, days
     }
 
     init(
@@ -375,6 +378,7 @@ struct GlanceLabels: Decodable, Equatable {
         resetsSoon = try? container.decodeIfPresent(String.self, forKey: .resetsSoon)
         restoresAt = try? container.decodeIfPresent(String.self, forKey: .restoresAt)
         resetAbsolute = try? container.decodeIfPresent(GlanceDayWords.self, forKey: .resetAbsolute)
+        resetMoment = try? container.decodeIfPresent(String.self, forKey: .resetMoment)
         pace = try? container.decodeIfPresent(GlancePaceWords.self, forKey: .pace)
         open = try container.decode(String.self, forKey: .open)
         notRunning = try container.decode(String.self, forKey: .notRunning)
@@ -884,6 +888,9 @@ struct GlanceMetric: Decodable, Equatable, Identifiable {
     var resetsAt: Date?
     /// Text shown where no reset countdown applies (`Not started`, a plan badge, `No data`).
     var detail: String?
+    /// A limit with no reset time yet: the countdown words of its title line (`Đặt lại sau 5 giờ`),
+    /// which `detail` then repeats for a document reader from before them.
+    var cadence: String? = nil
     /// A value that moves with the clock, drawn in place of `value` (island wings).
     var countdown: GlanceCountdown?
     /// When the soonest of the row's reset credits expires, for the dot before its value.
@@ -904,7 +911,7 @@ struct GlanceMetric: Decodable, Equatable, Identifiable {
     var tick: Double? = nil
 
     fileprivate enum CodingKeys: String, CodingKey {
-        case id, label, value, headline, fraction, severity, resetsAt, detail, countdown, expiresAt, period, pace, after, redeem
+        case id, label, value, headline, fraction, severity, resetsAt, detail, cadence, countdown, expiresAt, period, pace, after, redeem
     }
 
     /// `value`, or the countdown's words at `now`, its span as short as `GlanceFormat.shortSpan`.
@@ -926,6 +933,7 @@ extension GlanceMetric {
         severity = try container.decode(GlanceSeverity.self, forKey: .severity)
         resetsAt = try container.decodeIfPresent(Date.self, forKey: .resetsAt)
         detail = try container.decodeIfPresent(String.self, forKey: .detail)
+        cadence = try? container.decodeIfPresent(String.self, forKey: .cadence)
         countdown = try container.decodeIfPresent(GlanceCountdown.self, forKey: .countdown)
         expiresAt = try? container.decodeIfPresent(Date.self, forKey: .expiresAt)
         period = try? container.decodeIfPresent(String.self, forKey: .period)

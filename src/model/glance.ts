@@ -19,7 +19,7 @@ import { COUNTDOWN_SPAN } from "./glanceResets";
 import { MOMENT_PLACEHOLDER, resetRowAvatars } from "./glanceResetRows";
 import { brandOf, cardsAsShown, isLocalHistoryCard, layoutFamily, type ProviderMetrics } from "./layout";
 import { periodLabel } from "./menuBar";
-import { boundedTrailingText, isFreshSessionWindow, meterSeverity, meterState, type MeterState } from "./meterState";
+import { boundedTrailingText, isFreshSessionWindow, meterSeverity, meterState, resetCountdownText, type MeterState } from "./meterState";
 import { SOURCE_COLORS } from "./palette";
 import { PLAN_TERM_SOON_DAYS, planTermEnd } from "./planTerm";
 import { isOutdated } from "./providerText";
@@ -46,6 +46,9 @@ export interface GlanceMetric {
   resetsAt?: string;
   /** What shows where no countdown applies: `Not started`, a plan badge, `No data`. */
   detail?: string;
+  /** A limit with no reset time yet whose window's length is known: the countdown words its row puts
+   * on the title line (`resetCountdownText`), `Đặt lại sau 5 giờ`; `detail` then says the same. */
+  cadence?: string;
   /** A value that moves with the clock, which Swift ticks in place of `value` (island wings only). */
   countdown?: GlanceCountdown;
   /** When the soonest of the row's reset credits expires (Codex's `Lượt đặt lại`), for the dot before
@@ -123,6 +126,8 @@ export interface GlanceAfterReset {
   fraction: number;
   /** `Đặt lại sau 5 giờ`, `Chưa bắt đầu`. */
   detail?: string;
+  /** `Đặt lại sau 5 giờ` alone, as `GlanceMetric.cadence`. */
+  cadence?: string;
   /** The meter's color when it is not the normal one. */
   severity?: GlanceSeverity;
 }
@@ -433,6 +438,10 @@ export interface GlanceDocument {
     /** Countdown: the line under a limit's countdown with the moment it comes back, `{at}` standing
      * for its clock time and day as `days` words them: `Hồi lại lúc {at}`. Absent in Exact Time. */
     restoresAt?: string;
+    /** A limit's exact reset moment beside its reading, as the popup's row says it in either Reset Times
+     * setting (`resetMoment`), `{at}` standing for its clock time and day as `days` words them:
+     * `Đặt lại lúc {at}`. Absent from documents written before the row moved its reset words. */
+    resetMoment?: string;
     /** Exact Time: a limit's reset text, `{t}` standing for the clock time and `{d}` for a day neither
      * today nor tomorrow as `date` draws it: `Đặt lại lúc {t} hôm nay`, `Resets {d} at {t}`. Absent in
      * Countdown. */
@@ -889,6 +898,8 @@ export function glanceMetric(id: string, data: WidgetData, now: Date): GlanceMet
   else if (bounded) {
     const detail = boundedTrailingText(data, now);
     if (detail) metric.detail = detail;
+    const cadence = resetCountdownText(data, now);
+    if (cadence) metric.cadence = cadence;
   }
   if (!bounded && data.hasData && data.expiriesAt.length > 0) metric.expiresAt = new Date(Math.min(...data.expiriesAt.map((date) => date.getTime()))).toISOString();
   const pace = state ? glancePace(data, state, counting) : null;
@@ -914,6 +925,8 @@ function glanceAfterReset(data: WidgetData, now: Date): GlanceAfterReset {
   const after: GlanceAfterReset = { value: menuBarValue(rolled), headline: boundedHeadline(rolled), fraction: fraction(rolled) };
   const detail = boundedTrailingText(rolled, now);
   if (detail) after.detail = detail;
+  const cadence = resetCountdownText(rolled, now);
+  if (cadence) after.cadence = cadence;
   const severity = meterSeverity(meterState(rolled, now)) ?? "none";
   if (severity !== "normal") after.severity = severity;
   return after;
@@ -1006,6 +1019,16 @@ export function glanceRestoreWords(language: Language): string {
   const format = messagesFor(language).format;
   const today = { kind: "today" } as const;
   return format.restoresAt(TIME_PLACEHOLDER, today).replace(format.timeOnDay(TIME_PLACEHOLDER, today), MOMENT_PLACEHOLDER);
+}
+
+/**
+ * The popup's exact reset moment beside a limit's reading (`resetMoment`) with `{at}` where the moment
+ * goes, as `glanceDayWords` words a clock time and its day: `Đặt lại lúc {at}`.
+ */
+export function glanceResetMomentWords(language: Language): string {
+  const format = messagesFor(language).format;
+  const today = { kind: "today" } as const;
+  return format.resetsAt(TIME_PLACEHOLDER, today).replace(format.timeOnDay(TIME_PLACEHOLDER, today), MOMENT_PLACEHOLDER);
 }
 
 /**
@@ -1143,6 +1166,7 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
       upcomingEmpty: text.upcomingEmpty,
       tabs: { ...text.tabs },
       days: glanceDayWords(input.language, timeFormat),
+      resetMoment: glanceResetMomentWords(input.language),
     },
     providers: islandProviders,
     island: {

@@ -21,16 +21,14 @@ func dealRows(_ sizes: [Int], total: Int) -> [Int] {
 
 /// How much of each account a plan draws besides its rows, richest first.
 enum QuotaDetail: Int, Hashable {
-    /// Every detail and, under each countdown in a wide column, the moment the limit comes back.
-    case restore
-    /// The email under the heading and every row's reset countdown.
+    /// The email under the heading and every row's reset texts.
     case full
     /// No email line.
     case noAccounts
-    /// No email line and no reset countdown lines.
+    /// No email line and, in a narrow column, no reset texts.
     case bare
 
-    var showsAccounts: Bool { self == .restore || self == .full }
+    var showsAccounts: Bool { self == .full }
 }
 
 /// One way to fit the accounts: how much of each is drawn, how many metrics each shown account
@@ -46,9 +44,7 @@ struct QuotaPlan: Hashable {
     /// first with every detail, then without emails, then without reset lines; then one line per
     /// account, then fewer accounts. An account's rows are the one its card starts with at `now`
     /// (its reset row), then its metrics, or one for the notice saying why it has none. `most` caps
-    /// the rows tried, so a tall list does not try hundreds of plans that cannot fit. The lines with
-    /// the moment each limit comes back (`restore`) are tried with every row only: rows come before
-    /// them.
+    /// the rows tried, so a tall list does not try hundreds of plans that cannot fit.
     static func candidates(_ providers: [GlanceProvider], now: Date, most: Int, details: [QuotaDetail] = [.full, .noAccounts, .bare]) -> [QuotaPlan] {
         let sizes = providers.map { $0.rowCount(at: now) }
         let total = sizes.reduce(0, +)
@@ -56,7 +52,6 @@ struct QuotaPlan: Hashable {
         var plans: [QuotaPlan] = []
         for detail in details {
             for rows in stride(from: top, through: providers.count, by: -1) {
-                if detail == .restore, rows < top { break }
                 plans.append(QuotaPlan(counts: dealRows(sizes, total: rows), detail: detail, condensed: false))
             }
         }
@@ -122,6 +117,36 @@ struct ResetText: View {
     }
 }
 
+/// The countdown on a limit's title line at the entry's moment (`GlanceDocument.countdownText`).
+/// WidgetKit draws an entry once, so through the last five minutes the seconds are a timer the system
+/// counts (`Text(timerInterval:)`, `4:59` … `0:00`), after a `0` that pads its minutes to the popup's
+/// `04:59`; the timeline's entry at the reset then says what comes next.
+struct WidgetCountdown {
+    let full: String
+    let short: String
+    /// The reset counted down to the second, from the entry's moment.
+    let final: ClosedRange<Date>?
+    let lead: String
+
+    init?(metric: GlanceMetric, document: GlanceDocument, now: Date, showsReset: Bool = true) {
+        guard let full = document.countdownText(for: metric, now: now, showsReset: showsReset) else { return nil }
+        self.full = full
+        short = document.countdownText(for: metric, now: now, showsReset: showsReset, short: true) ?? full
+        lead = document.labels.resetsIn
+        if let at = metric.resetsAt, GlanceResetWording.isFinal(at, now: now) {
+            final = now...at
+        } else {
+            final = nil
+        }
+    }
+
+    func text(short: Bool) -> Text {
+        guard let final else { return Text(short ? self.short : full) }
+        let pad = short ? "0" : "\(lead) 0"
+        return Text(pad) + Text(timerInterval: final, countsDown: true, showsHours: false)
+    }
+}
+
 extension GlanceResetRowSizes {
     /// An account's reset row on a widget, at the sizes of its metric rows.
     static let widget = GlanceResetRowSizes(avatar: 12, title: WidgetScale.label, value: WidgetScale.label, caption: WidgetScale.caption)
@@ -164,10 +189,7 @@ struct DetailsLayout: View {
         let columns = quotaColumns(family, style: .details, accounts: providers.count)
         let inline = columnWidth(size.width, count: columns) >= 280
         let most = QuotaPlan.mostRows(height: size.height, columns: columns, row: 20)
-        let restores = inline && document.widget.shows.resets && providers.contains { provider in
-            provider.metrics.contains { document.restoreText(for: $0, now: now) != nil }
-        }
-        let details: [QuotaDetail] = restores ? [.restore, .full, .noAccounts, .bare] : [.full, .noAccounts, .bare]
+        let details: [QuotaDetail] = [.full, .noAccounts, .bare]
         VStack(alignment: .leading, spacing: 0) {
             ViewThatFits(in: .vertical) {
                 ForEach(Array(QuotaPlan.candidates(providers, now: now, most: most, details: details).enumerated()), id: \.offset) { _, plan in
@@ -240,7 +262,7 @@ private struct DetailedAccount: View {
             ForEach(metrics) { metric in
                 QuotaMetricRow(
                     metric: metric, document: document, now: now, showsReset: shows.resets, inline: inline,
-                    dense: detail == .bare, restores: detail == .restore
+                    dense: detail == .bare
                 )
             }
         }
@@ -254,15 +276,16 @@ extension GlanceDocument {
     }
 }
 
-/// A metric as the popup's row reads it (`metric` read at the entry's moment). A limit in a wide
-/// column: its title in bold with its pace note at the other end, over the meter, which alone carries
-/// the pace color and the even-pace tick; then its headline in the text color with its reset text on
-/// the right, in the Reset Times setting's form, and with `restores` the moment it comes back under
-/// them. A narrow column has no room for the headline and the reset text on one line, so there the
-/// headline sits on the title's line (with the pace note where it fits) and the reset text under the
-/// meter, left out in the densest plan. Where reset times are switched off, a detail that is not one
-/// still shows. A metric without a limit: its title with its value on the right, after the expiry
-/// dot of a reset credit.
+/// A metric as the popup's row reads it (`metric` read at the entry's moment). A limit: its title in
+/// bold with the countdown to its reset at the other end, over the meter, which alone carries the pace
+/// color and the even-pace tick; then its headline in the text color with the exact moment it resets
+/// on the right, both reset texts in the same place whatever Reset Times says. Through the last five
+/// minutes the countdown is a timer the system counts each second. The pace note takes the
+/// countdown's place only on a row without one. A narrow column drops the verb of the countdown and
+/// the lead-in of the moment where the full words do not fit; its densest plan keeps the headline on
+/// the title's line and leaves the reset texts out. Where reset times are switched off, a detail that
+/// is not one still shows. A metric without a limit: its title with its value on the right, after the
+/// expiry dot of a reset credit.
 private struct QuotaMetricRow: View {
     let metric: GlanceMetric
     let document: GlanceDocument
@@ -270,38 +293,47 @@ private struct QuotaMetricRow: View {
     var showsReset = true
     var inline = false
     var dense = false
-    var restores = false
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        let reset = ResetText(metric: metric, document: document, now: now, showsReset: showsReset)
-        if let fraction = metric.fraction, inline {
+        if let fraction = metric.fraction, inline || !dense {
+            let countdown = WidgetCountdown(metric: metric, document: document, now: now, showsReset: showsReset)
+            let size = inline ? WidgetScale.value : WidgetScale.caption
             VStack(alignment: .leading, spacing: 3) {
+                if let countdown {
+                    ViewThatFits(in: .horizontal) {
+                        countdownLine(countdown, short: false, size: size)
+                        countdownLine(countdown, short: true, size: size)
+                        title.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                } else {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        title
+                        if let note = metric.note {
+                            Spacer(minLength: 4)
+                            noteView(note)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                GlanceMeter(fraction: fraction, severity: metric.severity, height: 4, tick: metric.tick)
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    title
-                    if let note = metric.note {
+                    headline(noted: countdown == nil && metric.note != nil)
+                    if let moment = document.momentText(for: metric, now: now, showsReset: showsReset) {
                         Spacer(minLength: 4)
-                        noteView(note)
+                        ViewThatFits(in: .horizontal) {
+                            momentLine(moment)
+                            if let short = document.momentText(for: metric, now: now, showsReset: showsReset, short: true) {
+                                momentLine(short)
+                            }
+                        }
+                        .font(.glance(size: size))
+                        .foregroundStyle(.secondary)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                GlanceMeter(fraction: fraction, severity: metric.severity, height: 4, tick: metric.tick)
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    headline(noted: metric.note != nil)
-                    if let reset {
-                        Spacer(minLength: 4)
-                        reset
-                            .font(.glance(size: WidgetScale.value))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                if restores, let restore = document.restoreText(for: metric, now: now, showsReset: showsReset) {
-                    Text(restore)
-                        .font(.glance(size: WidgetScale.caption))
-                        .monospacedDigit()
-                        .foregroundStyle(GlanceRowInk.tertiary(dark: colorScheme == .dark))
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
+                if let redeem = metric.redeem {
+                    WidgetRedeemButton(metric: metric, redeem: redeem, now: now)
+                        .padding(.top, 1)
                 }
             }
         } else {
@@ -314,17 +346,31 @@ private struct QuotaMetricRow: View {
                 }
                 if let fraction = metric.fraction {
                     GlanceMeter(fraction: fraction, severity: metric.severity, height: 4, tick: metric.tick)
-                    if let reset, !dense {
-                        reset
-                            .font(.glance(size: WidgetScale.caption))
-                            .foregroundStyle(.secondary)
-                    }
                 }
                 if let redeem = metric.redeem {
                     WidgetRedeemButton(metric: metric, redeem: redeem, now: now)
                         .padding(.top, 1)
                 }
             }
+        }
+    }
+
+    private func momentLine(_ text: String) -> some View {
+        Text(text)
+            .monospacedDigit()
+            .lineLimit(1)
+            .truncationMode(.tail)
+    }
+
+    private func countdownLine(_ countdown: WidgetCountdown, short: Bool, size: CGFloat) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            title.fixedSize(horizontal: true, vertical: false)
+            Spacer(minLength: 4)
+            countdown.text(short: short)
+                .font(.glance(size: size))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: true, vertical: false)
         }
     }
 

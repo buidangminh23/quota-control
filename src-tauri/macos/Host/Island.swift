@@ -823,6 +823,15 @@ struct IslandRootView: View {
         }
     }
 
+    /// The open island redraws every 30 seconds, and each second while a limit row it shows is in its
+    /// last five minutes; closed, it draws none of them.
+    private func expandedSchedule(_ document: GlanceDocument) -> GlanceCountdownSchedule {
+        let now = Date()
+        let plan = IslandPlan.make(document, now: now, selected: model.selectedTab)
+        let deadlines = plan.sections.contains(.quota) ? IslandQuotaSection.countdowns(document, budget: model.budget, now: now) : []
+        return GlanceCountdownSchedule(deadlines: deadlines, interval: 30)
+    }
+
     private func shapeSize(_ geometry: IslandGeometry) -> CGSize {
         model.mode.isOpen ? model.expandedSize : model.compactSize(for: geometry)
     }
@@ -859,7 +868,7 @@ struct IslandRootView: View {
             }
             .transition(model.reducesMotion ? .identity : .opacity)
         case .expanded:
-            TimelineView(.periodic(from: .now, by: 30)) { context in
+            TimelineView(expandedSchedule(document)) { context in
                 IslandDetails(
                     document: document, now: context.date, topInset: geometry.detailsInset,
                     budget: model.budget, selected: model.selectedTab,
