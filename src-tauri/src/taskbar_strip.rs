@@ -220,6 +220,11 @@ pub fn encode_native(document: &serde_json::Value) -> Result<Vec<u8>, String> {
 }
 
 impl Bitmap {
+    #[cfg(windows)]
+    pub(crate) fn same_pixels(&self, other: &Self) -> bool {
+        self.width == other.width && self.height == other.height && self.bgra == other.bgra
+    }
+
     /// Back to straight RGBA, for platforms that take the frame as an ordinary image.
     #[cfg_attr(windows, allow(dead_code))]
     pub fn straight_rgba(&self) -> Vec<u8> {
@@ -767,6 +772,7 @@ mod platform {
 
     const WM_APP_FRAME: u32 = WM_APP + 1;
     const WM_APP_TASKBAR_CHANGED: u32 = WM_APP + 2;
+    const WM_APP_LAYOUT_READY: u32 = WM_APP + 3;
     const SYNC_TIMER: usize = 1;
     const SYNC_INTERVAL_MS: u32 = 1000;
     const GAP_POINTS: f64 = 4.0;
@@ -1150,7 +1156,7 @@ mod platform {
     }
 
     impl LayoutReader {
-        fn start() -> Self {
+        fn start(host: isize) -> Self {
             let mailbox = Arc::new(Mutex::new(LayoutMailbox::default()));
             let stopped = Arc::new(AtomicBool::new(false));
             let (wake, events) = mpsc::sync_channel(1);
@@ -1197,6 +1203,9 @@ mod platform {
                                     read: Instant::now(),
                                 });
                             }
+                            unsafe {
+                                PostMessageW(host as HWND, WM_APP_LAYOUT_READY, 0, 0);
+                            }
                         }
                     }
                     unsafe { CoUninitialize() };
@@ -1211,12 +1220,16 @@ mod platform {
             }
         }
 
-        fn poll(&self, key: LayoutKey) -> Option<LayoutResult> {
+        fn poll(&self, key: LayoutKey, request: bool) -> Option<LayoutResult> {
             let result = self.mailbox.try_lock().ok().and_then(|mut mailbox| {
-                mailbox.request = Some(key);
+                if request {
+                    mailbox.request = Some(key);
+                }
                 mailbox.result.take().filter(|result| result.key == key)
             });
-            let _ = self.wake.try_send(());
+            if request {
+                let _ = self.wake.try_send(());
+            }
             result
         }
     }
@@ -1244,9 +1257,9 @@ mod platform {
     }
 
     impl Islands {
-        fn new() -> Self {
+        fn new(host: isize) -> Self {
             Self {
-                reader: LayoutReader::start(),
+                reader: LayoutReader::start(host),
                 generation: 0,
                 key: None,
                 sample: None,
@@ -1279,14 +1292,15 @@ mod platform {
             }
         }
 
-        fn layout(&mut self, taskbar: &Taskbar) -> Option<Layout> {
+        fn layout(&mut self, taskbar: &Taskbar, request: bool) -> Option<Layout> {
             let key = LayoutKey::new(taskbar, self.generation);
-            if self.key != Some(key) {
+            let changed = self.key != Some(key);
+            if changed {
                 self.key = Some(key);
                 self.last = None;
                 self.reach = None;
             }
-            if let Some(result) = self.reader.poll(key)
+            if let Some(result) = self.reader.poll(key, request || changed)
                 && let Some(layout) = result.layout
             {
                 self.last = Some((layout, result.read, result.key));
@@ -1468,6 +1482,46 @@ mod platform {
     }
 
     #[derive(Default)]
+    struct SlotPlacement {
+        bounds: Option<RECT>,
+        misses: u8,
+        read: Option<Instant>,
+    }
+
+    impl SlotPlacement {
+        fn update(
+            &mut self,
+            button: Option<RECT>,
+            content: &Bitmap,
+            scale: f64,
+            read: Option<Instant>,
+        ) -> (Option<u32>, bool) {
+            let fresh = read.is_some() && self.read != read;
+            self.read = read;
+            let fitting = button
+                .filter(|slot| slot_holds(content, slot.right - slot.left, slot.bottom - slot.top));
+            match fitting {
+                Some(slot) => {
+                    self.bounds = Some(slot);
+                    self.misses = 0;
+                }
+                None if !fresh => {}
+                None if self.bounds.is_some() && self.misses + 1 < SLOT_EXIT_PASSES => {
+                    self.misses += 1;
+                }
+                None => {
+                    self.bounds = None;
+                    self.misses = 0;
+                }
+            }
+            let wanted = button
+                .or(self.bounds)
+                .map(|slot| slot_width_for(content, (slot.bottom - slot.top) as u32, scale));
+            (wanted, fresh)
+        }
+    }
+
+    #[derive(Default)]
     struct SlotStretch {
         request: Option<u32>,
         wanted: Option<u32>,
@@ -1486,8 +1540,14 @@ mod platform {
             now.duration_since(since) >= SLOT_RECOVERY_GRACE
         }
 
-        fn tray(&mut self, wanted: Option<u32>, held: bool, visible: bool) -> TraySlot {
-            self.tray_at(wanted, held, visible, Instant::now())
+        fn tray(
+            &mut self,
+            wanted: Option<u32>,
+            held: bool,
+            visible: bool,
+            fresh: bool,
+        ) -> TraySlot {
+            self.tray_at(wanted, held, visible, fresh, Instant::now())
         }
 
         fn tray_at(
@@ -1495,6 +1555,7 @@ mod platform {
             wanted: Option<u32>,
             held: bool,
             visible: bool,
+            fresh: bool,
             now: Instant,
         ) -> TraySlot {
             let Some(wanted) = wanted else {
@@ -1514,8 +1575,10 @@ mod platform {
             self.request = Some(request);
             self.unheld = if held {
                 0
-            } else {
+            } else if fresh {
                 self.unheld.saturating_add(1)
+            } else {
+                self.unheld
             };
             if self.unheld > SLOT_STRETCH_PASSES && visible {
                 TraySlot::Icon
@@ -1539,9 +1602,7 @@ mod platform {
         paint_failed: bool,
         placed: Option<(i32, i32, i32, i32)>,
         /// The widened notification-area button the strip covers, in taskbar client coordinates.
-        slot: Option<RECT>,
-        /// Passes in a row that found that button gone or too narrow for the frame.
-        slot_misses: u8,
+        slot: SlotPlacement,
         /// What the app last heard its button should show.
         tray: TraySlot,
         stretch: SlotStretch,
@@ -1579,7 +1640,7 @@ mod platform {
     /// Object-safe view of the thread state, so the window procedures need no runtime generic.
     trait StripThread {
         fn apply_pending(&mut self);
-        fn sync(&mut self);
+        fn sync(&mut self, request_layout: bool);
         /// Re-read the taskbar after a theme or display change, or (`restarted`) after Explorer
         /// replaced the taskbar.
         fn taskbar_changed(&mut self, restarted: bool);
@@ -1594,11 +1655,10 @@ mod platform {
                 .lock()
                 .ok()
                 .and_then(|mut pending| pending.take());
-            if let Some(bitmap) = update {
-                self.bitmap = bitmap;
-                self.composed = None;
-                self.painted = false;
-                self.sync();
+            if let Some(bitmap) = update
+                && self.replace_bitmap(bitmap)
+            {
+                self.sync(true);
             }
         }
 
@@ -1608,14 +1668,13 @@ mod platform {
             if restarted {
                 tracing::info!("taskbar strip invalidated after Explorer restart");
                 self.placed = None;
-                self.slot = None;
-                self.slot_misses = 0;
+                self.slot = SlotPlacement::default();
                 self.stretch.retry();
             }
-            self.sync();
+            self.sync(true);
         }
 
-        fn sync(&mut self) {
+        fn sync(&mut self, request_layout: bool) {
             let taskbar = read_taskbar();
             let info = taskbar
                 .as_ref()
@@ -1635,7 +1694,9 @@ mod platform {
                 tracing::warn!("could not publish taskbar info");
             }
             match (taskbar, &self.bitmap) {
-                (Some(taskbar), Some(_)) if taskbar.info.supported => self.show(&taskbar),
+                (Some(taskbar), Some(_)) if taskbar.info.supported => {
+                    self.show(&taskbar, request_layout)
+                }
                 _ => self.close(),
             }
         }
@@ -1655,7 +1716,31 @@ mod platform {
     }
 
     impl<R: Runtime> State<R> {
-        fn show(&mut self, taskbar: &Taskbar) {
+        fn replace_bitmap(&mut self, bitmap: Option<Bitmap>) -> bool {
+            if self.bitmap == bitmap {
+                return false;
+            }
+            let same_pixels = self
+                .bitmap
+                .as_ref()
+                .zip(bitmap.as_ref())
+                .is_some_and(|(current, next)| current.same_pixels(next));
+            if same_pixels {
+                if let Some((_, composed)) = self.composed.as_mut()
+                    && let Some(content) = bitmap.as_ref()
+                {
+                    composed.text.clone_from(&content.text);
+                    composed.tooltip.clone_from(&content.tooltip);
+                }
+            } else {
+                self.composed = None;
+                self.painted = false;
+            }
+            self.bitmap = bitmap;
+            true
+        }
+
+        fn show(&mut self, taskbar: &Taskbar, request_layout: bool) {
             let alive = self
                 .window
                 .as_ref()
@@ -1672,13 +1757,12 @@ mod platform {
             let padding = (FRAME_PADDING_POINTS * scale).round() as u32;
             let popup_open = self.shared.popup.load(Ordering::Acquire);
             let previous_key = self.islands.key;
-            let layout = self.islands.layout(taskbar);
+            let layout = self.islands.layout(taskbar, request_layout);
             if self.islands.key != previous_key {
                 if previous_key.is_some() {
                     tracing::info!("taskbar strip layout invalidated by changed taskbar geometry");
                 }
-                self.slot = None;
-                self.slot_misses = 0;
+                self.slot = SlotPlacement::default();
             }
             if layout.is_none() {
                 if self.placed.is_some() {
@@ -1709,24 +1793,13 @@ mod platform {
                 .and_then(|layout| layout.slot)
                 .map(|slot| to_client(taskbar.hwnd, slot))
                 .filter(|slot| slot_capable(slot.right - slot.left, slot.bottom - slot.top));
-            let wanted =
-                button.map(|slot| slot_width_for(content, (slot.bottom - slot.top) as u32, scale));
-            let fitting = button
-                .filter(|slot| slot_holds(content, slot.right - slot.left, slot.bottom - slot.top));
-            match fitting {
-                Some(slot) => {
-                    self.slot = Some(slot);
-                    self.slot_misses = 0;
-                }
-                None if self.slot.is_some() && self.slot_misses + 1 < SLOT_EXIT_PASSES => {
-                    self.slot_misses += 1;
-                }
-                None => {
-                    self.slot = None;
-                    self.slot_misses = 0;
-                }
-            }
-            let (x, y, composition) = if let Some(slot) = self.slot {
+            let (wanted, fresh) = self.slot.update(
+                button,
+                content,
+                scale,
+                self.islands.last.map(|(_, read, _)| read),
+            );
+            let (x, y, composition) = if let Some(slot) = self.slot.bounds {
                 let composition = Composition::Slotted {
                     width: (slot.right - slot.left) as u32,
                     height: (slot.bottom - slot.top) as u32,
@@ -1803,7 +1876,6 @@ mod platform {
                 }
                 self.placed = None;
             } else if self.placed != Some(placement)
-                || !self.painted
                 || unsafe { IsWindowVisible(window.strip) } == 0
             {
                 let positioned = unsafe {
@@ -1843,20 +1915,21 @@ mod platform {
                     tracing::info!("taskbar strip repaint recovered");
                 }
                 self.paint_failed = !self.painted;
-                update_tooltip(window, &bitmap.tooltip);
             }
-            let tray = self.tray_for(wanted);
+            update_tooltip(window, &bitmap.tooltip);
+            let tray = self.tray_for(wanted, fresh);
             self.cover(tray);
         }
 
         /// What the app's button should show while it is widened for the strip, which wants
         /// `wanted` points of it: a clear icon that wide (see [`TraySlot::Clear`]), until the strip
         /// has not fitted the button for [`SLOT_STRETCH_PASSES`] passes and is visible elsewhere.
-        fn tray_for(&mut self, wanted: Option<u32>) -> TraySlot {
+        fn tray_for(&mut self, wanted: Option<u32>, fresh: bool) -> TraySlot {
             self.stretch.tray(
                 wanted.filter(|_| self.painted),
-                self.slot.is_some(),
+                self.slot.bounds.is_some(),
                 self.placed.is_some(),
+                fresh,
             )
         }
 
@@ -1888,8 +1961,7 @@ mod platform {
 
         fn close(&mut self) {
             self.discard_window();
-            self.slot = None;
-            self.slot_misses = 0;
+            self.slot = SlotPlacement::default();
             self.stretch = SlotStretch::default();
             self.cover(TraySlot::Icon);
         }
@@ -2024,7 +2096,11 @@ mod platform {
         if window.tooltip.is_null() {
             return;
         }
-        window.tip = wide(text);
+        let tip = wide(text);
+        if window.tip == tip {
+            return;
+        }
+        window.tip = tip;
         let mut info = tool_info(window);
         unsafe {
             SendMessageW(
@@ -2143,7 +2219,11 @@ mod platform {
                 0
             }
             WM_TIMER if wparam == SYNC_TIMER => {
-                with_state(|state| state.sync());
+                with_state(|state| state.sync(true));
+                0
+            }
+            WM_APP_LAYOUT_READY => {
+                with_state(|state| state.sync(false));
                 0
             }
             WM_SETTINGCHANGE | WM_DISPLAYCHANGE => {
@@ -2265,12 +2345,11 @@ mod platform {
                 window: None,
                 bitmap: None,
                 composed: None,
-                islands: Islands::new(),
+                islands: Islands::new(host as isize),
                 painted: false,
                 paint_failed: false,
                 placed: None,
-                slot: None,
-                slot_misses: 0,
+                slot: SlotPlacement::default(),
                 tray: TraySlot::Icon,
                 stretch: SlotStretch::default(),
             }));
@@ -2278,7 +2357,7 @@ mod platform {
         unsafe { SetTimer(host, SYNC_TIMER, SYNC_INTERVAL_MS, None) };
         with_state(|state| {
             state.apply_pending();
-            state.sync();
+            state.sync(true);
         });
         let mut message: MSG = unsafe { std::mem::zeroed() };
         while unsafe { GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) } > 0 {
@@ -2335,23 +2414,196 @@ mod platform {
             }
         }
 
+        fn slot_content() -> Bitmap {
+            Bitmap {
+                width: 440,
+                height: 20,
+                bgra: vec![255; 440 * 20 * 4],
+                text: String::new(),
+                tooltip: String::new(),
+            }
+        }
+
+        fn slot_bounds() -> RECT {
+            RECT {
+                left: 700,
+                top: 4,
+                right: 1160,
+                bottom: 36,
+            }
+        }
+
+        fn strip_state() -> (
+            tauri::App<tauri::test::MockRuntime>,
+            State<tauri::test::MockRuntime>,
+        ) {
+            let app = tauri::test::mock_builder()
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .unwrap();
+            let (reader, _) = reader();
+            let state = State {
+                app: app.handle().clone(),
+                shared: Shared {
+                    host: Arc::new(AtomicIsize::new(0)),
+                    pending: Arc::new(Mutex::new(None)),
+                    info: Arc::new(Mutex::new(TaskbarInfo::UNSUPPORTED)),
+                    popup: Arc::new(AtomicBool::new(false)),
+                },
+                on_cover: Arc::new(|_| {}),
+                window: None,
+                bitmap: None,
+                composed: None,
+                islands: Islands {
+                    reader,
+                    generation: 0,
+                    key: None,
+                    sample: None,
+                    last: None,
+                    reach: None,
+                },
+                painted: false,
+                paint_failed: false,
+                placed: None,
+                slot: SlotPlacement::default(),
+                tray: TraySlot::Icon,
+                stretch: SlotStretch::default(),
+            };
+            (app, state)
+        }
+
+        #[test]
+        fn metadata_updates_preserve_the_uploaded_frame_and_composition() {
+            let (_app, mut state) = strip_state();
+            let content = slot_content();
+            state.bitmap = Some(content.clone());
+            state.composed = Some((
+                Composition::Slotted {
+                    width: 460,
+                    height: 32,
+                },
+                slotted(&content, 460, 32),
+            ));
+            state.painted = true;
+            state.placed = Some((700, 4, 460, 32));
+            assert!(!state.replace_bitmap(Some(content.clone())));
+            let mut metadata = content.clone();
+            metadata.text = "Updated accessible text".into();
+            metadata.tooltip = "Updated reset countdown".into();
+            assert!(state.replace_bitmap(Some(metadata.clone())));
+            assert!(state.painted);
+            assert_eq!(state.placed, Some((700, 4, 460, 32)));
+            let composed = &state.composed.as_ref().unwrap().1;
+            assert!(composed.same_pixels(&slotted(&content, 460, 32)));
+            assert_eq!(composed.text, metadata.text);
+            assert_eq!(composed.tooltip, metadata.tooltip);
+            metadata.bgra[0] = 0;
+            assert!(state.replace_bitmap(Some(metadata)));
+            assert!(!state.painted);
+            assert!(state.composed.is_none());
+            assert_eq!(state.placed, Some((700, 4, 460, 32)));
+        }
+
+        #[test]
+        fn cached_layout_does_not_exhaust_slot_stretch_grace() {
+            let mut stretch = SlotStretch::default();
+            let expanded = stretch.tray(Some(440), false, true, true);
+            for _ in 0..100 {
+                assert_eq!(stretch.tray(Some(440), false, true, false), expanded);
+                assert_eq!(stretch.unheld, 1);
+            }
+            for _ in 1..SLOT_STRETCH_PASSES {
+                assert_eq!(stretch.tray(Some(440), false, true, true), expanded);
+            }
+            assert_eq!(stretch.tray(Some(440), false, true, true), TraySlot::Icon);
+        }
+
+        #[test]
+        fn ready_layout_is_consumed_without_starting_another_read() {
+            let (reader, events) = reader();
+            let key = LayoutKey::new(&taskbar(), 0);
+            let mut islands = Islands {
+                reader,
+                generation: 0,
+                key: Some(key),
+                sample: None,
+                last: None,
+                reach: None,
+            };
+            islands.reader.mailbox.lock().unwrap().result = Some(LayoutResult {
+                key,
+                layout: Some(layout()),
+                read: Instant::now(),
+            });
+            assert!(islands.layout(&taskbar(), false).is_some());
+            assert!(islands.reader.mailbox.lock().unwrap().request.is_none());
+            assert!(matches!(events.try_recv(), Err(mpsc::TryRecvError::Empty)));
+            let mut resized = taskbar();
+            resized.notify_left -= 400;
+            assert!(islands.layout(&resized, false).is_none());
+            assert_eq!(
+                islands.reader.mailbox.lock().unwrap().request,
+                Some(LayoutKey::new(&resized, 0))
+            );
+            assert!(events.try_recv().is_ok());
+        }
+
+        #[test]
+        fn retained_slot_keeps_reserved_width_through_a_missing_observation() {
+            let mut slot = SlotPlacement::default();
+            let content = slot_content();
+            let read = Instant::now();
+            let (wanted, _) = slot.update(Some(slot_bounds()), &content, 1.0, Some(read));
+            let (retained, fresh) =
+                slot.update(None, &content, 1.0, Some(read + Duration::from_secs(1)));
+            assert!(fresh);
+            assert!(slot.bounds.is_some());
+            assert_eq!(retained, wanted);
+        }
+
+        #[test]
+        fn cached_missing_slot_does_not_exhaust_exit_grace() {
+            let mut slot = SlotPlacement::default();
+            let content = slot_content();
+            let read = Instant::now();
+            slot.update(Some(slot_bounds()), &content, 1.0, Some(read));
+            let missing = Some(read + Duration::from_secs(1));
+            slot.update(None, &content, 1.0, missing);
+            for _ in 0..100 {
+                let (_, fresh) = slot.update(None, &content, 1.0, missing);
+                assert!(!fresh);
+                assert!(slot.bounds.is_some());
+                assert_eq!(slot.misses, 1);
+            }
+            let (wanted, fresh) =
+                slot.update(None, &content, 1.0, Some(read + Duration::from_secs(2)));
+            assert!(fresh);
+            assert!(slot.bounds.is_none());
+            assert_eq!(wanted, None);
+        }
+
         #[test]
         fn hidden_strip_keeps_its_slot_request_only_through_a_bounded_layout_delay() {
             let mut stretch = SlotStretch::default();
             let started = Instant::now();
-            let expanded = stretch.tray_at(Some(440), false, false, started);
+            let expanded = stretch.tray_at(Some(440), false, false, true, started);
             assert!(matches!(expanded, TraySlot::Clear { .. }));
             assert_eq!(
-                stretch.tray_at(Some(440), false, false, started + SLOT_RECOVERY_GRACE / 2),
+                stretch.tray_at(
+                    Some(440),
+                    false,
+                    false,
+                    true,
+                    started + SLOT_RECOVERY_GRACE / 2
+                ),
                 expanded
             );
             assert_eq!(
-                stretch.tray_at(Some(440), false, false, started + SLOT_RECOVERY_GRACE),
+                stretch.tray_at(Some(440), false, false, true, started + SLOT_RECOVERY_GRACE),
                 TraySlot::Icon
             );
             assert_eq!(stretch.request, Some(next_slot_width(None, 440)));
             assert_eq!(
-                stretch.tray_at(Some(440), true, true, started + SLOT_RECOVERY_GRACE),
+                stretch.tray_at(Some(440), true, true, true, started + SLOT_RECOVERY_GRACE),
                 expanded
             );
             assert_eq!(stretch.unheld, 0);
@@ -2361,7 +2613,7 @@ mod platform {
         #[test]
         fn missing_layout_releases_a_clear_slot_even_without_a_new_frame() {
             let mut stretch = SlotStretch::default();
-            let expanded = stretch.tray(Some(440), true, true);
+            let expanded = stretch.tray(Some(440), true, true, true);
             let started = Instant::now();
             assert!(!stretch.hidden(started));
             assert!(!stretch.hidden(started + SLOT_RECOVERY_GRACE / 2));
@@ -2369,7 +2621,7 @@ mod platform {
             assert!(stretch.hidden(started + SLOT_RECOVERY_GRACE * 20));
             stretch.retry();
             assert!(stretch.hidden(started + SLOT_RECOVERY_GRACE * 21));
-            assert_eq!(stretch.tray(Some(440), true, true), expanded);
+            assert_eq!(stretch.tray(Some(440), true, true, true), expanded);
             assert!(!stretch.hidden(started + SLOT_RECOVERY_GRACE * 22));
         }
 
@@ -2378,13 +2630,13 @@ mod platform {
             let mut stretch = SlotStretch::default();
             for _ in 0..SLOT_STRETCH_PASSES {
                 assert!(matches!(
-                    stretch.tray(Some(440), false, true),
+                    stretch.tray(Some(440), false, true, true),
                     TraySlot::Clear { .. }
                 ));
             }
-            assert_eq!(stretch.tray(Some(440), false, true), TraySlot::Icon);
+            assert_eq!(stretch.tray(Some(440), false, true, true), TraySlot::Icon);
             assert!(matches!(
-                stretch.tray(Some(440), false, false),
+                stretch.tray(Some(440), false, false, true),
                 TraySlot::Clear { .. }
             ));
         }
@@ -2392,21 +2644,21 @@ mod platform {
         #[test]
         fn reconnect_retries_a_failed_slot_without_collapsing_the_reserved_width() {
             let mut stretch = SlotStretch::default();
-            let expanded = stretch.tray(Some(440), false, true);
+            let expanded = stretch.tray(Some(440), false, true, true);
             for _ in 0..20 {
-                stretch.tray(Some(440), false, true);
+                stretch.tray(Some(440), false, true, true);
             }
-            assert_eq!(stretch.tray(Some(440), false, true), TraySlot::Icon);
+            assert_eq!(stretch.tray(Some(440), false, true, true), TraySlot::Icon);
             stretch.retry();
-            assert_eq!(stretch.tray(Some(440), false, true), expanded);
+            assert_eq!(stretch.tray(Some(440), false, true, true), expanded);
             assert_eq!(stretch.request, Some(next_slot_width(None, 440)));
         }
 
         #[test]
         fn turning_the_strip_off_releases_a_pending_slot() {
             let mut stretch = SlotStretch::default();
-            stretch.tray(Some(440), false, false);
-            assert_eq!(stretch.tray(None, false, false), TraySlot::Icon);
+            stretch.tray(Some(440), false, false, true);
+            assert_eq!(stretch.tray(None, false, false, true), TraySlot::Icon);
             assert_eq!(stretch.request, None);
             assert_eq!(stretch.wanted, None);
             assert_eq!(stretch.unheld, 0);
@@ -2427,20 +2679,20 @@ mod platform {
             };
             let mut resized = taskbar();
             resized.notify_left -= 400;
-            assert!(islands.layout(&resized).is_none());
+            assert!(islands.layout(&resized, true).is_none());
             let resized_key = LayoutKey::new(&resized, 0);
             islands.reader.mailbox.lock().unwrap().result = Some(LayoutResult {
                 key,
                 layout: Some(layout()),
                 read: Instant::now(),
             });
-            assert!(islands.layout(&resized).is_none());
+            assert!(islands.layout(&resized, true).is_none());
             islands.reader.mailbox.lock().unwrap().result = Some(LayoutResult {
                 key: resized_key,
                 layout: Some(layout()),
                 read: Instant::now(),
             });
-            assert!(islands.layout(&resized).is_some());
+            assert!(islands.layout(&resized, true).is_some());
         }
 
         #[test]
@@ -2463,7 +2715,7 @@ mod platform {
             let (reader, _events) = reader();
             let guard = reader.mailbox.lock().unwrap();
             let started = Instant::now();
-            assert!(reader.poll(LayoutKey::new(&taskbar(), 0)).is_none());
+            assert!(reader.poll(LayoutKey::new(&taskbar(), 0), true).is_none());
             assert!(started.elapsed() < Duration::from_millis(250));
             drop(guard);
         }
@@ -2474,7 +2726,7 @@ mod platform {
             let mut current = taskbar();
             for width in 1000..2000 {
                 current.width = width;
-                assert!(reader.poll(LayoutKey::new(&current, 0)).is_none());
+                assert!(reader.poll(LayoutKey::new(&current, 0), true).is_none());
             }
             assert_eq!(
                 reader.mailbox.lock().unwrap().request,
@@ -2502,17 +2754,17 @@ mod platform {
                 });
             });
             let key = LayoutKey::new(&taskbar(), 0);
-            reader.poll(key);
+            reader.poll(key, true);
             ready.recv_timeout(Duration::from_secs(5)).unwrap();
             let started = Instant::now();
             for _ in 0..100 {
-                assert!(reader.poll(key).is_none());
+                assert!(reader.poll(key, true).is_none());
             }
             let elapsed = started.elapsed();
             release.send(()).unwrap();
             worker.join().unwrap();
             assert!(elapsed < Duration::from_millis(250));
-            assert!(reader.poll(key).unwrap().layout.is_some());
+            assert!(reader.poll(key, true).unwrap().layout.is_some());
         }
 
         #[test]
@@ -2541,7 +2793,7 @@ mod platform {
                     layout: Some(layout()),
                     read: Instant::now(),
                 });
-                assert!(reader.poll(key).is_none());
+                assert!(reader.poll(key, true).is_none());
             }
         }
 
@@ -2557,9 +2809,9 @@ mod platform {
                 last: Some((layout(), Instant::now(), key)),
                 reach: None,
             };
-            assert!(islands.layout(&taskbar()).is_some());
+            assert!(islands.layout(&taskbar(), true).is_some());
             islands.taskbar_changed(true);
-            assert!(islands.layout(&taskbar()).is_none());
+            assert!(islands.layout(&taskbar(), true).is_none());
         }
 
         #[test]
@@ -2581,7 +2833,7 @@ mod platform {
             };
             for _ in 0..100 {
                 islands.taskbar_changed(false);
-                assert!(islands.layout(&taskbar()).is_some());
+                assert!(islands.layout(&taskbar(), true).is_some());
                 assert_eq!(islands.key, Some(key));
                 assert_eq!(islands.generation, 0);
                 assert_eq!(islands.reach, Some((4, 4)));
@@ -2626,7 +2878,7 @@ mod platform {
                     reach: Some((4, 4)),
                 };
                 islands.taskbar_changed(false);
-                assert!(islands.layout(&changed).is_none());
+                assert!(islands.layout(&changed, true).is_none());
                 assert_eq!(islands.reach, None);
                 assert_eq!(islands.last.map(|(_, _, key)| key), None);
             }
@@ -2645,7 +2897,7 @@ mod platform {
                 reach: None,
             };
             islands.taskbar_changed(false);
-            assert!(islands.layout(&taskbar()).is_none());
+            assert!(islands.layout(&taskbar(), true).is_none());
         }
 
         #[test]

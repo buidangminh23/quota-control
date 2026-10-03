@@ -140,6 +140,31 @@ mod time_zone_tests {
 pub struct TrayImage {
     requested: parking_lot::Mutex<Option<tauri::image::Image<'static>>>,
     slot: parking_lot::Mutex<TraySlot>,
+    applied: std::sync::Arc<parking_lot::Mutex<TrayImageCache>>,
+}
+
+#[derive(Default)]
+struct TrayImageCache {
+    image: Option<tauri::image::Image<'static>>,
+}
+
+impl TrayImageCache {
+    fn apply(
+        &mut self,
+        image: tauri::image::Image<'static>,
+        update: impl FnOnce(tauri::image::Image<'static>) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if self.image.as_ref().is_some_and(|current| {
+            current.width() == image.width()
+                && current.height() == image.height()
+                && current.rgba() == image.rgba()
+        }) {
+            return Ok(());
+        }
+        update(image.clone())?;
+        self.image = Some(image);
+        Ok(())
+    }
 }
 
 impl TrayImage {
@@ -180,11 +205,21 @@ impl TrayImage {
         } else if let Some(image) = self.requested.lock().clone() {
             image
         } else {
-            app.default_window_icon()
-                .cloned()
-                .ok_or("Default icon is unavailable")?
+            let icon = app
+                .default_window_icon()
+                .ok_or("Default icon is unavailable")?;
+            tauri::image::Image::new_owned(icon.rgba().to_vec(), icon.width(), icon.height())
         };
-        tray.set_icon(Some(image)).map_err(safe_error)
+        let applied = self.applied.clone();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        app.run_on_main_thread(move || {
+            let result = applied.lock().apply(image, |image| {
+                tray.set_icon(Some(image)).map_err(safe_error)
+            });
+            let _ = sender.send(result);
+        })
+        .map_err(safe_error)?;
+        receiver.recv().map_err(safe_error)?
     }
 }
 
@@ -253,6 +288,67 @@ mod tests {
     use tauri::test::{mock_builder, mock_context, noop_assets};
     use uc_core::{Provider, ProviderRuntime, ProviderSnapshot, RefreshContext, WidgetDescriptor};
     use uc_engine::{DocumentStore, Engine, EngineConfig, SnapshotCache};
+
+    #[test]
+    fn tray_image_updates_do_not_replace_an_unchanged_sizing_icon() {
+        let mut cache = TrayImageCache::default();
+        let mut updates = 0;
+        for width in [600, 600, 600, 608, 608] {
+            cache
+                .apply(TrayImage::clear_icon(width), |_| {
+                    updates += 1;
+                    Ok(())
+                })
+                .unwrap();
+        }
+        assert_eq!(updates, 2);
+    }
+
+    #[test]
+    fn tray_image_updates_preserve_new_pixels_and_dimensions() {
+        let mut cache = TrayImageCache::default();
+        let mut updates = 0;
+        for (pixels, width, height) in [
+            (vec![0; 8], 2, 1),
+            (vec![0; 8], 2, 1),
+            (vec![1; 8], 2, 1),
+            (vec![1; 8], 1, 2),
+        ] {
+            cache
+                .apply(
+                    tauri::image::Image::new_owned(pixels, width, height),
+                    |_| {
+                        updates += 1;
+                        Ok(())
+                    },
+                )
+                .unwrap();
+        }
+        assert_eq!(updates, 3);
+    }
+
+    #[test]
+    fn tray_image_updates_retry_failures_and_restore_icons() {
+        let mut cache = TrayImageCache::default();
+        let mut attempts = 0;
+        let mut apply = |width, fail| {
+            cache.apply(TrayImage::clear_icon(width), |_| {
+                attempts += 1;
+                if fail {
+                    Err("unavailable".into())
+                } else {
+                    Ok(())
+                }
+            })
+        };
+        apply(600, false).unwrap();
+        assert!(apply(608, true).is_err());
+        apply(608, false).unwrap();
+        apply(608, false).unwrap();
+        apply(16, false).unwrap();
+        apply(600, false).unwrap();
+        assert_eq!(attempts, 5);
+    }
 
     struct FixtureProvider(Provider);
 
