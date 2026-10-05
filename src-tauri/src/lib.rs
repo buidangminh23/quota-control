@@ -14,6 +14,8 @@ mod ipc_guard;
 mod limit_resets;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(all(test, windows))]
+mod popup_resize_test;
 pub mod public_feeds;
 mod service;
 mod shortcut;
@@ -584,11 +586,31 @@ fn position_popup(app: &AppHandle) -> Result<(), String> {
                 .height
                 .saturating_add(outer.height.saturating_sub(inner.height)),
         );
-        window
-            .set_position(popup_origin(anchor, *monitor.work_area(), size))
-            .map_err(safe_error)?;
+        let origin = popup_origin(anchor, *monitor.work_area(), size);
+        if window.outer_position().map_err(safe_error)? != origin {
+            window.set_position(origin).map_err(safe_error)?;
+        }
     }
     Ok(())
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
+fn popup_requested_inner_size(
+    height: f64,
+    inner: PhysicalSize<u32>,
+    outer: PhysicalSize<u32>,
+    work_area: Option<PhysicalSize<u32>>,
+    scale: f64,
+) -> PhysicalSize<u32> {
+    let Some(work_area) = work_area else {
+        return tauri::LogicalSize::new(320.0, height.clamp(80.0, 800.0)).to_physical(scale);
+    };
+    let requested = tauri::LogicalSize::new(320.0, height.max(80.0)).to_physical(scale);
+    let frame = PhysicalSize::new(
+        outer.width.saturating_sub(inner.width),
+        outer.height.saturating_sub(inner.height),
+    );
+    popup_size_within_work_area(requested, frame, work_area, scale)
 }
 
 #[cfg(any(not(target_os = "macos"), test))]
@@ -598,17 +620,27 @@ fn popup_fitted_inner_size(
     work_area: PhysicalSize<u32>,
     scale: f64,
 ) -> PhysicalSize<u32> {
+    let frame = PhysicalSize::new(
+        outer.width.saturating_sub(inner.width),
+        outer.height.saturating_sub(inner.height),
+    );
+    popup_size_within_work_area(inner, frame, work_area, scale)
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
+fn popup_size_within_work_area(
+    requested: PhysicalSize<u32>,
+    frame: PhysicalSize<u32>,
+    work_area: PhysicalSize<u32>,
+    scale: f64,
+) -> PhysicalSize<u32> {
     let margin = (16.0 * scale).ceil() as u32;
     let maximum = |area: u32, frame: u32| area.saturating_sub(margin).saturating_sub(frame).max(1);
     PhysicalSize::new(
-        inner.width.min(maximum(
-            work_area.width,
-            outer.width.saturating_sub(inner.width),
-        )),
-        inner.height.min(maximum(
-            work_area.height,
-            outer.height.saturating_sub(inner.height),
-        )),
+        requested.width.min(maximum(work_area.width, frame.width)),
+        requested
+            .height
+            .min(maximum(work_area.height, frame.height)),
     )
 }
 
@@ -903,6 +935,56 @@ mod tests {
             popup_fitted_inner_size(inner, outer, PhysicalSize::new(10, 10), 1.0),
             PhysicalSize::new(1, 1)
         );
+    }
+
+    #[test]
+    fn tall_popup_resize_does_not_grow_a_window_that_already_fits() {
+        let area = PhysicalSize::new(2560, 1384);
+        let inner = PhysicalSize::new(320, 1359);
+        let outer = PhysicalSize::new(336, 1368);
+        let requested = popup_requested_inner_size(2000.0, inner, outer, Some(area), 1.0);
+        assert_eq!(requested, inner);
+        assert_eq!(
+            popup_fitted_inner_size(requested, outer, area, 1.0),
+            requested
+        );
+    }
+
+    #[test]
+    fn requested_popup_size_settles_at_fractional_dpi() {
+        for scale in [1.0, 1.25, 1.3, 1.5, 1.75, 2.0] {
+            let area = PhysicalSize::new(1920, 1024);
+            let frame = PhysicalSize::new(
+                (16.0_f64 * scale).round() as u32,
+                (9.0_f64 * scale).round() as u32,
+            );
+            let mut inner = tauri::LogicalSize::new(320.0, 400.0).to_physical::<u32>(scale);
+            for _ in 0..3 {
+                let outer =
+                    PhysicalSize::new(inner.width + frame.width, inner.height + frame.height);
+                let requested = popup_requested_inner_size(2000.0, inner, outer, Some(area), scale);
+                let requested_outer = PhysicalSize::new(
+                    requested.width + frame.width,
+                    requested.height + frame.height,
+                );
+                assert_eq!(
+                    popup_fitted_inner_size(requested, requested_outer, area, scale),
+                    requested,
+                    "scale {scale} must not require a second resize"
+                );
+                assert_eq!(
+                    popup_requested_inner_size(
+                        2000.0,
+                        requested,
+                        requested_outer,
+                        Some(area),
+                        scale
+                    ),
+                    requested
+                );
+                inner = requested;
+            }
+        }
     }
 
     #[test]

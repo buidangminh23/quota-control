@@ -73,15 +73,29 @@ pub fn resize_popup(app: AppHandle, height: f64) -> Result<(), String> {
     #[cfg(not(target_os = "macos"))]
     crate::position_popup(&app)?;
     let scale = window.scale_factor().map_err(safe_error)?;
-    let maximum = window
+    let work_area = window
         .current_monitor()
         .map_err(safe_error)?
-        .map(|monitor| f64::from(monitor.work_area().size.height) / scale - 16.0)
-        .unwrap_or(800.0)
-        .max(80.0);
-    window
-        .set_size(tauri::LogicalSize::new(320.0, height.clamp(80.0, maximum)))
-        .map_err(safe_error)?;
+        .map(|monitor| monitor.work_area().size);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let inner = window.inner_size().map_err(safe_error)?;
+        let outer = window.outer_size().map_err(safe_error)?;
+        let requested = crate::popup_requested_inner_size(height, inner, outer, work_area, scale);
+        if requested != inner {
+            window.set_size(requested).map_err(safe_error)?;
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let maximum = work_area
+            .map(|area| f64::from(area.height) / scale - 16.0)
+            .unwrap_or(800.0)
+            .max(80.0);
+        window
+            .set_size(tauri::LogicalSize::new(320.0, height.clamp(80.0, maximum)))
+            .map_err(safe_error)?;
+    }
     crate::position_popup(&app)?;
     #[cfg(target_os = "macos")]
     crate::macos::refresh_popup_shadow(&window);
