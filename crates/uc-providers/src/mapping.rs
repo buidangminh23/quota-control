@@ -139,6 +139,33 @@ pub fn title_case(raw: &str) -> String {
         .join(" ")
 }
 
+pub(crate) fn claude_plan(raw: &str, tier: Option<&str>) -> String {
+    let mut plan = title_case(raw.trim().strip_prefix("claude_").unwrap_or(raw.trim()));
+    if plan != "Free"
+        && let Some(multiplier) = tier.and_then(|tier| {
+            tier.split('_')
+                .find(|part| part.ends_with('x') && part[..part.len() - 1].parse::<u32>().is_ok())
+        })
+    {
+        plan.push(' ');
+        plan.push_str(multiplier);
+    }
+    plan
+}
+
+pub(crate) fn codex_plan(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    Some(match raw.to_lowercase().as_str() {
+        "prolite" => "Pro 5x".into(),
+        "pro" => "Pro 20x".into(),
+        "self_serve_business_prolite" => "Business Premium".into(),
+        _ => title_case(raw),
+    })
+}
+
 pub fn map_response(
     kind: ProviderKind,
     response: &HttpResponse,
@@ -392,19 +419,7 @@ fn map_codex(
         );
     }
     let plan = match body.get("plan_type").filter(|value| !value.is_null()) {
-        Some(value) => {
-            let raw = value.as_str().ok_or_else(invalid)?.trim();
-            if raw.is_empty() {
-                None
-            } else {
-                Some(match raw.to_lowercase().as_str() {
-                    "prolite" => "Pro 5x".into(),
-                    "pro" => "Pro 20x".into(),
-                    "self_serve_business_prolite" => "Business Premium".into(),
-                    _ => title_case(raw),
-                })
-            }
-        }
+        Some(value) => codex_plan(value.as_str().ok_or_else(invalid)?),
         None => None,
     };
     Ok(MappedUsage { plan, lines })

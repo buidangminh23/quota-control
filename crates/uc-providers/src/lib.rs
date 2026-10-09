@@ -68,6 +68,7 @@ pub struct LocalProvider {
     cooldown: tokio::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>>,
     cli: Option<CliBinding>,
     profile_term: plan_term::ProfileTerm,
+    metadata_retry: tokio::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>>,
 }
 
 /// The CLI login a card follows, checked on every refresh so that a CLI that switched accounts
@@ -97,6 +98,7 @@ impl LocalProvider {
             cooldown: tokio::sync::Mutex::new(None),
             cli: None,
             profile_term: Default::default(),
+            metadata_retry: Default::default(),
         }
     }
 
@@ -133,7 +135,7 @@ impl LocalProvider {
         rejected_token: Option<&str>,
     ) -> Result<credentials::Credentials, SimpleProviderError> {
         let Some(binding) = &self.cli else {
-            return accounts::ready_credentials(
+            let credentials = accounts::ready_credentials(
                 &self.credentials,
                 self.kind,
                 &self.http,
@@ -141,7 +143,33 @@ impl LocalProvider {
                 &self.refresh_endpoint,
                 rejected_token,
             )
-            .await;
+            .await?;
+            if self.kind == ProviderKind::Codex
+                && rejected_token.is_none()
+                && self.credentials.is_managed()
+                && (matches!(&credentials.plan_term, Some(uc_core::PlanTerm::Stated { ends_at, checked_at }) if *ends_at <= now || checked_at.is_none_or(|checked| checked > now || now - checked >= plan_term::TERM_RECHECK))
+                    || credentials.plan_term.is_none()
+                        && credentials
+                            .plan
+                            .as_deref()
+                            .is_some_and(|plan| plan != "Free"))
+            {
+                let mut retry = self.metadata_retry.lock().await;
+                if retry.is_none_or(|next| now >= next) {
+                    *retry = Some(now + plan_term::TERM_RECHECK);
+                    return Ok(accounts::ready_credentials(
+                        &self.credentials,
+                        self.kind,
+                        &self.http,
+                        now,
+                        &self.refresh_endpoint,
+                        Some(&credentials.access_token),
+                    )
+                    .await
+                    .unwrap_or(credentials));
+                }
+            }
+            return Ok(credentials);
         };
         let (kind, location, profile) =
             (self.kind, binding.location.clone(), binding.profile.clone());
@@ -216,6 +244,9 @@ impl LocalProvider {
                 "The Claude CLI session belongs to another account. Waiting for its account metadata to update.",
             ));
         }
+        self.profile_term
+            .seed(&credentials.access_token, &profile, (self.clock)())
+            .await;
         *verified = Some(fingerprint);
         Ok(())
     }
@@ -271,6 +302,24 @@ impl LocalProvider {
         let now = (self.clock)();
         let mut credentials = self.ready_credentials(now, None).await?;
         self.validate_credentials(&credentials, now)?;
+        if let Some(binding) = &self.cli
+            && self.cooldown.lock().await.is_some_and(|until| until > now)
+            && binding.verified_token.lock().await.as_ref()
+                != Some(&Sha256::digest(credentials.access_token.as_bytes()).into())
+        {
+            return Err(SimpleProviderError::new(
+                ErrorCategory::RateLimited,
+                "Account verification is rate limited. Waiting before retrying.",
+            ));
+        }
+        self.verify_cli_identity(&credentials).await?;
+        let subscription = if self.kind == ProviderKind::Claude {
+            self.profile_term
+                .get(&self.http, &credentials.access_token, now)
+                .await
+        } else {
+            None
+        };
         if self.cooldown.lock().await.is_some_and(|until| until > now) {
             return Err(SimpleProviderError::new(
                 ErrorCategory::RateLimited,
@@ -291,6 +340,25 @@ impl LocalProvider {
         self.record_cooldown(&response, now).await;
         let mut mapped = mapping::map_response(self.kind, &response, now)?;
         if self.kind == ProviderKind::Codex
+            && self.credentials.is_managed()
+            && mapped
+                .plan
+                .as_deref()
+                .zip(credentials.plan.as_deref())
+                .is_some_and(|(live, stored)| live != stored)
+        {
+            let mut retry = self.metadata_retry.lock().await;
+            if retry.is_none_or(|next| now >= next) {
+                *retry = Some(now + plan_term::TERM_RECHECK);
+                if let Ok(renewed) = self
+                    .ready_credentials(now, Some(&credentials.access_token))
+                    .await
+                {
+                    credentials = renewed;
+                }
+            }
+        }
+        if self.kind == ProviderKind::Codex
             && let Some(uc_core::MetricLine::Values(line)) = mapped
                 .lines
                 .iter_mut()
@@ -299,22 +367,35 @@ impl LocalProvider {
         {
             line.expiries_at = expiries;
         }
-        let plan_term = match credentials.plan_term.take() {
-            Some(term) => Some(term),
-            None if self.kind == ProviderKind::Claude && self.credentials.is_managed() => {
-                self.profile_term
-                    .get(&self.http, &credentials.access_token, now)
-                    .await
-            }
-            None => None,
-        };
-        Ok(ProviderSnapshot::make(
-            &self.provider,
-            mapped.plan.or(credentials.plan),
-            mapped.lines,
+        let plan_term = plan_term::confirmed_term(
+            credentials.plan_term.take(),
+            credentials.plan.as_deref(),
+            mapped.plan.as_deref(),
             now,
-        )
-        .with_plan_term(plan_term))
+        );
+        let plan_checked_at = if self.kind == ProviderKind::Codex {
+            mapped.plan.as_ref().map(|_| now)
+        } else {
+            subscription.as_ref().map(|profile| profile.checked_at)
+        };
+        let plan = if self.kind == ProviderKind::Claude {
+            subscription.and_then(|profile| profile.plan)
+        } else {
+            mapped.plan
+        };
+        let mut snapshot = ProviderSnapshot::make(&self.provider, plan, mapped.lines, now)
+            .with_plan_term(plan_term);
+        snapshot.plan_checked_at = plan_checked_at;
+        if self.kind == ProviderKind::Claude
+            && (snapshot.plan.is_none()
+                || plan_checked_at
+                    .is_none_or(|checked| now - checked >= chrono::Duration::minutes(5)))
+        {
+            snapshot.warning = Some(
+                "The current subscription could not be verified. Retrying automatically.".into(),
+            );
+        }
+        Ok(snapshot)
     }
 
     /// Codex's banked resets live next to its usage endpoint; Claude banks none.
@@ -594,11 +675,27 @@ impl ProviderRuntime for LocalProvider {
     }
 
     async fn refresh(&self, _: RefreshContext) -> ProviderSnapshot {
-        self.fetch().await.unwrap_or_else(|error| {
-            let mut snapshot = ProviderSnapshot::error(&self.provider, &error);
-            snapshot.refreshed_at = (self.clock)();
-            snapshot
-        })
+        match self.fetch().await {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                let mut snapshot = ProviderSnapshot::error(&self.provider, &error);
+                snapshot.refreshed_at = (self.clock)();
+                if self.kind == ProviderKind::Claude
+                    && !matches!(
+                        error.category,
+                        ErrorCategory::AuthExpired
+                            | ErrorCategory::AuthInvalid
+                            | ErrorCategory::NotAvailable
+                            | ErrorCategory::CredentialAccess
+                    )
+                    && let Some(profile) = self.profile_term.peek().await
+                {
+                    snapshot.plan = profile.plan;
+                    snapshot.plan_checked_at = Some(profile.checked_at);
+                }
+                snapshot
+            }
+        }
     }
 
     async fn has_local_credentials(&self) -> bool {

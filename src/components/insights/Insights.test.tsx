@@ -36,6 +36,7 @@ afterEach(async () => {
     resetInsights();
     useApp.setState({ screen: "dashboard", previousScreen: "dashboard", tabMotion: null });
   });
+  vi.useRealTimers();
 });
 
 describe("dashboard tabs", () => {
@@ -640,6 +641,8 @@ describe("Claude resets", () => {
   });
 
   it("scores the Codex estimate on its own history once that is long enough", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-26T12:00:00Z"));
     const api = await renderApp();
     const ago = (days: number) => new Date(Date.now() - days * DAY_MS).toISOString();
     const post = (id: string, days: number) => ({ id, reset_type: "regular", announced_at: ago(days), text: `Codex reset ${id}.`, source: { type: "x_post", author: "thsottiaux", url: `https://x.com/thsottiaux/status/${id}` } });

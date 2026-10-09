@@ -55,7 +55,12 @@ export function planTermEnd(term: PlanTerm, now: Date): PlanTermEnd | null {
     return endsAt ? { endsAt, estimated: false, checkedAt: dateOf(term.checkedAt), startedAt: null } : null;
   }
   const startedAt = dateOf(term.startedAt);
-  return startedAt ? { endsAt: nextMonthlyRenewal(startedAt, now), estimated: true, checkedAt: null, startedAt } : null;
+  if (!startedAt || startedAt.getTime() > now.getTime()) return null;
+  const checkedAt = dateOf(term.checkedAt);
+  if (term.checkedAt && !checkedAt) return null;
+  if (checkedAt && (checkedAt.getTime() < startedAt.getTime() || checkedAt.getTime() > now.getTime())) return null;
+  const endsAt = checkedAt ? nextMonthlyRenewal(startedAt, checkedAt) : addMonthsClamped(startedAt, 1);
+  return endsAt.getTime() > now.getTime() ? { endsAt, estimated: true, checkedAt, startedAt } : null;
 }
 
 export function planTermLeft(endsAt: Date, now: Date): PlanTermLeft {

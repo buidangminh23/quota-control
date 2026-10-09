@@ -1369,13 +1369,8 @@ impl HttpClient for TermHttp {
     }
 }
 
-fn subscription_start() -> chrono::DateTime<Utc> {
-    use chrono::TimeZone;
-    Utc.with_ymd_and_hms(2026, 7, 31, 3, 40, 9).unwrap()
-}
-
 #[tokio::test]
-async fn browser_claude_cards_read_the_subscription_start_from_the_live_profile_once() {
+async fn browser_claude_cards_read_the_current_plan_from_the_live_profile_once() {
     let (_dir, store) = store();
     let document = claude_doc(4_000_000_000_000);
     let record = store
@@ -1388,7 +1383,7 @@ async fn browser_claude_cards_read_the_subscription_start_from_the_live_profile_
         )
         .unwrap();
     let client = Arc::new(TermHttp {
-        profile: json!({"account":{"uuid":"account-a"},"organization":{"uuid":"org-a","subscription_created_at":"2026-07-31T03:40:09Z"}}),
+        profile: json!({"account":{"uuid":"account-a"},"organization":{"uuid":"org-a","organization_type":"claude_free","subscription_created_at":"2026-07-31T03:40:09Z"}}),
         profile_calls: Default::default(),
     });
     let runtime = runtimes_with_client(store.clone(), client.clone())
@@ -1397,12 +1392,9 @@ async fn browser_claude_cards_read_the_subscription_start_from_the_live_profile_
     for _ in 0..2 {
         let snapshot = runtime.refresh(RefreshContext::manual()).await;
         assert!(!snapshot.is_error(), "{:?}", snapshot.error_category);
-        assert_eq!(
-            snapshot.plan_term,
-            Some(uc_core::PlanTerm::MonthlyFrom {
-                started_at: subscription_start()
-            })
-        );
+        assert_eq!(snapshot.plan_term, None);
+        assert_eq!(snapshot.plan.as_deref(), Some("Free"));
+        assert!(snapshot.plan_checked_at.is_some());
     }
     assert_eq!(
         client
@@ -1414,7 +1406,7 @@ async fn browser_claude_cards_read_the_subscription_start_from_the_live_profile_
 }
 
 #[tokio::test]
-async fn claude_cli_cards_take_the_subscription_start_from_claude_code_without_asking() {
+async fn claude_cli_cards_ignore_cached_subscription_start_and_reuse_the_identity_profile() {
     let directory = tempfile::tempdir().unwrap();
     let client = cli_profile_http(200, false);
     let (runtime, _) = claude_cli_fixture(directory.path(), "fixture-old", client.clone());
@@ -1427,12 +1419,8 @@ async fn claude_cli_cards_take_the_subscription_start_from_claude_code_without_a
     .unwrap();
     let snapshot = runtime.refresh(RefreshContext::scheduled()).await;
     assert_eq!(snapshot.error_category, None);
-    assert_eq!(
-        snapshot.plan_term,
-        Some(uc_core::PlanTerm::MonthlyFrom {
-            started_at: subscription_start()
-        })
-    );
+    assert_eq!(snapshot.plan_term, None);
+    assert!(snapshot.plan_checked_at.is_some());
     let requests = client.requests.lock().unwrap();
     assert_eq!(
         requests

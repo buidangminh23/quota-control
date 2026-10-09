@@ -254,16 +254,8 @@ pub(crate) fn parse_credentials(
                 Some(_) => return Err(invalid()),
                 None => true,
             };
-            let mut plan =
-                text(&oauth["subscriptionType"]).map(|value| crate::mapping::title_case(&value));
-            if let (Some(plan), Some(tier)) = (&mut plan, text(&oauth["rateLimitTier"]))
-                && let Some(multiplier) = tier.split('_').find(|part| {
-                    part.ends_with('x') && part[..part.len() - 1].parse::<u32>().is_ok()
-                })
-            {
-                plan.push(' ');
-                plan.push_str(multiplier);
-            }
+            let plan = text(&oauth["subscriptionType"])
+                .map(|value| crate::mapping::claude_plan(&value, oauth["rateLimitTier"].as_str()));
             Ok(Credentials {
                 access_token,
                 account_id: None,
@@ -293,7 +285,7 @@ pub(crate) fn parse_credentials(
             Ok(Credentials {
                 access_token,
                 account_id: header_text(&tokens["account_id"])?,
-                plan: None,
+                plan: crate::plan_term::codex_plan(body),
                 expires_at,
                 profile_scope: true,
                 plan_term: crate::plan_term::from_document(kind, body),

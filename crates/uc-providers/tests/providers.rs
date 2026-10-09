@@ -90,6 +90,10 @@ impl HttpClient for ResetHttp {
         match url.as_str() {
             "https://chatgpt.com/backend-api/wham/usage"
             | "https://api.anthropic.com/api/oauth/usage" => Ok(self.usage.clone()),
+            "https://api.anthropic.com/api/oauth/profile" => Ok(response(
+                200,
+                json!({"organization":{"organization_type":"claude_pro"}}),
+            )),
             "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits" => match &self.reset {
                 ResetReply::Response(reply) => Ok(reply.clone()),
                 ResetReply::Timeout => Err(HttpError::Timeout),
@@ -277,7 +281,16 @@ async fn reset_credit_lookup_is_skipped_without_successful_codex_count() {
         };
         let (_directory, provider) = setup(kind, credentials, http.clone());
         provider.refresh(RefreshContext::manual()).await;
-        assert_eq!(http.requests.lock().unwrap().len(), 1);
+        let requests = http.requests.lock().unwrap();
+        assert!(
+            requests
+                .iter()
+                .all(|request| !request.url.ends_with("rate-limit-reset-credits"))
+        );
+        assert_eq!(
+            requests.len(),
+            if kind == ProviderKind::Claude { 2 } else { 1 }
+        );
     }
 }
 
@@ -393,7 +406,10 @@ fn status_errors_are_classified_without_leaking_response() {
 
 #[tokio::test]
 async fn claude_request_uses_oauth_beta_and_keeps_credentials_unchanged() {
-    let http = fake(200, json!({"five_hour":{"utilization":4}}));
+    let http = fake(
+        200,
+        json!({"five_hour":{"utilization":4}, "organization":{"organization_type":"claude_max", "rate_limit_tier":"default_claude_max_5x"}}),
+    );
     let (directory, provider) = setup(
         ProviderKind::Claude,
         json!({"claudeAiOauth":{"accessToken":"fixture-access","refreshToken":"fixture-refresh","expiresAt":2000000000000_i64,"subscriptionType":"max","rateLimitTier":"default_claude_max_5x"}}),
@@ -407,9 +423,13 @@ async fn claude_request_uses_oauth_beta_and_keeps_credentials_unchanged() {
     assert_eq!(snapshot.plan.as_deref(), Some("Max 5x"));
     assert_eq!(std::fs::read(path).unwrap(), original);
     let requests = http.requests.lock().unwrap();
-    assert_eq!(requests.len(), 1);
+    assert_eq!(requests.len(), 2);
     assert_eq!(requests[0].method, "GET");
-    assert_eq!(requests[0].url, "https://api.anthropic.com/api/oauth/usage");
+    assert_eq!(
+        requests[0].url,
+        "https://api.anthropic.com/api/oauth/profile"
+    );
+    assert_eq!(requests[1].url, "https://api.anthropic.com/api/oauth/usage");
     assert!(
         requests[0]
             .headers
@@ -735,8 +755,9 @@ async fn claude_has_no_limit_resets_and_sends_nothing() {
 #[tokio::test]
 async fn codex_cards_carry_the_paid_through_date_their_login_states() {
     let claims = json!({"https://api.openai.com/auth":{
+        "chatgpt_plan_type":"plus",
         "chatgpt_subscription_active_until":"2026-10-17T01:56:39+00:00",
-        "chatgpt_subscription_last_checked":"2026-09-25T13:56:24+00:00"
+        "chatgpt_subscription_last_checked":"2026-09-25T11:56:24+00:00"
     }});
     let id_token = format!(
         "header.{}.signature",
@@ -744,7 +765,7 @@ async fn codex_cards_carry_the_paid_through_date_their_login_states() {
     );
     let http = fake(
         200,
-        json!({"rate_limit":{"primary_window":{"used_percent":23}}}),
+        json!({"plan_type":"plus", "rate_limit":{"primary_window":{"used_percent":23}}}),
     );
     let (_directory, provider) = setup(
         ProviderKind::Codex,
@@ -757,14 +778,14 @@ async fn codex_cards_carry_the_paid_through_date_their_login_states() {
         snapshot.plan_term,
         Some(uc_core::PlanTerm::Stated {
             ends_at: Utc.with_ymd_and_hms(2026, 10, 17, 1, 56, 39).unwrap(),
-            checked_at: Some(Utc.with_ymd_and_hms(2026, 9, 25, 13, 56, 24).unwrap()),
+            checked_at: Some(Utc.with_ymd_and_hms(2026, 9, 25, 11, 56, 24).unwrap()),
         })
     );
     assert_eq!(http.requests.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]
-async fn claude_cards_from_a_credentials_file_never_ask_the_profile_for_a_term() {
+async fn claude_cards_from_a_credentials_file_refresh_the_profile_and_never_invent_a_term() {
     let http = fake(200, json!({"five_hour":{"utilization":15}}));
     let (_directory, provider) = setup(
         ProviderKind::Claude,
@@ -775,6 +796,165 @@ async fn claude_cards_from_a_credentials_file_never_ask_the_profile_for_a_term()
     assert!(!snapshot.is_error(), "{:?}", snapshot.error_category);
     assert_eq!(snapshot.plan_term, None);
     let requests = http.requests.lock().unwrap();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].url, "https://api.anthropic.com/api/oauth/usage");
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].url,
+        "https://api.anthropic.com/api/oauth/profile"
+    );
+    assert_eq!(requests[1].url, "https://api.anthropic.com/api/oauth/usage");
+}
+
+struct SubscriptionHttp {
+    profiles: Mutex<std::collections::VecDeque<Value>>,
+    usage_calls: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl HttpClient for SubscriptionHttp {
+    async fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        if request.url.ends_with("/profile") {
+            return Ok(response(
+                200,
+                self.profiles.lock().unwrap().pop_front().unwrap(),
+            ));
+        }
+        assert!(request.url.ends_with("/usage"));
+        self.usage_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut reply = response(429, json!({}));
+        reply.headers.insert("retry-after".into(), "3600".into());
+        Ok(reply)
+    }
+}
+
+#[tokio::test]
+async fn claude_plan_downgrades_and_renews_while_usage_remains_rate_limited() {
+    let client = Arc::new(SubscriptionHttp {
+        profiles: Mutex::new([
+            json!({"organization":{"organization_type":"claude_pro"}}),
+            json!({"organization":{"organization_type":"claude_free","subscription_status":"canceled","subscription_created_at":"2026-10-02T00:00:00Z"}}),
+            json!({"organization":{"organization_type":"claude_pro","subscription_status":"active"}}),
+        ].into()),
+        usage_calls: Default::default(),
+    });
+    let clock = Arc::new(Mutex::new(now()));
+    let read_clock = clock.clone();
+    let (directory, provider) = setup(
+        ProviderKind::Claude,
+        json!({"claudeAiOauth":{"accessToken":"fixture","subscriptionType":"pro"}}),
+        client.clone(),
+    );
+    let provider = provider.with_clock(Arc::new(move || *read_clock.lock().unwrap()));
+    for (offset, plan) in [(0, "Pro"), (5, "Free"), (10, "Pro")] {
+        let checked = now() + chrono::Duration::minutes(offset);
+        *clock.lock().unwrap() = checked;
+        let snapshot = provider.refresh(RefreshContext::scheduled()).await;
+        assert_eq!(snapshot.error_category, Some(ErrorCategory::RateLimited));
+        assert_eq!(snapshot.plan.as_deref(), Some(plan));
+        assert_eq!(snapshot.plan_checked_at, Some(checked));
+        assert_eq!(snapshot.plan_term, None);
+    }
+    assert_eq!(
+        client.usage_calls.load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+    std::fs::write(directory.path().join("credentials.json"), b"{}").unwrap();
+    let invalid = provider.refresh(RefreshContext::manual()).await;
+    assert_eq!(invalid.error_category, Some(ErrorCategory::AuthInvalid));
+    assert_eq!(invalid.plan, None);
+    assert_eq!(invalid.plan_checked_at, None);
+}
+
+struct CodexSubscriptionHttp {
+    tokens: Value,
+    token_status: u16,
+    plan: &'static str,
+    renewals: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl HttpClient for CodexSubscriptionHttp {
+    async fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        if request.url.ends_with("/oauth/token") {
+            self.renewals
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            return Ok(response(self.token_status, self.tokens.clone()));
+        }
+        assert!(request.url.ends_with("/usage"));
+        Ok(response(
+            200,
+            json!({"plan_type":self.plan, "rate_limit":{"primary_window":{"used_percent":23}}}),
+        ))
+    }
+}
+
+fn subscription_token(
+    plan: &str,
+    checked: chrono::DateTime<Utc>,
+    ends: chrono::DateTime<Utc>,
+) -> String {
+    let claims = json!({"https://api.openai.com/auth":{"chatgpt_account_id":"account-one", "chatgpt_user_id":"user-one", "chatgpt_plan_type":plan, "chatgpt_subscription_last_checked":checked.to_rfc3339(), "chatgpt_subscription_active_until":ends.to_rfc3339()}});
+    format!(
+        "header.{}.signature",
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap())
+    )
+}
+
+#[tokio::test]
+async fn managed_codex_renews_stale_subscription_metadata_without_repeated_rotation() {
+    for token_status in [200, 503] {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(uc_accounts::AccountStore::new(
+            directory.path().join("accounts"),
+        ));
+        let end = now() + chrono::Duration::days(30);
+        let document = json!({"tokens":{"access_token":"fixture-old", "refresh_token":"fixture-refresh", "account_id":"account-one", "id_token":subscription_token("plus", now() - chrono::Duration::days(20), now() - chrono::Duration::days(1))}});
+        let record = store
+            .import(
+                "codex",
+                "Managed",
+                "account-one|user-one",
+                &document,
+                uc_accounts::CredentialMode::ManagedOauth,
+            )
+            .unwrap();
+        let client = Arc::new(CodexSubscriptionHttp {
+            tokens: json!({"access_token":"fixture-new", "refresh_token":"fixture-next", "expires_in":3600, "id_token":subscription_token("plus", now(), end)}),
+            token_status,
+            plan: "plus",
+            renewals: Default::default(),
+        });
+        let provider = LocalProvider::new(
+            ProviderKind::Codex,
+            CredentialStore::for_account(ProviderKind::Codex, store.clone(), record.clone()),
+            client.clone(),
+        )
+        .with_clock(fixed_clock(now()));
+        for _ in 0..3 {
+            let snapshot = provider.refresh(RefreshContext::scheduled()).await;
+            assert_eq!(snapshot.error_category, None);
+            assert_eq!(snapshot.plan.as_deref(), Some("Plus"));
+            assert_eq!(snapshot.plan_checked_at, Some(now()));
+            assert_eq!(
+                snapshot.plan_term,
+                if token_status == 200 {
+                    Some(uc_core::PlanTerm::Stated {
+                        ends_at: end,
+                        checked_at: Some(now()),
+                    })
+                } else {
+                    None
+                }
+            );
+        }
+        assert_eq!(client.renewals.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            store.credentials(&record.id).unwrap()["tokens"]["access_token"],
+            if token_status == 200 {
+                "fixture-new"
+            } else {
+                "fixture-old"
+            }
+        );
+    }
 }

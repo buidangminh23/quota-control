@@ -21,12 +21,14 @@ pub enum PlanTerm {
         #[serde(rename = "checkedAt", default, skip_serializing_if = "Option::is_none")]
         checked_at: Option<DateTime<Utc>>,
     },
-    /// Only the subscription's start is known (Anthropic's profile); a monthly plan renews on that
-    /// day of each month.
+    /// A legacy monthly estimate, bounded by its last confirmation. A subscription start alone
+    /// does not establish the billing cadence or current paid entitlement.
     #[serde(rename = "monthlyFrom")]
     MonthlyFrom {
         #[serde(rename = "startedAt")]
         started_at: DateTime<Utc>,
+        #[serde(rename = "checkedAt", default, skip_serializing_if = "Option::is_none")]
+        checked_at: Option<DateTime<Utc>>,
     },
 }
 
@@ -39,6 +41,8 @@ pub struct ProviderSnapshot {
     pub display_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
+    #[serde(rename = "planCheckedAt", default, skip_serializing_if = "Option::is_none")]
+    pub plan_checked_at: Option<DateTime<Utc>>,
     /// The plan's paid period, when the account states or implies one.
     #[serde(rename = "planTerm", default, skip_serializing_if = "Option::is_none")]
     pub plan_term: Option<PlanTerm>,
@@ -66,6 +70,7 @@ impl ProviderSnapshot {
             provider_id: provider.id.clone(),
             display_name: provider.display_name.clone(),
             plan,
+            plan_checked_at: None,
             plan_term: None,
             account: None,
             lines,
@@ -107,6 +112,7 @@ impl ProviderSnapshot {
             provider_id: provider.id.clone(),
             display_name: provider.display_name.clone(),
             plan: None,
+            plan_checked_at: None,
             plan_term: None,
             account: None,
             lines: vec![MetricLine::Badge(BadgeLine {
@@ -174,7 +180,7 @@ mod tests {
                 serde_json::json!({"basis": "stated", "endsAt": "2026-10-17T01:56:39Z"}),
             ),
             (
-                PlanTerm::MonthlyFrom { started_at },
+                PlanTerm::MonthlyFrom { started_at, checked_at: None },
                 serde_json::json!({"basis": "monthlyFrom", "startedAt": "2026-07-31T03:40:09Z"}),
             ),
         ] {
@@ -190,5 +196,22 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(cached.plan_term, None);
+        assert_eq!(cached.plan_checked_at, None);
+    }
+
+    #[test]
+    fn subscription_confirmation_survives_serialization_and_legacy_terms_load() {
+        use chrono::TimeZone;
+        let checked_at = Utc.with_ymd_and_hms(2026, 10, 9, 10, 0, 0).unwrap();
+        let term: PlanTerm = serde_json::from_value(serde_json::json!({
+            "basis": "monthlyFrom", "startedAt": "2026-07-31T03:40:09Z"
+        })).unwrap();
+        assert!(matches!(term, PlanTerm::MonthlyFrom { checked_at: None, .. }));
+        let mut snapshot = ProviderSnapshot::make(&Provider::new("claude", "Claude"), Some("Free".into()), vec![], checked_at);
+        snapshot.plan_checked_at = Some(checked_at);
+        let value = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(value["planCheckedAt"], "2026-10-09T10:00:00Z");
+        let restored: ProviderSnapshot = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.plan_checked_at, Some(checked_at));
     }
 }

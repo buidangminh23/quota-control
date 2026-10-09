@@ -184,12 +184,15 @@ export function cardIdentity(provider: Provider, runtime: ProviderRuntimeState |
   const local = isLocalHistoryCard(provider.id);
   const email = local ? null : accountEmailOf(provider);
   const snapshot = local ? undefined : runtime?.snapshot;
+  const unconfirmed = !snapshot?.planCheckedAt && (snapshot?.errorCategory || (runtime?.error && !snapshot?.planTerm?.checkedAt));
+  const term = unconfirmed || /^free$/i.test(snapshot?.plan?.trim() ?? "") ? null : snapshot?.planTerm;
+  const planTerm = term?.basis === "monthlyFrom" && !term.checkedAt ? { ...term, checkedAt: snapshot?.planCheckedAt ?? snapshot?.refreshedAt } : term;
   return {
     name: email ? brandName(providerBrand(provider)) : providerTitle(provider, language),
     account: email ?? snapshot?.account ?? null,
     plan: snapshot?.plan ? translate(snapshot.plan, language) : null,
     notice: headerNotice(runtime, language)?.split("\n")[0] ?? null,
-    planTerm: snapshot?.planTerm ?? null,
+    planTerm: planTerm ?? null,
   };
 }
 

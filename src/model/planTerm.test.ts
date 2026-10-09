@@ -34,10 +34,10 @@ describe("planTermEnd", () => {
       checkedAt: day("2026-09-25T13:56:24Z"),
       startedAt: null,
     });
-    expect(planTermEnd({ basis: "monthlyFrom", startedAt: "2026-07-31T03:40:09Z" }, now)).toEqual({
+    expect(planTermEnd({ basis: "monthlyFrom", startedAt: "2026-07-31T03:40:09Z", checkedAt: now.toISOString() }, now)).toEqual({
       endsAt: day("2026-09-30T03:40:09Z"),
       estimated: true,
-      checkedAt: null,
+      checkedAt: now,
       startedAt: day("2026-07-31T03:40:09Z"),
     });
   });
@@ -45,6 +45,24 @@ describe("planTermEnd", () => {
   it("gives up on dates it cannot read", () => {
     expect(planTermEnd({ basis: "stated", endsAt: "soon" }, now)).toBeNull();
     expect(planTermEnd({ basis: "monthlyFrom", startedAt: "" }, now)).toBeNull();
+  });
+
+  it("does not invent another paid month after the last confirmed cycle ends", () => {
+    const term = { basis: "monthlyFrom", startedAt: "2026-08-31T03:40:09Z", checkedAt: "2026-09-27T02:45:00Z" } as const;
+    expect(planTermEnd(term, day("2026-09-30T03:40:08Z"))?.endsAt.toISOString()).toBe("2026-09-30T03:40:09.000Z");
+    expect(planTermEnd(term, day("2026-09-30T03:40:09Z"))).toBeNull();
+    expect(planTermEnd(term, day("2026-12-15T00:00:00Z"))).toBeNull();
+    expect(planTermEnd({ ...term, checkedAt: "2026-10-01T00:00:00Z" }, day("2026-10-01T00:00:01Z"))?.endsAt.toISOString()).toBe("2026-10-31T03:40:09.000Z");
+  });
+
+  it("does not extrapolate unconfirmed or invalid monthly subscription periods", () => {
+    const term = { basis: "monthlyFrom", startedAt: "2026-08-31T03:40:09Z" } as const;
+    expect(planTermEnd(term, now)?.endsAt.toISOString()).toBe("2026-09-30T03:40:09.000Z");
+    expect(planTermEnd(term, day("2026-10-01T00:00:00Z"))).toBeNull();
+    expect(planTermEnd({ ...term, checkedAt: "invalid" }, now)).toBeNull();
+    expect(planTermEnd({ ...term, checkedAt: "2026-10-01T00:00:00Z" }, now)).toBeNull();
+    expect(planTermEnd({ ...term, checkedAt: "2026-08-01T00:00:00Z" }, now)).toBeNull();
+    expect(planTermEnd({ ...term, startedAt: "2026-10-01T00:00:00Z" }, now)).toBeNull();
   });
 });
 

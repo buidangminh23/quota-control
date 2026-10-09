@@ -65,10 +65,35 @@ describe("card identity", () => {
   it("passes on the plan's paid period and the header notice's first line", () => {
     const term = { basis: "monthlyFrom", startedAt: "2026-08-30T03:00:00Z" } as const;
     const codex = { id: "codex@1", displayName: "Codex · codex", icon: "codex" };
-    expect(cardIdentity(codex, snapshot({ planTerm: term }), "vi").planTerm).toEqual(term);
+    expect(cardIdentity(codex, snapshot({ planTerm: term }), "vi").planTerm).toEqual({ ...term, checkedAt: "2026-09-26T03:00:00Z" });
     expect(cardIdentity(codex, undefined, "vi")).toMatchObject({ planTerm: null, notice: null });
     const failed = { ...snapshot({ errorCategory: "network", lines: [{ type: "badge", label: "Error", text: "The request timed out." }] }) } as Parameters<typeof cardIdentity>[1];
     expect(cardIdentity(codex, failed, "vi").notice).toBe("Lỗi mạng");
+  });
+
+  it("removes the previous paid term on Free and uses renewed paid metadata without inferring a plan from dates", () => {
+    const provider = account("personal");
+    const term = { basis: "stated", endsAt: "2026-09-01T00:00:00Z", checkedAt: "2026-08-25T00:00:00Z" } as const;
+    expect(cardIdentity(provider, snapshot({ plan: "Free", planTerm: term }), "vi")).toMatchObject({ plan: "Free", planTerm: null });
+    expect(cardIdentity(provider, snapshot({ plan: " free ", planTerm: term }), "en").planTerm).toBeNull();
+    expect(cardIdentity(provider, snapshot({ plan: "Plus", planTerm: term }), "vi")).toMatchObject({ plan: "Plus", planTerm: term });
+    const renewed = { ...term, endsAt: "2026-11-01T00:00:00Z", checkedAt: "2026-10-01T00:00:00Z" };
+    expect(cardIdentity(provider, snapshot({ plan: "Plus", planTerm: renewed }), "vi").planTerm).toEqual(renewed);
+    expect(cardIdentity(provider, snapshot({ plan: "Plus", planTerm: renewed, errorCategory: "network" }), "vi").planTerm).toBeNull();
+  });
+
+  it("preserves a billing confirmation separately from the usage snapshot timestamp", () => {
+    const term = { basis: "monthlyFrom", startedAt: "2026-08-30T03:00:00Z", checkedAt: "2026-09-25T00:00:00Z" } as const;
+    expect(cardIdentity(account("personal"), snapshot({ plan: "Pro", planTerm: term }), "vi").planTerm).toEqual(term);
+    const { checkedAt: _checkedAt, ...legacyTerm } = term;
+    expect(cardIdentity(account("personal"), snapshot({ plan: "Pro", planTerm: legacyTerm, planCheckedAt: term.checkedAt }), "vi").planTerm).toEqual(term);
+  });
+
+  it("uses fresh plan metadata even if the quota request failed", () => {
+    const term = { basis: "stated", endsAt: "2026-11-01T00:00:00Z", checkedAt: "2026-10-01T00:00:00Z" } as const;
+    const failedUsage = snapshot({ plan: "Plus", planTerm: term, planCheckedAt: term.checkedAt, errorCategory: "rate_limited" });
+    expect(cardIdentity(account("personal"), failedUsage, "vi")).toMatchObject({ plan: "Plus", planTerm: term, notice: "Bị giới hạn tần suất, sẽ thử lại" });
+    expect(cardIdentity(account("personal"), { ...failedUsage, snapshot: { ...failedUsage.snapshot, plan: "Free" } }, "vi")).toMatchObject({ plan: "Free", planTerm: null });
   });
 });
 

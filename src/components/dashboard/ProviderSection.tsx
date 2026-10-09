@@ -19,7 +19,7 @@ import {
   setProviderOpen,
   type ProviderMetrics,
 } from "@/model/layout";
-import { accountEmailOf, accountLabelOf, brandName, hasPlanReading, headerNotice, providerBrand, providerTitle, stalenessHint } from "@/model/providerText";
+import { accountEmailOf, accountLabelOf, brandName, cardIdentity, hasPlanReading, headerNotice, providerBrand, providerTitle, stalenessHint } from "@/model/providerText";
 import { planTermLines } from "@/model/planTermLines";
 import { knownBrandColor } from "@/model/totalSpend";
 import { condensedTextRowOffsets, offeredRows, widgetDataFor, type DisplayOptions, type WidgetData } from "@/model/widgetData";
@@ -98,8 +98,9 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
   const notice = headerNotice(runtime, language);
   const stale = stalenessHint(runtime, refreshIntervalMs, now, language);
   const refreshing = runtime?.refreshing ?? false;
-  const plan = isLocalHistoryCard(providerId) ? undefined : runtime?.snapshot?.plan;
-  const planTerm = isLocalHistoryCard(providerId) ? undefined : runtime?.snapshot?.planTerm;
+  const identity = cardIdentity(group.provider, runtime, language);
+  const plan = identity.plan ?? undefined;
+  const planTerm = identity.planTerm;
   const termLines = planTerm ? planTermLines(planTerm, now, display.timeFormat, language) : null;
   const chat = chatTarget(group);
   const seriesColor = tokenSource ? knownBrandColor(providerBrand(group.provider), false) : null;

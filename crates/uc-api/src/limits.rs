@@ -72,6 +72,8 @@ struct WireProvider {
     fetched_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     plan: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plan_checked_at: Option<String>,
     resources: BTreeMap<String, WireResource>,
     stale: bool,
 }
@@ -100,8 +102,9 @@ impl WireProvider {
             expires_at: iso(expiry),
             fetched_at: iso(snapshot.refreshed_at),
             plan: snapshot.plan.clone(),
+            plan_checked_at: snapshot.plan_checked_at.map(iso),
             resources,
-            stale: state.generated_at >= expiry,
+            stale: snapshot.error_category.is_some() || state.generated_at >= expiry,
         }
     }
 }
@@ -325,6 +328,35 @@ mod tests {
             vec![session.into(), credits.into(), trend.into()],
             fetched_at(),
         )
+    }
+
+    #[test]
+    fn confirmed_plan_on_a_failed_first_usage_read_is_stale() {
+        let mut snapshot = ProviderSnapshot::error_message(&codex(), "Rate limited", Some(uc_core::ErrorCategory::RateLimited));
+        snapshot.refreshed_at = fetched_at();
+        snapshot.plan = Some("Free".into());
+        snapshot.plan_checked_at = Some(fetched_at());
+        let state = state(snapshot, codex_descriptors());
+        let root = envelope(&["codex"], &state);
+        let provider = &root["providers"]["codex"];
+        assert_eq!(provider["plan"], "Free");
+        assert_eq!(provider["stale"], true);
+        assert_eq!(provider["resources"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn plan_confirmation_does_not_make_old_usage_fresh() {
+        let mut snapshot = codex_snapshot();
+        snapshot.plan = Some("Free".into());
+        snapshot.plan_checked_at = Some(fetched_at() + Duration::minutes(10));
+        let mut state = state(snapshot, codex_descriptors());
+        state.generated_at = fetched_at() + Duration::minutes(10);
+        let root = envelope(&["codex"], &state);
+        let provider = &root["providers"]["codex"];
+        assert_eq!(provider["plan"], "Free");
+        assert_eq!(provider["planCheckedAt"], "2026-07-13T01:49:30.000Z");
+        assert_eq!(provider["fetchedAt"], "2026-07-13T01:39:30.000Z");
+        assert_eq!(provider["stale"], true);
     }
 
     #[test]

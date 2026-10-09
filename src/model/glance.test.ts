@@ -625,6 +625,32 @@ describe("the account header", () => {
     expect(account(glance({ display: english }), "codex@52d0").term?.on).toBe("Fri, Oct 16");
   });
 
+  it("does not roll a failed Claude refresh into another paid cycle on any native surface", () => {
+    const now = new Date("2026-10-01T00:00:00Z");
+    const stale = glance({ now, errors: { "claude@7c1e": "Refresh failed" } });
+    for (const list of [stale.providers, stale.widget.providers, stale.island.wings]) {
+      const claude = list.find((entry) => entry.id === "claude@7c1e");
+      expect(claude?.plan).toBe("Max 5x");
+      expect(claude?.term).toBeUndefined();
+    }
+    const previous = snapshots["claude@7c1e"]!;
+    const paid = glance({ now, data: { ...snapshots, "claude@7c1e": { ...previous, refreshedAt: now.toISOString() } } });
+    expect(account(paid, "claude@7c1e").term?.endsAt).toBe("2026-10-30T03:00:00.000Z");
+  });
+
+  it("removes a stale paid term on Free and displays the newly confirmed Plus period", () => {
+    const previous = snapshots["codex@52d0"]!;
+    const free = glance({ wings: [descriptors.get("codex@52d0.session")!, null], data: { ...snapshots, "codex@52d0": { ...previous, plan: "Free" } } });
+    for (const list of [free.providers, free.widget.providers, free.island.wings]) {
+      const codex = list.find((entry) => entry.id === "codex@52d0");
+      expect(codex?.plan).toBe("Free");
+      expect(codex?.term).toBeUndefined();
+    }
+    const next = { basis: "stated", endsAt: "2026-11-16T15:00:00Z", checkedAt: NOW_GLANCE.toISOString() } as const;
+    const renewed = glance({ data: { ...snapshots, "codex@52d0": { ...previous, plan: "Plus", planTerm: next } } });
+    expect(account(renewed, "codex@52d0")).toMatchObject({ plan: "Plus", term: { endsAt: "2026-11-16T15:00:00.000Z" } });
+  });
+
   it("carries the popup's plan-period words, with a place for the count and one for the day, only while an account has a period", () => {
     expect(glance().labels.planTerm).toEqual({
       days: ["còn {n} ngày", "còn {n} ngày"],

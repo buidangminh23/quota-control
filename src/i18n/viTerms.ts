@@ -70,6 +70,7 @@ const EXACT: Readonly<Record<string, string>> = {
   "Codex Local Usage": "Codex · Trên máy này",
   Spark: "Spark",
   "Cannot connect to the usage service.": "Không kết nối được dịch vụ hạn mức.",
+  "The current subscription could not be verified. Retrying automatically.": "Chưa xác minh được gói hiện tại. App sẽ tự kiểm tra lại.",
   "The usage service returned an invalid response.": "Dịch vụ hạn mức trả về dữ liệu không hợp lệ.",
   "Cannot read local credentials.": "Không đọc được thông tin đăng nhập trên máy.",
   "Cannot read the login from the macOS keychain. Unlock the keychain and try again.":

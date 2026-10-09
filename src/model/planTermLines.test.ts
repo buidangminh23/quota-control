@@ -5,7 +5,7 @@ import { planTermLines } from "./planTermLines";
 /** Sunday 27/09/2026 09:45 in Vietnam. */
 const NOW = new Date("2026-09-27T02:45:00Z");
 const CODEX = { basis: "stated", endsAt: "2026-10-17T01:56:39+00:00", checkedAt: "2026-09-25T13:56:24Z" } as const;
-const CLAUDE = { basis: "monthlyFrom", startedAt: "2026-07-31T03:40:09Z" } as const;
+const CLAUDE = { basis: "monthlyFrom", startedAt: "2026-07-31T03:40:09Z", checkedAt: "2026-09-27T02:45:00Z" } as const;
 
 beforeEach(() => setSystemTimeZone("Asia/Saigon"));
 afterEach(() => setSystemTimeZone(null));
@@ -45,5 +45,11 @@ describe("planTermLines", () => {
 
   it("returns nothing for a term it cannot read", () => {
     expect(planTermLines({ basis: "stated", endsAt: "later" }, NOW, "auto", "vi")).toBeNull();
+  });
+
+  it("hides an expired monthly estimate until the subscription is confirmed again", () => {
+    const now = new Date("2026-10-01T00:00:00Z");
+    expect(planTermLines(CLAUDE, now, "auto", "vi")).toBeNull();
+    expect(planTermLines({ ...CLAUDE, checkedAt: now.toISOString() }, now, "auto", "vi")).toMatchObject({ day: "tới ~T7 31/10" });
   });
 });

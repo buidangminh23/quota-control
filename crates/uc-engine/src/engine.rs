@@ -19,7 +19,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use tokio::sync::{Notify, broadcast};
 use uc_core::{
-    Clock, ErrorCategory, MetricLine, Provider, ProviderRuntime, ProviderSnapshot,
+    Clock, ErrorCategory, MetricLine, PlanTerm, Provider, ProviderRuntime, ProviderSnapshot,
     ProviderUsageHistory, RefreshContext, UsageHistoryDescriptor, WidgetDescriptor, system_clock,
 };
 
@@ -581,9 +581,39 @@ impl Engine {
             );
         }
         if let Some(message) = Self::error_message_in(&snapshot) {
+            self.reconcile_plan(provider_id, &snapshot);
             return self.record_failure(provider_id, message, snapshot.error_category, force);
         }
         self.record_success(provider_id, snapshot, elapsed, force)
+    }
+
+    fn reconcile_plan(&self, provider_id: &str, snapshot: &ProviderSnapshot) {
+        let Some(checked_at) = snapshot.plan_checked_at else {
+            return;
+        };
+        let replacement = {
+            let mut inner = self.inner.lock();
+            match inner.snapshots.get_mut(provider_id) {
+                Some(previous)
+                    if checked_at > previous.plan_checked_at.unwrap_or(previous.refreshed_at) =>
+                {
+                    previous.plan = snapshot.plan.clone();
+                    previous.plan_term = snapshot.plan_term.clone();
+                    previous.plan_checked_at = Some(checked_at);
+                    Some(previous.clone())
+                }
+                None => {
+                    inner
+                        .snapshots
+                        .insert(provider_id.to_string(), snapshot.clone());
+                    None
+                }
+                _ => None,
+            }
+        };
+        if let Some(replacement) = replacement {
+            self.cache.replace_silently(&replacement);
+        }
     }
 
     fn record_failure(
@@ -706,14 +736,25 @@ impl Engine {
         if inner.refreshing.contains(provider_id) {
             return None;
         }
-        let deadline = reset_deadline(inner.snapshots.get(provider_id)?, &self.config)?;
-        if inner
-            .attempted_at
-            .get(provider_id)
-            .is_some_and(|attempt| *attempt >= deadline)
-        {
-            return None;
-        }
+        let snapshot = inner.snapshots.get(provider_id)?;
+        let plan_deadline = match snapshot.plan_term.as_ref() {
+            Some(PlanTerm::Stated { ends_at, .. })
+                if *ends_at > snapshot.plan_checked_at.unwrap_or(snapshot.refreshed_at) =>
+            {
+                Some(*ends_at)
+            }
+            _ => None,
+        };
+        let deadline = [reset_deadline(snapshot, &self.config), plan_deadline]
+            .into_iter()
+            .flatten()
+            .filter(|deadline| {
+                !inner
+                    .attempted_at
+                    .get(provider_id)
+                    .is_some_and(|attempt| *attempt >= *deadline)
+            })
+            .min()?;
         Some(match inner.retry_after.get(provider_id) {
             Some(retry) if *retry > deadline => *retry,
             _ => deadline,
@@ -984,6 +1025,327 @@ mod tests {
             Some(MetricLine::Progress(line)) => line.used,
             other => panic!("no Session meter: {other:?}"),
         }
+    }
+
+    struct SnapshotProvider {
+        provider: Provider,
+        snapshot: Mutex<ProviderSnapshot>,
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ProviderRuntime for SnapshotProvider {
+        fn provider(&self) -> &Provider {
+            &self.provider
+        }
+
+        fn widget_descriptors(&self) -> Vec<WidgetDescriptor> {
+            Vec::new()
+        }
+
+        async fn refresh(&self, _context: RefreshContext) -> ProviderSnapshot {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.snapshot.lock().clone()
+        }
+
+        async fn has_local_credentials(&self) -> bool {
+            true
+        }
+    }
+
+    fn subscription_snapshot(
+        plan: &str,
+        checked_at: &str,
+        ends_at: Option<&str>,
+        failed: bool,
+    ) -> ProviderSnapshot {
+        let provider = Provider::new("claude", "Claude");
+        let mut snapshot = if failed {
+            ProviderSnapshot::error_message(
+                &provider,
+                "Usage updates are rate limited",
+                Some(ErrorCategory::RateLimited),
+            )
+        } else {
+            ProviderSnapshot::make(
+                &provider,
+                Some(plan.into()),
+                vec![MetricLine::progress("Session", 80.0, 100.0, ProgressFormat::Percent).into()],
+                at(checked_at),
+            )
+        };
+        snapshot.plan = Some(plan.into());
+        snapshot.refreshed_at = at(checked_at);
+        snapshot.plan_checked_at = Some(at(checked_at));
+        snapshot.plan_term = ends_at.map(|ends_at| PlanTerm::Stated {
+            ends_at: at(ends_at),
+            checked_at: Some(at(checked_at)),
+        });
+        snapshot
+    }
+
+    fn snapshot_provider(snapshot: ProviderSnapshot) -> Arc<SnapshotProvider> {
+        Arc::new(SnapshotProvider {
+            provider: Provider::new("claude", "Claude"),
+            snapshot: Mutex::new(snapshot),
+            calls: AtomicUsize::new(0),
+        })
+    }
+
+    #[tokio::test]
+    async fn fresh_subscription_survives_usage_failure_and_clears_expired_paid_period() {
+        let clock = TestClock::starting("2026-10-09T00:00:00Z");
+        let provider = snapshot_provider(subscription_snapshot(
+            "Plus",
+            "2026-10-09T00:00:00Z",
+            Some("2026-10-09T00:01:00Z"),
+            false,
+        ));
+        let (engine, _dir) = clocked_engine(vec![provider.clone()], &clock);
+        assert_eq!(
+            engine.refresh("claude", false).await,
+            RefreshOutcome::Refreshed
+        );
+        let previous = engine.snapshots()["claude"].clone();
+        clock.set("2026-10-09T00:01:00Z");
+        *provider.snapshot.lock() =
+            subscription_snapshot("Free", "2026-10-09T00:01:00Z", None, true);
+        assert_eq!(engine.refresh("claude", true).await, RefreshOutcome::Failed);
+        let current = engine.snapshots()["claude"].clone();
+        assert_eq!(current.plan.as_deref(), Some("Free"));
+        assert_eq!(current.plan_term, None);
+        assert_eq!(current.plan_checked_at, Some(at("2026-10-09T00:01:00Z")));
+        assert_eq!(current.lines, previous.lines);
+        assert_eq!(current.refreshed_at, previous.refreshed_at);
+        assert!(engine.state().providers["claude"].error.is_some());
+        assert!(engine.rate_limited("claude"));
+        assert_eq!(
+            engine.refresh("claude", false).await,
+            RefreshOutcome::BackedOff
+        );
+        assert_eq!(
+            engine.cache.load_snapshots(&["claude".into()])["claude"],
+            current
+        );
+        clock.set("2026-10-09T00:05:00Z");
+        assert!(engine.cache.fresh_snapshot("claude").is_none());
+        *provider.snapshot.lock() = subscription_snapshot(
+            "Plus",
+            "2026-10-09T00:05:00Z",
+            Some("2026-11-09T00:05:00Z"),
+            true,
+        );
+        assert_eq!(engine.refresh("claude", true).await, RefreshOutcome::Failed);
+        assert_eq!(engine.snapshots()["claude"].plan.as_deref(), Some("Plus"));
+        assert_eq!(
+            engine.snapshots()["claude"].refreshed_at,
+            previous.refreshed_at
+        );
+        assert!(engine.cache.fresh_snapshot("claude").is_none());
+    }
+
+    #[tokio::test]
+    async fn unconfirmed_or_older_subscription_failure_cannot_replace_last_good_metadata() {
+        let clock = TestClock::starting("2026-10-09T00:00:00Z");
+        let provider = snapshot_provider(subscription_snapshot(
+            "Plus",
+            "2026-10-09T00:00:00Z",
+            Some("2026-11-09T00:00:00Z"),
+            false,
+        ));
+        let (engine, _dir) = clocked_engine(vec![provider.clone()], &clock);
+        engine.refresh("claude", false).await;
+        let previous = engine.snapshots()["claude"].clone();
+        for checked_at in [
+            None,
+            Some("2026-10-08T00:00:00Z"),
+            Some("2026-10-09T00:00:00Z"),
+        ] {
+            let mut failed = subscription_snapshot("Free", "2026-10-09T00:01:00Z", None, true);
+            failed.plan_checked_at = checked_at.map(at);
+            *provider.snapshot.lock() = failed;
+            assert_eq!(engine.refresh("claude", true).await, RefreshOutcome::Failed);
+            assert_eq!(engine.snapshots()["claude"], previous);
+            assert!(engine.state().providers["claude"].error.is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn metadata_only_failure_without_previous_usage_stays_an_error_and_is_not_cached() {
+        let clock = TestClock::starting("2026-10-09T00:00:00Z");
+        let snapshot = subscription_snapshot("Free", "2026-10-09T00:00:00Z", None, true);
+        let provider = snapshot_provider(snapshot.clone());
+        let (engine, _dir) = clocked_engine(vec![provider], &clock);
+        assert_eq!(
+            engine.refresh("claude", false).await,
+            RefreshOutcome::Failed
+        );
+        assert_eq!(engine.snapshots()["claude"], snapshot);
+        assert!(
+            engine.snapshots()["claude"]
+                .lines
+                .iter()
+                .all(MetricLine::is_error)
+        );
+        assert!(engine.cache.load_snapshots(&["claude".into()]).is_empty());
+        assert!(engine.cache.fresh_snapshot("claude").is_none());
+    }
+
+    #[tokio::test]
+    async fn stated_subscription_expiry_refreshes_before_interval_and_respects_backoff() {
+        let clock = TestClock::starting("2026-10-09T00:00:00Z");
+        let provider = snapshot_provider(subscription_snapshot(
+            "Plus",
+            "2026-10-09T00:00:00Z",
+            Some("2026-10-09T00:01:00Z"),
+            false,
+        ));
+        let (engine, _dir) = clocked_engine(vec![provider.clone()], &clock);
+        engine.refresh("claude", false).await;
+        clock.set("2026-10-09T00:00:30Z");
+        let mut failed = subscription_snapshot("Plus", "2026-10-09T00:00:30Z", None, true);
+        failed.plan_checked_at = None;
+        *provider.snapshot.lock() = failed;
+        engine.refresh("claude", true).await;
+        clock.set("2026-10-09T00:01:00Z");
+        assert!(engine.refresh_reset_windows().await.is_empty());
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+        clock.set("2026-10-09T00:05:30Z");
+        *provider.snapshot.lock() =
+            subscription_snapshot("Free", "2026-10-09T00:05:30Z", None, false);
+        assert_eq!(
+            engine.refresh_reset_windows().await,
+            vec![RefreshOutcome::Refreshed]
+        );
+        assert_eq!(engine.snapshots()["claude"].plan.as_deref(), Some("Free"));
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 3);
+        assert!(engine.refresh_reset_windows().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_expiry_recheck_is_attempted_only_once_for_the_same_boundary() {
+        let clock = TestClock::starting("2026-10-09T00:00:00Z");
+        let provider = snapshot_provider(subscription_snapshot(
+            "Plus",
+            "2026-10-09T00:00:00Z",
+            Some("2026-10-09T00:01:00Z"),
+            false,
+        ));
+        let (engine, _dir) = clocked_engine(vec![provider.clone()], &clock);
+        engine.refresh("claude", false).await;
+        clock.set("2026-10-09T00:01:00Z");
+        let mut failed = subscription_snapshot("Plus", "2026-10-09T00:01:00Z", None, true);
+        failed.plan_checked_at = None;
+        *provider.snapshot.lock() = failed;
+        assert_eq!(
+            engine.refresh_reset_windows().await,
+            vec![RefreshOutcome::Failed]
+        );
+        clock.set("2026-10-09T00:06:00Z");
+        assert!(engine.refresh_reset_windows().await.is_empty());
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn monthly_subscription_estimates_do_not_schedule_an_expiration() {
+        let clock = TestClock::starting("2026-10-09T00:00:00Z");
+        let provider = snapshot_provider(subscription_snapshot(
+            "Pro",
+            "2026-10-09T00:00:00Z",
+            None,
+            false,
+        ));
+        let (engine, _dir) = clocked_engine(vec![provider], &clock);
+        let mut snapshot = subscription_snapshot("Pro", "2026-10-09T00:00:00Z", None, false);
+        snapshot.plan_term = Some(PlanTerm::MonthlyFrom {
+            started_at: at("2026-09-09T00:01:00Z"),
+            checked_at: snapshot.plan_checked_at,
+        });
+        engine
+            .inner
+            .lock()
+            .snapshots
+            .insert("claude".into(), snapshot);
+        assert_eq!(
+            engine.reset_refresh_at(&engine.inner.lock(), "claude"),
+            None
+        );
+    }
+
+    #[test]
+    fn earlier_usage_reset_attempt_does_not_suppress_a_later_subscription_boundary() {
+        let clock = TestClock::starting("2026-10-09T00:00:00Z");
+        let provider = snapshot_provider(subscription_snapshot(
+            "Plus",
+            "2026-10-09T00:00:00Z",
+            Some("2026-10-09T00:02:00Z"),
+            false,
+        ));
+        let (engine, _dir) = clocked_engine(vec![provider], &clock);
+        let mut snapshot = subscription_snapshot(
+            "Plus",
+            "2026-10-09T00:00:00Z",
+            Some("2026-10-09T00:02:00Z"),
+            false,
+        );
+        snapshot.lines = vec![
+            MetricLine::progress("Session", 80.0, 100.0, ProgressFormat::Percent)
+                .resets_at(Some(at("2026-10-09T00:01:00Z")))
+                .into(),
+        ];
+        let mut inner = engine.inner.lock();
+        inner.snapshots.insert("claude".into(), snapshot);
+        inner
+            .attempted_at
+            .insert("claude".into(), at("2026-10-09T00:01:05Z"));
+        assert_eq!(
+            engine.reset_refresh_at(&inner, "claude"),
+            Some(at("2026-10-09T00:02:00Z"))
+        );
+    }
+
+    #[tokio::test]
+    async fn metadata_failure_does_not_make_a_persisted_usage_snapshot_fresh_in_a_new_session() {
+        let clock = TestClock::starting("2026-10-09T00:00:00Z");
+        let provider = snapshot_provider(subscription_snapshot(
+            "Plus",
+            "2026-10-09T00:00:00Z",
+            None,
+            false,
+        ));
+        let (previous_engine, dir) = clocked_engine(vec![provider.clone()], &clock);
+        previous_engine.refresh("claude", false).await;
+        clock.set("2026-10-09T00:01:00Z");
+        *provider.snapshot.lock() =
+            subscription_snapshot("Free", "2026-10-09T00:01:00Z", None, true);
+        let config = EngineConfig::default();
+        let cache = SnapshotCache::with_options(
+            dir.path().join("cache.json"),
+            config.refresh_interval,
+            false,
+            clock.clock(),
+        );
+        let engine = Engine::with_options(
+            vec![provider],
+            cache,
+            config,
+            HashMap::new(),
+            None,
+            clock.clock(),
+        );
+        assert!(engine.cache.fresh_snapshot("claude").is_none());
+        assert_eq!(
+            engine.refresh("claude", false).await,
+            RefreshOutcome::Failed
+        );
+        assert_eq!(engine.snapshots()["claude"].plan.as_deref(), Some("Free"));
+        assert!(engine.cache.fresh_snapshot("claude").is_none());
+        assert_eq!(
+            engine.cache.load_snapshots(&["claude".into()])["claude"]
+                .plan
+                .as_deref(),
+            Some("Free")
+        );
     }
 
     #[tokio::test]
