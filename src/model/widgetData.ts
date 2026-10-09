@@ -18,6 +18,7 @@ import type {
   WidgetTemplate,
 } from "@/lib/types";
 import { roundHalfAwayFromZero } from "./decimal";
+import { hasDashboardCard } from "./layout";
 import {
   clampPercent,
   compactDuration,
@@ -189,7 +190,7 @@ export function resolveLine(line: MetricLine, descriptor: WidgetDescriptor, disp
 export function widgetDataFor(descriptor: WidgetDescriptor, snapshot: ProviderSnapshot | undefined, display: DisplayOptions): WidgetData {
   const line = snapshot?.lines.find((candidate) => candidate.label === descriptor.metricLabel);
   const resolved = line ? resolveLine(line, descriptor, display) : null;
-  if (resolved) return resolved;
+  if (resolved) return hasDashboardCard(descriptor.providerId) && (snapshot?.usageUnavailable || snapshot?.errorCategory) ? { ...resolved, hasData: false } : resolved;
   return { ...sampleFromTemplate(descriptor.template, display), hasData: false };
 }
 

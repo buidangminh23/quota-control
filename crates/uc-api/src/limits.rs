@@ -86,6 +86,10 @@ impl WireProvider {
     ) -> Self {
         let interval = Duration::from_std(state.refresh_interval).unwrap_or(Duration::minutes(5));
         let expiry = snapshot.refreshed_at + interval;
+        let reset_passed = descriptors.iter().any(|descriptor| {
+            matches!(snapshot.line(&descriptor.metric_label), Some(MetricLine::Progress(progress))
+                if progress.resets_at.is_some_and(|reset| reset <= state.generated_at))
+        });
         let mut resources = BTreeMap::new();
         for descriptor in descriptors {
             let Some(line) = snapshot.line(&descriptor.metric_label) else {
@@ -104,7 +108,11 @@ impl WireProvider {
             plan: snapshot.plan.clone(),
             plan_checked_at: snapshot.plan_checked_at.map(iso),
             resources,
-            stale: snapshot.error_category.is_some() || state.generated_at >= expiry,
+            stale: snapshot.error_category.is_some()
+                || state.errors.contains_key(&snapshot.provider_id)
+                || snapshot.refreshed_at > state.generated_at
+                || state.generated_at >= expiry
+                || reset_passed,
         }
     }
 }
@@ -332,7 +340,11 @@ mod tests {
 
     #[test]
     fn confirmed_plan_on_a_failed_first_usage_read_is_stale() {
-        let mut snapshot = ProviderSnapshot::error_message(&codex(), "Rate limited", Some(uc_core::ErrorCategory::RateLimited));
+        let mut snapshot = ProviderSnapshot::error_message(
+            &codex(),
+            "Rate limited",
+            Some(uc_core::ErrorCategory::RateLimited),
+        );
         snapshot.refreshed_at = fetched_at();
         snapshot.plan = Some("Free".into());
         snapshot.plan_checked_at = Some(fetched_at());
@@ -407,6 +419,46 @@ mod tests {
         assert_eq!(
             envelope(&["codex"], &state)["providers"]["codex"]["stale"],
             true
+        );
+    }
+
+    #[test]
+    fn a_failed_refresh_marks_retained_usage_stale_for_every_provider() {
+        for id in ["claude", "codex", "copilot", "custom-service"] {
+            let mut snapshot = codex_snapshot();
+            snapshot.provider_id = id.into();
+            let mut state = state(snapshot, codex_descriptors());
+            state.errors.insert(id.into(), "Try again later".into());
+            let root = envelope(&[id], &state);
+            assert_eq!(root["providers"][id]["stale"], true, "{id}");
+            assert_eq!(root["providers"][id]["resources"]["session"]["used"], 42);
+            state.errors.clear();
+            assert_eq!(envelope(&[id], &state)["providers"][id]["stale"], false);
+        }
+    }
+
+    #[test]
+    fn a_future_reading_is_not_current_after_a_clock_change() {
+        let mut state = state(codex_snapshot(), codex_descriptors());
+        state.generated_at = fetched_at() - Duration::seconds(1);
+        assert_eq!(
+            envelope(&["codex"], &state)["providers"]["codex"]["stale"],
+            true
+        );
+    }
+
+    #[test]
+    fn a_passed_reset_requires_another_confirmed_reading() {
+        let mut snapshot = codex_snapshot();
+        let reset = at("2026-07-13T06:00:00.000Z");
+        snapshot.refreshed_at = reset - Duration::seconds(10);
+        let mut state = state(snapshot, codex_descriptors());
+        state.generated_at = reset;
+        let root = envelope(&["codex"], &state);
+        assert_eq!(root["providers"]["codex"]["stale"], true);
+        assert_eq!(
+            root["providers"]["codex"]["resources"]["session"]["used"],
+            42
         );
     }
 

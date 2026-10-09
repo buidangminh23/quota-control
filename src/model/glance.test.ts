@@ -35,14 +35,13 @@ import { dailyReliability } from "./insights/claudePresentation";
 import { parseClaudeResets } from "./insights/claudeResets";
 import { parseResetStatus } from "./insights/resets";
 import { glanceGroups, reconcileLayout } from "./layout";
-import { boundedTrailingText, meterSeverity, meterState, resetCountdownText } from "./meterState";
 import { barKind, platformKey } from "./platform";
 import { cardIdentity, providerBrand } from "./providerText";
 import { DEFAULT_SETTINGS, type DensitySetting, type GlanceContent, type IslandSettings, type ResetProvider, type ThemeSetting } from "./settings";
 import { planTermLines } from "./planTermLines";
 import { makeWidget, NOW, resetsAt, WEEK_SECONDS } from "./testHelpers";
 import { calendarDaysBetween, setSystemTimeZone } from "./timeZone";
-import { boundedHeadline, DEFAULT_DISPLAY, fraction, menuBarValue, widgetDataFor, type DisplayOptions } from "./widgetData";
+import { DEFAULT_DISPLAY, menuBarValue, widgetDataFor, type DisplayOptions } from "./widgetData";
 import { rollOverPassedWindows } from "./windowReset";
 
 const FETCHED = Date.UTC(2026, 8, 26, 3);
@@ -495,22 +494,19 @@ describe("a limit's reset words, pace and reset", () => {
       expect(limits.length).toBeGreaterThan(4);
       for (const { entry, metric } of limits) {
         const resetAt = new Date(metric.resetsAt!);
-        const after = new Date(resetAt.getTime() + 1000);
         const rolled = rollOverPassedWindows(engine, resetAt).providers[entry.id]!.snapshot;
         const data = widgetDataFor(descriptors.get(metric.id)!, rolled, display);
-        const severity = meterSeverity(meterState(data, after));
+        expect(data.hasData).toBe(false);
         expect(metric.after, metric.id).toEqual({
           value: menuBarValue(data),
-          headline: boundedHeadline(data),
-          fraction: fraction(data),
-          detail: boundedTrailingText(data, after) ?? undefined,
-          cadence: resetCountdownText(data, after) ?? undefined,
-          ...(severity === "normal" ? {} : { severity }),
+          headline: messagesFor(display.language).meter.noData,
+          fraction: null,
+          severity: "none",
         });
       }
     }
     const codex = glance().widget.providers.find((entry) => entry.id === "codex@52d0")!;
-    expect(codex.metrics.find((metric) => metric.id === "codex@52d0.session")!.after).toEqual({ value: "100%", headline: "Còn 100%", fraction: 1, detail: "Đặt lại sau 5 giờ", cadence: "Đặt lại sau 5 giờ" });
+    expect(codex.metrics.find((metric) => metric.id === "codex@52d0.session")!.after).toEqual({ value: "—", headline: "Không có dữ liệu", fraction: null, severity: "none" });
   });
 
   it("carries what a limit's pace note and tick are worked out from, and the notes' words while one does", () => {
@@ -719,12 +715,26 @@ describe("the account header", () => {
     });
   });
 
-  it("says a reading is outdated two refresh intervals after it was taken, as beside the card's name", () => {
+  it("keeps old readings' fetch time accessible without the inline outdated label", () => {
     expect(glance().widget.providers.some((entry) => entry.outdated)).toBe(false);
     expect(glance({ now: new Date(FETCHED + 8 * MINUTE) }).widget.providers.some((entry) => entry.outdated)).toBe(false);
     const later = glance({ now: new Date(FETCHED + 11 * MINUTE) });
-    expect(later.widget.providers.map((entry) => entry.outdated)).toEqual(["Dữ liệu cũ", "Dữ liệu cũ", "Dữ liệu cũ"]);
-    expect(account(glance({ now: new Date(FETCHED + 11 * MINUTE), display: english }), "codex@52d0").outdated).toBe("Outdated");
+    expect(later.widget.providers.every((entry) => entry.outdated === undefined)).toBe(true);
+    expect(later.widget.providers.map((entry) => entry.problem)).toEqual(Array(3).fill("Cập nhật lần cuối 12 phút trước"));
+    expect(account(glance({ now: new Date(FETCHED + 11 * MINUTE), display: english }), "codex@52d0").problem).toBe("Last updated 12m ago");
+    const failed = account(glance({ now: new Date(FETCHED + 11 * MINUTE), errors: { "codex@52d0": "Refresh failed" } }), "codex@52d0");
+    expect(failed.problem).toBe("Làm mới thất bại\nCập nhật lần cuối 12 phút trước");
+  });
+
+  it("bounds cached native quota lifetimes without expiring local history or plan metadata", () => {
+    const document = glance({ wings: [descriptors.get("codex@52d0.session")!, null] });
+    const expires = new Date(FETCHED + 9 * MINUTE).toISOString();
+    for (const list of [document.providers, document.widget.providers, document.island.wings]) {
+      expect(list.find((entry) => entry.id === "codex@52d0")?.validUntil).toBe(expires);
+    }
+    const previous = snapshots["codex@52d0"]!;
+    const unavailable = glance({ data: { ...snapshots, "codex@52d0": { ...previous, plan: "Free", usageUnavailable: true } } });
+    expect(account(unavailable, "codex@52d0")).toMatchObject({ plan: "Free", metrics: [], notice: "Không có dữ liệu" });
   });
 
   it("carries the email the provider reports when the card's label is not one, keeping the heading", () => {
@@ -1192,14 +1202,14 @@ describe("a document for someone who never chose Claude", () => {
    * `after`). `BEFORE_ROW_MOMENTS` pins the documents without those, to show nothing else moved.
    */
   const PINNED: Readonly<Record<string, string>> = {
-    defaults: "88010db18da5d18f015d43a45c4e92cc45e5ecd4975eb57bc4b5e2d9296caacc",
-    wings: "620b582f17736808c78dcacd10918770d56cd0679f65b4730f62fea92c2c50f5",
-    tuned: "0d0c1e363fd22d9c320d67ab1709e2c425188664705917a8b62171c638c49346",
+    defaults: "a3ebcbac45e6fa3674f5a656336fc02411696eb87eb604cc9f98f10f31617345",
+    wings: "8197a7f4dae6ddddee76483a164b7a0286c2a1aa25bae346da73b106fc5f7f93",
+    tuned: "d07f6481d1401889163a293646d6ef3f51b5c95cd49eb7266de0425186650277",
   };
   const BEFORE_ROW_MOMENTS: Readonly<Record<string, string>> = {
-    defaults: "9eadcd8a63238ab3ef93c58efa116b5297b47f4dda4f20f3fb47a1cef297cb63",
-    wings: "e2e15cb7d9652811e33f5235dcced660e55f6299ea18f21b4d32654403cfbe4a",
-    tuned: "8618b464fccc3324d33718ea7d8b109de98703a96ee877337b2c02232c15a40c",
+    defaults: "5dee4805f42f8909ebdffedc0e507d339963a23cd946baed4ccdf1109d1ce45c",
+    wings: "84b365e4736354fd0e24388da733a8db6d9836298b7a9346c1b2223644c8f525",
+    tuned: "3aa22263b06adf00c6936cd1e25018256763952826d70e99a60ee2959abd7606",
   };
   /** The document without the limit rows' reset words added in 0.3.29. */
   const withoutRowMoments = (document: ReturnType<typeof glance>) => {
@@ -1229,22 +1239,22 @@ describe("a document for someone who never chose Claude", () => {
     return copy;
   };
 
-  it("stays byte for byte what 0.3.16 sent apart from the quoted announcement, the fetch time and what it took over from the popup (up to the limit rows' reset words of 0.3.29), even with a Claude tracker at hand", () => {
+  it("pins native documents with bounded quota lifetimes and unavailable readings after reset", () => {
     const tracker = claude();
     expect(tracker).not.toBeNull();
+    const digests: Record<string, string> = {};
     for (const [name, options] of Object.entries(scenarios())) {
       const document = glance(options);
       expect(document.resets?.presentation?.latest, name).toMatchObject({ excerpt: expect.stringMatching(/^GPT-6 Sol and Luna are out\./), url: "https://x.com/thsottiaux/status/2102463847714247142" });
       expect(document.resets?.presentation?.fetched?.at, name).toBe(new Date(FETCHED).toISOString());
-      expect(digest(unquoted(document)), name).toBe(PINNED[name]);
-      expect(digest(unquoted(glance({ ...options, claudeResets: tracker }))), name).toBe(PINNED[name]);
+      digests[name] = digest(unquoted(document));
+      expect(digest(unquoted(glance({ ...options, claudeResets: tracker }))), name).toBe(digests[name]);
     }
+    expect(digests).toEqual(PINNED);
   });
 
   it("differs from what it was before the limit rows moved their reset words only by those words", () => {
-    for (const [name, options] of Object.entries(scenarios())) {
-      expect(digest(withoutRowMoments(unquoted(glance(options)))), name).toBe(BEFORE_ROW_MOMENTS[name]);
-    }
+    expect(Object.fromEntries(Object.entries(scenarios()).map(([name, options]) => [name, digest(withoutRowMoments(unquoted(glance(options))))]))).toEqual(BEFORE_ROW_MOMENTS);
   });
 
   it("carries no Claude key at all", () => {
@@ -1272,7 +1282,7 @@ describe("glance metric", () => {
     const period = WEEK_SECONDS * 1000;
     const weekly = glanceMetric("claude.weekly", makeWidget("Weekly", "percent", 95, 100, { resetsAt: resetsAt(0.5, WEEK_SECONDS), periodDurationMs: period }), NOW);
     expect(weekly.pace).toEqual({ used: 0.95, period });
-    expect(weekly.after).toMatchObject({ headline: "0% used", fraction: 0 });
+    expect(weekly.after).toMatchObject({ headline: "No data", fraction: null });
     const spent = glanceMetric("claude.weekly", makeWidget("Weekly", "percent", 100, 100, { resetsAt: resetsAt(0.5, WEEK_SECONDS), periodDurationMs: period }), NOW);
     expect(spent.pace).toEqual({ spent: true });
     const extra = glanceMetric("claude.extra", makeWidget("Extra usage spent", "dollars", 50, 50), NOW);

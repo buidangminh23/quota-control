@@ -206,11 +206,10 @@ export function isErrorSnapshot(runtime: ProviderRuntimeState | undefined): bool
  * a refresh fails), so a metric it lacks is a limit the account's plan does not have.
  */
 export function hasPlanReading(runtime: ProviderRuntimeState | undefined): boolean {
-  return runtime?.snapshot !== undefined && !isErrorSnapshot(runtime);
+  return runtime?.snapshot !== undefined && !runtime.snapshot.usageUnavailable && !isErrorSnapshot(runtime);
 }
 
 export interface StalenessHint {
-  label: string;
   tooltip: string;
 }
 
@@ -236,10 +235,14 @@ export function stalenessHint(
   now: Date,
   language: Language,
 ): StalenessHint | null {
-  const age = outdatedAge(runtime?.snapshot?.refreshedAt, refreshIntervalMs, now);
+  return lastUpdatedHint(runtime?.snapshot?.refreshedAt, refreshIntervalMs, now, language);
+}
+
+export function lastUpdatedHint(refreshedAt: string | undefined, refreshIntervalMs: number, now: Date, language: Language): StalenessHint | null {
+  const age = outdatedAge(refreshedAt, refreshIntervalMs, now);
   if (age === null) return null;
   const duration = compactDuration(age, language);
   if (!duration) return null;
   const meter = messagesFor(language).meter;
-  return { label: meter.outdated, tooltip: meter.lastUpdated(duration) };
+  return { tooltip: meter.lastUpdated(duration) };
 }

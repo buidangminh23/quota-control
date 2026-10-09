@@ -1,6 +1,6 @@
 import type { ProviderSnapshot, WidgetDescriptor } from "@/lib/types";
 import { makeWidget } from "./testHelpers";
-import { descriptorTitle, metricTitle, offeredRows } from "./widgetData";
+import { DEFAULT_DISPLAY, descriptorTitle, metricTitle, offeredRows, widgetDataFor } from "./widgetData";
 
 const HOUR = 3_600_000;
 
@@ -64,5 +64,32 @@ describe("offered rows", () => {
     const always = [row("Session", false)];
     const onDemand = [row("Sonnet", false)];
     expect(offeredRows(always, onDemand, true)).toEqual({ always, onDemand });
+  });
+});
+
+describe("quota availability", () => {
+  it("withholds unavailable numeric readings while retaining meter geometry and labels", () => {
+    const reading = snapshot([{ type: "progress", label: "Session", used: 82, limit: 100, format: { kind: "percent" }, periodDurationMs: 5 * HOUR, resetsAt: "2026-09-27T15:00:00Z" }]);
+    const available = widgetDataFor(descriptor("Session"), reading, DEFAULT_DISPLAY);
+    expect(available.hasData).toBe(true);
+    expect(widgetDataFor(descriptor("Session"), { ...reading, usageUnavailable: true }, DEFAULT_DISPLAY)).toEqual({ ...available, hasData: false });
+    expect(widgetDataFor(descriptor("Session"), { ...reading, errorCategory: "rate_limited" }, DEFAULT_DISPLAY).hasData).toBe(false);
+    expect(reading.lines[0]).toMatchObject({ used: 82 });
+  });
+
+  it("withholds cached credit counts and disabled badges on a failed account reading", () => {
+    for (const line of [
+      { type: "values", label: "Session", values: [{ number: 8, kind: "count", estimated: false }] },
+      { type: "badge", label: "Session", text: "Disabled" },
+    ] as ProviderSnapshot["lines"]) {
+      const reading = { ...snapshot([line]), usageUnavailable: true };
+      expect(widgetDataFor(descriptor("Session"), reading, DEFAULT_DISPLAY).hasData).toBe(false);
+    }
+  });
+
+  it("preserves cached local token history", () => {
+    const local = { ...descriptor("Session"), providerId: "codex-local" };
+    const reading = { ...snapshot([{ type: "values", label: "Session", values: [{ number: 2048, kind: "count" as const, estimated: false }] }]), errorCategory: "network" as const };
+    expect(widgetDataFor(local, reading, DEFAULT_DISPLAY).hasData).toBe(true);
   });
 });

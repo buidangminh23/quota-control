@@ -1,6 +1,6 @@
 import { chartDayLabel } from "./chart";
 import { foldedModels, OTHER_MODEL_NAME, wholePercents } from "./modelUsage";
-import { cardIdentity, headerNotice, isOutdated, providerTitle, spendLegendName, stalenessHint } from "./providerText";
+import { cardIdentity, hasPlanReading, headerNotice, isOutdated, providerTitle, spendLegendName, stalenessHint } from "./providerText";
 
 const account = (label: string) => ({ id: "claude@1", displayName: `Claude · ${label}`, icon: "claude" });
 
@@ -41,11 +41,14 @@ describe("header notice and staleness", () => {
       snapshot: { providerID: "x", displayName: "x", lines: [], refreshedAt: new Date(now.getTime() - minutesAgo * 60_000).toISOString() },
     });
     expect(stalenessHint(snapshot(4), 300_000, now, "vi")).toBeNull();
-    expect(stalenessHint(snapshot(12), 300_000, now, "vi")).toEqual({ label: "Dữ liệu cũ", tooltip: "Cập nhật lần cuối 12 phút trước" });
+    expect(stalenessHint(snapshot(12), 300_000, now, "vi")).toEqual({ tooltip: "Cập nhật lần cuối 12 phút trước" });
     for (const minutes of [4, 9, 10, 12]) {
       expect(isOutdated(snapshot(minutes).snapshot.refreshedAt, 300_000, now), `${minutes}`).toBe(stalenessHint(snapshot(minutes), 300_000, now, "vi") !== null);
     }
     expect(isOutdated(undefined, 300_000, now)).toBe(false);
+    const runtime = snapshot(12);
+    expect(hasPlanReading(runtime)).toBe(true);
+    expect(hasPlanReading({ ...runtime, snapshot: { ...runtime.snapshot, usageUnavailable: true } })).toBe(false);
   });
 });
 

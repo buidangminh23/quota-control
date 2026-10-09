@@ -9,12 +9,11 @@ struct GlancePace: Decodable, Equatable {
     var period: Double? = nil
 }
 
-/// A limit's reading once its reset has passed, as the popup shows the window the moment it rolls
-/// over: nothing used, no countdown, the next period's words (`Còn 100%`, `Đặt lại sau 5 giờ`).
+/// A limit's unavailable reading after its reset until the provider confirms the new allowance.
 struct GlanceAfterReset: Decodable, Equatable {
     var value: String
     var headline: String
-    var fraction: Double
+    var fraction: Double?
     var detail: String? = nil
     var cadence: String? = nil
     var severity: GlanceSeverity? = nil
@@ -150,25 +149,35 @@ struct GlancePacing: Equatable {
 }
 
 extension GlanceMetric {
-    /// The metric as the popup's row reads it at `now`: once its reset has passed, the reading its
-    /// window rolls over to; while it counts down, the meter's color, the note on its title line and
+    /// The metric as the popup's row reads it at `now`: unavailable after an unconfirmed reset;
+    /// while it counts down, the meter's color, the note on its title line and
     /// the even-pace tick of its pace verdict at `now`, which the popup works out every time it
     /// renders.
-    func reading(at now: Date, pacing: GlancePacing) -> GlanceMetric {
+    func unavailable(_ noData: String) -> GlanceMetric {
+        var copy = self
+        copy.value = "—"
+        copy.headline = noData
+        copy.fraction = nil
+        copy.detail = nil
+        copy.cadence = nil
+        copy.severity = .none
+        copy.resetsAt = nil
+        copy.pace = nil
+        copy.after = nil
+        copy.note = nil
+        copy.tick = nil
+        copy.countdown = nil
+        copy.expiresAt = nil
+        copy.redeem = nil
+        return copy
+    }
+
+    func reading(at now: Date, pacing: GlancePacing, noData: String = "—") -> GlanceMetric {
         var copy = self
         copy.note = nil
         copy.tick = nil
-        if let resetsAt, resetsAt <= now, let after {
-            copy.value = after.value
-            copy.headline = after.headline
-            copy.fraction = after.fraction
-            copy.detail = after.detail
-            copy.cadence = after.cadence
-            copy.severity = after.severity ?? .normal
-            copy.resetsAt = nil
-            copy.pace = nil
-            copy.after = nil
-            return copy
+        if let resetsAt, resetsAt <= now {
+            return unavailable(after?.fraction == nil ? after?.headline ?? noData : noData)
         }
         guard let pace, let verdict = pace.verdict(resetsAt: resetsAt, now: now) else { return copy }
         copy.severity = verdict.severity
@@ -180,9 +189,13 @@ extension GlanceMetric {
 
 extension GlanceProvider {
     /// The account with every metric read at `now` (`GlanceMetric.reading(at:pacing:)`).
-    func reading(at now: Date, pacing: GlancePacing) -> GlanceProvider {
+    func reading(at now: Date, pacing: GlancePacing, noData: String = "—") -> GlanceProvider {
         var copy = self
-        copy.metrics = metrics.map { $0.reading(at: now, pacing: pacing) }
+        if let validUntil, validUntil <= now {
+            copy.metrics = metrics.map { $0.unavailable(noData) }
+        } else {
+            copy.metrics = metrics.map { $0.reading(at: now, pacing: pacing, noData: noData) }
+        }
         return copy
     }
 }
@@ -194,14 +207,14 @@ extension GlanceDocument {
     }
 
     /// The document as the popup reads it at `now`: every limit, on the island, the widgets and
-    /// beside the notch, rolled over once its reset has passed and paced at `now`. A surface draws
+    /// beside the notch, unavailable after its validity boundary and paced at `now`. A surface draws
     /// this at each moment it draws, so its limits read as the popup's do then.
     func reading(at now: Date) -> GlanceDocument {
         let pacing = self.pacing
         var copy = self
-        copy.providers = providers.map { $0.reading(at: now, pacing: pacing) }
-        copy.widget.providers = widget.providers.map { $0.reading(at: now, pacing: pacing) }
-        copy.island.wings = island.wings.map { $0.reading(at: now, pacing: pacing) }
+        copy.providers = providers.map { $0.reading(at: now, pacing: pacing, noData: labels.noData) }
+        copy.widget.providers = widget.providers.map { $0.reading(at: now, pacing: pacing, noData: labels.noData) }
+        copy.island.wings = island.wings.map { $0.reading(at: now, pacing: pacing, noData: labels.noData) }
         return copy
     }
 
@@ -391,6 +404,9 @@ extension GlanceDocument {
         var moments: [Date] = []
         var finals: [Date] = []
         for provider in providers {
+            if let validUntil = provider.validUntil, validUntil > now {
+                finals.append(validUntil)
+            }
             if let row = provider.resetRow(at: now), let countdown = row.countdown, countdown.at > now {
                 moments += GlanceTicks.changes(after: now, until: min(end, countdown.at), anchor: countdown.at) {
                     countdown.text(now: $0, units: labels.units)
@@ -498,6 +514,7 @@ struct GlancePaceNoteView: View {
 /// second; with no deadline in its last five minutes it redraws every `interval` only.
 struct GlanceCountdownSchedule: TimelineSchedule {
     var deadlines: [Date]
+    var boundaries: [Date] = []
     var interval: TimeInterval = 30
 
     /// Past each second's turn by this much, so the time left read then has just dropped below it.
@@ -507,17 +524,21 @@ struct GlanceCountdownSchedule: TimelineSchedule {
     private static let margin: TimeInterval = 0.001
 
     func entries(from start: Date, mode: TimelineScheduleMode) -> Entries {
-        Entries(cursor: start, start: start, deadlines: deadlines, interval: max(1, interval))
+        Entries(cursor: start, start: start, deadlines: deadlines, boundaries: boundaries, interval: max(1, interval))
     }
 
     /// The moment after `moment` this schedule redraws at.
     func next(after moment: Date, start: Date) -> Date {
-        Self.next(after: moment, start: start, deadlines: deadlines, interval: max(1, interval))
+        Self.next(after: moment, start: start, deadlines: deadlines, boundaries: boundaries, interval: max(1, interval))
     }
 
-    fileprivate static func next(after moment: Date, start: Date, deadlines: [Date], interval: TimeInterval) -> Date {
+    fileprivate static func next(after moment: Date, start: Date, deadlines: [Date], boundaries: [Date], interval: TimeInterval) -> Date {
         let steps = (moment.timeIntervalSince(start) / interval).rounded(.down) + 1
         var soonest = start.addingTimeInterval(steps * interval)
+        for boundary in boundaries {
+            let tick = boundary.addingTimeInterval(settle)
+            if tick > moment.addingTimeInterval(margin), tick < soonest { soonest = tick }
+        }
         for deadline in deadlines {
             let ahead = deadline.timeIntervalSince(moment) + settle
             guard ahead > margin else { continue }
@@ -533,11 +554,12 @@ struct GlanceCountdownSchedule: TimelineSchedule {
         var cursor: Date
         let start: Date
         let deadlines: [Date]
+        let boundaries: [Date]
         let interval: TimeInterval
 
         mutating func next() -> Date? {
             let current = cursor
-            cursor = GlanceCountdownSchedule.next(after: current, start: start, deadlines: deadlines, interval: interval)
+            cursor = GlanceCountdownSchedule.next(after: current, start: start, deadlines: deadlines, boundaries: boundaries, interval: interval)
             return current
         }
     }

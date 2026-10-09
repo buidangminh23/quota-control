@@ -6,7 +6,7 @@
  * Swift side only lays it out. What moves with the clock travels as moments with the popup's words
  * and the inputs of its pace verdict, which Swift fills in at the moment it draws, as the popup does
  * at every tick: the countdowns in the Reset Times setting's form, a limit's pace note and even-pace
- * tick, and the reading a window rolls over to at its reset.
+ * tick, and the unavailable reading after an unconfirmed reset.
  */
 import { PROVIDER_MARKS, type ProviderMark } from "@/assets/providerMarks";
 import { knownBrandColor } from "./totalSpend";
@@ -22,10 +22,9 @@ import { periodLabel } from "./menuBar";
 import { boundedTrailingText, isFreshSessionWindow, meterSeverity, meterState, resetCountdownText, type MeterState } from "./meterState";
 import { SOURCE_COLORS } from "./palette";
 import { PLAN_TERM_SOON_DAYS, planTermEnd } from "./planTerm";
-import { isOutdated } from "./providerText";
+import { STALENESS_INTERVALS, lastUpdatedHint } from "./providerText";
 import { readsClaudeResets, type DensitySetting, type GlanceContent, type GlanceSurfaceSettings, type IslandSettings, type IslandStyle, type IslandView, type ResetParts, type ResetProvider, type SurfaceResets, type ThemeSetting } from "./settings";
 import { availableResets, boundedHeadline, fraction, isBounded, menuBarValue, soonestExpiry, unboundedDetail, type DisplayOptions, type WidgetData } from "./widgetData";
-import { rolledOverReading } from "./windowReset";
 
 export const GLANCE_VERSION = 1;
 /** The open island lists at most this many accounts (in two columns); the widget decides what fits
@@ -116,17 +115,15 @@ export interface GlancePace {
 }
 
 /**
- * A limit's reading once its reset has passed, as the popup shows the window the moment it rolls
- * over (`rollOverPassedWindows`): nothing used and no countdown, so `Còn 100%` with the next
- * period's words. The widgets draw it from the reset on, until the app writes the next reading.
+ * A limit's unavailable reading after its reset until the provider confirms the new allowance.
  */
 export interface GlanceAfterReset {
   value: string;
   headline: string;
-  fraction: number;
-  /** `Đặt lại sau 5 giờ`, `Chưa bắt đầu`. */
+  fraction: number | null;
+  /** An unavailable reading's detail. */
   detail?: string;
-  /** `Đặt lại sau 5 giờ` alone, as `GlanceMetric.cadence`. */
+  /** A confirmed cadence, as `GlanceMetric.cadence`. */
   cadence?: string;
   /** The meter's color when it is not the normal one. */
   severity?: GlanceSeverity;
@@ -174,8 +171,9 @@ export interface GlanceProvider {
   plan?: string;
   /** The plan's paid period, the card header's right corner. */
   term?: GlancePlanTerm;
-  /** `Dữ liệu cũ`, while the reading is two refresh intervals old, as beside the card's name. */
+  /** Compatibility with documents written before stale status moved into the warning tooltip. */
   outdated?: string;
+  validUntil?: string;
   /** The header notice's first line (a failed refresh, an error snapshot, a provider warning): the
    * reason for the warning triangle beside the name, whether or not the account has readings. */
   problem?: string;
@@ -904,7 +902,7 @@ export function glanceMetric(id: string, data: WidgetData, now: Date): GlanceMet
   if (!bounded && data.hasData && data.expiriesAt.length > 0) metric.expiresAt = new Date(Math.min(...data.expiriesAt.map((date) => date.getTime()))).toISOString();
   const pace = state ? glancePace(data, state, counting) : null;
   if (pace) metric.pace = pace;
-  if (counting) metric.after = glanceAfterReset(data, now);
+  if (counting) metric.after = glanceAfterReset(data);
   return metric;
 }
 
@@ -919,17 +917,9 @@ function glancePace(data: WidgetData, state: MeterState, counting: boolean): Gla
   return { used: data.used / data.limit, period: data.periodDurationMs };
 }
 
-/** `GlanceMetric.after`: the row as the popup reads it once its window has rolled over. */
-function glanceAfterReset(data: WidgetData, now: Date): GlanceAfterReset {
-  const rolled = rolledOverReading(data);
-  const after: GlanceAfterReset = { value: menuBarValue(rolled), headline: boundedHeadline(rolled), fraction: fraction(rolled) };
-  const detail = boundedTrailingText(rolled, now);
-  if (detail) after.detail = detail;
-  const cadence = resetCountdownText(rolled, now);
-  if (cadence) after.cadence = cadence;
-  const severity = meterSeverity(meterState(rolled, now)) ?? "none";
-  if (severity !== "normal") after.severity = severity;
-  return after;
+/** `GlanceMetric.after`: unavailable until the provider confirms the new window. */
+function glanceAfterReset(data: WidgetData): GlanceAfterReset {
+  return { value: "—", headline: messagesFor(data.language).meter.noData, fraction: null, severity: "none" };
 }
 
 function shows(settings: GlanceSurfaceSettings): GlanceShows {
@@ -1109,8 +1099,12 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
     if (about.plan) entry.plan = about.plan;
     const term = about.planTerm ? glancePlanTerm(about.planTerm, input.now, input.language) : null;
     if (term) entry.term = term;
-    if (isOutdated(input.refreshedAt(source.id), input.refreshIntervalMs, input.now)) entry.outdated = messages.meter.outdated;
-    if (about.notice) entry.problem = about.notice;
+    const refreshedAt = input.refreshedAt(source.id);
+    const stale = lastUpdatedHint(refreshedAt, input.refreshIntervalMs, input.now, input.language);
+    const problem = [about.notice, stale?.tooltip].filter(Boolean).join("\n");
+    if (problem) entry.problem = problem;
+    const fetched = Date.parse(refreshedAt ?? "");
+    if (!isLocalHistoryCard(source.id) && Number.isFinite(fetched)) entry.validUntil = new Date(fetched + STALENESS_INTERVALS * input.refreshIntervalMs).toISOString();
     if (metrics.length === 0) entry.notice = about.notice ?? messages.meter.noData;
     return entry;
   };

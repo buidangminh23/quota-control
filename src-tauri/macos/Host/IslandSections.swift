@@ -632,12 +632,6 @@ struct IslandAccountHeader: View {
                                 .lineLimit(1)
                                 .layoutPriority(1)
                         }
-                        if let outdated = provider.outdated {
-                            Text(outdated)
-                                .font(.glance(size: density.plan))
-                                .foregroundStyle(ink.faint)
-                                .lineLimit(1)
-                        }
                     }
                     if let problem = provider.problem {
                         Image(systemName: "exclamationmark.triangle.fill")

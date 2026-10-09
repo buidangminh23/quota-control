@@ -100,30 +100,77 @@ describe("popup", () => {
     expect(placed()).toEqual(counted);
   });
 
-  it("shows a limit window whose reset has passed as reset before the next reading comes in", async () => {
+  it("withholds a passed window until a successful provider reading confirms its allowance", async () => {
     const api = await renderApp();
     const work = screen.getByRole("region", { name: "Claude · Công ty" });
     act(() => api.editEngineState((state) => spendWorkSession(state, -1_000)));
-    expect(within(work).getByText("Còn 100%")).toBeInTheDocument();
-    expect(within(work).getByText("Chưa bắt đầu")).toBeInTheDocument();
+    expect(within(work).queryByText("Còn 100%")).not.toBeInTheDocument();
+    expect(within(work).queryByText("Chưa bắt đầu")).not.toBeInTheDocument();
     expect(within(work).queryByText("Còn 0%")).not.toBeInTheDocument();
+    expect(within(work).getByText("Phiên 5h")).toBeInTheDocument();
+    expect(within(work).getAllByText("—").length).toBeGreaterThanOrEqual(2);
+    act(() => api.editEngineState((state) => {
+      spendWorkSession(state, 5 * 3_600_000);
+      const snapshot = state.providers["claude@7c1e"]!.snapshot!;
+      snapshot.refreshedAt = new Date().toISOString();
+      const session = snapshot.lines.find((line) => line.label === "Session");
+      if (session?.type === "progress") session.used = 20;
+    }));
+    expect(within(work).getByText("Còn 80%")).toBeInTheDocument();
   });
 
-  it("opens with a window that reset while the app was closed already shown as reset", async () => {
+  it("withholds a window that reset while the app was closed", async () => {
     await renderApp({ engine: (state) => spendWorkSession(state, -60_000) });
     const work = screen.getByRole("region", { name: "Claude · Công ty" });
-    expect(within(work).getByText("Còn 100%")).toBeInTheDocument();
-    expect(within(work).getByText("Chưa bắt đầu")).toBeInTheDocument();
+    expect(within(work).queryByText("Còn 100%")).not.toBeInTheDocument();
+    expect(within(work).queryByText("Chưa bắt đầu")).not.toBeInTheDocument();
+    expect(within(work).getAllByText("—").length).toBeGreaterThanOrEqual(2);
   });
 
-  it("rolls a spent window over the moment its reset arrives, with no new reading", async () => {
+  it("removes the inline outdated label while keeping the failed fetch and last successful usage time accessible", async () => {
+    await renderApp({ engine: (state) => {
+      const runtime = state.providers["claude@7c1e"]!;
+      runtime.snapshot!.refreshedAt = new Date(Date.now() - 20 * 60_000).toISOString();
+      runtime.snapshot!.plan = "Free";
+      runtime.snapshot!.planCheckedAt = new Date().toISOString();
+      runtime.error = "Refresh failed";
+    } });
+    const work = screen.getByRole("region", { name: "Claude · Công ty" });
+    expect(within(work).queryByText("Dữ liệu cũ")).not.toBeInTheDocument();
+    expect(within(work).getByText("Free")).toBeInTheDocument();
+    expect(within(work).queryByText("Còn 88%")).not.toBeInTheDocument();
+    expect(within(work).queryByText("Còn 100%")).not.toBeInTheDocument();
+    expect(within(work).getByRole("img", { name: /Làm mới thất bại\s+Cập nhật lần cuối \d+ phút trước/ })).toBeInTheDocument();
+    expect(within(work).getByText("Phiên 5h")).toBeInTheDocument();
+  });
+
+  it("withholds a spent window at its reset without inventing a fresh reading", async () => {
     const api = await renderApp();
     const work = screen.getByRole("region", { name: "Claude · Công ty" });
     act(() => api.editEngineState((state) => spendWorkSession(state, 120)));
     expect(within(work).getByText("Còn 0%")).toBeInTheDocument();
     await act(() => new Promise((resolve) => setTimeout(resolve, 250)));
-    expect(within(work).getByText("Còn 100%")).toBeInTheDocument();
+    expect(within(work).queryByText("Còn 100%")).not.toBeInTheDocument();
     expect(within(work).queryByText("Còn 0%")).not.toBeInTheDocument();
+    expect(within(work).getAllByText("—").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("withholds obsolete quota at its freshness deadline without a backend event", async () => {
+    const api = await renderApp();
+    const work = screen.getByRole("region", { name: "Claude · Công ty" });
+    act(() => api.editEngineState((state) => {
+      state.refreshIntervalMs = 150;
+      state.providers["claude@7c1e"]!.snapshot!.refreshedAt = new Date().toISOString();
+    }));
+    expect(within(work).getByText("Còn 88%")).toBeInTheDocument();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 400)));
+    expect(within(work).queryByText("Còn 88%")).not.toBeInTheDocument();
+    expect(useApp.getState().engine?.providers["claude@7c1e"]?.snapshot).toMatchObject({ usageUnavailable: true });
+    act(() => api.editEngineState((state) => {
+      state.refreshIntervalMs = 300_000;
+      state.providers["claude@7c1e"]!.snapshot!.refreshedAt = new Date().toISOString();
+    }));
+    expect(within(work).getByText("Còn 88%")).toBeInTheDocument();
   });
 
   it("shows Codex's free limit resets as the last row of its card with the caret closed", async () => {

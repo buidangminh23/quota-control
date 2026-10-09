@@ -829,7 +829,8 @@ struct IslandRootView: View {
         let now = Date()
         let plan = IslandPlan.make(document, now: now, selected: model.selectedTab)
         let deadlines = plan.sections.contains(.quota) ? IslandQuotaSection.countdowns(document, budget: model.budget, now: now) : []
-        return GlanceCountdownSchedule(deadlines: deadlines, interval: 30)
+        let boundaries = document.visibleProviders.compactMap(\.validUntil)
+        return GlanceCountdownSchedule(deadlines: deadlines, boundaries: boundaries, interval: 30)
     }
 
     private func shapeSize(_ geometry: IslandGeometry) -> CGSize {
@@ -854,7 +855,9 @@ struct IslandRootView: View {
     private func content(_ document: GlanceDocument, geometry: IslandGeometry) -> some View {
         switch model.mode {
         case .compact:
-            TimelineView(.periodic(from: .now, by: 30)) { context in
+            TimelineView(GlanceCountdownSchedule(deadlines: [], boundaries: document.island.wings.flatMap { provider in
+                [provider.validUntil].compactMap { $0 } + provider.metrics.compactMap(\.resetsAt)
+            }, interval: 30)) { context in
                 IslandWings(
                     layout: model.wingLayout,
                     geometry: geometry,
@@ -1002,9 +1005,12 @@ struct IslandWingPiece: View {
         }
     }
 
-    /// The reading as the popup's row reads it at `now`: rolled over once its reset has passed, its
+    /// The reading as the popup's row reads it at `now`: unavailable after its validity boundary, its
     /// color the pace verdict's at `now`.
-    private var metric: GlanceMetric { slot.metric.reading(at: now, pacing: .colorOnly) }
+    private var metric: GlanceMetric {
+        if let validUntil = slot.provider.validUntil, validUntil <= now { return slot.metric.unavailable("—") }
+        return slot.metric.reading(at: now, pacing: .colorOnly)
+    }
 
     private var fraction: Double? { style == .percent ? nil : metric.fraction }
 

@@ -149,6 +149,7 @@ export interface ProviderSnapshot {
   account?: string;
   lines: MetricLine[];
   refreshedAt: string;
+  usageUnavailable?: boolean;
   usageHistory?: ProviderUsageHistory;
   warning?: string;
   errorCategory?: ErrorCategory;

@@ -95,8 +95,8 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
   const condensed = useMemo(() => new Set([...condensedIds(always), ...(open ? condensedIds(onDemand) : [])]), [always, onDemand, open]);
   const links = group.provider.links ?? [];
   const hasExpandable = onDemand.length > 0 || links.length > 0;
-  const notice = headerNotice(runtime, language);
   const stale = stalenessHint(runtime, refreshIntervalMs, now, language);
+  const notice = [headerNotice(runtime, language), stale?.tooltip].filter(Boolean).join("\n") || null;
   const refreshing = runtime?.refreshing ?? false;
   const identity = cardIdentity(group.provider, runtime, language);
   const plan = identity.plan ?? undefined;
@@ -178,11 +178,6 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
               {heading}
             </span>
             {plan ? <span className="uc-section-plan">{translate(plan, language)}</span> : null}
-            {stale && !refreshing ? (
-              <span className="uc-section-stale" {...tooltipProps(stale.tooltip)}>
-                {stale.label}
-              </span>
-            ) : null}
           </span>
           {refreshing ? (
             <span className="uc-section-status uc-secondary" aria-label={messages.dashboard.refreshing}>

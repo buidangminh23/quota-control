@@ -663,8 +663,9 @@ struct GlanceProvider: Equatable, Identifiable {
     var plan: String?
     /// The plan's paid period, the card header's right corner.
     var term: GlancePlanTerm? = nil
-    /// `Dữ liệu cũ`, while the reading is two refresh intervals old, as beside the card's name.
+    /// Compatibility with documents written before stale status moved into the warning tooltip.
     var outdated: String? = nil
+    var validUntil: Date? = nil
     /// Why the card header shows its warning triangle: a failed refresh, an error, a provider
     /// warning; with readings or without.
     var problem: String? = nil
@@ -712,7 +713,7 @@ struct GlanceProvider: Equatable, Identifiable {
 
 extension GlanceProvider: Decodable {
     private enum CodingKeys: String, CodingKey {
-        case id, name, account, plan, term, outdated, problem, notice, brand, color, lightColor, mark, metrics, resetRow
+        case id, name, account, plan, term, outdated, validUntil, problem, notice, brand, color, lightColor, mark, metrics, resetRow
     }
 
     /// Keys added after the first release are read leniently, so one malformed key never loses the
@@ -725,6 +726,7 @@ extension GlanceProvider: Decodable {
         plan = try container.decodeIfPresent(String.self, forKey: .plan)
         term = try? container.decodeIfPresent(GlancePlanTerm.self, forKey: .term)
         outdated = try? container.decodeIfPresent(String.self, forKey: .outdated)
+        validUntil = try? container.decodeIfPresent(Date.self, forKey: .validUntil)
         problem = try? container.decodeIfPresent(String.self, forKey: .problem)
         notice = try container.decodeIfPresent(String.self, forKey: .notice)
         brand = try container.decode(String.self, forKey: .brand)

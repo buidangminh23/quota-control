@@ -91,7 +91,7 @@ enum GlanceHeaderInk {
 }
 
 /// A widget account's header as the popup's card header draws it: the mark in its brand color,
-/// the name, the plan in plain secondary text, `Dữ liệu cũ` once the reading is outdated, the
+/// the name, the plan in plain secondary text, and the last fetch time in the warning tooltip;
 /// warning triangle when the account has a problem, the email under; with `term`, the plan period
 /// in the right corner.
 struct GlanceProviderHeader: View {
@@ -121,17 +121,12 @@ struct GlanceProviderHeader: View {
                                 .lineLimit(1)
                                 .layoutPriority(1)
                         }
-                        if let outdated = provider.outdated {
-                            Text(outdated)
-                                .font(.glance(size: smallSize))
-                                .foregroundStyle(GlanceResetPalette(scheme: colorScheme).tertiary)
-                                .lineLimit(1)
-                        }
                     }
                     if let problem = provider.problem {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: smallSize))
                             .foregroundStyle(GlanceHeaderInk.warning(dark: colorScheme == .dark))
+                            .help(problem)
                             .accessibilityLabel(problem)
                     }
                 }

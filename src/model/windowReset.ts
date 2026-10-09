@@ -1,70 +1,71 @@
-/**
- * A limit window whose reset time has passed is shown as reset: nothing used and no countdown, the way
- * a provider reports a window that has not started, until the next reading replaces it (the core asks
- * again a few seconds after every reset). So a reading taken before a reset never passes for the
- * current one, not even offline or while its provider is backed off.
- */
 import type { EngineState, ProgressLine, ProviderRuntimeState } from "@/lib/types";
+import { hasDashboardCard } from "./layout";
 import type { WidgetData } from "./widgetData";
 
 function resetTime(line: ProgressLine): number | null {
   if (!line.resetsAt) return null;
   const time = Date.parse(line.resetsAt);
-  return Number.isNaN(time) ? null : time;
+  return Number.isFinite(time) ? time : null;
 }
 
-function rolledOver(line: ProgressLine): ProgressLine {
-  const fresh: ProgressLine = { ...line, used: 0 };
-  delete fresh.resetsAt;
-  return fresh;
+function readingLifetime(state: EngineState): number {
+  return Number.isFinite(state.refreshIntervalMs) && state.refreshIntervalMs > 0 ? state.refreshIntervalMs * 2 : 60_000;
 }
 
-/**
- * A row's reading once its window has rolled over, as `rollOverPassedWindows` leaves its line:
- * nothing used and no countdown. The island and the widgets draw it from the reset time on, before
- * the next reading reaches them.
- */
 export function rolledOverReading(data: WidgetData): WidgetData {
-  return { ...data, used: 0, resetsAt: null };
+  return data.hasData ? { ...data, hasData: false } : data;
 }
 
-function rollOverRuntime(runtime: ProviderRuntimeState, now: number): ProviderRuntimeState {
+function validateRuntime(runtime: ProviderRuntimeState, now: number, lifetime: number): ProviderRuntimeState {
   const snapshot = runtime.snapshot;
   if (!snapshot) return runtime;
-  let changed = false;
-  const lines = snapshot.lines.map((line) => {
-    if (line.type !== "progress") return line;
-    const reset = resetTime(line);
-    if (reset === null || reset > now) return line;
-    changed = true;
-    return rolledOver(line);
-  });
-  return changed ? { ...runtime, snapshot: { ...snapshot, lines } } : runtime;
+  const reading = Date.parse(snapshot.refreshedAt);
+  const unavailable = snapshot.usageUnavailable === true
+    || runtime.error !== undefined
+    || snapshot.errorCategory !== undefined
+    || !Number.isFinite(reading)
+    || reading > now
+    || now - reading >= lifetime
+    || snapshot.lines.some((line) => line.type === "progress" && (resetTime(line) ?? Number.POSITIVE_INFINITY) <= now);
+  return unavailable && !snapshot.usageUnavailable ? { ...runtime, snapshot: { ...snapshot, usageUnavailable: true } } : runtime;
 }
 
-/** `state` with every window whose reset is at or before `now` rolled over; `state` itself when none is. */
 export function rollOverPassedWindows(state: EngineState, now: Date): EngineState {
   const time = now.getTime();
+  const lifetime = readingLifetime(state);
   let changed = false;
   const providers: EngineState["providers"] = {};
   for (const [id, runtime] of Object.entries(state.providers)) {
-    const next = rollOverRuntime(runtime, time);
+    const next = hasDashboardCard(id) ? validateRuntime(runtime, time, lifetime) : runtime;
     if (next !== runtime) changed = true;
     providers[id] = next;
   }
   return changed ? { ...state, providers } : state;
 }
 
-/** The first window reset in `state` after `now`, or `null` when none lies ahead. */
 export function nextWindowReset(state: EngineState, now: Date): Date | null {
   const time = now.getTime();
   let next = Number.POSITIVE_INFINITY;
-  for (const runtime of Object.values(state.providers)) {
+  for (const [id, runtime] of Object.entries(state.providers)) {
+    if (!hasDashboardCard(id)) continue;
     for (const line of runtime.snapshot?.lines ?? []) {
       if (line.type !== "progress") continue;
       const reset = resetTime(line);
       if (reset !== null && reset > time && reset < next) next = reset;
     }
+  }
+  return Number.isFinite(next) ? new Date(next) : null;
+}
+
+export function nextUsageDeadline(state: EngineState, now: Date): Date | null {
+  const time = now.getTime();
+  let next = nextWindowReset(state, now)?.getTime() ?? Number.POSITIVE_INFINITY;
+  for (const [id, runtime] of Object.entries(state.providers)) {
+    if (!hasDashboardCard(id) || !runtime.snapshot) continue;
+    const refreshed = Date.parse(runtime.snapshot.refreshedAt);
+    const deadline = refreshed + readingLifetime(state);
+    if (Number.isFinite(deadline) && deadline > time && deadline < next) next = deadline;
+    if (Number.isFinite(refreshed) && refreshed > time && refreshed < next) next = refreshed;
   }
   return Number.isFinite(next) ? new Date(next) : null;
 }
