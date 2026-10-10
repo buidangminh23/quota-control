@@ -99,7 +99,7 @@ impl Accounts {
         let cli = self.cli.lock().clone();
         let id = id.to_owned();
         uc_core::load_blocking(move || {
-            uc_providers::accounts::codex_billing_account_uuid(store, &cli, &id)
+            uc_providers::accounts::billing_account_uuid(store, &cli, &id)
         })
         .await
         .map_err(safe_error)
@@ -532,6 +532,9 @@ fn unfinished(
 
 /// Bring the popup back for a connected or failed sign-in, and tell it how the sign-in ended.
 fn report(app: &AppHandle, outcome: LoginOutcome) {
+    if let Some(account_id) = billing_account_after_login(&outcome) {
+        crate::chat_commands::request_account_billing(app, account_id);
+    }
     if matches!(outcome.status, "connected" | "failed")
         && let Err(error) = crate::show_popup(app)
     {
@@ -540,6 +543,17 @@ fn report(app: &AppHandle, outcome: LoginOutcome) {
     if app.emit_to("popup", "account-login", outcome).is_err() {
         tracing::warn!("Could not report how the sign-in ended");
     }
+}
+
+fn billing_account_after_login(outcome: &LoginOutcome) -> Option<&str> {
+    (outcome.status == "connected" && matches!(outcome.provider, "claude" | "codex"))
+        .then_some(outcome.account_id.as_deref())
+        .flatten()
+        .filter(|id| {
+            id.split_once('@').is_some_and(|(provider, identity)| {
+                provider == outcome.provider && !identity.is_empty()
+            })
+        })
 }
 
 async fn finish_login(app: AppHandle, flow_id: String, kind: ProviderKind) {
@@ -859,6 +873,35 @@ pub async fn backfill_account_labels(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn billing_follows_only_the_exact_successfully_connected_subscription_account() {
+        for provider in ["claude", "codex"] {
+            let id = format!("{provider}@second-account");
+            let mut outcome = LoginOutcome {
+                flow_id: "flow".into(),
+                provider,
+                status: "connected",
+                account_id: Some(id.clone()),
+                error: None,
+            };
+            assert_eq!(billing_account_after_login(&outcome), Some(id.as_str()));
+            for status in ["failed", "cancelled", "expired", "waiting"] {
+                outcome.status = status;
+                assert_eq!(billing_account_after_login(&outcome), None);
+            }
+            outcome.status = "connected";
+            outcome.account_id = None;
+            assert_eq!(billing_account_after_login(&outcome), None);
+            outcome.account_id = Some("other@second-account".into());
+            assert_eq!(billing_account_after_login(&outcome), None);
+            outcome.account_id = Some(format!("{provider}@"));
+            assert_eq!(billing_account_after_login(&outcome), None);
+            outcome.provider = "antigravity";
+            outcome.account_id = Some("antigravity@second-account".into());
+            assert_eq!(billing_account_after_login(&outcome), None);
+        }
+    }
 
     #[test]
     fn account_commands_only_accept_supported_providers() {

@@ -16,6 +16,7 @@ use crate::service::safe_error;
 #[derive(Default)]
 pub struct ChatWindows {
     operations: tokio::sync::Mutex<()>,
+    browser_billing: tokio::sync::Mutex<()>,
     loaded: parking_lot::Mutex<HashSet<String>>,
     billing_requested: tokio::sync::Notify,
 }
@@ -210,83 +211,105 @@ pub async fn open_chat_session(
 #[tauri::command]
 pub async fn open_account_billing(
     app: AppHandle,
-    store: State<'_, ChatStore>,
     accounts: State<'_, crate::account_commands::Accounts>,
     account_id: String,
 ) -> Result<bool, String> {
-    let label = accounts.billing_label(&account_id)?;
-    let provider = account_id
+    accounts.billing_label(&account_id)?;
+    if connect_account_billing(&app, &account_id).await? {
+        return Ok(true);
+    }
+    let provider = billing_provider(&account_id).ok_or("Unsupported billing provider")?;
+    crate::browser::open_login_page(&app, billing_page(provider)?.as_str())?;
+    request_account_billing(&app, &account_id);
+    Ok(false)
+}
+
+fn billing_provider(account_id: &str) -> Option<&str> {
+    account_id
         .split_once('@')
+        .filter(|(_, identity)| !identity.is_empty())
         .map(|(provider, _)| provider)
         .filter(|provider| matches!(*provider, "claude" | "codex"))
-        .ok_or("Billing requires a supported connected account")?;
+}
+
+fn browser_billing_enabled(provider: &str, account_ids: &[String]) -> bool {
+    account_ids
+        .iter()
+        .any(|id| billing_provider(id) == Some(provider))
+}
+
+fn billing_page(provider: &str) -> Result<Url, String> {
+    match provider {
+        "claude" => Url::parse("https://claude.ai/settings/billing").map_err(safe_error),
+        "codex" => Url::parse("https://chatgpt.com/#settings/Account").map_err(safe_error),
+        _ => Err("Unsupported billing provider".into()),
+    }
+}
+
+pub fn request_account_billing(app: &AppHandle, account_id: &str) {
+    if billing_provider(account_id).is_none() {
+        return;
+    }
+    let app = app.clone();
+    let account_id = account_id.to_owned();
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = connect_account_billing(&app, &account_id).await {
+            tracing::debug!(%error, "Automatic billing could not reuse the connected account");
+        }
+    });
+}
+
+async fn connect_account_billing(app: &AppHandle, account_id: &str) -> Result<bool, String> {
+    let accounts = app.state::<crate::account_commands::Accounts>();
+    accounts.billing_label(account_id)?;
+    let provider =
+        billing_provider(account_id).ok_or("Billing requires a supported connected account")?;
     let periods = uc_providers::BillingPeriods::default_store();
+    let windows = app.state::<ChatWindows>();
+    let _billing = windows.browser_billing.lock().await;
     let chrome = read_chrome_billing(provider).await;
     if let Err(error) = &chrome {
         tracing::debug!(%error, "The billing connection could not use Chrome");
     }
     if let Ok(reads) = chrome {
         let observed_at = Utc::now();
-        let matching_account = if provider == "codex" {
-            billing_read_confirms(
-                &reads,
-                provider,
-                &accounts.billing_account_uuid(&account_id).await?,
-                observed_at,
-            )
-        } else {
-            true
-        };
+        let account_uuid = accounts.billing_account_uuid(account_id).await?;
+        let matching_account = billing_read_confirms(&reads, provider, &account_uuid, observed_at);
+        let without_subscription =
+            billing_read_without_subscription(&reads, provider, &account_uuid);
         let changed = store_chrome_billing(&periods, provider, reads, observed_at)?;
-        let windows = app.state::<ChatWindows>();
-        windows.billing_requested.notify_one();
         let engine = app.state::<crate::service::BackendService>().engine();
         if changed {
-            engine.invalidate_plan_term(&account_id);
+            refresh_billing_provider(&engine, provider).await;
+        } else {
+            refresh_billing_account(&engine, account_id).await;
         }
-        refresh_billing_account(&engine, &account_id).await;
-        if matching_account && billing_connected(engine.snapshots().get(&account_id), observed_at) {
+        if without_subscription
+            || (matching_account
+                && billing_connected(engine.snapshots().get(account_id), observed_at))
+        {
             return Ok(true);
         }
-        tracing::debug!("Chrome is signed in to a different account; opening a saved web session");
+        tracing::debug!("The existing browser session has not confirmed this account's billing");
     }
-    let windows = app.state::<ChatWindows>();
-    let _operation = windows.operations.lock().await;
-    let session =
-        match store.list()?.into_iter().find(|session| {
-            session.provider == provider && session.label.eq_ignore_ascii_case(&label)
-        }) {
-            Some(session) => session,
-            None => {
-                let session = store.create(provider, Some(label))?;
-                let _ = app.emit_to("popup", "chat-sessions-changed", store.list()?);
-                session
-            }
-        };
-    let url = if provider == "claude" {
-        Url::parse("https://claude.ai/settings/billing").unwrap()
-    } else {
-        official_url(provider)?
-    };
-    let window_label = format!("chat-{}", session.id);
-    if let Some(window) = app.get_webview_window(&window_label) {
-        window.navigate(url).map_err(safe_error)?;
-        window.unminimize().map_err(safe_error)?;
-        window.show().map_err(safe_error)?;
-        window.set_focus().map_err(safe_error)?;
-    } else {
-        build_chat_window(
-            &app,
-            &session,
-            store.profile_directory(&session.id)?,
-            &window_label,
-            url,
-            None,
-            true,
-        )?;
-    }
-    windows.billing_requested.notify_one();
     Ok(false)
+}
+
+fn billing_read_without_subscription(reads: &[BillingRead], provider: &str, account: &str) -> bool {
+    reads.len() == 1
+        && reads[0].state == "ready"
+        && reads[0].organizations.iter().any(|org| {
+            org.uuid.eq_ignore_ascii_case(account)
+                && org.status == 200
+                && matches!(
+                    (provider, org.plan_type.as_str()),
+                    ("claude", "claude_free") | ("codex", "free")
+                )
+                && org
+                    .details
+                    .as_ref()
+                    .is_some_and(|details| details["status"] == "inactive")
+        })
 }
 
 fn billing_read_confirms(
@@ -363,6 +386,18 @@ async fn refresh_billing_account(engine: &uc_engine::Engine, account_id: &str) {
         }
     })
     .await;
+}
+
+async fn refresh_billing_provider(engine: &uc_engine::Engine, provider: &str) {
+    let ids: Vec<_> = engine
+        .provider_ids()
+        .into_iter()
+        .filter(|id| billing_provider(id) == Some(provider))
+        .collect();
+    for id in &ids {
+        engine.invalidate_plan_term(id);
+    }
+    futures::future::join_all(ids.iter().map(|id| refresh_billing_account(engine, id))).await;
 }
 
 #[derive(Deserialize)]
@@ -688,13 +723,22 @@ pub async fn run_billing_reader(app: AppHandle) {
         };
         let mut changed = HashSet::new();
         let periods = uc_providers::BillingPeriods::default_store();
+        let account_ids = app
+            .state::<crate::service::BackendService>()
+            .engine()
+            .provider_ids();
         for provider in ["claude", "codex"] {
-            if !periods.browser_enabled_for(provider) {
+            if !browser_billing_enabled(provider, &account_ids) {
                 continue;
             }
+            let _billing = windows.browser_billing.lock().await;
             match read_chrome_billing(provider).await {
                 Ok(reads) => match store_chrome_billing(&periods, provider, reads, Utc::now()) {
                     Ok(true) => {
+                        tracing::info!(
+                            provider,
+                            "Billing refreshed from the existing browser login"
+                        );
                         changed.insert(provider.to_string());
                     }
                     Ok(false) => {}
@@ -721,12 +765,8 @@ pub async fn run_billing_reader(app: AppHandle) {
         }
         if !changed.is_empty() {
             let engine = app.state::<crate::service::BackendService>().engine();
-            for id in engine.provider_ids().into_iter().filter(|id| {
-                id.split_once('@')
-                    .is_some_and(|(provider, _)| changed.contains(provider))
-            }) {
-                engine.invalidate_plan_term(&id);
-                refresh_billing_account(&engine, &id).await;
+            for provider in changed {
+                refresh_billing_provider(&engine, &provider).await;
             }
         }
     }
@@ -1058,6 +1098,55 @@ fn store_chrome_billing(
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    #[ignore = "Read-only probe using an already signed-in Chrome Default profile"]
+    async fn existing_browser_login_confirms_connected_account_billing() {
+        let provider =
+            std::env::var("UC_BILLING_PROBE_PROVIDER").unwrap_or_else(|_| "codex".into());
+        assert!(matches!(provider.as_str(), "claude" | "codex"));
+        let reads = read_chrome_billing(&provider).await.unwrap();
+        assert_eq!(reads.len(), 1);
+        assert_eq!(
+            reads[0].state, "ready",
+            "The existing browser session is not signed in"
+        );
+        let store = std::sync::Arc::new(uc_accounts::AccountStore::default_store());
+        let records = store.list().unwrap();
+        let cli = uc_providers::cli_accounts_keeping(&[]);
+        let ids: Vec<_> = uc_providers::visible_accounts(&records, &cli)
+            .into_iter()
+            .map(|account| match account {
+                uc_providers::VisibleAccount::Stored(record) => record.id.clone(),
+                uc_providers::VisibleAccount::Cli(login) => login.id.clone(),
+            })
+            .filter(|id| billing_provider(id) == Some(provider.as_str()))
+            .collect();
+        let mut matched = 0;
+        let mut confirmed_periods = 0;
+        for id in ids {
+            let Ok(uuid) = uc_providers::accounts::billing_account_uuid(store.clone(), &cli, &id)
+            else {
+                continue;
+            };
+            if reads[0]
+                .organizations
+                .iter()
+                .any(|org| org.uuid.eq_ignore_ascii_case(&uuid) && org.status == 200)
+            {
+                matched += 1;
+                confirmed_periods +=
+                    usize::from(billing_read_confirms(&reads, &provider, &uuid, Utc::now()));
+            }
+        }
+        assert!(
+            matched > 0,
+            "The browser session must match a connected provider account"
+        );
+        eprintln!(
+            "Existing {provider} browser login: {matched} matched accounts, {confirmed_periods} confirmed billing periods"
+        );
+    }
+
     #[test]
     fn navigation_blocks_native_origins_and_unsafe_schemes() {
         for url in [
@@ -1139,7 +1228,7 @@ mod tests {
     }
 
     #[test]
-    fn chrome_debugging_is_bound_to_the_running_local_browser_and_billing_is_opt_in() {
+    fn chrome_debugging_is_bound_to_the_running_local_browser() {
         assert!(
             chrome_port("9222\n/devtools/browser/00000000-0000-4000-8000-000000000001\n").is_some()
         );
@@ -1177,6 +1266,27 @@ mod tests {
                 .unwrap();
         assert!(store_chrome_billing(&periods, "claude", vec![removed], now).unwrap());
         assert_eq!(periods.get(org, Some("Max"), now), None);
+    }
+
+    #[test]
+    fn connected_accounts_enable_browser_billing_without_a_second_connection() {
+        let temporary = tempfile::tempdir().unwrap();
+        let periods = uc_providers::BillingPeriods::new(temporary.path());
+        let accounts = vec![
+            "claude@first".into(),
+            "codex@second".into(),
+            "codex@third".into(),
+        ];
+        for provider in ["claude", "codex"] {
+            assert!(!periods.browser_enabled_for(provider));
+            assert!(browser_billing_enabled(provider, &accounts));
+            assert!(!browser_billing_enabled(provider, &[]));
+            assert!(billing_origin(provider, &billing_page(provider).unwrap()));
+        }
+        for id in ["claude@", "codex", "other@first", "claude.ai@first"] {
+            assert!(billing_provider(id).is_none());
+            assert!(!browser_billing_enabled("claude", &[id.into()]));
+        }
     }
 
     #[test]
@@ -1313,21 +1423,46 @@ mod tests {
     }
 
     #[test]
-    fn independent_fresh_jwt_cannot_claim_billing_for_a_different_browser_account() {
+    fn a_fresh_plan_cannot_claim_billing_for_a_different_browser_account() {
         let now = Utc::now();
         let first = "00000000-0000-4000-8000-000000000001";
         let second = "00000000-0000-4000-8000-000000000002";
-        let read = paid_read("codex", second, now + chrono::Duration::days(7));
-        let mut reads = vec![read];
-        assert!(billing_read_confirms(&reads, "codex", second, now));
-        assert!(!billing_read_confirms(&reads, "codex", first, now));
-        reads[0].organizations[0].details.as_mut().unwrap()["status"] =
-            serde_json::json!("inactive");
-        assert!(!billing_read_confirms(&reads, "codex", second, now));
-        reads[0].organizations[0].details.as_mut().unwrap()["status"] = serde_json::json!("active");
-        reads[0].organizations[0].details.as_mut().unwrap()["expires_at"] =
-            serde_json::json!(now.to_rfc3339());
-        assert!(!billing_read_confirms(&reads, "codex", second, now));
+        for provider in ["claude", "codex"] {
+            let read = paid_read(provider, second, now + chrono::Duration::days(7));
+            let mut reads = vec![read];
+            assert!(billing_read_confirms(&reads, provider, second, now));
+            assert!(!billing_read_confirms(&reads, provider, first, now));
+            reads[0].organizations[0].details.as_mut().unwrap()["status"] =
+                serde_json::json!("inactive");
+            assert!(!billing_read_confirms(&reads, provider, second, now));
+            reads[0].organizations[0].details.as_mut().unwrap()["status"] =
+                serde_json::json!("active");
+            let field = if provider == "codex" {
+                "expires_at"
+            } else {
+                "next_charge_at"
+            };
+            reads[0].organizations[0].details.as_mut().unwrap()[field] =
+                serde_json::json!(now.to_rfc3339());
+            assert!(!billing_read_confirms(&reads, provider, second, now));
+        }
+    }
+
+    #[test]
+    fn a_verified_free_account_does_not_need_another_billing_login() {
+        let first = "00000000-0000-4000-8000-000000000001";
+        let second = "00000000-0000-4000-8000-000000000002";
+        for (provider, plan) in [("claude", "claude_free"), ("codex", "free")] {
+            let read = serde_json::from_value(serde_json::json!({"state":"ready","organizations":[{
+                "uuid":first,"planType":plan,"tier":null,"status":200,"details":{"status":"inactive"}
+            }]})).unwrap();
+            let mut reads = vec![read];
+            assert!(billing_read_without_subscription(&reads, provider, first));
+            assert!(!billing_read_without_subscription(&reads, provider, second));
+            assert!(!billing_read_confirms(&reads, provider, first, Utc::now()));
+            reads[0].organizations[0].status = 401;
+            assert!(!billing_read_without_subscription(&reads, provider, first));
+        }
     }
 
     #[tokio::test]
@@ -1551,6 +1686,103 @@ mod tests {
                 .unwrap()
                 .unwrap();
         }
+    }
+
+    struct StoredBillingProvider {
+        provider: uc_core::Provider,
+        account: String,
+        periods: uc_providers::BillingPeriods,
+    }
+
+    #[async_trait::async_trait]
+    impl uc_core::ProviderRuntime for StoredBillingProvider {
+        fn provider(&self) -> &uc_core::Provider {
+            &self.provider
+        }
+        fn widget_descriptors(&self) -> Vec<uc_core::WidgetDescriptor> {
+            Vec::new()
+        }
+        async fn has_local_credentials(&self) -> bool {
+            true
+        }
+        async fn refresh(&self, _: uc_core::RefreshContext) -> uc_core::ProviderSnapshot {
+            let now = Utc::now();
+            let mut snapshot = uc_core::ProviderSnapshot::make(
+                &self.provider,
+                Some("Pro 5x".into()),
+                Vec::new(),
+                now,
+            );
+            snapshot.plan_checked_at = Some(now);
+            snapshot.plan_term = self.periods.peek_for("codex", &self.account, now);
+            snapshot
+        }
+    }
+
+    #[tokio::test]
+    async fn switching_browser_accounts_refreshes_every_affected_billing_card() {
+        let directory = tempfile::tempdir().unwrap();
+        let periods = uc_providers::BillingPeriods::new(directory.path().join("billing"));
+        let first = "00000000-0000-4000-8000-000000000001";
+        let second = "00000000-0000-4000-8000-000000000002";
+        let now = Utc::now();
+        store_chrome_billing(
+            &periods,
+            "codex",
+            vec![paid_read("codex", first, now + chrono::Duration::days(7))],
+            now,
+        )
+        .unwrap();
+        let providers: Vec<std::sync::Arc<dyn uc_core::ProviderRuntime>> = [first, second]
+            .into_iter()
+            .map(|account| {
+                std::sync::Arc::new(StoredBillingProvider {
+                    provider: uc_core::Provider::new(format!("codex@{account}"), "Codex"),
+                    account: account.into(),
+                    periods: periods.clone(),
+                }) as std::sync::Arc<dyn uc_core::ProviderRuntime>
+            })
+            .collect();
+        let config = uc_engine::EngineConfig::default();
+        let engine = uc_engine::Engine::new(
+            providers,
+            uc_engine::SnapshotCache::new(
+                directory.path().join("cache.json"),
+                config.refresh_interval,
+            ),
+            config,
+        );
+        refresh_billing_provider(&engine, "codex").await;
+        assert!(
+            engine.snapshots()[&format!("codex@{first}")]
+                .plan_term
+                .is_some()
+        );
+        assert!(
+            engine.snapshots()[&format!("codex@{second}")]
+                .plan_term
+                .is_none()
+        );
+        assert!(
+            store_chrome_billing(
+                &periods,
+                "codex",
+                vec![paid_read("codex", second, now + chrono::Duration::days(14))],
+                now,
+            )
+            .unwrap()
+        );
+        refresh_billing_provider(&engine, "codex").await;
+        assert!(
+            engine.snapshots()[&format!("codex@{first}")]
+                .plan_term
+                .is_none()
+        );
+        assert!(
+            engine.snapshots()[&format!("codex@{second}")]
+                .plan_term
+                .is_some()
+        );
     }
 
     struct BlockingBillingProvider {

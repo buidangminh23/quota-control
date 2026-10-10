@@ -868,7 +868,14 @@ fn billing_account_uuid_validates_the_current_cli_binding_and_managed_identity()
     let path = write_codex_login(dir.path(), first);
     let login = cli_account_from(ProviderKind::Codex, path.clone(), None).unwrap();
     let lookup = |cli: &[CliAccount], id: &str| {
-        uc_providers::accounts::codex_billing_account_uuid(store.clone(), cli, id)
+        let legacy = uc_providers::accounts::codex_billing_account_uuid(store.clone(), cli, id);
+        let generalized = uc_providers::accounts::billing_account_uuid(store.clone(), cli, id);
+        assert_eq!(legacy.as_ref().ok(), generalized.as_ref().ok());
+        assert_eq!(
+            legacy.as_ref().err().map(|error| error.category),
+            generalized.as_ref().err().map(|error| error.category)
+        );
+        generalized
     };
     assert_eq!(
         lookup(std::slice::from_ref(&login), &login.id).unwrap(),
@@ -898,6 +905,140 @@ fn billing_account_uuid_validates_the_current_cli_binding_and_managed_identity()
     replaced["tokens"]["account_id"] = json!(second);
     store.update_credentials(&record.id, &replaced).unwrap();
     assert!(lookup(&[], &record.id).is_err());
+}
+
+#[test]
+fn claude_billing_account_uuid_validates_the_full_managed_identity() {
+    let (_dir, store) = store();
+    let organization = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    let mut document = claude_doc(4_000_000_000_000);
+    document["oauthAccount"]["accountUuid"] = json!(" ACCOUNT-A ");
+    document["oauthAccount"]["organizationUuid"] =
+        json!(format!(" {} ", organization.to_uppercase()));
+    let record = store
+        .import(
+            "claude",
+            "fixture",
+            &format!("account-a|{organization}"),
+            &document,
+            CredentialMode::ManagedOauth,
+        )
+        .unwrap();
+    let lookup = || uc_providers::accounts::billing_account_uuid(store.clone(), &[], &record.id);
+    assert_eq!(lookup().unwrap(), organization);
+    assert!(
+        uc_providers::accounts::codex_billing_account_uuid(store.clone(), &[], &record.id).is_err()
+    );
+    for (field, value) in [
+        ("accountUuid", json!("account-b")),
+        ("accountUuid", Value::Null),
+        (
+            "organizationUuid",
+            json!("00000000-0000-4000-8000-000000000002"),
+        ),
+    ] {
+        let mut changed = document.clone();
+        changed["oauthAccount"][field] = value;
+        store.update_credentials(&record.id, &changed).unwrap();
+        assert_eq!(lookup().unwrap_err().category, ErrorCategory::AuthInvalid);
+    }
+}
+
+#[test]
+fn claude_billing_account_uuid_uses_the_current_cli_profile() {
+    let (dir, store) = store();
+    let path = dir.path().join(".credentials.json");
+    let profile = dir.path().join(".claude.json");
+    let organization = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    let mut document = claude_doc(4_000_000_000_000);
+    document["oauthAccount"]["organizationUuid"] = json!("00000000-0000-4000-8000-000000000002");
+    std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+    let metadata = json!({"oauthAccount": {
+        "accountUuid":"account-a",
+        "organizationUuid":format!(" {} ", organization.to_uppercase())
+    }});
+    std::fs::write(&profile, serde_json::to_vec(&metadata).unwrap()).unwrap();
+    let login =
+        cli_account_from(ProviderKind::Claude, path.clone(), Some(profile.clone())).unwrap();
+    let lookup = || {
+        uc_providers::accounts::billing_account_uuid(
+            store.clone(),
+            std::slice::from_ref(&login),
+            &login.id,
+        )
+    };
+    assert_eq!(lookup().unwrap(), organization);
+    document.as_object_mut().unwrap().remove("oauthAccount");
+    std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+    assert_eq!(lookup().unwrap(), organization);
+    for (field, value) in [
+        ("accountUuid", json!("account-b")),
+        (
+            "organizationUuid",
+            json!("00000000-0000-4000-8000-000000000002"),
+        ),
+        ("organizationUuid", Value::Null),
+    ] {
+        let mut changed = metadata.clone();
+        changed["oauthAccount"][field] = value;
+        std::fs::write(&profile, serde_json::to_vec(&changed).unwrap()).unwrap();
+        assert_eq!(lookup().unwrap_err().category, ErrorCategory::AuthInvalid);
+    }
+    std::fs::write(&profile, serde_json::to_vec(&metadata).unwrap()).unwrap();
+    document["claudeAiOauth"]["accessToken"] = json!("");
+    std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+    assert_eq!(lookup().unwrap_err().category, ErrorCategory::AuthInvalid);
+}
+
+#[test]
+fn claude_billing_account_uuid_rejects_invalid_and_nil_organizations() {
+    for organization in [
+        Value::Null,
+        json!(42),
+        json!(""),
+        json!("invalid-organization"),
+        json!("00000000-0000-0000-0000-000000000000"),
+    ] {
+        let (dir, store) = store();
+        let path = dir.path().join(".credentials.json");
+        let profile = dir.path().join(".claude.json");
+        let mut document = claude_doc(4_000_000_000_000);
+        document["oauthAccount"]["organizationUuid"] = organization.clone();
+        let identity = format!("account-a|{}", organization.as_str().unwrap_or("invalid"));
+        let record = store
+            .import(
+                "claude",
+                "fixture",
+                &identity,
+                &document,
+                CredentialMode::ManagedOauth,
+            )
+            .unwrap();
+        assert_eq!(
+            uc_providers::accounts::billing_account_uuid(store.clone(), &[], &record.id)
+                .unwrap_err()
+                .category,
+            ErrorCategory::AuthInvalid
+        );
+        std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+        std::fs::write(&profile, serde_json::to_vec(&document).unwrap()).unwrap();
+        match cli_account_from(ProviderKind::Claude, path, Some(profile)) {
+            Ok(login) => {
+                let cli_store = Arc::new(AccountStore::new(dir.path().join("cli-accounts")));
+                assert_eq!(
+                    uc_providers::accounts::billing_account_uuid(
+                        cli_store,
+                        std::slice::from_ref(&login),
+                        &login.id,
+                    )
+                    .unwrap_err()
+                    .category,
+                    ErrorCategory::AuthInvalid
+                );
+            }
+            Err(error) => assert_eq!(error.category, ErrorCategory::AuthInvalid),
+        }
+    }
 }
 
 #[tokio::test]

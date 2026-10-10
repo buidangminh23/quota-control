@@ -293,7 +293,7 @@ pub(crate) fn read_cli_account(
             auth_error("Claude account metadata is unavailable. Connect through the browser.")
         })?;
         document["oauthAccount"] = read_json_file(profile, kind)?["oauthAccount"].clone();
-        credentials.plan_term = crate::plan_term::from_document(kind, &document);
+        credentials = parse_credentials(kind, &document)?;
     }
     let key = identity(kind, &document)?;
     let email = match kind {
@@ -422,34 +422,55 @@ pub fn account_runtimes(
     account_runtimes_with(store, cli, ReqwestHttpClient::shared())
 }
 
+pub fn billing_account_uuid(
+    store: Arc<AccountStore>,
+    cli: &[CliAccount],
+    id: &str,
+) -> Result<String, SimpleProviderError> {
+    billing_account_uuid_for(store, cli, id, None)
+}
+
 pub fn codex_billing_account_uuid(
     store: Arc<AccountStore>,
     cli: &[CliAccount],
     id: &str,
 ) -> Result<String, SimpleProviderError> {
+    billing_account_uuid_for(store, cli, id, Some(ProviderKind::Codex))
+}
+
+fn billing_account_uuid_for(
+    store: Arc<AccountStore>,
+    cli: &[CliAccount],
+    id: &str,
+    expected_kind: Option<ProviderKind>,
+) -> Result<String, SimpleProviderError> {
     let records = store.list().map_err(|_| account_error())?;
     let account = visible_accounts(&records, cli)
         .into_iter()
         .find(|account| match account {
-            VisibleAccount::Stored(record) => record.id == id && record.provider == "codex",
-            VisibleAccount::Cli(login) => login.id == id && login.kind == ProviderKind::Codex,
+            VisibleAccount::Stored(record) => record.id == id,
+            VisibleAccount::Cli(login) => login.id == id,
         })
         .ok_or_else(account_error)?;
+    let kind = match account {
+        VisibleAccount::Stored(record) => {
+            ProviderKind::parse(&record.provider).ok_or_else(account_error)?
+        }
+        VisibleAccount::Cli(login) => login.kind,
+    };
+    if expected_kind.is_some_and(|expected| kind != expected) {
+        return Err(account_error());
+    }
     let credentials = match account {
         VisibleAccount::Stored(record) => {
-            let source =
-                CredentialStore::for_account(ProviderKind::Codex, store.clone(), record.clone());
+            let source = CredentialStore::for_account(kind, store.clone(), record.clone());
             let document = source.read_document()?;
-            if account_id(
-                ProviderKind::Codex,
-                &identity(ProviderKind::Codex, &document)?,
-            ) != id
-            {
+            if account_id(kind, &identity(kind, &document)?) != id {
                 return Err(auth_error(
                     "The connected account identity changed. Reconnect this account.",
                 ));
             }
-            parse_credentials(ProviderKind::Codex, &document)?
+            parse_credentials(kind, &document)?
         }
         VisibleAccount::Cli(login) => {
             let (current, credentials) =
@@ -463,7 +484,13 @@ pub fn codex_billing_account_uuid(
         }
     };
     credentials.billing_account_id.ok_or_else(|| {
-        auth_error("The ChatGPT billing account identity is unavailable. Reconnect this account.")
+        let provider = match kind {
+            ProviderKind::Claude => "Claude",
+            ProviderKind::Codex => "ChatGPT",
+        };
+        auth_error(&format!(
+            "The {provider} billing account identity is unavailable. Reconnect this account."
+        ))
     })
 }
 

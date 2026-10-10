@@ -260,7 +260,11 @@ pub(crate) fn parse_credentials(
             Ok(Credentials {
                 access_token,
                 account_id: None,
-                billing_account_id: None,
+                billing_account_id: body["oauthAccount"]["organizationUuid"]
+                    .as_str()
+                    .and_then(|id| uuid::Uuid::parse_str(id.trim()).ok())
+                    .filter(|id| !id.is_nil())
+                    .map(|id| id.to_string()),
                 plan,
                 expires_at,
                 profile_scope,
