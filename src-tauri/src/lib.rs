@@ -16,6 +16,8 @@ mod limit_resets;
 mod macos;
 #[cfg(all(test, windows))]
 mod popup_resize_test;
+#[cfg(all(test, windows))]
+mod popup_visibility_test;
 pub mod public_feeds;
 mod service;
 mod shortcut;
@@ -499,7 +501,7 @@ fn show_popup_at(app: &AppHandle, anchor: Option<PhysicalRect<i32, u32>>) -> Res
     if let Some(strip) = app.try_state::<taskbar_strip::TaskbarStrip>() {
         strip.set_popup_visible(true);
     }
-    window.show().map_err(safe_error)?;
+    set_popup_window_visible(&window, true)?;
     window.set_focus().map_err(safe_error)?;
     window.emit("popup-visibility", true).map_err(safe_error)?;
     if let Some(updates) = app.try_state::<updates::Updates>() {
@@ -515,7 +517,7 @@ fn hide_popup(app: &AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("popup")
         .ok_or("Popup is unavailable")?;
-    window.hide().map_err(safe_error)?;
+    set_popup_window_visible(&window, false)?;
     if let Some(updates) = app.try_state::<updates::Updates>() {
         updates.popup_seen();
     }
@@ -525,6 +527,52 @@ fn hide_popup(app: &AppHandle) -> Result<(), String> {
         strip.set_popup_visible(false);
     }
     window.emit("popup-visibility", false).map_err(safe_error)
+}
+
+/// Show or hide the popup's window. The window library acts only when its own record of the
+/// window's visibility changes, so once another program had shown or hidden the popup a request
+/// changed nothing: a popup a UI probe showed could never be closed (10/10/2026). On Windows the
+/// native window is therefore brought in line after the request, on the window's own thread.
+fn set_popup_window_visible(window: &tauri::WebviewWindow, visible: bool) -> Result<(), String> {
+    if visible {
+        window.show()
+    } else {
+        window.hide()
+    }
+    .map_err(safe_error)?;
+    #[cfg(windows)]
+    {
+        let native = window.clone();
+        window
+            .run_on_main_thread(move || {
+                if let Ok(hwnd) = native.hwnd()
+                    && match_native_visibility(hwnd.0, visible)
+                {
+                    let (found, done) = if visible {
+                        ("hidden", "showed")
+                    } else {
+                        ("shown", "hid")
+                    };
+                    tracing::info!("the popup was {found} outside the app; {done} it");
+                }
+            })
+            .map_err(safe_error)?;
+    }
+    Ok(())
+}
+
+/// Make a native window visible (without activating it) or hidden when it is not already;
+/// whether it had to.
+#[cfg(windows)]
+fn match_native_visibility(hwnd: windows_sys::Win32::Foundation::HWND, visible: bool) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        IsWindowVisible, SW_HIDE, SW_SHOWNOACTIVATE, ShowWindow,
+    };
+    if (unsafe { IsWindowVisible(hwnd) } != 0) == visible {
+        return false;
+    }
+    unsafe { ShowWindow(hwnd, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE }) };
+    true
 }
 
 /// Gap, in physical pixels, between the popup and the rectangle it opens against.
