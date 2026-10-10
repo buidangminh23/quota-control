@@ -367,12 +367,18 @@ impl LocalProvider {
         {
             line.expiries_at = expiries;
         }
-        let plan_term = plan_term::confirmed_term(
-            credentials.plan_term.take(),
-            credentials.plan.as_deref(),
-            mapped.plan.as_deref(),
-            now,
-        );
+        let plan_term = if self.kind == ProviderKind::Claude {
+            subscription
+                .as_ref()
+                .and_then(|profile| profile.confirmed_term(now))
+        } else {
+            plan_term::confirmed_term(
+                credentials.plan_term.take(),
+                credentials.plan.as_deref(),
+                mapped.plan.as_deref(),
+                now,
+            )
+        };
         let plan_checked_at = if self.kind == ProviderKind::Codex {
             mapped.plan.as_ref().map(|_| now)
         } else {
@@ -690,6 +696,7 @@ impl ProviderRuntime for LocalProvider {
                     )
                     && let Some(profile) = self.profile_term.peek().await
                 {
+                    snapshot.plan_term = profile.confirmed_term(snapshot.refreshed_at);
                     snapshot.plan = profile.plan;
                     snapshot.plan_checked_at = Some(profile.checked_at);
                 }

@@ -647,6 +647,23 @@ describe("the account header", () => {
     expect(account(renewed, "codex@52d0")).toMatchObject({ plan: "Plus", term: { endsAt: "2026-11-16T15:00:00.000Z" } });
   });
 
+  it("publishes a freshly confirmed Claude estimate on native surfaces even when usage fails", () => {
+    const previous = snapshots["claude@7c1e"]!;
+    const term = { basis: "monthlyFrom", startedAt: "2026-07-31T03:00:00Z", checkedAt: NOW_GLANCE.toISOString() } as const;
+    const confirmed = { ...previous, plan: "Max 20x", planTerm: term, planCheckedAt: term.checkedAt, errorCategory: "rate_limited" as const };
+    const options = { data: { ...snapshots, "claude@7c1e": confirmed } };
+    const paid = glance(options);
+    for (const list of [paid.providers, paid.widget.providers]) {
+      const claude = list.find((entry) => entry.id === "claude@7c1e");
+      expect(claude).toMatchObject({ plan: "Max 20x", term: { endsAt: "2026-09-30T03:00:00.000Z", estimated: true } });
+      expect(fillPlanTerm(claude!.term!, paid.labels.planTerm!, NOW_GLANCE)?.left).toMatch(/^còn ~/);
+    }
+    const free = glance({ ...options, data: { ...snapshots, "claude@7c1e": { ...confirmed, plan: "Free" } } });
+    for (const list of [free.providers, free.widget.providers]) {
+      expect(list.find((entry) => entry.id === "claude@7c1e")?.term).toBeUndefined();
+    }
+  });
+
   it("carries the popup's plan-period words, with a place for the count and one for the day, only while an account has a period", () => {
     expect(glance().labels.planTerm).toEqual({
       days: ["còn {n} ngày", "còn {n} ngày"],

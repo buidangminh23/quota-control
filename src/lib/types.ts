@@ -136,7 +136,7 @@ export type ErrorCategory =
 export type PlanTerm =
   /** The provider states when the period ends (ChatGPT's login carries it). */
   | { basis: "stated"; endsAt: string; checkedAt?: string }
-  /** A legacy monthly estimate bounded by its last confirmation. */
+  /** A monthly estimate from a verified paid subscription, bounded by its last confirmation. */
   | { basis: "monthlyFrom"; startedAt: string; checkedAt?: string };
 
 export interface ProviderSnapshot {

@@ -460,11 +460,37 @@ describe("popup", () => {
     expect(stated).not.toHaveClass("is-soon");
     expect(stated.closest("header")).toHaveClass("has-term");
     const work = screen.getByRole("region", { name: "Claude · Công ty" });
-    const estimate = within(work).getByRole("group", { name: /^còn ~\d+ ngày\. tới ~.+\. Khoảng .+, ước tính\./ });
+    const estimate = within(work).getByRole("group", { name: /^còn ~\d+ (?:ngày|giờ|phút)\. tới ~.+\. Khoảng .+, ước tính\./ });
     expect(within(estimate).getByText(/^tới ~/)).toHaveClass("uc-plan-term-day");
     const personal = screen.getByRole("region", { name: "Claude · Cá nhân" });
     expect(within(personal).queryByRole("group", { name: /^còn / })).not.toBeInTheDocument();
     expect(personal.querySelector("header")).not.toHaveClass("has-term");
+  });
+
+  it("keeps a freshly confirmed Claude estimate visible through quota failures and clears it on Free", async () => {
+    const confirmed = new Date().toISOString();
+    const started = new Date();
+    started.setUTCMonth(started.getUTCMonth() - 2, 1);
+    const term = { basis: "monthlyFrom", startedAt: started.toISOString(), checkedAt: confirmed } as const;
+    const api = await renderApp({ engine: (state) => {
+      const snapshot = state.providers["claude@7c1e"]!.snapshot!;
+      snapshot.plan = "Max 20x";
+      snapshot.planCheckedAt = confirmed;
+      snapshot.planTerm = term;
+      snapshot.errorCategory = "rate_limited";
+      snapshot.usageUnavailable = true;
+    } });
+    const work = screen.getByRole("region", { name: "Claude · Công ty" });
+    const estimate = within(work).getByRole("group", { name: /^còn ~\d+ (?:ngày|giờ|phút)\. tới ~.+\. Khoảng .+, ước tính\./ });
+    expect(estimate.closest("header")).toHaveClass("has-term");
+    expect(within(work).getByText("Max 20x")).toBeInTheDocument();
+    expect(within(work).queryByText(/^Còn \d+%$/)).not.toBeInTheDocument();
+    act(() => api.editEngineState((state) => {
+      state.providers["claude@7c1e"]!.snapshot!.plan = "Free";
+    }));
+    expect(within(work).getByText("Free")).toBeInTheDocument();
+    expect(within(work).queryByRole("group", { name: /^còn ~/ })).not.toBeInTheDocument();
+    expect(work.querySelector("header")).not.toHaveClass("has-term");
   });
 
   it("removes a card found on this computer without touching its login, and shows it again", async () => {

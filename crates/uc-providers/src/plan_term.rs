@@ -81,7 +81,16 @@ fn timestamp(value: &Value) -> Option<DateTime<Utc>> {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ProfileSubscription {
     pub(crate) plan: Option<String>,
+    pub(crate) term: Option<PlanTerm>,
     pub(crate) checked_at: DateTime<Utc>,
+}
+
+impl ProfileSubscription {
+    pub(crate) fn confirmed_term(&self, now: DateTime<Utc>) -> Option<PlanTerm> {
+        (self.checked_at <= now && now - self.checked_at < PROFILE_RECHECK)
+            .then(|| self.term.clone())
+            .flatten()
+    }
 }
 
 fn subscription(profile: &Value, now: DateTime<Utc>) -> Result<ProfileSubscription, ()> {
@@ -101,8 +110,36 @@ fn subscription(profile: &Value, now: DateTime<Utc>) -> Result<ProfileSubscripti
             ))
         })
         .transpose()?;
+    let paid = organization
+        .get("organization_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .map(|raw| raw.strip_prefix("claude_").unwrap_or(raw))
+        .is_some_and(|raw| matches!(raw.to_ascii_lowercase().as_str(), "pro" | "max" | "team"));
+    let inactive = organization
+        .get("subscription_status")
+        .and_then(Value::as_str)
+        .is_some_and(|status| {
+            matches!(
+                status.trim().to_ascii_lowercase().as_str(),
+                "inactive" | "canceled" | "cancelled" | "expired"
+            )
+        });
+    let term = (paid && !inactive)
+        .then(|| {
+            organization
+                .get("subscription_created_at")
+                .and_then(timestamp)
+                .filter(|started_at| *started_at <= now)
+                .map(|started_at| PlanTerm::MonthlyFrom {
+                    started_at,
+                    checked_at: Some(now),
+                })
+        })
+        .flatten();
     Ok(ProfileSubscription {
         plan,
+        term,
         checked_at: now,
     })
 }
@@ -218,11 +255,26 @@ mod tests {
     }
 
     #[test]
-    fn subscription_start_is_not_a_billing_period() {
+    fn a_live_paid_profile_confirms_a_monthly_estimate_without_trusting_cached_logins() {
         let profile = json!({"organization":{"organization_type":"claude_pro", "subscription_created_at":"2026-07-31T00:00:00Z"}});
+        let current = subscription(&profile, now()).unwrap();
+        assert_eq!(current.plan.as_deref(), Some("Pro"));
         assert_eq!(
-            subscription(&profile, now()).unwrap().plan.as_deref(),
-            Some("Pro")
+            current.confirmed_term(now()),
+            Some(PlanTerm::MonthlyFrom {
+                started_at: Utc.with_ymd_and_hms(2026, 7, 31, 0, 0, 0).unwrap(),
+                checked_at: Some(now()),
+            })
+        );
+        assert!(
+            current
+                .confirmed_term(now() + chrono::Duration::minutes(4))
+                .is_some()
+        );
+        assert_eq!(current.confirmed_term(now() + PROFILE_RECHECK), None);
+        assert_eq!(
+            current.confirmed_term(now() - chrono::Duration::seconds(1)),
+            None
         );
         assert_eq!(
             from_document(
@@ -238,6 +290,49 @@ mod tests {
             None
         );
         assert!(subscription(&json!({}), now()).is_err());
+    }
+
+    #[test]
+    fn monthly_estimates_require_a_valid_start_and_recognized_current_paid_plan() {
+        for plan in ["claude_pro", "claude_max", "claude_team"] {
+            for started in [
+                "2026-07-31T03:40:09Z",
+                "2026-07-31T03:40:09.000000Z",
+                "2026-07-31T10:40:09+07:00",
+                "2026-07-31T03:40:09",
+                "2026-07-31T03:40:09.000",
+            ] {
+                let profile = json!({"organization":{"organization_type":plan, "subscription_created_at":started, "subscription_status":"active", "cancel_at_period_end":true}});
+                assert_eq!(
+                    subscription(&profile, now()).unwrap().term,
+                    Some(PlanTerm::MonthlyFrom {
+                        started_at: Utc.with_ymd_and_hms(2026, 7, 31, 3, 40, 9).unwrap(),
+                        checked_at: Some(now()),
+                    }),
+                    "{plan} {started}"
+                );
+            }
+        }
+        for organization in [
+            json!({"organization_type":"claude_free", "subscription_created_at":"2026-07-31T00:00:00Z"}),
+            json!({"organization_type":"claude_unknown", "subscription_created_at":"2026-07-31T00:00:00Z"}),
+            json!({"subscription_created_at":"2026-07-31T00:00:00Z"}),
+            json!({"organization_type":"claude_pro"}),
+            json!({"organization_type":"claude_pro", "subscription_created_at":null}),
+            json!({"organization_type":"claude_pro", "subscription_created_at":"July"}),
+            json!({"organization_type":"claude_pro", "subscription_created_at":"2026-11-01T00:00:00Z"}),
+        ] {
+            assert_eq!(
+                subscription(&json!({"organization":organization}), now())
+                    .unwrap()
+                    .term,
+                None
+            );
+        }
+        for status in ["inactive", "canceled", "cancelled", "expired", " CANCELED "] {
+            let profile = json!({"organization":{"organization_type":"claude_max", "subscription_created_at":"2026-07-31T00:00:00Z", "subscription_status":status}});
+            assert_eq!(subscription(&profile, now()).unwrap().term, None);
+        }
     }
 
     #[test]
@@ -323,11 +418,13 @@ mod tests {
 
     #[tokio::test]
     async fn plans_downgrade_and_renew_without_relogin_and_back_off_on_failure() {
-        let client = std::sync::Arc::new(ProfileHttp { replies: std::sync::Mutex::new([(200, json!({"organization":{"organization_type":"claude_pro"}})), (429, json!({})), (200, json!({"organization":{"organization_type":"claude_free", "subscription_created_at":"2026-10-02T00:00:00Z"}})), (200, json!({"organization":{"organization_type":"claude_max", "rate_limit_tier":"default_claude_max_5x"}}))].into()), calls: Default::default() });
+        let client = std::sync::Arc::new(ProfileHttp { replies: std::sync::Mutex::new([(200, json!({"organization":{"organization_type":"claude_pro", "subscription_created_at":"2026-07-31T00:00:00Z"}})), (429, json!({})), (200, json!({"organization":{"organization_type":"claude_free", "subscription_created_at":"2026-10-02T00:00:00Z"}})), (200, json!({"organization":{"organization_type":"claude_max", "rate_limit_tier":"default_claude_max_5x", "subscription_created_at":"2026-10-01T00:00:00Z"}}))].into()), calls: Default::default() });
         let http: SharedHttpClient = client.clone();
         let cache = ProfileTerm::default();
         let first = cache.get(&http, "fixture", now()).await.unwrap();
         assert_eq!(first.plan.as_deref(), Some("Pro"));
+        assert!(first.confirmed_term(now()).is_some());
+        assert_eq!(first.confirmed_term(now() + PROFILE_RECHECK), None);
         assert_eq!(
             cache
                 .get(&http, "fixture", now() + chrono::Duration::minutes(4))
@@ -351,12 +448,59 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(free.plan.as_deref(), Some("Free"));
+        assert_eq!(free.term, None);
         let renewed = cache
             .get(&http, "fixture", now() + chrono::Duration::minutes(20))
             .await
             .unwrap();
         assert_eq!(renewed.plan.as_deref(), Some("Max 5x"));
+        assert_eq!(
+            renewed.term,
+            Some(PlanTerm::MonthlyFrom {
+                started_at: Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap(),
+                checked_at: Some(now() + chrono::Duration::minutes(20)),
+            })
+        );
         assert_eq!(client.calls.load(std::sync::atomic::Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn failed_profile_refreshes_do_not_reconfirm_the_estimate_and_retry_after_one_minute() {
+        let client = std::sync::Arc::new(ProfileHttp {
+            replies: std::sync::Mutex::new([
+                (500, json!({})),
+                (200, json!({"organization":{"organization_type":"claude_pro", "subscription_created_at":"2026-10-01T00:00:00Z"}})),
+            ].into()),
+            calls: Default::default(),
+        });
+        let http: SharedHttpClient = client.clone();
+        let cache = ProfileTerm::default();
+        cache
+            .seed(
+                "fixture",
+                &json!({"organization":{"organization_type":"claude_pro", "subscription_created_at":"2026-07-31T00:00:00Z"}}),
+                now(),
+            )
+            .await;
+        for offset in [
+            PROFILE_RECHECK,
+            PROFILE_RECHECK + chrono::Duration::seconds(30),
+        ] {
+            let cached = cache.get(&http, "fixture", now() + offset).await.unwrap();
+            assert_eq!(cached.checked_at, now());
+            assert_eq!(cached.confirmed_term(now() + offset), None);
+        }
+        assert_eq!(client.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let checked_at = now() + PROFILE_RECHECK + PROFILE_RETRY;
+        let renewed = cache.get(&http, "fixture", checked_at).await.unwrap();
+        assert_eq!(
+            renewed.confirmed_term(checked_at),
+            Some(PlanTerm::MonthlyFrom {
+                started_at: Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap(),
+                checked_at: Some(checked_at),
+            })
+        );
+        assert_eq!(client.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
@@ -365,7 +509,7 @@ mod tests {
         cache
             .seed(
                 "first",
-                &json!({"organization":{"organization_type":"claude_pro"}}),
+                &json!({"organization":{"organization_type":"claude_pro", "subscription_created_at":"2026-07-31T00:00:00Z"}}),
                 now(),
             )
             .await;

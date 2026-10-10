@@ -806,13 +806,17 @@ async fn claude_cards_from_a_credentials_file_refresh_the_profile_and_never_inve
 
 struct SubscriptionHttp {
     profiles: Mutex<std::collections::VecDeque<Value>>,
+    profile_calls: std::sync::atomic::AtomicUsize,
     usage_calls: std::sync::atomic::AtomicUsize,
+    usage_status: u16,
 }
 
 #[async_trait]
 impl HttpClient for SubscriptionHttp {
     async fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
         if request.url.ends_with("/profile") {
+            self.profile_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             return Ok(response(
                 200,
                 self.profiles.lock().unwrap().pop_front().unwrap(),
@@ -821,7 +825,7 @@ impl HttpClient for SubscriptionHttp {
         assert!(request.url.ends_with("/usage"));
         self.usage_calls
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let mut reply = response(429, json!({}));
+        let mut reply = response(self.usage_status, json!({"five_hour":{"utilization":15}}));
         reply.headers.insert("retry-after".into(), "3600".into());
         Ok(reply)
     }
@@ -831,11 +835,13 @@ impl HttpClient for SubscriptionHttp {
 async fn claude_plan_downgrades_and_renews_while_usage_remains_rate_limited() {
     let client = Arc::new(SubscriptionHttp {
         profiles: Mutex::new([
-            json!({"organization":{"organization_type":"claude_pro"}}),
-            json!({"organization":{"organization_type":"claude_free","subscription_status":"canceled","subscription_created_at":"2026-10-02T00:00:00Z"}}),
-            json!({"organization":{"organization_type":"claude_pro","subscription_status":"active"}}),
+            json!({"organization":{"organization_type":"claude_pro", "subscription_created_at":"2026-09-15T00:00:00Z"}}),
+            json!({"organization":{"organization_type":"claude_free","subscription_status":"canceled","subscription_created_at":"2026-09-15T00:00:00Z"}}),
+            json!({"organization":{"organization_type":"claude_pro","subscription_status":"active", "subscription_created_at":"2026-09-20T00:00:00Z"}}),
         ].into()),
+        profile_calls: Default::default(),
         usage_calls: Default::default(),
+        usage_status: 429,
     });
     let clock = Arc::new(Mutex::new(now()));
     let read_clock = clock.clone();
@@ -845,15 +851,39 @@ async fn claude_plan_downgrades_and_renews_while_usage_remains_rate_limited() {
         client.clone(),
     );
     let provider = provider.with_clock(Arc::new(move || *read_clock.lock().unwrap()));
-    for (offset, plan) in [(0, "Pro"), (5, "Free"), (10, "Pro")] {
+    for (offset, plan, started_at) in [
+        (
+            0,
+            "Pro",
+            Some(Utc.with_ymd_and_hms(2026, 9, 15, 0, 0, 0).unwrap()),
+        ),
+        (5, "Free", None),
+        (
+            10,
+            "Pro",
+            Some(Utc.with_ymd_and_hms(2026, 9, 20, 0, 0, 0).unwrap()),
+        ),
+    ] {
         let checked = now() + chrono::Duration::minutes(offset);
         *clock.lock().unwrap() = checked;
         let snapshot = provider.refresh(RefreshContext::scheduled()).await;
         assert_eq!(snapshot.error_category, Some(ErrorCategory::RateLimited));
         assert_eq!(snapshot.plan.as_deref(), Some(plan));
         assert_eq!(snapshot.plan_checked_at, Some(checked));
-        assert_eq!(snapshot.plan_term, None);
+        assert_eq!(
+            snapshot.plan_term,
+            started_at.map(|started_at| uc_core::PlanTerm::MonthlyFrom {
+                started_at,
+                checked_at: Some(checked),
+            })
+        );
     }
+    assert_eq!(
+        client
+            .profile_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        3
+    );
     assert_eq!(
         client.usage_calls.load(std::sync::atomic::Ordering::SeqCst),
         1
@@ -863,6 +893,60 @@ async fn claude_plan_downgrades_and_renews_while_usage_remains_rate_limited() {
     assert_eq!(invalid.error_category, Some(ErrorCategory::AuthInvalid));
     assert_eq!(invalid.plan, None);
     assert_eq!(invalid.plan_checked_at, None);
+    assert_eq!(invalid.plan_term, None);
+}
+
+#[tokio::test]
+async fn paid_claude_terms_follow_live_profile_renewals_and_clear_when_the_start_is_missing() {
+    let client = Arc::new(SubscriptionHttp {
+        profiles: Mutex::new([
+            json!({"organization":{"organization_type":"claude_max", "rate_limit_tier":"default_claude_max_20x", "subscription_created_at":"2026-07-31T00:00:00Z"}}),
+            json!({"organization":{"organization_type":"claude_max", "rate_limit_tier":"default_claude_max_20x", "subscription_created_at":"2026-09-20T00:00:00Z", "subscription_status":"active", "cancel_at_period_end":true}}),
+            json!({"organization":{"organization_type":"claude_max", "rate_limit_tier":"default_claude_max_20x"}}),
+        ].into()),
+        profile_calls: Default::default(),
+        usage_calls: Default::default(),
+        usage_status: 200,
+    });
+    let clock = Arc::new(Mutex::new(now()));
+    let read_clock = clock.clone();
+    let (_directory, provider) = setup(
+        ProviderKind::Claude,
+        json!({"claudeAiOauth":{"accessToken":"fixture","subscriptionType":"pro"}, "oauthAccount":{"subscriptionCreatedAt":"2026-07-05T00:00:00Z"}}),
+        client.clone(),
+    );
+    let provider = provider.with_clock(Arc::new(move || *read_clock.lock().unwrap()));
+    for (offset, confirmation_offset, start_day) in [
+        (0, 0, Some((7, 31))),
+        (4, 0, Some((7, 31))),
+        (5, 5, Some((9, 20))),
+        (10, 10, None),
+    ] {
+        *clock.lock().unwrap() = now() + chrono::Duration::minutes(offset);
+        let checked_at = now() + chrono::Duration::minutes(confirmation_offset);
+        let snapshot = provider.refresh(RefreshContext::scheduled()).await;
+        assert_eq!(snapshot.error_category, None);
+        assert_eq!(snapshot.plan.as_deref(), Some("Max 20x"));
+        assert_eq!(snapshot.plan_checked_at, Some(checked_at));
+        assert_eq!(
+            snapshot.plan_term,
+            start_day.map(|(month, day)| uc_core::PlanTerm::MonthlyFrom {
+                started_at: Utc.with_ymd_and_hms(2026, month, day, 0, 0, 0).unwrap(),
+                checked_at: Some(checked_at),
+            })
+        );
+        assert_eq!(progress(&snapshot.lines, "Session").used, 15.0);
+    }
+    assert_eq!(
+        client
+            .profile_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        3
+    );
+    assert_eq!(
+        client.usage_calls.load(std::sync::atomic::Ordering::SeqCst),
+        4
+    );
 }
 
 struct CodexSubscriptionHttp {

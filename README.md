@@ -72,7 +72,7 @@ A desktop with system tray support is recommended. If FUSE is unavailable, run `
 - Claude, Codex, Cursor, Copilot and many other AI services in one dashboard.
 - Account limits, credits and reset countdowns, depending on what each service exposes.
 - Failed reads retry when their backoff ends. Unconfirmed or expired quota readings show no current value until a successful refresh; passing a reset never invents a full balance.
-- Live subscription names update independently of quota failures. Paid-period dates appear only when the provider confirms them; historical Claude subscription start dates are not treated as renewal dates.
+- Live subscription names update independently of quota failures. The card header shows confirmed paid-period dates and clearly marked monthly estimates from a verified paid Claude subscription, even when quota cannot be refreshed. Free accounts show no paid period; estimates stop at the last confirmed cycle until the subscription is checked again.
 - Local token history and estimated API-equivalent costs, separate from subscription charges.
 - Quota notifications, a global shortcut and automatic updates.
 - Dynamic Island and desktop widgets on macOS.

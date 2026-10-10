@@ -21,8 +21,8 @@ pub enum PlanTerm {
         #[serde(rename = "checkedAt", default, skip_serializing_if = "Option::is_none")]
         checked_at: Option<DateTime<Utc>>,
     },
-    /// A legacy monthly estimate, bounded by its last confirmation. A subscription start alone
-    /// does not establish the billing cadence or current paid entitlement.
+    /// A monthly estimate from a verified paid subscription, bounded by its last confirmation.
+    /// The subscription start anchors the estimate; it is not a stated renewal date.
     #[serde(rename = "monthlyFrom")]
     MonthlyFrom {
         #[serde(rename = "startedAt")]
