@@ -851,32 +851,14 @@ async fn claude_plan_downgrades_and_renews_while_usage_remains_rate_limited() {
         client.clone(),
     );
     let provider = provider.with_clock(Arc::new(move || *read_clock.lock().unwrap()));
-    for (offset, plan, started_at) in [
-        (
-            0,
-            "Pro",
-            Some(Utc.with_ymd_and_hms(2026, 9, 15, 0, 0, 0).unwrap()),
-        ),
-        (5, "Free", None),
-        (
-            10,
-            "Pro",
-            Some(Utc.with_ymd_and_hms(2026, 9, 20, 0, 0, 0).unwrap()),
-        ),
-    ] {
+    for (offset, plan) in [(0, "Pro"), (5, "Free"), (10, "Pro")] {
         let checked = now() + chrono::Duration::minutes(offset);
         *clock.lock().unwrap() = checked;
         let snapshot = provider.refresh(RefreshContext::scheduled()).await;
         assert_eq!(snapshot.error_category, Some(ErrorCategory::RateLimited));
         assert_eq!(snapshot.plan.as_deref(), Some(plan));
         assert_eq!(snapshot.plan_checked_at, Some(checked));
-        assert_eq!(
-            snapshot.plan_term,
-            started_at.map(|started_at| uc_core::PlanTerm::MonthlyFrom {
-                started_at,
-                checked_at: Some(checked),
-            })
-        );
+        assert_eq!(snapshot.plan_term, None);
     }
     assert_eq!(
         client
@@ -897,18 +879,19 @@ async fn claude_plan_downgrades_and_renews_while_usage_remains_rate_limited() {
 }
 
 #[tokio::test]
-async fn paid_claude_terms_follow_live_profile_renewals_and_clear_when_the_start_is_missing() {
+async fn claude_resubscription_and_upgrades_do_not_make_historical_start_a_billing_anchor() {
     let client = Arc::new(SubscriptionHttp {
         profiles: Mutex::new([
-            json!({"organization":{"organization_type":"claude_max", "rate_limit_tier":"default_claude_max_20x", "subscription_created_at":"2026-07-31T00:00:00Z"}}),
-            json!({"organization":{"organization_type":"claude_max", "rate_limit_tier":"default_claude_max_20x", "subscription_created_at":"2026-09-20T00:00:00Z", "subscription_status":"active", "cancel_at_period_end":true}}),
+            json!({"organization":{"organization_type":"claude_max", "rate_limit_tier":"default_claude_max_5x", "subscription_created_at":"2026-07-31T00:00:00Z", "subscription_status":"active"}}),
+            json!({"organization":{"organization_type":"claude_max", "rate_limit_tier":"default_claude_max_20x", "subscription_created_at":"2026-07-31T00:00:00Z", "subscription_status":"active", "cancel_at_period_end":true}}),
             json!({"organization":{"organization_type":"claude_max", "rate_limit_tier":"default_claude_max_20x"}}),
         ].into()),
         profile_calls: Default::default(),
         usage_calls: Default::default(),
         usage_status: 200,
     });
-    let clock = Arc::new(Mutex::new(now()));
+    let resubscribed_at = Utc.with_ymd_and_hms(2026, 10, 3, 7, 3, 48).unwrap();
+    let clock = Arc::new(Mutex::new(resubscribed_at));
     let read_clock = clock.clone();
     let (_directory, provider) = setup(
         ProviderKind::Claude,
@@ -916,25 +899,19 @@ async fn paid_claude_terms_follow_live_profile_renewals_and_clear_when_the_start
         client.clone(),
     );
     let provider = provider.with_clock(Arc::new(move || *read_clock.lock().unwrap()));
-    for (offset, confirmation_offset, start_day) in [
-        (0, 0, Some((7, 31))),
-        (4, 0, Some((7, 31))),
-        (5, 5, Some((9, 20))),
-        (10, 10, None),
+    for (offset, confirmation_offset, plan) in [
+        (0, 0, "Max 5x"),
+        (4, 0, "Max 5x"),
+        (5, 5, "Max 20x"),
+        (10, 10, "Max 20x"),
     ] {
-        *clock.lock().unwrap() = now() + chrono::Duration::minutes(offset);
-        let checked_at = now() + chrono::Duration::minutes(confirmation_offset);
+        *clock.lock().unwrap() = resubscribed_at + chrono::Duration::minutes(offset);
+        let checked_at = resubscribed_at + chrono::Duration::minutes(confirmation_offset);
         let snapshot = provider.refresh(RefreshContext::scheduled()).await;
         assert_eq!(snapshot.error_category, None);
-        assert_eq!(snapshot.plan.as_deref(), Some("Max 20x"));
+        assert_eq!(snapshot.plan.as_deref(), Some(plan));
         assert_eq!(snapshot.plan_checked_at, Some(checked_at));
-        assert_eq!(
-            snapshot.plan_term,
-            start_day.map(|(month, day)| uc_core::PlanTerm::MonthlyFrom {
-                started_at: Utc.with_ymd_and_hms(2026, month, day, 0, 0, 0).unwrap(),
-                checked_at: Some(checked_at),
-            })
-        );
+        assert_eq!(snapshot.plan_term, None);
         assert_eq!(progress(&snapshot.lines, "Session").used, 15.0);
     }
     assert_eq!(
@@ -946,6 +923,77 @@ async fn paid_claude_terms_follow_live_profile_renewals_and_clear_when_the_start
     assert_eq!(
         client.usage_calls.load(std::sync::atomic::Ordering::SeqCst),
         4
+    );
+}
+
+#[tokio::test]
+async fn claude_billing_is_read_independently_of_usage_and_removed_on_a_live_downgrade() {
+    let org = "00000000-0000-4000-8000-000000000001";
+    let client = Arc::new(SubscriptionHttp {
+        profiles: Mutex::new([
+            json!({"organization":{"uuid":org,"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x","subscription_created_at":"2026-07-31T00:00:00Z"}}),
+            json!({"organization":{"uuid":org,"organization_type":"claude_free"}}),
+        ].into()),
+        profile_calls: Default::default(), usage_calls: Default::default(), usage_status: 429,
+    });
+    let clock = Arc::new(Mutex::new(now()));
+    let read_clock = clock.clone();
+    let (directory, provider) = setup(
+        ProviderKind::Claude,
+        json!({"claudeAiOauth":{"accessToken":"fixture","subscriptionType":"pro"}}),
+        client,
+    );
+    let periods = uc_providers::BillingPeriods::new(directory.path().join("billing"));
+    let end = Utc.with_ymd_and_hms(2026, 11, 3, 7, 3, 48).unwrap();
+    periods
+        .save(
+            org,
+            "claude_max",
+            Some("default_claude_max_20x"),
+            &json!({"status":"active","next_charge_at":end.to_rfc3339()}),
+            now(),
+        )
+        .unwrap();
+    let provider = provider
+        .with_billing_periods(periods.clone())
+        .with_clock(Arc::new(move || *read_clock.lock().unwrap()));
+    let first = provider.refresh(RefreshContext::manual()).await;
+    assert_eq!(first.error_category, Some(ErrorCategory::RateLimited));
+    assert_eq!(first.plan.as_deref(), Some("Max 20x"));
+    assert_eq!(
+        first.plan_term,
+        Some(uc_core::PlanTerm::Stated {
+            ends_at: end,
+            checked_at: Some(now())
+        })
+    );
+    let later = now() + chrono::Duration::minutes(1);
+    *clock.lock().unwrap() = later;
+    let next_end = Utc.with_ymd_and_hms(2026, 12, 3, 7, 3, 48).unwrap();
+    periods
+        .save(
+            org,
+            "claude_max",
+            Some("default_claude_max_20x"),
+            &json!({"status":"active","next_charge_at":next_end.to_rfc3339()}),
+            later,
+        )
+        .unwrap();
+    let renewed = provider.refresh(RefreshContext::scheduled()).await;
+    assert_eq!(
+        renewed.plan_term,
+        Some(uc_core::PlanTerm::Stated {
+            ends_at: next_end,
+            checked_at: Some(later)
+        })
+    );
+    *clock.lock().unwrap() = now() + chrono::Duration::minutes(5);
+    let free = provider.refresh(RefreshContext::scheduled()).await;
+    assert_eq!(free.plan.as_deref(), Some("Free"));
+    assert_eq!(free.plan_term, None);
+    assert_eq!(
+        periods.get(org, Some("Max 20x"), *clock.lock().unwrap()),
+        None
     );
 }
 
@@ -972,6 +1020,106 @@ impl HttpClient for CodexSubscriptionHttp {
     }
 }
 
+fn billing_codex_document(account: &str, plan: &str) -> Value {
+    let claims = json!({"https://api.openai.com/auth":{
+        "chatgpt_account_id":account,
+        "chatgpt_user_id":"fixture-user",
+        "chatgpt_plan_type":plan
+    }});
+    json!({"tokens":{
+        "access_token":"fixture",
+        "account_id":account,
+        "id_token":format!("header.{}.signature", URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap()))
+    }})
+}
+
+#[tokio::test]
+async fn codex_browser_billing_matches_the_current_account_and_live_plan() {
+    let account = "00000000-0000-4000-8000-000000000021";
+    let other = "00000000-0000-4000-8000-000000000022";
+    for (status, live_plan, source_account, expected_term) in [
+        (200, "prolite", account, true),
+        (429, "prolite", account, true),
+        (403, "prolite", account, false),
+        (200, "free", account, false),
+        (200, "prolite", other, false),
+    ] {
+        let (directory, provider) = setup(
+            ProviderKind::Codex,
+            billing_codex_document(account, "prolite"),
+            fake(
+                status,
+                json!({"plan_type":live_plan,"rate_limit":{"primary_window":{"used_percent":23}}}),
+            ),
+        );
+        let periods = uc_providers::BillingPeriods::new(directory.path().join("billing"));
+        let end = now() + chrono::Duration::days(30);
+        periods
+            .save_from(
+                "codex",
+                source_account,
+                "Pro 5x",
+                Some(end),
+                now(),
+                "browser",
+            )
+            .unwrap();
+        let snapshot = provider
+            .with_billing_periods(periods.clone())
+            .refresh(RefreshContext::scheduled())
+            .await;
+        assert_eq!(
+            snapshot.plan_term,
+            expected_term.then_some(uc_core::PlanTerm::Stated {
+                ends_at: end,
+                checked_at: Some(now())
+            })
+        );
+        if status == 429 {
+            assert_eq!(snapshot.error_category, Some(ErrorCategory::RateLimited));
+            assert_eq!(snapshot.plan_checked_at, Some(now()));
+            assert_eq!(snapshot.plan.as_deref(), Some("Pro 5x"));
+        }
+        if live_plan == "free" {
+            assert!(
+                periods
+                    .get_for("codex", account, Some("Pro 5x"), now())
+                    .is_none()
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn codex_cached_billing_keeps_its_original_confirmation_time_during_quota_failures() {
+    let account = "00000000-0000-4000-8000-000000000031";
+    let (directory, provider) = setup(
+        ProviderKind::Codex,
+        billing_codex_document(account, "plus"),
+        fake(429, json!({})),
+    );
+    let periods = uc_providers::BillingPeriods::new(directory.path().join("billing"));
+    let end = now() + chrono::Duration::days(30);
+    periods
+        .save_from("codex", account, "Plus", Some(end), now(), "browser")
+        .unwrap();
+    let later = now() + chrono::Duration::minutes(15);
+    let snapshot = provider
+        .with_billing_periods(periods)
+        .with_clock(fixed_clock(later))
+        .refresh(RefreshContext::scheduled())
+        .await;
+    assert_eq!(snapshot.refreshed_at, later);
+    assert_eq!(snapshot.plan_checked_at, Some(now()));
+    assert_eq!(
+        snapshot.plan_term,
+        Some(uc_core::PlanTerm::Stated {
+            ends_at: end,
+            checked_at: Some(now())
+        })
+    );
+}
+
 fn subscription_token(
     plan: &str,
     checked: chrono::DateTime<Utc>,
@@ -982,6 +1130,44 @@ fn subscription_token(
         "header.{}.signature",
         URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap())
     )
+}
+
+#[tokio::test]
+async fn a_fresh_signed_codex_period_survives_a_revoked_browser_source_during_quota_failure() {
+    let account = "00000000-0000-4000-8000-000000000041";
+    let end = now() + chrono::Duration::days(30);
+    let claims = json!({"https://api.openai.com/auth":{
+        "chatgpt_account_id":account,"chatgpt_plan_type":"plus",
+        "chatgpt_subscription_last_checked":now().to_rfc3339(),
+        "chatgpt_subscription_active_until":end.to_rfc3339()
+    }});
+    let mut document = billing_codex_document(account, "plus");
+    document["tokens"]["id_token"] = Value::String(format!(
+        "header.{}.signature",
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap())
+    ));
+    let (directory, provider) = setup(ProviderKind::Codex, document, fake(429, json!({})));
+    let periods = uc_providers::BillingPeriods::new(directory.path().join("billing"));
+    periods
+        .save_from("codex", account, "Plus", Some(end), now(), "browser")
+        .unwrap();
+    periods
+        .invalidate_source("codex", account, "browser")
+        .unwrap();
+    let snapshot = provider
+        .with_billing_periods(periods)
+        .refresh(RefreshContext::scheduled())
+        .await;
+    assert_eq!(snapshot.error_category, Some(ErrorCategory::RateLimited));
+    assert_eq!(snapshot.plan.as_deref(), Some("Plus"));
+    assert_eq!(snapshot.plan_checked_at, Some(now()));
+    assert_eq!(
+        snapshot.plan_term,
+        Some(uc_core::PlanTerm::Stated {
+            ends_at: end,
+            checked_at: Some(now())
+        })
+    );
 }
 
 #[tokio::test]

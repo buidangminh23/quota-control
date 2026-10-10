@@ -4,6 +4,7 @@ import { setBackend } from "@/lib/backend";
 import { localDay } from "@/lib/days";
 import type { EngineState } from "@/lib/types";
 import { MockBackend } from "@/lib/mockBackend";
+import { setSystemTimeZone } from "@/model/timeZone";
 import { updateSettings, useApp } from "@/state/store";
 import { App } from "./App";
 import { closeDialog } from "./components/ui/dialog";
@@ -460,36 +461,64 @@ describe("popup", () => {
     expect(stated).not.toHaveClass("is-soon");
     expect(stated.closest("header")).toHaveClass("has-term");
     const work = screen.getByRole("region", { name: "Claude · Công ty" });
-    const estimate = within(work).getByRole("group", { name: /^còn ~\d+ (?:ngày|giờ|phút)\. tới ~.+\. Khoảng .+, ước tính\./ });
-    expect(within(estimate).getByText(/^tới ~/)).toHaveClass("uc-plan-term-day");
+    const billing = within(work).getByRole("group", { name: /^còn \d+ (?:ngày|giờ|phút)\. tới .+\. Gói hết kỳ lúc .+\. Ngày được nhà cung cấp xác nhận/ });
+    expect(within(billing).getByText(/^tới /)).toHaveClass("uc-plan-term-day");
+    expect(billing).not.toHaveTextContent("~");
     const personal = screen.getByRole("region", { name: "Claude · Cá nhân" });
     expect(within(personal).queryByRole("group", { name: /^còn / })).not.toBeInTheDocument();
     expect(personal.querySelector("header")).not.toHaveClass("has-term");
   });
 
-  it("keeps a freshly confirmed Claude estimate visible through quota failures and clears it on Free", async () => {
-    const confirmed = new Date().toISOString();
-    const started = new Date();
-    started.setUTCMonth(started.getUTCMonth() - 2, 1);
-    const term = { basis: "monthlyFrom", startedAt: started.toISOString(), checkedAt: confirmed } as const;
+  it("keeps a confirmed Claude billing date visible through quota failures and clears it on Free", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-10T01:00:00Z"));
+    setSystemTimeZone("Asia/Saigon");
+    try {
+      const term = { basis: "stated", endsAt: "2026-11-03T07:03:48Z", checkedAt: new Date().toISOString() } as const;
+      const api = await renderApp({ engine: (state) => {
+        const snapshot = state.providers["claude@7c1e"]!.snapshot!;
+        snapshot.plan = "Max 20x";
+        snapshot.planCheckedAt = term.checkedAt;
+        snapshot.planTerm = term;
+        snapshot.errorCategory = "rate_limited";
+        snapshot.usageUnavailable = true;
+      } });
+      const work = screen.getByRole("region", { name: "Claude · Công ty" });
+      const billing = within(work).getByRole("group", { name: /^còn 24 ngày\. tới T3 03\/11\. Gói hết kỳ lúc 14:03 · T3 03\/11 · GMT\+7\. Ngày được nhà cung cấp xác nhận/ });
+      expect(billing.closest("header")).toHaveClass("has-term");
+      expect(billing).not.toHaveTextContent("~");
+      expect(within(work).getByText("Max 20x")).toBeInTheDocument();
+      expect(within(work).queryByText(/^Còn \d+%$/)).not.toBeInTheDocument();
+      act(() => api.editEngineState((state) => {
+        state.providers["claude@7c1e"]!.snapshot!.plan = "Free";
+      }));
+      expect(within(work).getByText("Free")).toBeInTheDocument();
+      expect(within(work).queryByRole("group", { name: /^còn / })).not.toBeInTheDocument();
+      expect(work.querySelector("header")).not.toHaveClass("has-term");
+    } finally {
+      vi.useRealTimers();
+      setSystemTimeZone(null);
+    }
+  });
+
+  it("hides a historical Claude monthly estimate even when a quota failure retains a fresh profile", async () => {
     const api = await renderApp({ engine: (state) => {
       const snapshot = state.providers["claude@7c1e"]!.snapshot!;
       snapshot.plan = "Max 20x";
-      snapshot.planCheckedAt = confirmed;
-      snapshot.planTerm = term;
+      snapshot.planCheckedAt = new Date().toISOString();
+      snapshot.planTerm = { basis: "monthlyFrom", startedAt: "2026-07-31T03:40:09Z", checkedAt: snapshot.planCheckedAt };
       snapshot.errorCategory = "rate_limited";
-      snapshot.usageUnavailable = true;
+      state.providers["claude@7c1e"]!.error = "Usage updates are rate limited. Try again later.";
     } });
     const work = screen.getByRole("region", { name: "Claude · Công ty" });
-    const estimate = within(work).getByRole("group", { name: /^còn ~\d+ (?:ngày|giờ|phút)\. tới ~.+\. Khoảng .+, ước tính\./ });
-    expect(estimate.closest("header")).toHaveClass("has-term");
     expect(within(work).getByText("Max 20x")).toBeInTheDocument();
-    expect(within(work).queryByText(/^Còn \d+%$/)).not.toBeInTheDocument();
+    expect(work.querySelector("header")).not.toHaveClass("has-term");
+    expect(within(work).queryByRole("group", { name: /^còn / })).not.toBeInTheDocument();
     act(() => api.editEngineState((state) => {
-      state.providers["claude@7c1e"]!.snapshot!.plan = "Free";
+      const runtime = state.providers["claude@7c1e"]!;
+      delete runtime.error;
+      delete runtime.snapshot!.errorCategory;
     }));
-    expect(within(work).getByText("Free")).toBeInTheDocument();
-    expect(within(work).queryByRole("group", { name: /^còn ~/ })).not.toBeInTheDocument();
     expect(work.querySelector("header")).not.toHaveClass("has-term");
   });
 
@@ -558,6 +587,67 @@ describe("popup", () => {
     expect(screen.queryByRole("button", { name: /^Mở (Claude|ChatGPT) trong ứng dụng$/ })).not.toBeInTheDocument();
     expect(screen.queryByText("Phiên chat trong ứng dụng")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Phiên (Claude|ChatGPT) mới/ })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { provider: "claude", title: "Claude · Công ty", brand: "Claude" },
+    { provider: "codex", title: "Codex", brand: "ChatGPT" },
+  ] as const)("connects $provider billing from its account row and reuses only the matching web session", async ({ provider, title, brand }) => {
+    const api = await renderApp();
+    const accounts = await api.listAccounts();
+    const account = accounts.find((candidate) => candidate.provider === provider);
+    if (!account) throw new Error("The provider should have a connected account");
+    const otherSession = await api.createChatSession(provider === "claude" ? "codex" : "claude", account.label);
+    const connect = vi.spyOn(api, "openAccountBilling");
+    const open = vi.spyOn(api, "openChatSession");
+    act(() => useApp.setState({ screen: "accounts" }));
+    const remove = await screen.findByRole("button", { name: `Xóa ${title}` });
+    const row = remove.closest<HTMLElement>(".uc-list-row");
+    if (!row) throw new Error("The account should have its own row");
+    const button = within(row).getByRole("button", { name: "Kết nối Billing" });
+    expect(screen.getAllByRole("button", { name: "Kết nối Billing" })).toHaveLength(accounts.length);
+    fireEvent.click(button);
+    await waitFor(() => expect(connect).toHaveBeenCalledWith(account.id));
+    expect(await screen.findByText(`Đã kết nối Billing ${brand}`)).toBeInTheDocument();
+    await waitFor(() => expect(button).not.toBeDisabled());
+    const sessions = await api.listChatSessions();
+    const matching = sessions.find((session) => session.provider === provider && session.label === account.label);
+    if (!matching) throw new Error("Billing should create a web session for the matching provider and account");
+    expect(open).toHaveBeenCalledWith(matching.id);
+    expect(open).not.toHaveBeenCalledWith(otherSession.id);
+    fireEvent.click(button);
+    await waitFor(() => expect(connect).toHaveBeenCalledTimes(2));
+    expect((await api.listChatSessions()).length).toBe(sessions.length);
+    expect(open).toHaveBeenNthCalledWith(2, matching.id);
+  });
+
+  it.each([
+    { title: "Claude · Công ty", brand: "Claude" },
+    { title: "Codex", brand: "ChatGPT" },
+  ])("names $brand when a Billing connection still needs sign-in", async ({ title, brand }) => {
+    const api = await renderApp();
+    vi.spyOn(api, "openAccountBilling").mockResolvedValue(false);
+    act(() => useApp.setState({ screen: "accounts" }));
+    const remove = await screen.findByRole("button", { name: `Xóa ${title}` });
+    const row = remove.closest<HTMLElement>(".uc-list-row");
+    if (!row) throw new Error("The account should have its own row");
+    fireEvent.click(within(row).getByRole("button", { name: "Kết nối Billing" }));
+    expect(await screen.findByText(`Đăng nhập ${brand} trên trang vừa mở để kết nối Billing.`)).toBeInTheDocument();
+    expect(screen.queryByText(`Đã kết nối Billing ${brand}`)).not.toBeInTheDocument();
+  });
+
+  it("allows retrying Codex Billing after the connection fails", async () => {
+    const api = await renderApp();
+    vi.spyOn(api, "openAccountBilling").mockRejectedValue(new Error("The matching account could not be confirmed"));
+    act(() => useApp.setState({ screen: "accounts" }));
+    const remove = await screen.findByRole("button", { name: "Xóa Codex" });
+    const row = remove.closest<HTMLElement>(".uc-list-row");
+    if (!row) throw new Error("The account should have its own row");
+    const button = within(row).getByRole("button", { name: "Kết nối Billing" });
+    fireEvent.click(button);
+    expect(await screen.findByText("Không thực hiện được: The matching account could not be confirmed")).toBeInTheDocument();
+    expect(button).not.toBeDisabled();
+    expect(screen.queryByText("Đã kết nối Billing ChatGPT")).not.toBeInTheDocument();
   });
 
   it("tells how to copy a session cookie or a whole Cookie header for web-session providers", async () => {

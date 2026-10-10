@@ -614,7 +614,7 @@ describe("the account header", () => {
 
   it("carries each account's plan period as moments, with the day it ends as the popup names a date", () => {
     const document = glance();
-    expect(account(document, "claude@7c1e").term).toEqual({ endsAt: "2026-09-30T03:00:00.000Z", soonAt: "2026-09-26T03:00:00.000Z", on: "T4 30/09", estimated: true });
+    expect(account(document, "claude@7c1e").term).toEqual({ endsAt: "2026-09-30T03:00:00.000Z", soonAt: "2026-09-26T03:00:00.000Z", on: "T4 30/09" });
     expect(account(document, "codex@52d0").term).toEqual({ endsAt: "2026-10-16T15:00:00.000Z", soonAt: "2026-10-12T15:00:00.000Z", on: "T6 16/10" });
     expect(account(document, "claude@a93f").term).toBeUndefined();
     expect(document.providers.find((entry) => entry.id === "codex@52d0")?.term).toEqual(account(document, "codex@52d0").term);
@@ -623,15 +623,19 @@ describe("the account header", () => {
 
   it("does not roll a failed Claude refresh into another paid cycle on any native surface", () => {
     const now = new Date("2026-10-01T00:00:00Z");
-    const stale = glance({ now, errors: { "claude@7c1e": "Refresh failed" } });
+    const stale = glance({ now, wings: [descriptors.get("claude@7c1e.session")!, null], errors: { "claude@7c1e": "Refresh failed" } });
     for (const list of [stale.providers, stale.widget.providers, stale.island.wings]) {
       const claude = list.find((entry) => entry.id === "claude@7c1e");
       expect(claude?.plan).toBe("Max 5x");
-      expect(claude?.term).toBeUndefined();
+      expect(claude?.term?.endsAt).toBe("2026-09-30T03:00:00.000Z");
+      expect(fillPlanTerm(claude!.term!, stale.labels.planTerm!, now)?.left).toBe("đã tới hạn");
     }
     const previous = snapshots["claude@7c1e"]!;
     const paid = glance({ now, data: { ...snapshots, "claude@7c1e": { ...previous, refreshedAt: now.toISOString() } } });
-    expect(account(paid, "claude@7c1e").term?.endsAt).toBe("2026-10-30T03:00:00.000Z");
+    expect(account(paid, "claude@7c1e").term?.endsAt).toBe("2026-09-30T03:00:00.000Z");
+    const next = { basis: "stated", endsAt: "2026-11-03T07:03:48Z", checkedAt: now.toISOString() } as const;
+    const renewed = glance({ now, data: { ...snapshots, "claude@7c1e": { ...previous, planTerm: next, planCheckedAt: next.checkedAt } } });
+    expect(account(renewed, "claude@7c1e").term?.endsAt).toBe("2026-11-03T07:03:48.000Z");
   });
 
   it("removes a stale paid term on Free and displays the newly confirmed Plus period", () => {
@@ -647,20 +651,62 @@ describe("the account header", () => {
     expect(account(renewed, "codex@52d0")).toMatchObject({ plan: "Plus", term: { endsAt: "2026-11-16T15:00:00.000Z" } });
   });
 
-  it("publishes a freshly confirmed Claude estimate on native surfaces even when usage fails", () => {
-    const previous = snapshots["claude@7c1e"]!;
-    const term = { basis: "monthlyFrom", startedAt: "2026-07-31T03:00:00Z", checkedAt: NOW_GLANCE.toISOString() } as const;
-    const confirmed = { ...previous, plan: "Max 20x", planTerm: term, planCheckedAt: term.checkedAt, errorCategory: "rate_limited" as const };
-    const options = { data: { ...snapshots, "claude@7c1e": confirmed } };
+  it("publishes a confirmed Claude billing date on native surfaces even when usage fails", () => {
+    const now = new Date("2026-10-10T01:00:00Z");
+    const previous = fixtureSnapshots(now.getTime())["claude@7c1e"]!;
+    const term = { basis: "stated", endsAt: "2026-11-03T07:03:48Z", checkedAt: now.toISOString() } as const;
+    const confirmed = { ...previous, plan: "Max 20x", planTerm: term, planCheckedAt: term.checkedAt };
+    const options: Options = { now, wings: [descriptors.get("claude@7c1e.session")!, null], data: { ...snapshots, "claude@7c1e": confirmed }, errors: { "claude@7c1e": "Usage updates are rate limited. Try again later." } };
     const paid = glance(options);
-    for (const list of [paid.providers, paid.widget.providers]) {
+    for (const list of [paid.providers, paid.widget.providers, paid.island.wings]) {
       const claude = list.find((entry) => entry.id === "claude@7c1e");
-      expect(claude).toMatchObject({ plan: "Max 20x", term: { endsAt: "2026-09-30T03:00:00.000Z", estimated: true } });
-      expect(fillPlanTerm(claude!.term!, paid.labels.planTerm!, NOW_GLANCE)?.left).toMatch(/^còn ~/);
+      expect(claude).toMatchObject({ plan: "Max 20x", term: { endsAt: "2026-11-03T07:03:48.000Z" } });
+      expect(claude?.term?.estimated).toBeUndefined();
+      expect(fillPlanTerm(claude!.term!, paid.labels.planTerm!, now)).toMatchObject({ left: "còn 24 ngày", day: "tới T3 03/11" });
+    }
+    const unavailable = glance({ ...options, data: { ...snapshots, "claude@7c1e": { ...confirmed, errorCategory: "rate_limited", usageUnavailable: true } } });
+    for (const list of [unavailable.providers, unavailable.widget.providers]) {
+      expect(list.find((entry) => entry.id === "claude@7c1e")?.term?.endsAt).toBe("2026-11-03T07:03:48.000Z");
     }
     const free = glance({ ...options, data: { ...snapshots, "claude@7c1e": { ...confirmed, plan: "Free" } } });
-    for (const list of [free.providers, free.widget.providers]) {
+    for (const list of [free.providers, free.widget.providers, free.island.wings]) {
       expect(list.find((entry) => entry.id === "claude@7c1e")?.term).toBeUndefined();
+    }
+  });
+
+  it("rejects historical Claude monthly estimates on every native surface", () => {
+    const now = new Date("2026-10-10T01:00:00Z");
+    const previous = snapshots["claude@7c1e"]!;
+    const term = { basis: "monthlyFrom", startedAt: "2026-07-31T03:40:09Z", checkedAt: now.toISOString() } as const;
+    const confirmed = { ...previous, plan: "Max 20x", planTerm: term, planCheckedAt: term.checkedAt };
+    const failures: Readonly<Record<string, string>>[] = [{}, { "claude@7c1e": "Usage updates are rate limited. Try again later." }];
+    for (const errors of failures) {
+      const document = glance({ now, wings: [descriptors.get("claude@7c1e.session")!, null], data: { ...snapshots, "claude@7c1e": confirmed }, errors });
+      for (const list of [document.providers, document.widget.providers, document.island.wings]) {
+        expect(list.find((entry) => entry.id === "claude@7c1e")?.term).toBeUndefined();
+      }
+    }
+  });
+
+  it("clears Claude billing terms on native surfaces after authentication fails", () => {
+    const now = new Date("2026-10-10T01:00:00Z");
+    const term = { basis: "stated", endsAt: "2026-11-03T07:03:48Z", checkedAt: now.toISOString() } as const;
+    const previous = snapshots["claude@7c1e"]!;
+    for (const errorCategory of ["auth_expired", "auth_invalid"] as const) {
+      const snapshot = { ...previous, planTerm: term, planCheckedAt: term.checkedAt, errorCategory };
+      const document = glance({ now, wings: [descriptors.get("claude@7c1e.session")!, null], data: { ...snapshots, "claude@7c1e": snapshot } });
+      for (const list of [document.providers, document.widget.providers, document.island.wings]) {
+        expect(list.find((entry) => entry.id === "claude@7c1e")?.term).toBeUndefined();
+      }
+    }
+    for (const error of ["Session expired. Sign in again.", "Local credentials are invalid. Sign in again."]) {
+      const snapshot = { ...fixtureSnapshots(now.getTime())["claude@7c1e"]!, planTerm: term, planCheckedAt: term.checkedAt };
+      const document = glance({ now, wings: [descriptors.get("claude@7c1e.session")!, null], data: { ...snapshots, "claude@7c1e": snapshot }, errors: { "claude@7c1e": error } });
+      for (const list of [document.providers, document.widget.providers, document.island.wings]) {
+        const claude = list.find((entry) => entry.id === "claude@7c1e");
+        expect(claude?.plan).toBe("Max 5x");
+        expect(claude?.term).toBeUndefined();
+      }
     }
   });
 
@@ -1219,14 +1265,14 @@ describe("a document for someone who never chose Claude", () => {
    * `after`). `BEFORE_ROW_MOMENTS` pins the documents without those, to show nothing else moved.
    */
   const PINNED: Readonly<Record<string, string>> = {
-    defaults: "a3ebcbac45e6fa3674f5a656336fc02411696eb87eb604cc9f98f10f31617345",
-    wings: "8197a7f4dae6ddddee76483a164b7a0286c2a1aa25bae346da73b106fc5f7f93",
-    tuned: "d07f6481d1401889163a293646d6ef3f51b5c95cd49eb7266de0425186650277",
+    defaults: "86ea1db8cfdfd1106e8ba71a0ce015646aaf9e52110ef0aaff38652726640c2a",
+    wings: "1262688ee7c23dfefc9cc0d1b1223fea3ca9036ebcdc0c013a2796d066d47160",
+    tuned: "963a763f3335b2bb65d75614e1d4730176866161020a8163783c4bcd71a52a1f",
   };
   const BEFORE_ROW_MOMENTS: Readonly<Record<string, string>> = {
-    defaults: "5dee4805f42f8909ebdffedc0e507d339963a23cd946baed4ccdf1109d1ce45c",
-    wings: "84b365e4736354fd0e24388da733a8db6d9836298b7a9346c1b2223644c8f525",
-    tuned: "3aa22263b06adf00c6936cd1e25018256763952826d70e99a60ee2959abd7606",
+    defaults: "d3648da0a855af20bf673508d3027054e393dcf7767663693489295aa73cd26b",
+    wings: "9fb923f38066a1b68c759900e8a76aa75972be2c5bc37bc048f0ad14b5165bbf",
+    tuned: "1e499f938541e361e6b2a2ed584b821de6d2139eefeb08066a88ef59e097a162",
   };
   /** The document without the limit rows' reset words added in 0.3.29. */
   const withoutRowMoments = (document: ReturnType<typeof glance>) => {

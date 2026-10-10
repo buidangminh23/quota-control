@@ -171,8 +171,9 @@ impl Service for NanoGpt {
             };
             rows.push(row);
         }
-        let term =
-            value::time(&usage, "/period/currentPeriodEnd").map(|ends_at| PlanTerm::Stated {
+        let term = value::time(&usage, "/period/currentPeriodEnd")
+            .filter(|_| value::flag(&usage, "/active") == Some(true))
+            .map(|ends_at| PlanTerm::Stated {
                 ends_at,
                 checked_at: None,
             });
@@ -254,6 +255,21 @@ mod tests {
         let reading = NanoGpt.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.lines.len(), 1);
         assert!(reading.warning.is_some());
+    }
+
+    #[tokio::test]
+    async fn inactive_and_unconfirmed_subscriptions_keep_the_balance_without_a_paid_period() {
+        for active in [serde_json::Value::Null, json!(false)] {
+            let mut body: serde_json::Value = serde_json::from_str(SUBSCRIPTION).unwrap();
+            body["active"] = active;
+            let http = Scripted::new()
+                .on("POST", BALANCE_URL, 200, r#"{"usd_balance":10}"#)
+                .on("GET", USAGE_URL, 200, &body.to_string());
+            let scope = context_at(&http, json!({"apiKey":"test"}), Utc::now());
+            let reading = NanoGpt.fetch(&scope.context()).await.unwrap();
+            assert_eq!(reading.plan_term, None);
+            assert_eq!(reading.lines[0], lines::dollar_value("Balance", 10.0));
+        }
     }
 
     #[tokio::test]

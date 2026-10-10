@@ -840,6 +840,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "data-encoding"
+version = "2.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
+
+[[package]]
 name = "dbus"
 version = "0.9.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3438,11 +3444,12 @@ dependencies = [
 
 [[package]]
 name = "quota-control"
-version = "0.3.35"
+version = "0.3.36"
 dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "futures",
  "iana-time-zone",
  "ksni",
  "libc",
@@ -3462,6 +3469,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -4134,6 +4142,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "170fb83ab34de17dc69aa7c67482b22218ddb85da56546f9bd6b929e32a05930"
 dependencies = [
  "stable_deref_trait",
+]
+
+[[package]]
+name = "sha1"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.2.17",
+ "digest 0.10.7",
 ]
 
 [[package]]
@@ -5050,6 +5069,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-tungstenite"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d25a406cddcc431a75d3d9afc6a7c0f7428d4891dd973e4d54c56b46127bf857"
+dependencies = [
+ "futures-util",
+ "log",
+ "tokio",
+ "tungstenite",
+]
+
+[[package]]
 name = "tokio-util"
 version = "0.7.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5347,6 +5378,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
+name = "tungstenite"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8628dcc84e5a09eb3d8423d6cb682965dea9133204e8fb3efee74c2a0c259442"
+dependencies = [
+ "bytes",
+ "data-encoding",
+ "http",
+ "httparse",
+ "log",
+ "rand 0.9.5",
+ "sha1",
+ "thiserror 2.0.21",
+ "utf-8",
+]
+
+[[package]]
 name = "typeid"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5360,7 +5408,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "uc-accounts"
-version = "0.3.35"
+version = "0.3.36"
 dependencies = [
  "chrono",
  "libc",
@@ -5376,7 +5424,7 @@ dependencies = [
 
 [[package]]
 name = "uc-api"
-version = "0.3.35"
+version = "0.3.36"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5396,7 +5444,7 @@ dependencies = [
 
 [[package]]
 name = "uc-core"
-version = "0.3.35"
+version = "0.3.36"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5416,7 +5464,7 @@ dependencies = [
 
 [[package]]
 name = "uc-engine"
-version = "0.3.35"
+version = "0.3.36"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5434,7 +5482,7 @@ dependencies = [
 
 [[package]]
 name = "uc-logscan"
-version = "0.3.35"
+version = "0.3.36"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5453,7 +5501,7 @@ dependencies = [
 
 [[package]]
 name = "uc-pricing"
-version = "0.3.35"
+version = "0.3.36"
 dependencies = [
  "serde",
  "serde_json",
@@ -5461,7 +5509,7 @@ dependencies = [
 
 [[package]]
 name = "uc-providers"
-version = "0.3.35"
+version = "0.3.36"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -5479,7 +5527,7 @@ dependencies = [
 
 [[package]]
 name = "uc-services"
-version = "0.3.35"
+version = "0.3.36"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -5594,6 +5642,12 @@ dependencies = [
  "unic-ucd-ident",
  "url",
 ]
+
+[[package]]
+name = "utf-8"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09cc8ee72d2a9becf2f2febe0205bbed8fc6615b7cb429ad062dc7b7ddd036a9"
 
 [[package]]
 name = "utf8_iter"

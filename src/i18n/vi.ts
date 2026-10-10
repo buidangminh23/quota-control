@@ -195,11 +195,11 @@ export const vi: Messages = {
     },
     planTermDay: (day, estimated, ended) => (ended ? restoreDay(day) : `tới ${estimated ? "~" : ""}${restoreDay(day)}`),
     planTermStatedNote: (time, offset, checked) =>
-      `Gói hết kỳ lúc ${time} · ${offset}. Ngày do ChatGPT ghi trong phiên đăng nhập${checked ? `, kiểm tra lần cuối ${checked}` : ""}. Gói tự gia hạn thì đây là ngày gia hạn.`,
+      `Gói hết kỳ lúc ${time} · ${offset}. Ngày được nhà cung cấp xác nhận${checked ? `, kiểm tra lần cuối ${checked}` : ""}. Gói tự gia hạn thì đây là ngày gia hạn.`,
     planTermEndedNote: (time, offset) =>
-      `Kỳ gói đã hết lúc ${time} · ${offset}. ChatGPT gửi ngày của kỳ mới khi phiên đăng nhập tự làm mới.`,
+      `Kỳ gói đã hết lúc ${time} · ${offset}. Kỳ mới chỉ hiện khi nhà cung cấp xác nhận ngày mới.`,
     planTermEstimateNote: (time, offset, started) =>
-      `Khoảng ${time} · ${offset}, ước tính. Anthropic chỉ cho biết ngày đăng ký gói (${started}), không cho biết ngày gia hạn, nên ngày này tính theo chu kỳ tháng từ ngày đăng ký.`,
+      `Khoảng ${time} · ${offset}, ước tính. Chu kỳ tháng được tính từ ngày đăng ký gói (${started}); nhà cung cấp chưa xác nhận ngày gia hạn.`,
   },
   totalSpend: {
     metric: (key) => ({ cost: "Chi phí", costPerMtok: "Chi phí mỗi triệu token", tokens: "Token" })[key],
@@ -436,6 +436,10 @@ export const vi: Messages = {
   },
   accounts: {
     connected: "Tài khoản đã kết nối",
+    connectBilling: "Kết nối Billing",
+    connectBillingNote: (provider) => `Tự cập nhật ngày hết kỳ do ${provider} xác nhận từ tài khoản đã đăng nhập trong Chrome hoặc trong ứng dụng.`,
+    billingConnected: (provider) => `Đã kết nối Billing ${provider}`,
+    billingWaiting: (provider) => `Đăng nhập ${provider} trên trang vừa mở để kết nối Billing.`,
     none: "Chưa có tài khoản nào. Thêm một tài khoản bên dưới để xem hạn mức.",
     mode: (mode, cliName) =>
       ({

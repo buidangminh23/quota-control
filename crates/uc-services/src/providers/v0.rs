@@ -173,14 +173,16 @@ fn parse(body: &Value) -> Result<Reading, SimpleProviderError> {
     } else {
         credits.push(lines::count_value("Credits", limit, "credits"));
     }
-    let plan = token
+    let paid_plan = token
         .then(|| value::text(body, "/data/plan").and_then(lines::plan_name))
-        .flatten()
-        .unwrap_or_else(|| "API".into());
-    let term = reset.filter(|_| token).map(|ends_at| PlanTerm::Stated {
-        ends_at,
-        checked_at: None,
-    });
+        .flatten();
+    let term = reset
+        .filter(|_| paid_plan.as_deref().is_some_and(|plan| plan != "Free"))
+        .map(|ends_at| PlanTerm::Stated {
+            ends_at,
+            checked_at: None,
+        });
+    let plan = paid_plan.unwrap_or_else(|| "API".into());
     Ok(Reading::new(Some(plan), credits).with_plan_term(term))
 }
 
@@ -193,6 +195,31 @@ mod tests {
     use uc_core::ErrorCategory;
 
     const TOKEN_BILLING: &str = r###"{"billingType":"token","data":{"plan":"premium","role":"user","balance":{"total":100,"remaining":75},"onDemand":{"balance":12.5},"billingCycle":{"start":1788220800000,"end":1790812800000}}}"###;
+
+    #[test]
+    fn a_free_or_unnamed_token_plan_keeps_the_credit_reset_without_a_paid_period() {
+        for plan in [Value::Null, json!("free")] {
+            let body = json!({
+                "billingType": "token",
+                "data": {
+                    "plan": plan,
+                    "balance": {"total": 100, "remaining": 75},
+                    "billingCycle": {"end": 1790812800000_i64}
+                }
+            });
+            let reading = parse(&body).unwrap();
+            assert_eq!(reading.plan_term, None);
+            assert_eq!(
+                reading.lines,
+                vec![lines::percent(
+                    "Credits",
+                    25.0,
+                    value::as_time(&json!(1790812800000_i64)),
+                    None
+                )]
+            );
+        }
+    }
 
     #[tokio::test]
     async fn reads_credits_requests_and_the_on_demand_balance_with_the_key_as_a_bearer() {

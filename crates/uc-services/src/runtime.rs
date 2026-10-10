@@ -4,8 +4,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uc_accounts::KeyStore;
 use uc_core::{
-    Clock, ErrorCategory, MetricLine, ProgressFormat, Provider, ProviderRuntime, ProviderSnapshot,
-    RefreshContext, SharedHttpClient, SimpleProviderError, WidgetDescriptor, system_clock,
+    Clock, ErrorCategory, MetricLine, PlanTerm, ProgressFormat, Provider, ProviderRuntime,
+    ProviderSnapshot, RefreshContext, SharedHttpClient, SimpleProviderError, WidgetDescriptor,
+    system_clock,
 };
 
 use crate::catalog::identity_hash;
@@ -161,13 +162,43 @@ impl ServiceRuntime {
             let secret = self.secret().await?;
             fetch(self.service, &secret, &self.http, now, &self.memo).await?
         };
-        Ok(
-            ProviderSnapshot::make(&self.provider, reading.plan, reading.lines, now)
-                .with_plan_term(reading.plan_term)
-                .with_account(reading.account)
-                .with_warning(reading.warning),
-        )
+        Ok(snapshot(&self.provider, reading, now))
     }
+}
+
+fn snapshot(provider: &Provider, reading: Reading, now: DateTime<Utc>) -> ProviderSnapshot {
+    let paid = reading.plan.as_deref().is_some_and(|plan| {
+        !matches!(
+            plan.trim().to_ascii_lowercase().as_str(),
+            "free" | "free plan" | "free tier" | "unknown" | "inactive"
+        )
+    });
+    let term = reading.plan_term.and_then(|term| match term {
+        PlanTerm::Stated {
+            ends_at,
+            checked_at,
+        } if paid && ends_at > now => {
+            let checked_at = checked_at.or(reading.plan_checked_at).unwrap_or(now);
+            (checked_at <= now).then_some(PlanTerm::Stated {
+                ends_at,
+                checked_at: Some(checked_at),
+            })
+        }
+        _ => None,
+    });
+    let checked_at = reading
+        .plan_checked_at
+        .filter(|checked_at| *checked_at <= now)
+        .or(match &term {
+            Some(PlanTerm::Stated { checked_at, .. }) => *checked_at,
+            _ => None,
+        });
+    let mut snapshot = ProviderSnapshot::make(provider, reading.plan, reading.lines, now)
+        .with_plan_term(term)
+        .with_account(reading.account)
+        .with_warning(reading.warning);
+    snapshot.plan_checked_at = checked_at;
+    snapshot
 }
 
 async fn fetch(
@@ -339,6 +370,95 @@ mod tests {
 
     fn provider() -> Provider {
         Provider::new("antigravity@abc", "Antigravity")
+    }
+
+    #[test]
+    fn paid_periods_get_a_verification_stamp_without_refreshing_a_cached_confirmation() {
+        let now = Utc.with_ymd_and_hms(2026, 10, 10, 10, 0, 0).unwrap();
+        let ends_at = now + chrono::Duration::days(10);
+        let original = Some(now - chrono::Duration::hours(6));
+        for (checked_at, plan_checked_at) in [(None, None), (original, None), (None, original)] {
+            let reading = Reading::new(
+                Some("Pro".into()),
+                vec![lines::percent("Monthly", 40.0, Some(ends_at), None)],
+            )
+            .with_plan_checked_at(plan_checked_at)
+            .with_plan_term(Some(PlanTerm::Stated {
+                ends_at,
+                checked_at,
+            }));
+            let current = snapshot(&provider(), reading, now);
+            let confirmed = checked_at.or(plan_checked_at).unwrap_or(now);
+            assert_eq!(current.plan_checked_at, Some(confirmed));
+            assert_eq!(
+                current.plan_term,
+                Some(PlanTerm::Stated {
+                    ends_at,
+                    checked_at: Some(confirmed)
+                })
+            );
+            assert_eq!(current.refreshed_at, now);
+        }
+    }
+
+    #[test]
+    fn free_unknown_expired_and_inferred_periods_keep_usage_without_paid_dates() {
+        let now = Utc.with_ymd_and_hms(2026, 10, 10, 10, 0, 0).unwrap();
+        let lines = vec![lines::percent("Weekly", 40.0, None, None)];
+        let future = now + chrono::Duration::days(10);
+        let stated = Some(PlanTerm::Stated {
+            ends_at: future,
+            checked_at: None,
+        });
+        for (plan, term) in [
+            (Some("Free"), stated.clone()),
+            (Some("Free Plan"), stated.clone()),
+            (Some("Free Tier"), stated.clone()),
+            (Some("Unknown"), stated.clone()),
+            (Some("Inactive"), stated),
+            (
+                None,
+                Some(PlanTerm::Stated {
+                    ends_at: future,
+                    checked_at: None,
+                }),
+            ),
+            (
+                Some("Pro"),
+                Some(PlanTerm::Stated {
+                    ends_at: now,
+                    checked_at: None,
+                }),
+            ),
+            (
+                Some("Pro"),
+                Some(PlanTerm::Stated {
+                    ends_at: future,
+                    checked_at: Some(future),
+                }),
+            ),
+            (
+                Some("Pro"),
+                Some(PlanTerm::MonthlyFrom {
+                    started_at: now - chrono::Duration::days(7),
+                    checked_at: Some(now),
+                }),
+            ),
+        ] {
+            let reading =
+                Reading::new(plan.map(str::to_string), lines.clone()).with_plan_term(term);
+            let current = snapshot(&provider(), reading, now);
+            assert_eq!(current.plan_term, None, "{plan:?}");
+            assert_eq!(current.lines, lines);
+        }
+        let checked_at = now - chrono::Duration::hours(6);
+        let current = snapshot(
+            &provider(),
+            Reading::new(Some("Free".into()), lines).with_plan_checked_at(Some(checked_at)),
+            now,
+        );
+        assert_eq!(current.plan_checked_at, Some(checked_at));
+        assert_eq!(current.plan_term, None);
     }
 
     /// A service whose token renews at every fetch and whose usage request then fails.

@@ -183,13 +183,7 @@ impl Service for Windsurf {
         Ok(Reading::new(
             value::text(plan_info, "/planName").map(str::to_owned),
             meters,
-        )
-        .with_plan_term(value::time(plan_info, "/endTimestamp").map(|ends_at| {
-            uc_core::PlanTerm::Stated {
-                ends_at,
-                checked_at: None,
-            }
-        })))
+        ))
     }
 }
 
@@ -347,11 +341,13 @@ mod tests {
         let http = Scripted::new();
         let scope = context_at(
             &http,
-            json!({"planName":"Pro","quotaUsage":{"dailyRemainingPercent":75,"weeklyRemainingPercent":90,"dailyResetAtUnix":1790503200,"weeklyResetAtUnix":1790812800}}),
+            json!({"planName":"Pro","endTimestamp":"2026-11-03T00:00:00Z","quotaUsage":{"dailyRemainingPercent":75,"weeklyRemainingPercent":90,"dailyResetAtUnix":1790503200,"weeklyResetAtUnix":1790812800}}),
             Utc::now(),
         );
         let reading = Windsurf.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan.as_deref(), Some("Pro"));
+        assert_eq!(reading.plan_term, None);
+        assert_eq!(reading.plan_checked_at, None);
         assert_eq!(
             reading.lines,
             vec![

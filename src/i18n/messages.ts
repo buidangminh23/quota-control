@@ -298,6 +298,10 @@ export interface SettingsMessages {
 
 export interface AccountsMessages {
   connected: string;
+  connectBilling: string;
+  connectBillingNote(provider: string): string;
+  billingConnected(provider: string): string;
+  billingWaiting(provider: string): string;
   none: string;
   /** `cliName`: Claude Code or the Codex CLI, whose login a `cli` account follows. */
   mode(mode: "shared_cli" | "managed_oauth" | "cli", cliName: string): string;

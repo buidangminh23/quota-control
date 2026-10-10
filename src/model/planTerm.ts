@@ -1,7 +1,6 @@
 /**
- * The plan's paid period for the card header. ChatGPT states when the period ends. For Claude only
- * the subscription start is known, so the next renewal is estimated on that day of each month (the
- * month's last day when the month is shorter), counted in UTC like a billing cycle anchor.
+ * The plan's paid period for the card header, using the fixed end stated by the service. Legacy
+ * monthly estimates remain readable for older payloads; account cards reject inferred periods.
  */
 import type { PlanTerm } from "@/lib/types";
 

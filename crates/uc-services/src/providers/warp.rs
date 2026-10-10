@@ -20,7 +20,7 @@
 //! hour after a failure), and a failure never affects the credits.
 
 use async_trait::async_trait;
-use chrono::Duration;
+use chrono::{DateTime, Duration, Utc};
 use serde_json::{Value, json};
 use uc_core::{HttpRequest, PlanTerm, Provider, SimpleProviderError, WidgetDescriptor};
 
@@ -182,10 +182,11 @@ impl Service for Warp {
             .map(str::to_string)
             .or_else(|| unlimited.then(|| "Unlimited".into()));
         Ok(Reading::new(plan, out)
+            .with_plan_checked_at(value::time(&account, "/checkedAt"))
             .with_plan_term(
                 value::time(&account, "/endsAt").map(|ends_at| PlanTerm::Stated {
                     ends_at,
-                    checked_at: None,
+                    checked_at: value::time(&account, "/checkedAt"),
                 }),
             )
             .with_account(value::text(&account, "/email")))
@@ -222,7 +223,9 @@ fn graphql(url: &str, key: &str, operation: &str, query: &str) -> HttpRequest {
 /// The account's email, plan and plan end as `{"email", "plan", "endsAt"}`, remembered for 12
 /// hours (an hour after a failed query, then as an empty object). Never fails the card.
 async fn account(context: &FetchContext<'_>, key: &str) -> Value {
-    if let Some(memo) = context.memo.get(ACCOUNT_MEMO, context.now).await {
+    if let Some(memo) = context.memo.get(ACCOUNT_MEMO, context.now).await
+        && (value::time(&memo, "/endsAt").is_none() || value::time(&memo, "/checkedAt").is_some())
+    {
         return memo;
     }
     let answer = http::json(
@@ -237,22 +240,31 @@ async fn account(context: &FetchContext<'_>, key: &str) -> Value {
             .and_then(Value::as_array)
             .is_none_or(Vec::is_empty)
     })
-    .and_then(|body| body.pointer("/data/user/user").map(read_account));
+    .and_then(|body| {
+        body.pointer("/data/user/user")
+            .map(|user| read_account(user, context.now))
+    });
     let keep = if answer.is_some() {
         Duration::hours(12)
     } else {
         Duration::hours(1)
     };
-    let found = answer.unwrap_or_else(|| json!({}));
+    let mut found = answer.unwrap_or_else(|| json!({}));
+    if found.get("plan").is_some_and(|plan| !plan.is_null()) {
+        found["checkedAt"] = json!(context.now.to_rfc3339());
+    }
+    let expires = value::time(&found, "/endsAt")
+        .filter(|end| *end > context.now)
+        .map_or(context.now + keep, |end| end.min(context.now + keep));
     context
         .memo
-        .put(ACCOUNT_MEMO, found.clone(), Some(context.now + keep))
+        .put(ACCOUNT_MEMO, found.clone(), Some(expires))
         .await;
     found
 }
 
 /// The email, the plan's tier name and its agreement's period end from a `GetAccountInfo` user.
-fn read_account(user: &Value) -> Value {
+fn read_account(user: &Value, now: DateTime<Utc>) -> Value {
     let billing = std::iter::once(user.get("billingMetadata"))
         .chain(
             user.get("workspaces")
@@ -274,7 +286,8 @@ fn read_account(user: &Value) -> Value {
                 Some("ACTIVE" | "CANCELED")
             )
         })
-        .find_map(|agreement| value::time(agreement, "/currentPeriodEnd"));
+        .filter_map(|agreement| value::time(agreement, "/currentPeriodEnd"))
+        .find(|end| *end > now);
     json!({
         "email": value::text(user, "/profile/email"),
         "plan": billing.and_then(|billing| value::text(billing, "/tier/name")),
@@ -286,8 +299,26 @@ fn read_account(user: &Value) -> Value {
 mod tests {
     use super::*;
     use crate::testing::{Scripted, context_at, header};
-    use chrono::Utc;
+    use chrono::TimeZone;
     use uc_core::ErrorCategory;
+
+    #[test]
+    fn an_expired_agreement_does_not_hide_the_current_paid_period() {
+        let now = Utc.with_ymd_and_hms(2026, 10, 10, 10, 0, 0).unwrap();
+        let current_end = now + Duration::days(10);
+        let user = json!({"billingMetadata": {
+            "tier": {"name": "Pro"},
+            "serviceAgreements": [
+                {"status": "CANCELED", "currentPeriodEnd": (now - Duration::days(1)).to_rfc3339()},
+                {"status": "UNPAID", "currentPeriodEnd": (now + Duration::days(20)).to_rfc3339()},
+                {"status": "ACTIVE", "currentPeriodEnd": current_end.to_rfc3339()}
+            ]
+        }});
+        assert_eq!(
+            value::time(&read_account(&user, now), "/endsAt"),
+            Some(current_end)
+        );
+    }
 
     const LIMITED_PLAN: &str = r#"{"data":{"user":{"__typename":"UserOutput","user":{"requestLimitInfo":{"isUnlimited":false,"requestLimit":100,"requestsUsedSinceLastRefresh":25,"nextRefreshTime":"2026-10-01T00:00:00Z"},"bonusGrants":[{"requestCreditsGranted":20,"requestCreditsRemaining":15}],"workspaces":[]}}}}"#;
 
@@ -341,14 +372,17 @@ mod tests {
             reading.plan_term,
             value::as_time(&json!("2026-10-15T00:00:00Z")).map(|ends_at| PlanTerm::Stated {
                 ends_at,
-                checked_at: None,
+                checked_at: Some(scope.context().now),
             })
         );
         let requests = http.requests();
         assert_eq!(requests[1].url, ACCOUNT_URL);
         assert_eq!(header(&requests[1], "Authorization"), Some("Bearer test"));
-        let again = Warp.fetch(&scope.context()).await.unwrap();
+        let mut later = scope.context();
+        later.now += Duration::hours(1);
+        let again = Warp.fetch(&later).await.unwrap();
         assert_eq!(again, reading);
+        assert_eq!(again.plan_checked_at, Some(scope.context().now));
         assert_eq!(http.requests().len(), 3, "the account answer is remembered");
     }
 

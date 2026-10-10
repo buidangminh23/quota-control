@@ -14,6 +14,7 @@ use crate::keychain::{self, KeychainItem};
 pub struct Credentials {
     pub(crate) access_token: String,
     pub(crate) account_id: Option<String>,
+    pub(crate) billing_account_id: Option<String>,
     pub(crate) plan: Option<String>,
     pub(crate) expires_at: Option<DateTime<Utc>>,
     pub(crate) profile_scope: bool,
@@ -259,6 +260,7 @@ pub(crate) fn parse_credentials(
             Ok(Credentials {
                 access_token,
                 account_id: None,
+                billing_account_id: None,
                 plan,
                 expires_at,
                 profile_scope,
@@ -285,6 +287,7 @@ pub(crate) fn parse_credentials(
             Ok(Credentials {
                 access_token,
                 account_id: header_text(&tokens["account_id"])?,
+                billing_account_id: crate::plan_term::codex_billing_account(body),
                 plan: crate::plan_term::codex_plan(body),
                 expires_at,
                 profile_scope: true,

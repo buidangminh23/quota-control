@@ -36,6 +36,19 @@ function AccountRow({ account, runtime, messages, language }: { account: Connect
   const notice = status === "error" ? headerNotice(runtime, language) : null;
   const title = accountTitle(account.provider, account.label);
   const cli = account.credentialMode === "cli";
+  const billingBrand = account.provider === "codex" ? "ChatGPT" : "Claude";
+  const [billingOpening, setBillingOpening] = useState(false);
+  const connectBilling = async () => {
+    setBillingOpening(true);
+    try {
+      const connected = await backend().openAccountBilling(account.id);
+      showNotice(connected ? messages.accounts.billingConnected(billingBrand) : messages.accounts.billingWaiting(billingBrand), connected ? "positive" : "notice");
+    } catch (error) {
+      showNotice(messages.accounts.failed(errorText(error, language)), "notice");
+    } finally {
+      setBillingOpening(false);
+    }
+  };
   const remove = async () => {
     const confirmed = await confirmAction(
       cli
@@ -75,6 +88,9 @@ function AccountRow({ account, runtime, messages, language }: { account: Connect
           {messages.accounts.status(status)}
         </span>
       </span>
+      <Button className="is-small" disabled={billingOpening} onClick={() => void connectBilling()} {...tooltipProps(messages.accounts.connectBillingNote(billingBrand))}>
+        {messages.accounts.connectBilling}
+      </Button>
       <button type="button" className="uc-icon-button" aria-label={`${messages.accounts.remove} ${title}`} onClick={() => void remove()} {...tooltipProps(messages.accounts.remove)}>
         <CloseIcon size={11} />
       </button>

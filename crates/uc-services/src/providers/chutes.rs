@@ -16,7 +16,7 @@
 //! paid models refuse requests, and the card warns about it.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Months, TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde_json::Value;
 use uc_core::{
     ErrorCategory, HttpRequest, LimitResourceKind, LimitResourceSource, MetricKind, MetricLine,
@@ -287,8 +287,7 @@ impl Cap {
 }
 
 /// A `subscription_usage` answer: the plan, the Session (4-hour) and Monthly caps as used shares,
-/// and the renewal. A custom subscription states no monthly cap, only the anchor it renews from a
-/// month later, which is how Chutes computes every renewal.
+/// and the renewal. A custom subscription states no current monthly cycle end.
 fn read_subscription(
     body: &Value,
     now: DateTime<Utc>,
@@ -306,9 +305,7 @@ fn read_subscription(
     };
     let renews_at = match &monthly {
         Some(monthly) => monthly.resets_at,
-        None => value::time(body, "/anchor_date")
-            .and_then(|anchor| anchor.checked_add_months(Months::new(1)))
-            .filter(|renewal| *renewal > now),
+        None => None,
     };
     let plan = if value::flag(body, "/custom") == Some(true) {
         CUSTOM_PLAN
@@ -645,7 +642,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_custom_subscription_has_no_monthly_cap_and_renews_a_month_after_its_anchor() {
+    async fn a_custom_subscription_has_no_monthly_cap_or_inferred_period_end() {
         let custom = json!({
             "subscription": true,
             "custom": true,
@@ -678,10 +675,6 @@ mod tests {
                     lines::dollar_value("Balance", 0.0),
                 ],
             )
-            .with_plan_term(Some(PlanTerm::Stated {
-                ends_at: at(2026, 9, 30, 9, 30),
-                checked_at: None,
-            }))
         );
     }
 

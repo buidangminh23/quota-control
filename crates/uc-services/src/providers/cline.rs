@@ -225,21 +225,22 @@ impl Service for Cline {
             .or_else(|| value::text(&current, "/plan/name").and_then(lines::plan_name));
         let ends_at = value::time(&current, "/cancelAt")
             .or_else(|| value::time(&current, "/currentPeriodEnd"));
-        Ok(
-            Reading::new(plan, rows).with_plan_term(ends_at.map(|ends_at| {
-                uc_core::PlanTerm::Stated {
-                    ends_at,
-                    checked_at: None,
-                }
-            })),
-        )
+        let checked_at = value::time(&current, "/checkedAt");
+        Ok(Reading::new(plan, rows)
+            .with_plan_checked_at(checked_at)
+            .with_plan_term(ends_at.map(|ends_at| uc_core::PlanTerm::Stated {
+                ends_at,
+                checked_at,
+            })))
     }
 }
 
 /// The account's current plan (`data` of Cline's envelope), looked up twice a day. Best-effort: any
 /// failure gives `Null` and never affects the usage rows.
 async fn current_plan(context: &FetchContext<'_>, key: &str) -> Value {
-    if let Some(memo) = context.memo.get("cline.plan", context.now).await {
+    if let Some(memo) = context.memo.get("cline.plan", context.now).await
+        && value::time(&memo, "/checkedAt").is_some()
+    {
         return memo;
     }
     let response = match http::send(
@@ -264,7 +265,7 @@ async fn current_plan(context: &FetchContext<'_>, key: &str) -> Value {
     let Ok(body) = http::parse(&response, NAME) else {
         return Value::Null;
     };
-    let current = if body["success"].is_boolean() {
+    let mut current = if body["success"].is_boolean() {
         if body["success"] != true {
             return Value::Null;
         }
@@ -272,13 +273,19 @@ async fn current_plan(context: &FetchContext<'_>, key: &str) -> Value {
     } else {
         body
     };
+    if !current.is_object() {
+        return Value::Null;
+    }
+    current["checkedAt"] = serde_json::json!(context.now.to_rfc3339());
+    let expires = value::time(&current, "/cancelAt")
+        .or_else(|| value::time(&current, "/currentPeriodEnd"))
+        .filter(|end| *end > context.now)
+        .map_or(context.now + Duration::hours(12), |end| {
+            end.min(context.now + Duration::hours(12))
+        });
     context
         .memo
-        .put(
-            "cline.plan",
-            current.clone(),
-            Some(context.now + Duration::hours(12)),
-        )
+        .put("cline.plan", current.clone(), Some(expires))
         .await;
     current
 }
@@ -618,10 +625,16 @@ mod tests {
             reading.plan_term,
             Some(uc_core::PlanTerm::Stated {
                 ends_at: "2026-10-10T00:00:00Z".parse().unwrap(),
-                checked_at: None,
+                checked_at: Some(now()),
             })
         );
         assert_eq!(reading.lines.len(), 3);
+        let mut later = scope.context();
+        later.now += Duration::hours(1);
+        let cached = Cline.fetch(&later).await.unwrap();
+        assert_eq!(cached.plan_term, reading.plan_term);
+        assert_eq!(cached.plan_checked_at, Some(now()));
+        assert_eq!(http.requests().len(), 3);
     }
 
     #[tokio::test]

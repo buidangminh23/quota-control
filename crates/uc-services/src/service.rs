@@ -385,6 +385,7 @@ impl FetchContext<'_> {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Reading {
     pub plan: Option<String>,
+    pub plan_checked_at: Option<DateTime<Utc>>,
     pub lines: Vec<MetricLine>,
     pub plan_term: Option<PlanTerm>,
     /// The account's email when the service's API names it; the card shows it under the title.
@@ -399,6 +400,7 @@ impl Reading {
             plan: plan
                 .map(|plan| plan.trim().to_string())
                 .filter(|plan| !plan.is_empty()),
+            plan_checked_at: None,
             lines,
             plan_term: None,
             account: None,
@@ -408,6 +410,11 @@ impl Reading {
 
     pub fn with_plan_term(mut self, term: Option<PlanTerm>) -> Self {
         self.plan_term = term;
+        self
+    }
+
+    pub fn with_plan_checked_at(mut self, checked_at: Option<DateTime<Utc>>) -> Self {
+        self.plan_checked_at = checked_at;
         self
     }
 

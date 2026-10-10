@@ -7,12 +7,12 @@
 //! API URL), with the key in the `xi-api-key` header. The answer's `character_count` of
 //! `character_limit` fills the Characters meter until `next_character_count_reset_unix`, the voice
 //! slots and professional voice slots in use fill a row each when the plan has any, `tier` names the
-//! plan, and the next invoice's payment attempt (`next_invoice.next_payment_attempt_unix`, `-1`
-//! when none is due) is the plan's renewal date. A key without the `user_read` permission is reported as such rather than as a
+//! plan. An invoice payment attempt and a credit reset do not state when the paid period ends.
+//! A key without the `user_read` permission is reported as such rather than as a
 //! refused key.
 
 use async_trait::async_trait;
-use uc_core::{HttpRequest, PlanTerm, Provider, SimpleProviderError, WidgetDescriptor};
+use uc_core::{HttpRequest, Provider, SimpleProviderError, WidgetDescriptor};
 
 use crate::service::{ApiKeyHelp, Connection, FetchContext, Reading, Service};
 use crate::support::{
@@ -150,16 +150,10 @@ impl Service for ElevenLabs {
                 ));
             }
         }
-        let renews_at = value::number(&body, "/next_invoice/next_payment_attempt_unix")
-            .filter(|seconds| *seconds > 0.0)
-            .and_then(|_| value::time(&body, "/next_invoice/next_payment_attempt_unix"));
-        Ok(
-            Reading::new(value::text(&body, "/tier").and_then(lines::plan_name), rows)
-                .with_plan_term(renews_at.map(|ends_at| PlanTerm::Stated {
-                    ends_at,
-                    checked_at: None,
-                })),
-        )
+        Ok(Reading::new(
+            value::text(&body, "/tier").and_then(lines::plan_name),
+            rows,
+        ))
     }
 }
 
@@ -200,29 +194,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_next_invoice_payment_attempt_is_the_renewal_date() {
-        for (next_invoice, renews_at) in [
-            (
-                json!({"amount_due_cents":2200,"next_payment_attempt_unix":1791000000}),
-                Some(chrono::Utc.timestamp_opt(1791000000, 0).unwrap()),
-            ),
-            (
-                json!({"amount_due_cents":0,"next_payment_attempt_unix":-1}),
-                None,
-            ),
+    async fn invoice_payment_attempts_and_credit_resets_do_not_state_a_paid_period() {
+        for next_invoice in [
+            json!({"amount_due_cents":2200,"next_payment_attempt_unix":1791000000}),
+            json!({"amount_due_cents":0,"next_payment_attempt_unix":-1}),
         ] {
             let mut body: serde_json::Value = serde_json::from_str(CREATOR_SUBSCRIPTION).unwrap();
             body["next_invoice"] = next_invoice;
             let http = Scripted::new().on("GET", URL, 200, &body.to_string());
             let scope = context_at(&http, json!({"apiKey":"fixture"}), chrono::Utc::now());
             let reading = ElevenLabs.fetch(&scope.context()).await.unwrap();
-            assert_eq!(
-                reading.plan_term,
-                renews_at.map(|ends_at| PlanTerm::Stated {
-                    ends_at,
-                    checked_at: None,
-                })
-            );
+            assert_eq!(reading.plan_term, None);
         }
     }
 

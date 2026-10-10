@@ -120,9 +120,11 @@ impl Service for Zai {
         };
         let term = subscription.renews_at.map(|ends_at| PlanTerm::Stated {
             ends_at,
-            checked_at: None,
+            checked_at: subscription.checked_at,
         });
-        Ok(Reading::new(subscription.name.or(level), meters).with_plan_term(term))
+        Ok(Reading::new(subscription.name.or(level), meters)
+            .with_plan_checked_at(subscription.checked_at)
+            .with_plan_term(term))
     }
 }
 
@@ -421,11 +423,16 @@ async fn subscription(context: &FetchContext<'_>, key: &str) -> Subscription {
         .memo
         .get(PLAN_MEMO, context.now)
         .await
-        .filter(Value::is_object)
+        .filter(|memo| {
+            memo.is_object()
+                && (value::time(memo, "/renewsAt").is_none()
+                    || value::time(memo, "/checkedAt").is_some())
+        })
     {
         return Subscription {
             name: value::text(&remembered, "/name").map(str::to_string),
             renews_at: value::time(&remembered, "/renewsAt"),
+            checked_at: value::time(&remembered, "/checkedAt"),
         };
     }
     let list = match http::send(context.http, get(SUBSCRIPTIONS, key), NAME).await {
@@ -439,7 +446,10 @@ async fn subscription(context: &FetchContext<'_>, key: &str) -> Subscription {
         name: entry
             .and_then(|entry| value::text(entry, "/productName"))
             .map(str::to_string),
-        renews_at: entry.and_then(|entry| value::time(entry, "/nextRenewTime")),
+        renews_at: entry
+            .filter(|entry| current_period(entry))
+            .and_then(|entry| value::time(entry, "/nextRenewTime")),
+        checked_at: list.as_ref().map(|_| context.now),
     };
     let recheck = if list.is_some() {
         Duration::hours(12)
@@ -453,8 +463,14 @@ async fn subscription(context: &FetchContext<'_>, key: &str) -> Subscription {
             serde_json::json!({
                 "name": found.name,
                 "renewsAt": found.renews_at.map(|time| time.to_rfc3339()),
+                "checkedAt": found.checked_at.map(|time| time.to_rfc3339()),
             }),
-            Some(context.now + recheck),
+            Some(
+                found
+                    .renews_at
+                    .filter(|end| *end > context.now)
+                    .map_or(context.now + recheck, |end| end.min(context.now + recheck)),
+            ),
         )
         .await;
     found
@@ -465,6 +481,21 @@ async fn subscription(context: &FetchContext<'_>, key: &str) -> Subscription {
 struct Subscription {
     name: Option<String>,
     renews_at: Option<DateTime<Utc>>,
+    checked_at: Option<DateTime<Utc>>,
+}
+
+fn current_period(entry: &Value) -> bool {
+    if value::flag(entry, "/inCurrentPeriod") == Some(false) {
+        return false;
+    }
+    match value::text(entry, "/status")
+        .map(str::to_ascii_uppercase)
+        .as_deref()
+    {
+        Some("VALID") => true,
+        Some("EXPIRED" | "CANCELED" | "CANCELLED" | "INVALID" | "INACTIVE") => false,
+        _ => value::flag(entry, "/inCurrentPeriod") == Some(true),
+    }
 }
 
 /// The named subscription in its current period, else the first named one listed.
@@ -473,10 +504,7 @@ fn current_subscription(list: &[Value]) -> Option<&Value> {
         list.iter()
             .filter(|entry| value::text(entry, "/productName").is_some())
     };
-    let current = |entry: &&Value| {
-        value::text(entry, "/status").is_some_and(|status| status.eq_ignore_ascii_case("VALID"))
-            || value::flag(entry, "/inCurrentPeriod") == Some(true)
-    };
+    let current = |entry: &&Value| current_period(entry);
     named().find(current).or_else(|| named().next())
 }
 
@@ -588,7 +616,7 @@ mod tests {
             reading.plan_term,
             Some(PlanTerm::Stated {
                 ends_at: Utc.with_ymd_and_hms(2026, 7, 29, 0, 0, 0).unwrap(),
-                checked_at: None,
+                checked_at: Some(june()),
             })
         );
         assert_eq!(
@@ -620,6 +648,105 @@ mod tests {
             assert_eq!(header(request, "Accept"), Some("application/json"));
             assert_eq!(request.body, None);
         }
+    }
+
+    #[tokio::test]
+    async fn remembered_periods_keep_the_original_confirmation_and_recheck_at_the_boundary() {
+        let first_end = june() + Duration::minutes(30);
+        let renewed_end = first_end + Duration::days(30);
+        let answer = |end: DateTime<Utc>| {
+            json!({"data": [{
+                "productName": "GLM Coding Pro", "status": "VALID", "inCurrentPeriod": true,
+                "nextRenewTime": end.to_rfc3339()
+            }]})
+            .to_string()
+        };
+        let http = Scripted::new()
+            .on("GET", GLOBAL_QUOTA, 200, PRO_QUOTA)
+            .on("GET", SUBSCRIPTIONS, 200, &answer(first_end))
+            .on("GET", SUBSCRIPTIONS, 200, &answer(renewed_end));
+        let scope = context_at(&http, secret(), june());
+        let first = Zai.fetch(&scope.context()).await.unwrap();
+        let mut later = scope.context();
+        later.now += Duration::minutes(15);
+        let cached = Zai.fetch(&later).await.unwrap();
+        assert_eq!(cached.plan_term, first.plan_term);
+        assert_eq!(cached.plan_checked_at, Some(june()));
+        assert_eq!(http.requests().len(), 3);
+
+        later.now = first_end;
+        let renewed = Zai.fetch(&later).await.unwrap();
+        assert_eq!(renewed.plan_checked_at, Some(first_end));
+        assert_eq!(
+            renewed.plan_term,
+            Some(PlanTerm::Stated {
+                ends_at: renewed_end,
+                checked_at: Some(first_end)
+            })
+        );
+        assert_eq!(http.requests().len(), 5);
+    }
+
+    #[tokio::test]
+    async fn inactive_or_unconfirmed_periods_keep_usage_without_a_paid_date() {
+        for (status, in_current_period) in [
+            (Some("EXPIRED"), Some(true)),
+            (Some("CANCELED"), Some(true)),
+            (Some("INVALID"), Some(true)),
+            (Some("VALID"), Some(false)),
+            (None, None),
+        ] {
+            let answer = json!({"data": [{
+                "productName": "GLM Coding Pro", "status": status,
+                "inCurrentPeriod": in_current_period,
+                "nextRenewTime": "2026-07-29"
+            }]})
+            .to_string();
+            let http = Scripted::new().on("GET", GLOBAL_QUOTA, 200, PRO_QUOTA).on(
+                "GET",
+                SUBSCRIPTIONS,
+                200,
+                &answer,
+            );
+            let scope = context_at(&http, secret(), june());
+            let reading = Zai.fetch(&scope.context()).await.unwrap();
+            assert_eq!(reading.plan_term, None, "{status:?} {in_current_period:?}");
+            assert_eq!(reading.plan_checked_at, Some(june()));
+            assert_eq!(reading.lines.len(), 6);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_remembered_date_without_a_confirmation_is_looked_up_again() {
+        let http = Scripted::new().on("GET", GLOBAL_QUOTA, 200, PRO_QUOTA).on(
+            "GET",
+            SUBSCRIPTIONS,
+            200,
+            PRO_SUBSCRIPTIONS,
+        );
+        let scope = context_at(&http, secret(), june());
+        scope
+            .context()
+            .memo
+            .put(
+                PLAN_MEMO,
+                json!({
+                    "name": "GLM Coding Lite", "renewsAt": "2026-07-10"
+                }),
+                Some(june() + Duration::hours(12)),
+            )
+            .await;
+        let reading = Zai.fetch(&scope.context()).await.unwrap();
+        assert_eq!(reading.plan.as_deref(), Some("GLM Coding Pro"));
+        assert_eq!(reading.plan_checked_at, Some(june()));
+        assert_eq!(
+            reading.plan_term,
+            Some(PlanTerm::Stated {
+                ends_at: Utc.with_ymd_and_hms(2026, 7, 29, 0, 0, 0).unwrap(),
+                checked_at: Some(june())
+            })
+        );
+        assert_eq!(urls(&http), [GLOBAL_QUOTA, SUBSCRIPTIONS]);
     }
 
     #[tokio::test]

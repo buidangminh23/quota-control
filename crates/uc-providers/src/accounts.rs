@@ -422,12 +422,58 @@ pub fn account_runtimes(
     account_runtimes_with(store, cli, ReqwestHttpClient::shared())
 }
 
+pub fn codex_billing_account_uuid(
+    store: Arc<AccountStore>,
+    cli: &[CliAccount],
+    id: &str,
+) -> Result<String, SimpleProviderError> {
+    let records = store.list().map_err(|_| account_error())?;
+    let account = visible_accounts(&records, cli)
+        .into_iter()
+        .find(|account| match account {
+            VisibleAccount::Stored(record) => record.id == id && record.provider == "codex",
+            VisibleAccount::Cli(login) => login.id == id && login.kind == ProviderKind::Codex,
+        })
+        .ok_or_else(account_error)?;
+    let credentials = match account {
+        VisibleAccount::Stored(record) => {
+            let source =
+                CredentialStore::for_account(ProviderKind::Codex, store.clone(), record.clone());
+            let document = source.read_document()?;
+            if account_id(
+                ProviderKind::Codex,
+                &identity(ProviderKind::Codex, &document)?,
+            ) != id
+            {
+                return Err(auth_error(
+                    "The connected account identity changed. Reconnect this account.",
+                ));
+            }
+            parse_credentials(ProviderKind::Codex, &document)?
+        }
+        VisibleAccount::Cli(login) => {
+            let (current, credentials) =
+                read_cli_account(login.kind, login.location.clone(), login.profile.clone())?;
+            if current.id != id {
+                return Err(auth_error(
+                    "The CLI account identity changed. Reconnect this account.",
+                ));
+            }
+            credentials
+        }
+    };
+    credentials.billing_account_id.ok_or_else(|| {
+        auth_error("The ChatGPT billing account identity is unavailable. Reconnect this account.")
+    })
+}
+
 pub fn account_runtimes_with(
     store: Arc<AccountStore>,
     cli: &[CliAccount],
     http: SharedHttpClient,
 ) -> Result<Vec<Arc<dyn ProviderRuntime>>, SimpleProviderError> {
     let records = store.list().map_err(|_| account_error())?;
+    let billing_periods = crate::BillingPeriods::new(store.directory().join("billing-periods"));
     visible_accounts(&records, cli)
         .into_iter()
         .map(|account| match account {
@@ -436,13 +482,17 @@ pub fn account_runtimes_with(
                     .ok_or_else(|| auth_error("Unsupported account provider."))?;
                 let credentials = CredentialStore::for_account(kind, store.clone(), record.clone());
                 Ok(Arc::new(
-                    LocalProvider::new(kind, credentials, http.clone()).with_account(record),
+                    LocalProvider::new(kind, credentials, http.clone())
+                        .with_billing_periods(billing_periods.clone())
+                        .with_account(record),
                 ) as Arc<dyn ProviderRuntime>)
             }
             VisibleAccount::Cli(login) => {
                 let credentials = CredentialStore::at(login.kind, login.location.clone());
                 Ok(Arc::new(
-                    LocalProvider::new(login.kind, credentials, http.clone()).with_cli_login(login),
+                    LocalProvider::new(login.kind, credentials, http.clone())
+                        .with_billing_periods(billing_periods.clone())
+                        .with_cli_login(login),
                 ) as Arc<dyn ProviderRuntime>)
             }
         })

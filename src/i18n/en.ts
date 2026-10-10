@@ -160,10 +160,10 @@ export const en: Messages = {
     },
     planTermDay: (day, estimated, ended) => `${estimated && !ended ? "~" : ""}${restoreDay(day)}`,
     planTermStatedNote: (time, offset, checked) =>
-      `The plan period ends at ${time} · ${offset}. ChatGPT states this date in the login${checked ? `, last checked ${checked}` : ""}. If the plan renews automatically, this is the renewal date.`,
-    planTermEndedNote: (time, offset) => `The plan period ended at ${time} · ${offset}. ChatGPT sends the next period's date when the login renews itself.`,
+      `The plan period ends at ${time} · ${offset}. The service confirmed this date${checked ? `, last checked ${checked}` : ""}. If the plan renews automatically, this is the renewal date.`,
+    planTermEndedNote: (time, offset) => `The plan period ended at ${time} · ${offset}. The next period appears after the service confirms a new date.`,
     planTermEstimateNote: (time, offset, started) =>
-      `Around ${time} · ${offset}, estimated. Anthropic only states when the subscription started (${started}), not when it renews, so this counts monthly from that day.`,
+      `Around ${time} · ${offset}, estimated. This monthly estimate counts from the subscription start (${started}); the service has not confirmed a renewal date.`,
   },
   totalSpend: {
     metric: (key) => ({ cost: "Cost", costPerMtok: "Cost/MTok", tokens: "Tokens" })[key],
@@ -398,6 +398,10 @@ export const en: Messages = {
   },
   accounts: {
     connected: "Connected Accounts",
+    connectBilling: "Connect Billing",
+    connectBillingNote: (provider) => `Keep the provider-confirmed period end up to date from ${provider} signed in to Chrome or this app.`,
+    billingConnected: (provider) => `${provider} billing connected`,
+    billingWaiting: (provider) => `Sign in to ${provider} on the page that opened to connect billing.`,
     none: "No accounts yet. Add one below to see your limits.",
     mode: (mode, cliName) =>
       ({

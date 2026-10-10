@@ -72,7 +72,8 @@ A desktop with system tray support is recommended. If FUSE is unavailable, run `
 - Claude, Codex, Cursor, Copilot and many other AI services in one dashboard.
 - Account limits, credits and reset countdowns, depending on what each service exposes.
 - Failed reads retry when their backoff ends. Unconfirmed or expired quota readings show no current value until a successful refresh; passing a reset never invents a full balance.
-- Live subscription names update independently of quota failures. The card header shows confirmed paid-period dates and clearly marked monthly estimates from a verified paid Claude subscription, even when quota cannot be refreshed. Free accounts show no paid period; estimates stop at the last confirmed cycle until the subscription is checked again.
+- Live subscription names update independently of quota failures. Card headers show renewal or paid-through dates explicitly confirmed by the provider, with the original verification time. Historical signup dates, invoice attempts, inactive plans and unverified estimates never set the paid period.
+- Claude and Codex/ChatGPT Billing connect from Accounts using a saved official web session or the existing signed-in Chrome Default profile with remote debugging enabled. They refresh every five minutes and keep only encrypted period metadata matched to the connected account and current plan: Claude's organization or ChatGPT's account UUID and active entitlement. Dates that can no longer be confirmed are hidden. Chrome connections require Chrome to be running; other integrations use their own explicit API period when available.
 - Local token history and estimated API-equivalent costs, separate from subscription charges.
 - Quota notifications, a global shortcut and automatic updates.
 - Dynamic Island and desktop widgets on macOS.

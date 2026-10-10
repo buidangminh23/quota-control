@@ -860,6 +860,46 @@ fn write_codex_login(dir: &std::path::Path, account: &str) -> std::path::PathBuf
     path
 }
 
+#[test]
+fn billing_account_uuid_validates_the_current_cli_binding_and_managed_identity() {
+    let (dir, store) = store();
+    let first = "00000000-0000-4000-8000-000000000001";
+    let second = "00000000-0000-4000-8000-000000000002";
+    let path = write_codex_login(dir.path(), first);
+    let login = cli_account_from(ProviderKind::Codex, path.clone(), None).unwrap();
+    let lookup = |cli: &[CliAccount], id: &str| {
+        uc_providers::accounts::codex_billing_account_uuid(store.clone(), cli, id)
+    };
+    assert_eq!(
+        lookup(std::slice::from_ref(&login), &login.id).unwrap(),
+        first
+    );
+    write_codex_login(dir.path(), second);
+    assert!(lookup(std::slice::from_ref(&login), &login.id).is_err());
+    write_codex_login(dir.path(), first);
+    let document: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let record = store
+        .import(
+            "codex",
+            "fixture",
+            &format!("{first}|fixture-user"),
+            &document,
+            CredentialMode::ManagedOauth,
+        )
+        .unwrap();
+    assert_eq!(lookup(&[], &record.id).unwrap(), first);
+    let mut mismatched = document.clone();
+    mismatched["tokens"]["id_token"] = json!(jwt(
+        json!({"https://api.openai.com/auth":{"chatgpt_account_id":second}})
+    ));
+    store.update_credentials(&record.id, &mismatched).unwrap();
+    assert!(lookup(&[], &record.id).is_err());
+    let mut replaced = document;
+    replaced["tokens"]["account_id"] = json!(second);
+    store.update_credentials(&record.id, &replaced).unwrap();
+    assert!(lookup(&[], &record.id).is_err());
+}
+
 #[tokio::test]
 async fn codex_cli_email_labels_follow_id_token_without_changing_identity() {
     let (dir, store) = store();

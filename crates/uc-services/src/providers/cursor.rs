@@ -1231,7 +1231,7 @@ fn cents(amount: f64) -> f64 {
 /// The paid plan's current billing period ends when the usage answer's `billingCycleEnd` says; a
 /// free plan has no subscription to renew, so it shows no term.
 fn plan_term(usage: &Value, label: Option<&str>) -> Option<PlanTerm> {
-    if label.is_some_and(|label| label.eq_ignore_ascii_case("free")) {
+    if label.is_none_or(|label| label.eq_ignore_ascii_case("free")) {
         return None;
     }
     value::time(usage, "/billingCycleEnd").map(|ends_at| PlanTerm::Stated {
@@ -1619,6 +1619,7 @@ mod tests {
     fn a_free_plan_has_no_term_and_a_paid_one_ends_with_its_billing_cycle() {
         let usage = json!({"billingCycleEnd": "1790812800000"});
         assert_eq!(plan_term(&usage, Some("Free")), None);
+        assert_eq!(plan_term(&usage, None), None);
         assert_eq!(plan_term(&usage, Some("Pro")), cycle_term());
         assert_eq!(plan_term(&json!({}), Some("Pro")), None);
     }

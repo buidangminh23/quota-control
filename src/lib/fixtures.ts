@@ -241,7 +241,8 @@ export function fixtureSnapshots(now = Date.now()): Record<string, ProviderSnaps
       providerID: "claude@7c1e",
       displayName: "Claude · Công ty",
       plan: "Max 5x",
-      planTerm: { basis: "monthlyFrom", startedAt: iso(-27 * DAY, now) },
+      planCheckedAt: refreshedAt,
+      planTerm: { basis: "stated", endsAt: iso(4 * DAY, now), checkedAt: refreshedAt },
       refreshedAt,
       lines: [
         progress("Session", 12, 3.2 * HOUR, SESSION_MS, now),

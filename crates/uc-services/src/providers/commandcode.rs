@@ -145,14 +145,16 @@ async fn read(context: &FetchContext<'_>, key: &str) -> Result<Reading, SimplePr
     let (org, body) = org_and_credits(context, key, &print).await?;
     let credits = parse_credits(&body)?;
     let lookup = subscription(context, key, &print, org.as_deref()).await;
-    let (plan, listed_grant, period_end) = match &lookup {
-        Some(Subscription::Free) => (Some("Free".to_string()), None, None),
-        Some(Subscription::Paid {
-            plan_id,
-            period_end,
-        }) => (plan_display(plan_id), plan_grant(plan_id), *period_end),
-        None => (None, None, None),
-    };
+    let checked_at = lookup.as_ref().map(|(_, checked_at)| *checked_at);
+    let (plan, listed_grant, period_end) =
+        match lookup.as_ref().map(|(subscription, _)| subscription) {
+            Some(Subscription::Free) => (Some("Free".to_string()), None, None),
+            Some(Subscription::Paid {
+                plan_id,
+                period_end,
+            }) => (plan_display(plan_id), plan_grant(plan_id), *period_end),
+            None => (None, None, None),
+        };
     let mut meters = credits.windows;
     if let (Some(total), Some(left)) = (credits.granted.or(listed_grant), credits.monthly_left) {
         // Without the billing period's end, the row states no cadence either: "resets in 30
@@ -172,10 +174,11 @@ async fn read(context: &FetchContext<'_>, key: &str) -> Result<Reading, SimplePr
         .filter(|end| *end > context.now)
         .map(|ends_at| PlanTerm::Stated {
             ends_at,
-            checked_at: None,
+            checked_at,
         });
     let email = remembered_email(context, &print).await;
     Ok(Reading::new(plan, meters)
+        .with_plan_checked_at(checked_at)
         .with_plan_term(term)
         .with_account(email)
         .with_warning(warning))
@@ -265,18 +268,22 @@ async fn subscription(
     key: &str,
     print: &str,
     org: Option<&str>,
-) -> Option<Subscription> {
+) -> Option<(Subscription, DateTime<Utc>)> {
     if let Some(memo) = context.memo.get(PLAN_MEMO, context.now).await
         && memo["key"].as_str() == Some(print)
         && memo["org"].as_str() == org
+        && let Some(checked_at) = value::time(&memo, "/checkedAt")
     {
-        return Some(match memo["plan"].as_str() {
-            Some(plan_id) => Subscription::Paid {
-                plan_id: plan_id.to_string(),
-                period_end: value::time(&memo, "/periodEnd"),
+        return Some((
+            match memo["plan"].as_str() {
+                Some(plan_id) => Subscription::Paid {
+                    plan_id: plan_id.to_string(),
+                    period_end: value::time(&memo, "/periodEnd"),
+                },
+                None => Subscription::Free,
             },
-            None => Subscription::Free,
-        });
+            checked_at,
+        ));
     }
     let response = http::send(
         context.http,
@@ -309,11 +316,11 @@ async fn subscription(
         .memo
         .put(
             PLAN_MEMO,
-            json!({ "key": print, "org": org, "plan": plan_id, "periodEnd": period_end }),
+            json!({ "key": print, "org": org, "plan": plan_id, "periodEnd": period_end, "checkedAt": context.now.to_rfc3339() }),
             Some(expires),
         )
         .await;
-    Some(found)
+    Some((found, context.now))
 }
 
 /// A subscriptions answer: its plan, or the free tier when it states `data: null`. `None` for a
@@ -533,13 +540,15 @@ mod tests {
 
     /// A reading of the whoami fixture's account, whose plan renews at `period_end()`.
     fn of_account(reading: Reading, renews: bool) -> Reading {
+        let checked_at = reading.plan.as_ref().map(|_| now());
         reading
+            .with_plan_checked_at(checked_at)
             .with_plan_term(
                 period_end()
                     .filter(|_| renews)
                     .map(|ends_at| PlanTerm::Stated {
                         ends_at,
-                        checked_at: None,
+                        checked_at,
                     }),
             )
             .with_account(Some("dev@example.com"))
@@ -596,7 +605,7 @@ mod tests {
             reading.plan_term,
             Some(PlanTerm::Stated {
                 ends_at: period_end().unwrap(),
-                checked_at: None
+                checked_at: Some(now())
             })
         );
         assert_eq!(reading.account.as_deref(), Some("dev@example.com"));
@@ -633,8 +642,11 @@ mod tests {
         let http = goat_account(CREDITS_BODY, SUBSCRIPTION_BODY);
         let scope = context_at(&http, secret(), now());
         let first = CommandCode.fetch(&scope.context()).await.unwrap();
-        let second = CommandCode.fetch(&scope.context()).await.unwrap();
+        let mut later = scope.context();
+        later.now += Duration::hours(1);
+        let second = CommandCode.fetch(&later).await.unwrap();
         assert_eq!(first, second);
+        assert_eq!(second.plan_checked_at, Some(now()));
         assert_eq!(
             urls(&http),
             [

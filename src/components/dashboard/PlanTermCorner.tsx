@@ -1,7 +1,7 @@
 /**
  * The card header's right corner, beside the plan and the email: how long the plan's paid period has
- * left and the day it ends, in the warning color from three days out. Claude's day is an estimate
- * from the subscription start and says so; the hover note gives the exact time and the source.
+ * left and the day it ends, in the warning color from three days out. The hover note gives the exact
+ * time and whether the service confirmed the date or it is an estimate.
  */
 import type { PlanTermLines } from "@/model/planTermLines";
 import { tooltipProps } from "../ui/tooltip";

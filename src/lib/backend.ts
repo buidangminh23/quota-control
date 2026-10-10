@@ -62,6 +62,7 @@ export interface Backend {
   onChatSessionsChanged?(listener: (sessions: ChatSession[]) => void): Unsubscribe;
   createChatSession(provider: AccountProvider, label?: string): Promise<ChatSession>;
   openChatSession(sessionId: string): Promise<void>;
+  openAccountBilling(accountId: string): Promise<boolean>;
   engineState(): Promise<EngineState>;
   onEngineState(listener: (state: EngineState) => void): Unsubscribe;
   /** Force-refresh one provider, or every enabled provider when `providerId` is omitted. */

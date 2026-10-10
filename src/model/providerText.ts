@@ -185,8 +185,15 @@ export function cardIdentity(provider: Provider, runtime: ProviderRuntimeState |
   const email = local ? null : accountEmailOf(provider);
   const snapshot = local ? undefined : runtime?.snapshot;
   const unconfirmed = !snapshot?.planCheckedAt && (snapshot?.errorCategory || (runtime?.error && !snapshot?.planTerm?.checkedAt));
-  const term = unconfirmed || /^free$/i.test(snapshot?.plan?.trim() ?? "") ? null : snapshot?.planTerm;
-  const planTerm = term?.basis === "monthlyFrom" && !term.checkedAt ? { ...term, checkedAt: snapshot?.planCheckedAt ?? snapshot?.refreshedAt } : term;
+  const authenticationFailed = ["not_logged_in", "auth_expired", "auth_invalid"].includes(snapshot?.errorCategory ?? "")
+    || /^(?:Session expired\.|Login (?:expired|rejected)\b|Local credentials are invalid\.|The login does not have permission\b)/i.test(runtime?.error ?? "");
+  const claude = layoutFamily(provider.id) === "claude";
+  const unconfirmedClaude = claude && (
+    snapshot?.planTerm?.basis !== "stated"
+    || !snapshot.planCheckedAt
+    || !/^(?:pro|max|team)(?:\s+\d+x)?$/i.test(snapshot.plan?.trim() ?? "")
+  );
+  const planTerm = unconfirmed || authenticationFailed || unconfirmedClaude || snapshot?.planTerm?.basis !== "stated" || /^free$/i.test(snapshot?.plan?.trim() ?? "") ? null : snapshot?.planTerm;
   return {
     name: email ? brandName(providerBrand(provider)) : providerTitle(provider, language),
     account: email ?? snapshot?.account ?? null,

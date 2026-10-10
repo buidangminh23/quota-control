@@ -66,16 +66,16 @@ describe("card identity", () => {
   });
 
   it("passes on the plan's paid period and the header notice's first line", () => {
-    const term = { basis: "monthlyFrom", startedAt: "2026-08-30T03:00:00Z" } as const;
+    const term = { basis: "stated", endsAt: "2026-10-30T03:00:00Z", checkedAt: "2026-09-26T03:00:00Z" } as const;
     const codex = { id: "codex@1", displayName: "Codex · codex", icon: "codex" };
-    expect(cardIdentity(codex, snapshot({ planTerm: term }), "vi").planTerm).toEqual({ ...term, checkedAt: "2026-09-26T03:00:00Z" });
+    expect(cardIdentity(codex, snapshot({ planTerm: term }), "vi").planTerm).toEqual(term);
     expect(cardIdentity(codex, undefined, "vi")).toMatchObject({ planTerm: null, notice: null });
     const failed = { ...snapshot({ errorCategory: "network", lines: [{ type: "badge", label: "Error", text: "The request timed out." }] }) } as Parameters<typeof cardIdentity>[1];
     expect(cardIdentity(codex, failed, "vi").notice).toBe("Lỗi mạng");
   });
 
   it("removes the previous paid term on Free and uses renewed paid metadata without inferring a plan from dates", () => {
-    const provider = account("personal");
+    const provider = { id: "codex@1", displayName: "Codex · personal", icon: "codex" };
     const term = { basis: "stated", endsAt: "2026-09-01T00:00:00Z", checkedAt: "2026-08-25T00:00:00Z" } as const;
     expect(cardIdentity(provider, snapshot({ plan: "Free", planTerm: term }), "vi")).toMatchObject({ plan: "Free", planTerm: null });
     expect(cardIdentity(provider, snapshot({ plan: " free ", planTerm: term }), "en").planTerm).toBeNull();
@@ -85,18 +85,66 @@ describe("card identity", () => {
     expect(cardIdentity(provider, snapshot({ plan: "Plus", planTerm: renewed, errorCategory: "network" }), "vi").planTerm).toBeNull();
   });
 
-  it("preserves a billing confirmation separately from the usage snapshot timestamp", () => {
+  it("rejects legacy inferred dates for every provider even when a cached plan was confirmed", () => {
     const term = { basis: "monthlyFrom", startedAt: "2026-08-30T03:00:00Z", checkedAt: "2026-09-25T00:00:00Z" } as const;
-    expect(cardIdentity(account("personal"), snapshot({ plan: "Pro", planTerm: term }), "vi").planTerm).toEqual(term);
     const { checkedAt: _checkedAt, ...legacyTerm } = term;
-    expect(cardIdentity(account("personal"), snapshot({ plan: "Pro", planTerm: legacyTerm, planCheckedAt: term.checkedAt }), "vi").planTerm).toEqual(term);
+    for (const brand of ["codex", "cursor", "windsurf"]) {
+      const provider = { id: `${brand}@1`, displayName: brand, icon: brand };
+      expect(cardIdentity(provider, snapshot({ plan: "Pro", planTerm: term }), "vi").planTerm).toBeNull();
+      expect(cardIdentity(provider, snapshot({ plan: "Pro", planTerm: legacyTerm, planCheckedAt: term.checkedAt }), "vi").planTerm).toBeNull();
+    }
+  });
+
+  it("rejects historical Claude start dates even when the paid profile is freshly confirmed", () => {
+    const term = { basis: "monthlyFrom", startedAt: "2026-07-31T03:40:09Z", checkedAt: "2026-10-10T01:00:00Z" } as const;
+    for (const errorCategory of [undefined, "rate_limited"] as const) {
+      const runtime = snapshot({ plan: "Max 20x", planTerm: term, planCheckedAt: term.checkedAt, errorCategory });
+      expect(cardIdentity(account("personal"), runtime, "vi").planTerm).toBeNull();
+      expect(cardIdentity(account("personal"), { ...runtime, error: "Usage updates are rate limited. Try again later." }, "vi").planTerm).toBeNull();
+    }
   });
 
   it("uses fresh plan metadata even if the quota request failed", () => {
-    const term = { basis: "stated", endsAt: "2026-11-01T00:00:00Z", checkedAt: "2026-10-01T00:00:00Z" } as const;
-    const failedUsage = snapshot({ plan: "Plus", planTerm: term, planCheckedAt: term.checkedAt, errorCategory: "rate_limited" });
-    expect(cardIdentity(account("personal"), failedUsage, "vi")).toMatchObject({ plan: "Plus", planTerm: term, notice: "Bị giới hạn tần suất, sẽ thử lại" });
+    const term = { basis: "stated", endsAt: "2026-11-03T07:03:48Z", checkedAt: "2026-10-10T01:00:00Z" } as const;
+    const failedUsage = snapshot({ plan: "Max 20x", planTerm: term, planCheckedAt: term.checkedAt, errorCategory: "rate_limited" });
+    expect(cardIdentity(account("personal"), failedUsage, "vi")).toMatchObject({ plan: "Max 20x", planTerm: term, notice: "Bị giới hạn tần suất, sẽ thử lại" });
+    expect(cardIdentity(account("personal"), { ...failedUsage, error: "Usage updates are rate limited. Try again later." }, "vi").planTerm).toEqual(term);
     expect(cardIdentity(account("personal"), { ...failedUsage, snapshot: { ...failedUsage.snapshot, plan: "Free" } }, "vi")).toMatchObject({ plan: "Free", planTerm: null });
+  });
+
+  it("requires a confirmed paid Claude plan for a stated billing date", () => {
+    const term = { basis: "stated", endsAt: "2026-11-03T07:03:48Z", checkedAt: "2026-10-10T01:00:00Z" } as const;
+    for (const plan of [undefined, "Free", "Unknown", "Plus"]) {
+      expect(cardIdentity(account("personal"), snapshot({ plan, planTerm: term, planCheckedAt: term.checkedAt }), "vi").planTerm).toBeNull();
+    }
+    expect(cardIdentity(account("personal"), snapshot({ plan: "Max 20x", planTerm: term }), "vi").planTerm).toBeNull();
+    for (const plan of ["Pro", "Max", "Max 5x", "Max 20x", "Team"]) {
+      expect(cardIdentity(account("personal"), snapshot({ plan, planTerm: term, planCheckedAt: term.checkedAt }), "vi").planTerm).toEqual(term);
+    }
+  });
+
+  it("hides Claude billing dates after authentication fails even with checked plan metadata", () => {
+    const term = { basis: "stated", endsAt: "2026-11-03T07:03:48Z", checkedAt: "2026-10-10T01:00:00Z" } as const;
+    const confirmed = { plan: "Max 20x", planTerm: term, planCheckedAt: term.checkedAt };
+    for (const errorCategory of ["auth_expired", "auth_invalid", "not_logged_in"]) {
+      expect(cardIdentity(account("personal"), snapshot({ ...confirmed, errorCategory }), "vi").planTerm).toBeNull();
+    }
+    for (const error of ["Session expired. Sign in again.", "Local credentials are invalid. Sign in again.", "The login does not have permission to read usage. Sign in again."]) {
+      expect(cardIdentity(account("personal"), { ...snapshot(confirmed), error }, "vi").planTerm).toBeNull();
+    }
+  });
+
+  it("keeps verified service dates through network errors and hides them after logout", () => {
+    const term = { basis: "stated", endsAt: "2026-11-03T07:03:48Z", checkedAt: "2026-10-10T01:00:00Z" } as const;
+    for (const brand of ["cursor", "augment", "zai", "warp", "codex"]) {
+      const provider = { id: `${brand}@1`, displayName: brand, icon: brand };
+      const confirmed = { plan: "Pro", planTerm: term, planCheckedAt: term.checkedAt };
+      expect(cardIdentity(provider, { ...snapshot(confirmed), error: "The request timed out." }, "vi").planTerm).toEqual(term);
+      for (const errorCategory of ["auth_expired", "auth_invalid", "not_logged_in"]) {
+        expect(cardIdentity(provider, snapshot({ ...confirmed, errorCategory }), "vi").planTerm).toBeNull();
+      }
+      expect(cardIdentity(provider, snapshot({ ...confirmed, plan: "Free" }), "vi").planTerm).toBeNull();
+    }
   });
 });
 

@@ -148,8 +148,10 @@ impl Service for Qoder {
             None => login_usage(context).await?,
         };
         let meters = meters(&body, context.now)?;
-        let (plan, term) = plan(context, site, &bearer).await;
-        Ok(Reading::new(plan, meters).with_plan_term(term))
+        let (plan, term, checked_at) = plan(context, site, &bearer).await;
+        Ok(Reading::new(plan, meters)
+            .with_plan_term(term)
+            .with_plan_checked_at(checked_at))
     }
 }
 
@@ -343,8 +345,14 @@ async fn plan(
     context: &FetchContext<'_>,
     site: &str,
     token: &str,
-) -> (Option<String>, Option<PlanTerm>) {
-    let memo = match context.memo.get(PLAN_MEMO, context.now).await {
+) -> (Option<String>, Option<PlanTerm>, Option<DateTime<Utc>>) {
+    let memo = match context
+        .memo
+        .get(PLAN_MEMO, context.now)
+        .await
+        .filter(|memo| {
+            value::time(memo, "/endsAt").is_none() || value::time(memo, "/checkedAt").is_some()
+        }) {
         Some(memo) => memo,
         None => {
             let answer = plan_lookup(context, site, token).await;
@@ -358,7 +366,15 @@ async fn plan(
                 .unwrap_or_else(|| json!({}));
             context
                 .memo
-                .put(PLAN_MEMO, memo.clone(), Some(context.now + lasts))
+                .put(
+                    PLAN_MEMO,
+                    memo.clone(),
+                    Some(
+                        value::time(&memo, "/endsAt")
+                            .filter(|end| *end > context.now)
+                            .map_or(context.now + lasts, |end| end.min(context.now + lasts)),
+                    ),
+                )
                 .await;
             memo
         }
@@ -370,7 +386,7 @@ async fn plan(
             ends_at,
             checked_at: value::time(&memo, "/checkedAt"),
         });
-    (plan, term)
+    (plan, term, value::time(&memo, "/checkedAt"))
 }
 
 async fn plan_lookup(context: &FetchContext<'_>, site: &str, token: &str) -> Option<Value> {
@@ -675,6 +691,7 @@ mod tests {
         let scope = context_at(&http, key("pt-personal"), now());
         let reading = Qoder.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan.as_deref(), Some("Pro"));
+        assert_eq!(reading.plan_checked_at, Some(now()));
         assert_eq!(
             reading.lines,
             vec![
@@ -722,8 +739,11 @@ mod tests {
             .on("GET", &url(GLOBAL, PLAN_PATH), 200, PLAN);
         let scope = context_at(&http, key("personal"), now());
         Qoder.fetch(&scope.context()).await.unwrap();
-        let reading = Qoder.fetch(&scope.context()).await.unwrap();
+        let mut later = scope.context();
+        later.now += Duration::hours(1);
+        let reading = Qoder.fetch(&later).await.unwrap();
         assert_eq!(reading.plan.as_deref(), Some("Pro"));
+        assert_eq!(reading.plan_checked_at, Some(now()));
         assert_eq!(
             urls(&http),
             vec![

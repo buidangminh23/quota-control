@@ -97,6 +97,10 @@ impl AccountStore {
         Self::new(uc_core::paths::config_dir().join("accounts"))
     }
 
+    pub fn directory(&self) -> &std::path::Path {
+        &self.root
+    }
+
     pub fn list(&self) -> Result<Vec<AccountRecord>> {
         let _lock = storage::lock(&self.root)?;
         Ok(self

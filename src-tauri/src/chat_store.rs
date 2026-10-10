@@ -19,6 +19,8 @@ pub struct ChatSession {
     pub provider: String,
     pub label: String,
     pub created_at: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub billing_organizations: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -76,6 +78,7 @@ impl ChatStore {
             provider: provider.to_owned(),
             label,
             created_at: Utc::now().to_rfc3339(),
+            billing_organizations: Vec::new(),
         };
         registry.sessions.push(session.clone());
         self.write_registry(&registry)?;
@@ -90,6 +93,38 @@ impl ChatStore {
             .into_iter()
             .find(|session| session.id == id)
             .ok_or_else(|| "Chat session does not exist".into())
+    }
+
+    pub fn set_billing_organizations(
+        &self,
+        id: &str,
+        mut organizations: Vec<String>,
+    ) -> Result<(), String> {
+        checked_id(id)?;
+        if organizations.len() > 32
+            || organizations
+                .iter()
+                .any(|id| uuid::Uuid::parse_str(id).ok().is_none_or(|id| id.is_nil()))
+        {
+            return Err("Billing organization metadata is invalid".into());
+        }
+        organizations.sort();
+        organizations.dedup();
+        let _lock = self.lock()?;
+        let mut registry = self.read_registry()?;
+        let session = registry
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == id)
+            .ok_or_else(|| "Chat session does not exist".to_string())?;
+        if !matches!(session.provider.as_str(), "claude" | "codex") {
+            return Err("Billing requires a supported subscription web session".into());
+        }
+        if session.billing_organizations == organizations {
+            return Ok(());
+        }
+        session.billing_organizations = organizations;
+        self.write_registry(&registry)
     }
 
     pub fn profile_directory(&self, id: &str) -> Result<PathBuf, String> {
@@ -156,6 +191,11 @@ impl ChatStore {
                     || checked_label(&session.label).is_err()
                     || session.label.trim() != session.label
                     || DateTime::parse_from_rfc3339(&session.created_at).is_err()
+                    || session.billing_organizations.len() > 32
+                    || session
+                        .billing_organizations
+                        .iter()
+                        .any(|id| uuid::Uuid::parse_str(id).is_err())
             })
         {
             return Err(INVALID_REGISTRY.into());
@@ -366,6 +406,35 @@ mod tests {
             std::fs::read(personal_profile.join("session-data")).unwrap(),
             b"personal-session"
         );
+    }
+
+    #[test]
+    fn billing_metadata_is_scoped_to_each_provider_and_preserves_existing_sessions() {
+        let (store, _temporary) = store();
+        let claude = store.create("claude", None).unwrap();
+        let codex = store.create("codex", None).unwrap();
+        let org = "00000000-0000-4000-8000-000000000001".to_string();
+        store
+            .set_billing_organizations(&claude.id, vec![org.clone(), org.clone()])
+            .unwrap();
+        assert_eq!(
+            store
+                .get(&claude.id)
+                .unwrap()
+                .billing_organizations
+                .as_slice(),
+            std::slice::from_ref(&org)
+        );
+        assert_eq!(store.get(&claude.id).unwrap().created_at, claude.created_at);
+        store
+            .set_billing_organizations(&codex.id, vec![org.clone()])
+            .unwrap();
+        assert!(
+            store
+                .set_billing_organizations(&claude.id, vec!["invalid".into()])
+                .is_err()
+        );
+        assert_eq!(store.get(&codex.id).unwrap().billing_organizations, [org]);
     }
 
     #[test]

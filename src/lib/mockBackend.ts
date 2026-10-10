@@ -280,6 +280,15 @@ export class MockBackend implements Backend {
     if (!this.chatSessions.some((session) => session.id === sessionId)) throw new Error("Chat session does not exist");
   }
 
+  async openAccountBilling(accountId: string): Promise<boolean> {
+    const account = this.accounts.find((account) => account.id === accountId);
+    if (!account) throw new Error("Billing connection requires a connected account");
+    const session = this.chatSessions.find((session) => session.provider === account.provider && session.label === account.label)
+      ?? await this.createChatSession(account.provider, account.label);
+    await this.openChatSession(session.id);
+    return true;
+  }
+
   async engineState(): Promise<EngineState> {
     return this.state;
   }

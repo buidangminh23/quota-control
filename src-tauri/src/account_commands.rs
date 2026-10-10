@@ -86,6 +86,25 @@ impl Accounts {
             .collect())
     }
 
+    pub fn billing_label(&self, id: &str) -> Result<String, String> {
+        self.entries()?
+            .into_iter()
+            .find(|entry| entry.id == id && matches!(entry.provider.as_str(), "claude" | "codex"))
+            .map(|entry| entry.label)
+            .ok_or_else(|| "Billing connection requires a connected subscription account".into())
+    }
+
+    pub async fn billing_account_uuid(&self, id: &str) -> Result<String, String> {
+        let store = self.store.clone();
+        let cli = self.cli.lock().clone();
+        let id = id.to_owned();
+        uc_core::load_blocking(move || {
+            uc_providers::accounts::codex_billing_account_uuid(store, &cli, &id)
+        })
+        .await
+        .map_err(safe_error)
+    }
+
     /// Whether the card `id` on the Accounts screen is a CLI login, which removing only hides.
     fn is_cli_card(&self, id: &str) -> Result<bool, String> {
         let records = self.store.list().map_err(safe_error)?;

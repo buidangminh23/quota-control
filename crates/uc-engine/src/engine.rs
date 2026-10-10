@@ -4,7 +4,8 @@
 //! - All enabled providers refresh concurrently: once at launch, then every refresh interval.
 //! - A reading goes out of date when a limit window in it resets, so that provider is asked again a
 //!   few seconds after the reset instead of at the next interval.
-//! - A failed refresh never wipes data: the last good snapshot stays, the error is kept beside it.
+//! - A failed refresh preserves the last good usage reading; definitive auth failures clear its
+//!   paid period.
 //! - A failing provider is backed off for 60 s so a wake burst can't re-probe it in a tight loop.
 //! - A provider that refuses a reading for asking too often is left alone for five minutes.
 //! - A provider that never returns is abandoned after 120 s and reported as timed out.
@@ -156,6 +157,7 @@ pub struct EngineState {
 #[derive(Default)]
 struct Inner {
     snapshots: HashMap<String, ProviderSnapshot>,
+    plan_term_generation: HashMap<String, u64>,
     refreshing: HashSet<String>,
     errors: HashMap<String, String>,
     /// Providers whose last answer refused the reading for asking too often.
@@ -353,6 +355,34 @@ impl Engine {
         self.inner.lock().snapshots.clone()
     }
 
+    pub fn invalidate_plan_term(&self, provider_id: &str) -> bool {
+        if !self.by_id.contains_key(provider_id) {
+            return false;
+        }
+        let changed = {
+            let mut inner = self.inner.lock();
+            let generation = inner
+                .plan_term_generation
+                .entry(provider_id.to_owned())
+                .or_default();
+            *generation = generation.wrapping_add(1);
+            let replacement = inner
+                .snapshots
+                .get_mut(provider_id)
+                .and_then(|snapshot| snapshot.plan_term.take().map(|_| snapshot.clone()));
+            if let Some(replacement) = replacement {
+                self.cache.replace_silently(&replacement);
+                true
+            } else {
+                false
+            }
+        };
+        if changed {
+            self.publish();
+        }
+        changed
+    }
+
     pub fn error_message(&self, provider_id: &str) -> Option<String> {
         self.inner.lock().errors.get(provider_id).cloned()
     }
@@ -462,7 +492,7 @@ impl Engine {
         every: Option<Duration>,
     ) -> RefreshOutcome {
         let identity = self.identity_keys.get(provider_id).map(String::as_str);
-        {
+        let generation = {
             let mut inner = self.inner.lock();
             if !inner.enabled.contains(provider_id) {
                 return RefreshOutcome::Skipped;
@@ -518,17 +548,22 @@ impl Engine {
             }
             inner.refreshing.insert(provider_id.to_string());
             inner.attempted_at.insert(provider_id.to_string(), now);
-        }
+            inner
+                .plan_term_generation
+                .get(provider_id)
+                .copied()
+                .unwrap_or(0)
+        };
         let _refresh = RefreshGuard {
             engine: self,
             provider_id,
         };
         self.publish();
 
-        self.run_refresh(provider_id, force).await
+        self.run_refresh(provider_id, force, generation).await
     }
 
-    async fn run_refresh(&self, provider_id: &str, force: bool) -> RefreshOutcome {
+    async fn run_refresh(&self, provider_id: &str, force: bool, generation: u64) -> RefreshOutcome {
         let runtime = self.by_id[provider_id].clone();
         let context = if force {
             RefreshContext::manual()
@@ -584,21 +619,35 @@ impl Engine {
             );
         }
         if let Some(message) = Self::error_message_in(&snapshot) {
-            self.reconcile_plan(provider_id, &snapshot);
+            self.reconcile_plan(provider_id, &snapshot, generation);
             return self.record_failure(provider_id, message, snapshot.error_category, force);
         }
-        self.record_success(provider_id, snapshot, elapsed, force)
+        self.record_success(provider_id, snapshot, elapsed, force, generation)
     }
 
-    fn reconcile_plan(&self, provider_id: &str, snapshot: &ProviderSnapshot) {
+    fn reconcile_plan(&self, provider_id: &str, snapshot: &ProviderSnapshot, generation: u64) {
         let Some(checked_at) = snapshot.plan_checked_at else {
             return;
         };
-        let replacement = {
+        {
             let mut inner = self.inner.lock();
-            match inner.snapshots.get_mut(provider_id) {
+            let mut snapshot = snapshot.clone();
+            if inner
+                .plan_term_generation
+                .get(provider_id)
+                .copied()
+                .unwrap_or(0)
+                != generation
+            {
+                snapshot.plan_term = None;
+            }
+            let replacement = match inner.snapshots.get_mut(provider_id) {
                 Some(previous)
-                    if checked_at > previous.plan_checked_at.unwrap_or(previous.refreshed_at) =>
+                    if checked_at > previous.plan_checked_at.unwrap_or(previous.refreshed_at)
+                        || (checked_at
+                            == previous.plan_checked_at.unwrap_or(previous.refreshed_at)
+                            && snapshot.plan == previous.plan
+                            && snapshot.plan_term != previous.plan_term) =>
                 {
                     previous.plan = snapshot.plan.clone();
                     previous.plan_term = snapshot.plan_term.clone();
@@ -612,10 +661,10 @@ impl Engine {
                     None
                 }
                 _ => None,
+            };
+            if let Some(replacement) = replacement {
+                self.cache.replace_silently(&replacement);
             }
-        };
-        if let Some(replacement) = replacement {
-            self.cache.replace_silently(&replacement);
         }
     }
 
@@ -627,7 +676,7 @@ impl Engine {
         force: bool,
     ) -> RefreshOutcome {
         tracing::warn!(target: "refresh", "{provider_id} failed: {}", uc_core::redact::log_message(&message));
-        {
+        let replacement = {
             let mut inner = self.inner.lock();
             inner.errors.insert(provider_id.to_string(), message);
             let backoff = if category == Some(ErrorCategory::RateLimited) {
@@ -640,6 +689,25 @@ impl Engine {
             let retry = (self.clock)()
                 + chrono::Duration::from_std(backoff).unwrap_or(chrono::Duration::seconds(60));
             inner.retry_after.insert(provider_id.to_string(), retry);
+            match inner.snapshots.get_mut(provider_id) {
+                Some(snapshot)
+                    if matches!(
+                        category,
+                        Some(
+                            ErrorCategory::NotLoggedIn
+                                | ErrorCategory::AuthExpired
+                                | ErrorCategory::AuthInvalid
+                        )
+                    ) && snapshot.plan_term.is_some() =>
+                {
+                    snapshot.plan_term = None;
+                    Some(snapshot.clone())
+                }
+                _ => None,
+            }
+        };
+        if let Some(replacement) = replacement {
+            self.cache.replace_silently(&replacement);
         }
         self.notify_outcome(provider_id, RefreshOutcome::Failed, category, force);
         RefreshOutcome::Failed
@@ -651,9 +719,19 @@ impl Engine {
         mut snapshot: ProviderSnapshot,
         elapsed: Duration,
         force: bool,
+        generation: u64,
     ) -> RefreshOutcome {
         {
             let mut inner = self.inner.lock();
+            if inner
+                .plan_term_generation
+                .get(provider_id)
+                .copied()
+                .unwrap_or(0)
+                != generation
+            {
+                snapshot.plan_term = None;
+            }
             inner.errors.remove(provider_id);
             inner.rate_limited.remove(provider_id);
             inner.retry_after.remove(provider_id);
@@ -675,11 +753,11 @@ impl Engine {
             inner
                 .snapshots
                 .insert(provider_id.to_string(), snapshot.clone());
+            self.cache.store(
+                &snapshot,
+                self.identity_keys.get(provider_id).map(String::as_str),
+            );
         }
-        self.cache.store(
-            &snapshot,
-            self.identity_keys.get(provider_id).map(String::as_str),
-        );
         tracing::info!(target: "refresh", "{provider_id} ok ({}ms)", elapsed.as_millis());
         self.notify_outcome(provider_id, RefreshOutcome::Refreshed, None, force);
         RefreshOutcome::Refreshed
@@ -1071,6 +1149,35 @@ mod tests {
         }
     }
 
+    struct BlockedPeriodRead {
+        provider: Provider,
+        snapshot: ProviderSnapshot,
+        started: Notify,
+        finish: Notify,
+    }
+
+    #[async_trait]
+    impl ProviderRuntime for BlockedPeriodRead {
+        fn provider(&self) -> &Provider {
+            &self.provider
+        }
+
+        fn widget_descriptors(&self) -> Vec<WidgetDescriptor> {
+            Vec::new()
+        }
+
+        async fn refresh(&self, _: RefreshContext) -> ProviderSnapshot {
+            let snapshot = self.snapshot.clone();
+            self.started.notify_one();
+            self.finish.notified().await;
+            snapshot
+        }
+
+        async fn has_local_credentials(&self) -> bool {
+            true
+        }
+    }
+
     fn subscription_snapshot(
         plan: &str,
         checked_at: &str,
@@ -1256,6 +1363,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_billing_refresh_updates_the_term_while_the_same_profile_and_quota_backoff_are_cached()
+     {
+        let clock = TestClock::starting("2026-10-10T00:00:00Z");
+        let provider = snapshot_provider(subscription_snapshot(
+            "Max 20x",
+            "2026-10-10T00:00:00Z",
+            None,
+            false,
+        ));
+        let (engine, _dir) = clocked_engine(vec![provider.clone()], &clock);
+        engine.refresh("claude", true).await;
+        let previous = engine.snapshots()["claude"].clone();
+        clock.set("2026-10-10T00:01:00Z");
+        let updated = subscription_snapshot(
+            "Max 20x",
+            "2026-10-10T00:00:00Z",
+            Some("2026-11-03T07:03:48Z"),
+            true,
+        );
+        *provider.snapshot.lock() = updated.clone();
+        assert_eq!(engine.refresh("claude", true).await, RefreshOutcome::Failed);
+        assert_eq!(engine.snapshots()["claude"].plan_term, updated.plan_term);
+        assert_eq!(engine.snapshots()["claude"].lines, previous.lines);
+        assert_eq!(
+            engine.snapshots()["claude"].refreshed_at,
+            previous.refreshed_at
+        );
+        *provider.snapshot.lock() =
+            subscription_snapshot("Max 20x", "2026-10-10T00:00:00Z", None, true);
+        engine.refresh("claude", true).await;
+        assert_eq!(engine.snapshots()["claude"].plan_term, None);
+        assert_eq!(
+            engine.snapshots()["claude"].plan_checked_at,
+            previous.plan_checked_at
+        );
+    }
+
+    #[tokio::test]
     async fn unconfirmed_or_older_subscription_failure_cannot_replace_last_good_metadata() {
         let clock = TestClock::starting("2026-10-09T00:00:00Z");
         let provider = snapshot_provider(subscription_snapshot(
@@ -1278,6 +1423,273 @@ mod tests {
             assert_eq!(engine.refresh("claude", true).await, RefreshOutcome::Failed);
             assert_eq!(engine.snapshots()["claude"], previous);
             assert!(engine.state().providers["claude"].error.is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn definitive_auth_failure_clears_only_the_saved_paid_period_and_metadata_can_restore_it()
+    {
+        for category in [
+            ErrorCategory::NotLoggedIn,
+            ErrorCategory::AuthExpired,
+            ErrorCategory::AuthInvalid,
+        ] {
+            let clock = TestClock::starting("2026-10-10T00:00:00Z");
+            let mut paid = subscription_snapshot(
+                "Max 20x",
+                "2026-10-10T00:00:00Z",
+                Some("2026-11-03T00:00:00Z"),
+                false,
+            );
+            paid.usage_history = Some(ProviderUsageHistory {
+                series: uc_core::DailyUsageSeries {
+                    daily: vec![uc_core::DailyUsageEntry {
+                        date: "2026-10-10".into(),
+                        total_tokens: 1_234,
+                        token_usage: None,
+                        cost_usd: Some(0.25),
+                    }],
+                },
+                ..ProviderUsageHistory::default()
+            });
+            let mut failed = ProviderSnapshot::error_message(
+                &Provider::new("claude", "Claude"),
+                "Authentication failed",
+                Some(category),
+            );
+            failed.refreshed_at = at("2026-10-10T00:01:00Z");
+            let provider = snapshot_provider(failed);
+            let dir = tempfile::tempdir().unwrap();
+            let config = EngineConfig::default();
+            let cache = SnapshotCache::with_options(
+                dir.path().join("cache.json"),
+                config.refresh_interval,
+                false,
+                clock.clock(),
+            );
+            cache.store(&paid, Some("paid-account"));
+            let engine = Engine::with_options(
+                vec![provider.clone()],
+                cache,
+                config.clone(),
+                HashMap::from([("claude".into(), "paid-account".into())]),
+                None,
+                clock.clock(),
+            );
+            assert_eq!(engine.snapshots()["claude"], paid);
+            clock.set("2026-10-10T00:01:00Z");
+            assert_eq!(engine.refresh("claude", true).await, RefreshOutcome::Failed);
+            let mut expected = paid.clone();
+            expected.plan_term = None;
+            assert_eq!(engine.snapshots()["claude"], expected);
+            assert_eq!(
+                engine.state().providers["claude"].error.as_deref(),
+                Some("Authentication failed")
+            );
+            let persisted = SnapshotCache::with_options(
+                dir.path().join("cache.json"),
+                config.refresh_interval,
+                false,
+                clock.clock(),
+            );
+            assert_eq!(
+                persisted.load_snapshots(&["claude".into()])["claude"],
+                expected
+            );
+            assert_eq!(
+                persisted.produced_by_identity_key("claude").as_deref(),
+                Some("paid-account")
+            );
+            clock.set("2026-10-10T00:02:00Z");
+            let mut current = subscription_snapshot(
+                "Max 20x",
+                "2026-10-10T00:02:00Z",
+                Some("2026-11-03T00:00:00Z"),
+                false,
+            );
+            current.usage_history = paid.usage_history.clone();
+            *provider.snapshot.lock() = current.clone();
+            assert_eq!(
+                engine.refresh("claude", true).await,
+                RefreshOutcome::Refreshed
+            );
+            assert_eq!(engine.snapshots()["claude"], current);
+            assert_eq!(
+                persisted.load_snapshots(&["claude".into()])["claude"],
+                current
+            );
+            assert!(engine.error_message("claude").is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn an_in_flight_refresh_cannot_restore_a_revoked_paid_period() {
+        for failed in [false, true] {
+            let clock = TestClock::starting("2026-10-10T00:01:00Z");
+            let paid = subscription_snapshot(
+                "Plus",
+                "2026-10-10T00:00:00Z",
+                Some("2026-11-01T00:00:00Z"),
+                false,
+            );
+            let provider = Arc::new(BlockedPeriodRead {
+                provider: Provider::new("claude", "Claude"),
+                snapshot: subscription_snapshot(
+                    "Plus",
+                    "2026-10-10T00:01:00Z",
+                    Some("2026-11-01T00:00:00Z"),
+                    failed,
+                ),
+                started: Notify::new(),
+                finish: Notify::new(),
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let config = EngineConfig::default();
+            let cache = SnapshotCache::with_options(
+                dir.path().join("cache.json"),
+                config.refresh_interval,
+                false,
+                clock.clock(),
+            );
+            cache.store(&paid, Some("paid-account"));
+            let engine = Arc::new(Engine::with_options(
+                vec![provider.clone()],
+                cache,
+                config.clone(),
+                HashMap::from([("claude".into(), "paid-account".into())]),
+                None,
+                clock.clock(),
+            ));
+            let running = engine.clone();
+            let refresh = tokio::spawn(async move { running.refresh("claude", true).await });
+            tokio::time::timeout(Duration::from_secs(5), provider.started.notified())
+                .await
+                .unwrap();
+            assert!(engine.invalidate_plan_term("claude"));
+            assert_eq!(
+                engine.refresh("claude", true).await,
+                RefreshOutcome::Skipped
+            );
+            provider.finish.notify_one();
+            let outcome = refresh.await.unwrap();
+            assert_eq!(
+                outcome,
+                if failed {
+                    RefreshOutcome::Failed
+                } else {
+                    RefreshOutcome::Refreshed
+                }
+            );
+            assert_eq!(engine.snapshots()["claude"].plan_term, None);
+            let persisted = SnapshotCache::with_options(
+                dir.path().join("cache.json"),
+                config.refresh_interval,
+                false,
+                clock.clock(),
+            );
+            assert_eq!(
+                persisted.load_snapshots(&["claude".into()])["claude"].plan_term,
+                None
+            );
+            assert_eq!(
+                persisted.produced_by_identity_key("claude").as_deref(),
+                Some("paid-account")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn billing_revocation_clears_the_cached_period_during_rate_limiting_without_reconfirming_plan()
+     {
+        let clock = TestClock::starting("2026-10-10T00:00:00Z");
+        let paid = subscription_snapshot(
+            "Plus",
+            "2026-10-10T00:00:00Z",
+            Some("2026-11-01T00:00:00Z"),
+            false,
+        );
+        let mut failed = ProviderSnapshot::error_message(
+            &Provider::new("claude", "Claude"),
+            "Rate limited",
+            Some(ErrorCategory::RateLimited),
+        );
+        failed.refreshed_at = at("2026-10-10T00:01:00Z");
+        let provider = snapshot_provider(failed);
+        let dir = tempfile::tempdir().unwrap();
+        let config = EngineConfig::default();
+        let cache = SnapshotCache::with_options(
+            dir.path().join("cache.json"),
+            config.refresh_interval,
+            false,
+            clock.clock(),
+        );
+        cache.store(&paid, Some("paid-account"));
+        let engine = Engine::with_options(
+            vec![provider],
+            cache,
+            config.clone(),
+            HashMap::from([("claude".into(), "paid-account".into())]),
+            None,
+            clock.clock(),
+        );
+        assert!(engine.invalidate_plan_term("claude"));
+        assert!(!engine.invalidate_plan_term("claude"));
+        assert!(!engine.invalidate_plan_term("unknown"));
+        clock.set("2026-10-10T00:01:00Z");
+        assert_eq!(engine.refresh("claude", true).await, RefreshOutcome::Failed);
+        let mut expected = paid;
+        expected.plan_term = None;
+        assert_eq!(engine.snapshots()["claude"], expected);
+        let persisted = SnapshotCache::with_options(
+            dir.path().join("cache.json"),
+            config.refresh_interval,
+            false,
+            clock.clock(),
+        );
+        assert_eq!(
+            persisted.load_snapshots(&["claude".into()])["claude"],
+            expected
+        );
+        assert_eq!(
+            persisted.produced_by_identity_key("claude").as_deref(),
+            Some("paid-account")
+        );
+    }
+
+    #[tokio::test]
+    async fn transient_usage_failure_preserves_the_saved_paid_period() {
+        for category in [ErrorCategory::Network, ErrorCategory::RateLimited] {
+            let clock = TestClock::starting("2026-10-10T00:00:00Z");
+            let paid = subscription_snapshot(
+                "Max 20x",
+                "2026-10-10T00:00:00Z",
+                Some("2026-11-03T00:00:00Z"),
+                false,
+            );
+            let provider = snapshot_provider(paid.clone());
+            let (engine, dir) = clocked_engine(vec![provider.clone()], &clock);
+            assert_eq!(
+                engine.refresh("claude", false).await,
+                RefreshOutcome::Refreshed
+            );
+            let mut failed = ProviderSnapshot::error_message(
+                &Provider::new("claude", "Claude"),
+                "Usage refresh failed",
+                Some(category),
+            );
+            failed.refreshed_at = at("2026-10-10T00:01:00Z");
+            *provider.snapshot.lock() = failed;
+            clock.set("2026-10-10T00:01:00Z");
+            assert_eq!(engine.refresh("claude", true).await, RefreshOutcome::Failed);
+            assert_eq!(engine.snapshots()["claude"], paid);
+            let persisted = SnapshotCache::with_options(
+                dir.path().join("cache.json"),
+                EngineConfig::default().refresh_interval,
+                false,
+                clock.clock(),
+            );
+            assert_eq!(persisted.load_snapshots(&["claude".into()])["claude"], paid);
+            assert!(engine.error_message("claude").is_some());
         }
     }
 

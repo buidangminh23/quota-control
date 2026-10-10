@@ -277,10 +277,17 @@ fn parse(body: &Value) -> Result<Reading, SimpleProviderError> {
     )
     .and_then(Value::as_str)
     .and_then(lines::plan_name);
-    let term = active.and_then(plan_end).map(|ends_at| PlanTerm::Stated {
-        ends_at,
-        checked_at: None,
-    });
+    let term = active
+        .filter(|instance| {
+            value::text(instance, "/status").is_some_and(|status| {
+                ["VALID", "ACTIVE", "NORMAL", "RUNNING"].contains(&status.to_uppercase().as_str())
+            })
+        })
+        .and_then(plan_end)
+        .map(|ends_at| PlanTerm::Stated {
+            ends_at,
+            checked_at: None,
+        });
     Ok(Reading::new(plan, rows).with_plan_term(term))
 }
 
@@ -416,7 +423,7 @@ mod tests {
             })
         );
         let millis = json!({"data":{"codingPlanInstanceInfos":[{"planName":"pro",
-            "endTime":1790812800000i64}],
+            "status":"ACTIVE","endTime":1790812800000i64}],
             "codingPlanQuotaInfo":{"per5HourUsedQuota":1,"per5HourTotalQuota":10}}});
         assert_eq!(
             parse(&millis).unwrap().plan_term,
@@ -428,6 +435,20 @@ mod tests {
         let unstated = json!({"data":{"codingPlanInstanceInfos":[{"planName":"pro"}],
             "codingPlanQuotaInfo":{"per5HourUsedQuota":1,"per5HourTotalQuota":10}}});
         assert_eq!(parse(&unstated).unwrap().plan_term, None);
+    }
+
+    #[test]
+    fn inactive_or_unconfirmed_instances_do_not_state_a_paid_period() {
+        for status in [serde_json::Value::Null, json!("EXPIRED"), json!("CANCELED")] {
+            let body = json!({"data":{"codingPlanInstanceInfos":[{
+                "planName":"Coding Plan Pro", "status":status,
+                "endTime":"2026-11-03T00:00:00Z",
+                "codingPlanQuotaInfo":{"per5HourUsedQuota":1,"per5HourTotalQuota":10}
+            }]}});
+            let reading = parse(&body).unwrap();
+            assert_eq!(reading.plan_term, None);
+            assert_eq!(reading.lines.len(), 1);
+        }
     }
 
     #[tokio::test]

@@ -133,6 +133,7 @@ pub fn run() -> anyhow::Result<()> {
             chat_commands::list_chat_sessions,
             chat_commands::create_chat_session,
             chat_commands::open_chat_session,
+            chat_commands::open_account_billing,
             system::system_notification_access,
             system::request_system_notification_access,
             system::send_system_notification,
@@ -296,6 +297,7 @@ pub fn run() -> anyhow::Result<()> {
                 }
             });
             tauri::async_runtime::spawn(activity_refresh::run(app.handle().clone()));
+            tauri::async_runtime::spawn(chat_commands::run_billing_reader(app.handle().clone()));
             if let Err(error) = shortcut::restore(app.handle()) {
                 tracing::warn!("The saved global shortcut is unavailable: {error}");
             }

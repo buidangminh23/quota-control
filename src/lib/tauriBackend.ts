@@ -139,6 +139,10 @@ export class TauriBackend implements Backend {
     return invoke("open_chat_session", { sessionId });
   }
 
+  openAccountBilling(accountId: string): Promise<boolean> {
+    return invoke<boolean>("open_account_billing", { accountId });
+  }
+
   engineState(): Promise<EngineState> {
     return invoke<EngineState>("engine_state");
   }

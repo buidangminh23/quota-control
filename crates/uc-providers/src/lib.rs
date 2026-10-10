@@ -10,6 +10,7 @@ pub use accounts::{
     visible_accounts,
 };
 pub use credentials::CliLocation;
+pub use plan_term::BillingPeriods;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -68,6 +69,7 @@ pub struct LocalProvider {
     cooldown: tokio::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>>,
     cli: Option<CliBinding>,
     profile_term: plan_term::ProfileTerm,
+    billing_periods: Option<BillingPeriods>,
     metadata_retry: tokio::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>>,
 }
 
@@ -78,6 +80,19 @@ struct CliBinding {
     location: CliLocation,
     profile: Option<PathBuf>,
     verified_token: tokio::sync::Mutex<Option<[u8; 32]>>,
+}
+
+fn newest_confirmed_term(
+    first: Option<uc_core::PlanTerm>,
+    second: Option<uc_core::PlanTerm>,
+) -> Option<uc_core::PlanTerm> {
+    [first, second]
+        .into_iter()
+        .flatten()
+        .max_by_key(|term| match term {
+            uc_core::PlanTerm::Stated { checked_at, .. } => *checked_at,
+            _ => None,
+        })
 }
 
 impl LocalProvider {
@@ -98,6 +113,7 @@ impl LocalProvider {
             cooldown: tokio::sync::Mutex::new(None),
             cli: None,
             profile_term: Default::default(),
+            billing_periods: None,
             metadata_retry: Default::default(),
         }
     }
@@ -105,6 +121,66 @@ impl LocalProvider {
     pub fn with_clock(mut self, clock: Clock) -> Self {
         self.clock = clock;
         self
+    }
+
+    pub fn with_billing_periods(mut self, periods: BillingPeriods) -> Self {
+        self.profile_term = self.profile_term.with_billing_periods(periods.clone());
+        self.billing_periods = Some(periods);
+        self
+    }
+
+    async fn billing_term(
+        &self,
+        profile: Option<&plan_term::ProfileSubscription>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Option<uc_core::PlanTerm> {
+        let periods = self.billing_periods.clone()?;
+        let profile = profile?.clone();
+        uc_core::load_blocking(move || profile.confirmed_term(Some(&periods), now)).await
+    }
+
+    async fn codex_billing_term(
+        &self,
+        credentials: &credentials::Credentials,
+        live_plan: Option<&str>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Option<uc_core::PlanTerm> {
+        let periods = self.billing_periods.clone()?;
+        let account = credentials.billing_account_id.clone()?;
+        let plan = live_plan.map(str::to_owned);
+        uc_core::load_blocking(move || periods.get_for("codex", &account, plan.as_deref(), now))
+            .await
+    }
+
+    async fn retained_codex_billing(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Option<(String, uc_core::PlanTerm)> {
+        let credentials = if let Some(binding) = &self.cli {
+            let (location, profile) = (binding.location.clone(), binding.profile.clone());
+            let (current, credentials) = uc_core::load_blocking(move || {
+                accounts::read_cli_account(ProviderKind::Codex, location, profile)
+            })
+            .await
+            .ok()?;
+            if current.id != binding.id {
+                return None;
+            }
+            credentials
+        } else {
+            self.credentials.load().await.ok()?
+        };
+        if self.validate_credentials(&credentials, now).is_err() {
+            return None;
+        }
+        let plan = credentials.plan.as_ref()?.clone();
+        let billing = self
+            .codex_billing_term(&credentials, Some(&plan), now)
+            .await;
+        let signed =
+            plan_term::confirmed_term(credentials.plan_term, Some(&plan), Some(&plan), now);
+        let term = newest_confirmed_term(signed, billing)?;
+        Some((plan, term))
     }
 
     pub fn with_account(mut self, record: &uc_accounts::AccountRecord) -> Self {
@@ -368,16 +444,18 @@ impl LocalProvider {
             line.expiries_at = expiries;
         }
         let plan_term = if self.kind == ProviderKind::Claude {
-            subscription
-                .as_ref()
-                .and_then(|profile| profile.confirmed_term(now))
+            self.billing_term(subscription.as_ref(), now).await
         } else {
-            plan_term::confirmed_term(
+            let signed = plan_term::confirmed_term(
                 credentials.plan_term.take(),
                 credentials.plan.as_deref(),
                 mapped.plan.as_deref(),
                 now,
-            )
+            );
+            let billing = self
+                .codex_billing_term(&credentials, mapped.plan.as_deref(), now)
+                .await;
+            newest_confirmed_term(signed, billing)
         };
         let plan_checked_at = if self.kind == ProviderKind::Codex {
             mapped.plan.as_ref().map(|_| now)
@@ -687,6 +765,17 @@ impl ProviderRuntime for LocalProvider {
                 let mut snapshot = ProviderSnapshot::error(&self.provider, &error);
                 snapshot.refreshed_at = (self.clock)();
                 if self.kind == ProviderKind::Claude
+                    && matches!(
+                        error.category,
+                        ErrorCategory::AuthExpired
+                            | ErrorCategory::AuthInvalid
+                            | ErrorCategory::NotLoggedIn
+                            | ErrorCategory::NotAvailable
+                    )
+                {
+                    self.profile_term.invalidate_billing().await;
+                }
+                if self.kind == ProviderKind::Claude
                     && !matches!(
                         error.category,
                         ErrorCategory::AuthExpired
@@ -696,9 +785,30 @@ impl ProviderRuntime for LocalProvider {
                     )
                     && let Some(profile) = self.profile_term.peek().await
                 {
-                    snapshot.plan_term = profile.confirmed_term(snapshot.refreshed_at);
+                    snapshot.plan_term = self
+                        .billing_term(Some(&profile), snapshot.refreshed_at)
+                        .await;
                     snapshot.plan = profile.plan;
                     snapshot.plan_checked_at = Some(profile.checked_at);
+                }
+                if self.kind == ProviderKind::Codex
+                    && !matches!(
+                        error.category,
+                        ErrorCategory::AuthExpired
+                            | ErrorCategory::AuthInvalid
+                            | ErrorCategory::NotLoggedIn
+                            | ErrorCategory::NotAvailable
+                            | ErrorCategory::CredentialAccess
+                    )
+                    && let Some((plan, term)) =
+                        self.retained_codex_billing(snapshot.refreshed_at).await
+                {
+                    snapshot.plan_checked_at = match &term {
+                        uc_core::PlanTerm::Stated { checked_at, .. } => *checked_at,
+                        _ => None,
+                    };
+                    snapshot.plan = Some(plan);
+                    snapshot.plan_term = Some(term);
                 }
                 snapshot
             }
