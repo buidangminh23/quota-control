@@ -248,7 +248,7 @@ pub async fn open_account_billing(
         if matching_account && billing_connected(engine.snapshots().get(&account_id), observed_at) {
             return Ok(true);
         }
-        return Err("The browser did not confirm a current paid period for this account. Sign in to the matching account and try again.".into());
+        tracing::debug!("Chrome is signed in to a different account; opening a saved web session");
     }
     let windows = app.state::<ChatWindows>();
     let _operation = windows.operations.lock().await;
