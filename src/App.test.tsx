@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { messagesFor } from "@/i18n";
 import { setBackend } from "@/lib/backend";
 import { localDay } from "@/lib/days";
 import type { EngineState } from "@/lib/types";
@@ -592,62 +593,89 @@ describe("popup", () => {
   it.each([
     { provider: "claude", title: "Claude · Công ty", brand: "Claude" },
     { provider: "codex", title: "Codex", brand: "ChatGPT" },
-  ] as const)("connects $provider billing from its account row and reuses only the matching web session", async ({ provider, title, brand }) => {
+  ] as const)("refreshes $provider billing from its account row through the existing sign-in, never an embedded session", async ({ provider, title, brand }) => {
     const api = await renderApp();
     const accounts = await api.listAccounts();
     const account = accounts.find((candidate) => candidate.provider === provider);
     if (!account) throw new Error("The provider should have a connected account");
-    const otherSession = await api.createChatSession(provider === "claude" ? "codex" : "claude", account.label);
-    const connect = vi.spyOn(api, "openAccountBilling");
+    const sessionsBefore = await api.listChatSessions();
+    const refresh = vi.spyOn(api, "openAccountBilling");
+    const create = vi.spyOn(api, "createChatSession");
     const open = vi.spyOn(api, "openChatSession");
     act(() => useApp.setState({ screen: "accounts" }));
     const remove = await screen.findByRole("button", { name: `Xóa ${title}` });
     const row = remove.closest<HTMLElement>(".uc-list-row");
     if (!row) throw new Error("The account should have its own row");
-    const button = within(row).getByRole("button", { name: "Kết nối Billing" });
-    expect(screen.getAllByRole("button", { name: "Kết nối Billing" })).toHaveLength(accounts.length);
+    const button = within(row).getByRole("button", { name: "Làm mới Billing" });
+    expect(screen.getAllByRole("button", { name: "Làm mới Billing" })).toHaveLength(accounts.length);
+    expect(screen.queryByRole("button", { name: "Kết nối Billing" })).not.toBeInTheDocument();
     fireEvent.click(button);
-    await waitFor(() => expect(connect).toHaveBeenCalledWith(account.id));
-    expect(await screen.findByText(`Đã kết nối Billing ${brand}`)).toBeInTheDocument();
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    expect(refresh).toHaveBeenNthCalledWith(1, account.id);
+    expect(await screen.findByText(`Đã kết nối Billing ${brand} từ phiên đăng nhập đã có`)).toBeInTheDocument();
     await waitFor(() => expect(button).not.toBeDisabled());
-    const sessions = await api.listChatSessions();
-    const matching = sessions.find((session) => session.provider === provider && session.label === account.label);
-    if (!matching) throw new Error("Billing should create a web session for the matching provider and account");
-    expect(open).toHaveBeenCalledWith(matching.id);
-    expect(open).not.toHaveBeenCalledWith(otherSession.id);
     fireEvent.click(button);
-    await waitFor(() => expect(connect).toHaveBeenCalledTimes(2));
-    expect((await api.listChatSessions()).length).toBe(sessions.length);
-    expect(open).toHaveBeenNthCalledWith(2, matching.id);
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(2));
+    expect(refresh).toHaveBeenNthCalledWith(2, account.id);
+    await waitFor(() => expect(button).not.toBeDisabled());
+    expect(create).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+    expect(await api.listChatSessions()).toEqual(sessionsBefore);
+  });
+
+  it("describes Billing as reusing the provider sign-in instead of a second sign-in", () => {
+    for (const language of ["vi", "en"] as const) {
+      const note = messagesFor(language).accounts.connectBillingNote("Claude");
+      const waiting = messagesFor(language).accounts.billingWaiting("ChatGPT");
+      expect(note).toMatch(language === "vi" ? /tự dùng phiên đăng nhập Claude đã có/ : /uses the existing Claude sign-in by itself/);
+      expect(note).toMatch(language === "vi" ? /không cần đăng nhập lần hai/ : /no second sign-in/);
+      expect(waiting).toMatch(language === "vi" ? /tài khoản ChatGPT khớp trong trình duyệt đang mở/ : /matching ChatGPT account in the browser that is already open/);
+      expect(waiting).not.toMatch(language === "vi" ? /trong ứng dụng/ : /in the app/);
+    }
   });
 
   it.each([
     { title: "Claude · Công ty", brand: "Claude" },
     { title: "Codex", brand: "ChatGPT" },
-  ])("names $brand when a Billing connection still needs sign-in", async ({ title, brand }) => {
+  ])("names $brand when a Billing refresh is still checking the open browser", async ({ title, brand }) => {
     const api = await renderApp();
-    vi.spyOn(api, "openAccountBilling").mockResolvedValue(false);
+    const refresh = vi.spyOn(api, "openAccountBilling").mockResolvedValue(false);
+    const create = vi.spyOn(api, "createChatSession");
+    const open = vi.spyOn(api, "openChatSession");
     act(() => useApp.setState({ screen: "accounts" }));
     const remove = await screen.findByRole("button", { name: `Xóa ${title}` });
     const row = remove.closest<HTMLElement>(".uc-list-row");
     if (!row) throw new Error("The account should have its own row");
-    fireEvent.click(within(row).getByRole("button", { name: "Kết nối Billing" }));
-    expect(await screen.findByText(`Đăng nhập ${brand} trên trang vừa mở để kết nối Billing.`)).toBeInTheDocument();
-    expect(screen.queryByText(`Đã kết nối Billing ${brand}`)).not.toBeInTheDocument();
+    fireEvent.click(within(row).getByRole("button", { name: "Làm mới Billing" }));
+    expect(await screen.findByText(`Đang kiểm tra tài khoản ${brand} khớp trong trình duyệt đang mở. Khi trang Billing ${brand} ở đó hiện đúng tài khoản, bấm Làm mới Billing.`)).toBeInTheDocument();
+    expect(screen.queryByText(`Đã kết nối Billing ${brand} từ phiên đăng nhập đã có`)).not.toBeInTheDocument();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(create).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
   });
 
-  it("allows retrying Codex Billing after the connection fails", async () => {
+  it("allows retrying the Codex Billing refresh after the check fails", async () => {
     const api = await renderApp();
-    vi.spyOn(api, "openAccountBilling").mockRejectedValue(new Error("The matching account could not be confirmed"));
+    const codex = (await api.listAccounts()).find((candidate) => candidate.provider === "codex");
+    if (!codex) throw new Error("Codex should have a connected account");
+    const refresh = vi.spyOn(api, "openAccountBilling").mockRejectedValue(new Error("The matching account could not be confirmed"));
+    const create = vi.spyOn(api, "createChatSession");
+    const open = vi.spyOn(api, "openChatSession");
     act(() => useApp.setState({ screen: "accounts" }));
     const remove = await screen.findByRole("button", { name: "Xóa Codex" });
     const row = remove.closest<HTMLElement>(".uc-list-row");
     if (!row) throw new Error("The account should have its own row");
-    const button = within(row).getByRole("button", { name: "Kết nối Billing" });
+    const button = within(row).getByRole("button", { name: "Làm mới Billing" });
     fireEvent.click(button);
     expect(await screen.findByText("Không thực hiện được: The matching account could not be confirmed")).toBeInTheDocument();
     expect(button).not.toBeDisabled();
-    expect(screen.queryByText("Đã kết nối Billing ChatGPT")).not.toBeInTheDocument();
+    expect(screen.queryByText("Đã kết nối Billing ChatGPT từ phiên đăng nhập đã có")).not.toBeInTheDocument();
+    fireEvent.click(button);
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(2));
+    expect(refresh).toHaveBeenNthCalledWith(1, codex.id);
+    expect(refresh).toHaveBeenNthCalledWith(2, codex.id);
+    expect(create).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
   });
 
   it("tells how to copy a session cookie or a whole Cookie header for web-session providers", async () => {

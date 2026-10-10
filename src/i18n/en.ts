@@ -398,10 +398,12 @@ export const en: Messages = {
   },
   accounts: {
     connected: "Connected Accounts",
-    connectBilling: "Connect Billing",
-    connectBillingNote: (provider) => `Keep the provider-confirmed period end up to date from ${provider} signed in to Chrome or this app.`,
-    billingConnected: (provider) => `${provider} billing connected`,
-    billingWaiting: (provider) => `Sign in to ${provider} on the page that opened to connect billing.`,
+    connectBilling: "Refresh Billing",
+    connectBillingNote: (provider) =>
+      `Billing uses the existing ${provider} sign-in by itself to keep the period end up to date, no second sign-in needed. Click to check again now.`,
+    billingConnected: (provider) => `${provider} billing connected from the existing sign-in`,
+    billingWaiting: (provider) =>
+      `Checking for the matching ${provider} account in the browser that is already open. Once the ${provider} Billing page there shows the right account, click Refresh Billing.`,
     none: "No accounts yet. Add one below to see your limits.",
     mode: (mode, cliName) =>
       ({
