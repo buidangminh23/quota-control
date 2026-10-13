@@ -210,11 +210,12 @@ impl BillingPeriods {
         {
             let _ = self.remove(&id);
         }
-        confirmations
-            .values()
-            .filter(|evidence| evidence["plan"].as_str() == Some(plan))
-            .filter_map(|evidence| evidence_term(evidence, now))
-            .max_by_key(term_checked_at)
+        latest_billing_term(
+            confirmations
+                .values()
+                .filter(|evidence| evidence["plan"].as_str() == Some(plan)),
+            now,
+        )
     }
 
     pub fn peek_for(
@@ -224,11 +225,10 @@ impl BillingPeriods {
         now: DateTime<Utc>,
     ) -> Option<PlanTerm> {
         let account_uuid = organization_uuid_value(account_uuid)?;
-        self.confirmations(provider, &account_uuid)
-            .ok()?
-            .values()
-            .filter_map(|evidence| evidence_term(evidence, now))
-            .max_by_key(term_checked_at)
+        latest_billing_term(
+            self.confirmations(provider, &account_uuid).ok()?.values(),
+            now,
+        )
     }
 
     pub fn save_from(
@@ -251,15 +251,38 @@ impl BillingPeriods {
             .renewal_lock(&id)
             .map_err(|_| billing_error(ErrorCategory::CredentialAccess))?;
         let mut confirmations = self.confirmations(provider, &account_uuid)?;
+        supersede_billing_conflicts(&mut confirmations, observed_at);
+        if confirmations
+            .get(source)
+            .and_then(|evidence| billing_timestamp(&evidence["observedAt"]))
+            .is_some_and(|checked| checked > observed_at)
+        {
+            return Ok(());
+        }
         if let Some(ends_at) =
             ends_at.filter(|end| *end > observed_at && paid_plan_for(provider, plan))
         {
+            let agrees = |evidence: &Value| {
+                evidence["plan"].as_str() == Some(plan)
+                    && billing_timestamp(&evidence["endsAt"]) == Some(ends_at)
+            };
+            if confirmations.values().any(|evidence| {
+                !agrees(evidence)
+                    && billing_timestamp(&evidence["observedAt"])
+                        .is_some_and(|checked| checked >= observed_at)
+            }) {
+                return Ok(());
+            }
+            confirmations.retain(|_, evidence| agrees(evidence));
             confirmations.insert(source.into(), json!({"plan":plan,"endsAt":ends_at.to_rfc3339(),"observedAt":observed_at.to_rfc3339()}));
         } else {
             confirmations.remove(source);
             confirmations.remove("legacy");
         }
-        confirmations.retain(|_, evidence| evidence_term(evidence, observed_at).is_some());
+        confirmations.retain(|_, evidence| {
+            billing_timestamp(&evidence["observedAt"]).is_some()
+                && billing_timestamp(&evidence["endsAt"]).is_some_and(|end| end > observed_at)
+        });
         self.write_confirmations(provider, &account_uuid, confirmations)
     }
 
@@ -277,6 +300,7 @@ impl BillingPeriods {
             .renewal_lock(&id)
             .map_err(|_| billing_error(ErrorCategory::CredentialAccess))?;
         let mut confirmations = self.confirmations(provider, &account_uuid)?;
+        supersede_billing_conflicts(&mut confirmations, Utc::now());
         confirmations.remove(source);
         confirmations.remove("legacy");
         self.write_confirmations(provider, &account_uuid, confirmations)
@@ -328,22 +352,51 @@ impl BillingPeriods {
     }
 }
 
-fn term_checked_at(term: &PlanTerm) -> Option<DateTime<Utc>> {
-    match term {
-        PlanTerm::Stated { checked_at, .. } => *checked_at,
-        _ => None,
+fn supersede_billing_conflicts(
+    confirmations: &mut serde_json::Map<String, Value>,
+    now: DateTime<Utc>,
+) {
+    let latest = confirmations
+        .values()
+        .filter_map(|evidence| {
+            let checked = billing_timestamp(&evidence["observedAt"])?;
+            (checked <= now).then_some((checked, evidence))
+        })
+        .max_by_key(|(checked, _)| *checked)
+        .map(|(_, evidence)| {
+            (
+                evidence["plan"].clone(),
+                billing_timestamp(&evidence["endsAt"]),
+            )
+        });
+    if let Some((plan, end)) = latest {
+        confirmations.retain(|_, evidence| {
+            (evidence["plan"] == plan && billing_timestamp(&evidence["endsAt"]) == end)
+                || billing_timestamp(&evidence["observedAt"]).is_some_and(|checked| checked > now)
+        });
     }
+}
+
+fn latest_billing_term<'a>(
+    evidence: impl Iterator<Item = &'a Value>,
+    now: DateTime<Utc>,
+) -> Option<PlanTerm> {
+    evidence
+        .filter_map(|evidence| {
+            let checked = billing_timestamp(&evidence["observedAt"])?;
+            (checked <= now).then_some((checked, evidence))
+        })
+        .max_by_key(|(checked, _)| *checked)
+        .and_then(|(_, evidence)| evidence_term(evidence, now))
 }
 
 fn evidence_term(evidence: &Value, now: DateTime<Utc>) -> Option<PlanTerm> {
     let ends_at = billing_timestamp(&evidence["endsAt"])?;
     let checked_at = billing_timestamp(&evidence["observedAt"])?;
-    (ends_at > now && checked_at <= now && now - checked_at < TERM_RECHECK).then_some(
-        PlanTerm::Stated {
-            ends_at,
-            checked_at: Some(checked_at),
-        },
-    )
+    (ends_at > now && checked_at <= now).then_some(PlanTerm::Stated {
+        ends_at,
+        checked_at: Some(checked_at),
+    })
 }
 
 fn paid_plan_for(provider: &str, plan: &str) -> bool {
@@ -797,7 +850,7 @@ mod tests {
     }
 
     #[test]
-    fn refreshing_a_profile_does_not_reconfirm_a_separately_acquired_billing_term() {
+    fn refreshing_a_profile_preserves_the_original_billing_confirmation_until_its_end() {
         let directory = tempfile::tempdir().unwrap();
         let periods = BillingPeriods::new(directory.path());
         let organization_uuid = "00000000-0000-4000-8000-000000000001";
@@ -808,12 +861,16 @@ mod tests {
             checked_at: Some(now()),
         };
         periods.save(organization_uuid, "claude_max", None, &json!({"status":"active", "next_charge_at":(now() + chrono::Duration::days(20)).to_rfc3339()}), now()).unwrap();
-        assert_eq!(current.confirmed_term(Some(&periods), now()), Some(term));
-        let later = now() + TERM_RECHECK;
+        assert_eq!(
+            current.confirmed_term(Some(&periods), now()),
+            Some(term.clone())
+        );
+        let later = now() + chrono::Duration::days(3);
+        assert_eq!(current.confirmed_term(Some(&periods), later), None);
         let refreshed = subscription(&profile, later).unwrap();
         assert_eq!(refreshed.plan.as_deref(), Some("Max"));
         assert_eq!(refreshed.checked_at, later);
-        assert_eq!(refreshed.confirmed_term(Some(&periods), later), None);
+        assert_eq!(refreshed.confirmed_term(Some(&periods), later), Some(term));
     }
 
     #[test]
@@ -868,7 +925,13 @@ mod tests {
             periods.get(org, Some("Pro"), now() - chrono::Duration::seconds(1)),
             None
         );
-        assert_eq!(periods.get(org, Some("Pro"), now() + TERM_RECHECK), None);
+        assert_eq!(
+            periods.get(org, Some("Pro"), now() + TERM_RECHECK),
+            Some(PlanTerm::Stated {
+                ends_at: end,
+                checked_at: Some(now())
+            })
+        );
         assert_eq!(periods.get(org, Some("Pro"), end), None);
         assert_eq!(periods.get(org, Some("Free"), now()), None);
         assert!(
@@ -931,7 +994,7 @@ mod tests {
                 "codex",
                 account,
                 "Pro 5x",
-                Some(end + chrono::Duration::days(1)),
+                Some(end),
                 newer,
                 "session:fixture",
             )
@@ -942,7 +1005,7 @@ mod tests {
         assert_eq!(
             periods.get_for("codex", account, Some("Pro 5x"), newer),
             Some(PlanTerm::Stated {
-                ends_at: end + chrono::Duration::days(1),
+                ends_at: end,
                 checked_at: Some(newer)
             })
         );
@@ -987,6 +1050,217 @@ mod tests {
                 .is_err()
         );
         assert!(periods.get(account, Some("Max 20x"), newer).is_some());
+    }
+
+    #[test]
+    fn persisted_billing_survives_days_without_refresh_until_the_exact_paid_through_time() {
+        let directory = tempfile::tempdir().unwrap();
+        let account = "00000000-0000-4000-8000-000000000001";
+        let other = "00000000-0000-4000-8000-000000000002";
+        let end = now() + chrono::Duration::days(24);
+        let later = now() + chrono::Duration::days(3);
+        for (provider, plan) in [("claude", "Pro"), ("codex", "Pro 5x")] {
+            BillingPeriods::new(directory.path())
+                .save_from(provider, account, plan, Some(end), now(), "browser")
+                .unwrap();
+            let periods = BillingPeriods::new(directory.path());
+            let original = Some(PlanTerm::Stated {
+                ends_at: end,
+                checked_at: Some(now()),
+            });
+            assert_eq!(
+                periods.get_for(provider, account, Some(plan), later),
+                original
+            );
+            assert_eq!(periods.peek_for(provider, account, later), original);
+            assert_eq!(periods.get_for(provider, other, Some(plan), later), None);
+            assert_eq!(
+                periods.get_for(
+                    provider,
+                    account,
+                    Some(plan),
+                    now() - chrono::Duration::seconds(1)
+                ),
+                None
+            );
+            assert_eq!(
+                periods.get_for(
+                    provider,
+                    account,
+                    Some(plan),
+                    end - chrono::Duration::seconds(1)
+                ),
+                original
+            );
+            assert_eq!(periods.get_for(provider, account, Some(plan), end), None);
+            assert_eq!(
+                periods.peek_for(provider, account, end + chrono::Duration::days(30)),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn preexisting_conflicting_billing_sources_do_not_revive_an_expired_newer_term() {
+        let directory = tempfile::tempdir().unwrap();
+        let account = "00000000-0000-4000-8000-000000000001";
+        let current = now() + chrono::Duration::days(3);
+        let end = current + chrono::Duration::days(10);
+        let evidence = |ends: DateTime<Utc>, checked: DateTime<Utc>, plan: &str| json!({"plan":plan,"endsAt":ends.to_rfc3339(),"observedAt":checked.to_rfc3339()});
+        for (provider, plan) in [("claude", "Pro"), ("codex", "Pro 5x")] {
+            let periods = BillingPeriods::new(directory.path());
+            let mut confirmations = serde_json::Map::from_iter([
+                ("old".into(), evidence(end, now(), plan)),
+                (
+                    "future".into(),
+                    evidence(end, current + chrono::Duration::days(1), plan),
+                ),
+            ]);
+            periods
+                .write_confirmations(provider, account, confirmations.clone())
+                .unwrap();
+            let original = Some(PlanTerm::Stated {
+                ends_at: end,
+                checked_at: Some(now()),
+            });
+            assert_eq!(
+                periods.get_for(provider, account, Some(plan), current),
+                original
+            );
+            assert_eq!(periods.peek_for(provider, account, current), original);
+            confirmations.insert(
+                "new".into(),
+                evidence(current, current - chrono::Duration::days(1), plan),
+            );
+            periods
+                .write_confirmations(provider, account, confirmations.clone())
+                .unwrap();
+            assert_eq!(
+                periods.get_for(provider, account, Some(plan), current),
+                None
+            );
+            assert_eq!(periods.peek_for(provider, account, current), None);
+            periods
+                .save_from(provider, account, plan, None, current, "unrelated")
+                .unwrap();
+            assert_eq!(
+                periods.get_for(provider, account, Some(plan), current),
+                None
+            );
+            confirmations.remove("future");
+            periods
+                .write_confirmations(provider, account, confirmations)
+                .unwrap();
+            periods.invalidate_source(provider, account, "new").unwrap();
+            assert_eq!(periods.peek_for(provider, account, current), None);
+        }
+    }
+
+    #[test]
+    fn later_billing_evidence_keeps_agreeing_sources_and_supersedes_conflicting_dates() {
+        let directory = tempfile::tempdir().unwrap();
+        let account = "00000000-0000-4000-8000-000000000001";
+        let end = now() + chrono::Duration::days(24);
+        let later = now() + chrono::Duration::days(3);
+        let shortened_end = later + chrono::Duration::days(2);
+        for (provider, plan) in [("claude", "Pro"), ("codex", "Pro 5x")] {
+            let periods = BillingPeriods::new(directory.path());
+            periods
+                .save_from(provider, account, plan, Some(end), now(), "browser")
+                .unwrap();
+            let mut confirmations = periods.confirmations(provider, account).unwrap();
+            confirmations["browser"]["endsAt"] = json!(
+                end.with_timezone(&chrono::FixedOffset::east_opt(7 * 3600).unwrap())
+                    .to_rfc3339()
+            );
+            periods
+                .write_confirmations(provider, account, confirmations)
+                .unwrap();
+            periods
+                .save_from(provider, account, plan, Some(end), later, "session:fixture")
+                .unwrap();
+            periods
+                .invalidate_source(provider, account, "session:fixture")
+                .unwrap();
+            assert_eq!(
+                periods.get_for(provider, account, Some(plan), later),
+                Some(PlanTerm::Stated {
+                    ends_at: end,
+                    checked_at: Some(now())
+                })
+            );
+            periods
+                .save_from(
+                    provider,
+                    account,
+                    plan,
+                    Some(shortened_end),
+                    later,
+                    "session:fixture",
+                )
+                .unwrap();
+            periods
+                .save_from(provider, account, plan, Some(end), now(), "delayed:fixture")
+                .unwrap();
+            periods
+                .save_from(provider, account, plan, None, now(), "session:fixture")
+                .unwrap();
+            assert_eq!(
+                periods.get_for(provider, account, Some(plan), later),
+                Some(PlanTerm::Stated {
+                    ends_at: shortened_end,
+                    checked_at: Some(later)
+                })
+            );
+            periods
+                .invalidate_source(provider, account, "session:fixture")
+                .unwrap();
+            assert_eq!(periods.get_for(provider, account, Some(plan), later), None);
+            periods
+                .save_from(provider, account, plan, Some(end), now(), "browser")
+                .unwrap();
+            periods
+                .save_from(
+                    provider,
+                    account,
+                    plan,
+                    Some(shortened_end),
+                    later,
+                    "session:fixture",
+                )
+                .unwrap();
+            assert_eq!(
+                periods.get_for(provider, account, Some(plan), shortened_end),
+                None
+            );
+            periods
+                .save_from(
+                    provider,
+                    account,
+                    plan,
+                    None,
+                    shortened_end,
+                    "unrelated:fixture",
+                )
+                .unwrap();
+            assert_eq!(periods.peek_for(provider, account, shortened_end), None);
+            periods
+                .save_from(provider, account, plan, None, later, "browser")
+                .unwrap();
+            assert_eq!(periods.peek_for(provider, account, later), None);
+            for live_plan in [Some("Free"), Some("Different paid plan"), None] {
+                periods
+                    .save_from(provider, account, plan, Some(end), now(), "browser")
+                    .unwrap();
+                assert_eq!(periods.get_for(provider, account, live_plan, later), None);
+                assert_eq!(periods.peek_for(provider, account, later), None);
+            }
+            periods
+                .save_from(provider, account, plan, Some(end), now(), "browser")
+                .unwrap();
+            periods.invalidate_for(provider, account).unwrap();
+            assert_eq!(periods.peek_for(provider, account, later), None);
+        }
     }
 
     #[test]
