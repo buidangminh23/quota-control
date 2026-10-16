@@ -40,6 +40,10 @@ impl DocumentStore {
         Self::new(uc_core::paths::config_dir())
     }
 
+    pub fn root(&self) -> &std::path::Path {
+        &self.root
+    }
+
     fn path(&self, name: DocumentName) -> PathBuf {
         self.root.join(name.file_name())
     }
@@ -54,6 +58,7 @@ impl DocumentStore {
     }
 
     pub fn save(&self, name: DocumentName, value: &Value) -> anyhow::Result<()> {
+        let _guard = uc_core::paths::lock_documents(&self.root)?;
         let bytes = serde_json::to_vec_pretty(value)?;
         uc_core::paths::write_atomic(&self.path(name), &bytes)?;
         Ok(())

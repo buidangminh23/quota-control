@@ -385,12 +385,23 @@ async fn refresh_billing_account(engine: &uc_engine::Engine, account_id: &str) {
     .await;
 }
 
-async fn refresh_billing_provider(engine: &uc_engine::Engine, provider: &str) {
+pub(crate) async fn refresh_billing_provider(engine: &uc_engine::Engine, provider: &str) {
     let ids: Vec<_> = engine
         .provider_ids()
         .into_iter()
         .filter(|id| billing_provider(id) == Some(provider))
         .collect();
+    refresh_synced_billing_accounts(engine, &ids).await;
+}
+
+pub(crate) async fn refresh_synced_billing_accounts(engine: &uc_engine::Engine, ids: &[String]) {
+    let mut ids: Vec<_> = ids
+        .iter()
+        .map(String::as_str)
+        .filter(|id| billing_provider(id).is_some() && engine.runtime(id).is_some())
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
     for id in &ids {
         engine.invalidate_plan_term(id);
     }
@@ -401,6 +412,12 @@ async fn refresh_billing_provider(engine: &uc_engine::Engine, provider: &str) {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct BillingRead {
     state: String,
+    #[serde(default)]
+    stage: Option<String>,
+    #[serde(default)]
+    account_count: Option<usize>,
+    #[serde(default)]
+    temporary_target: Option<bool>,
     #[serde(default)]
     status: Option<u16>,
     #[serde(default)]
@@ -415,6 +432,122 @@ struct BillingOrganization {
     tier: Option<String>,
     status: u16,
     details: Option<Value>,
+}
+
+fn billing_stage(stage: Option<&str>) -> &'static str {
+    match stage {
+        Some("session_http") => "session_http",
+        Some("session_json") => "session_json",
+        Some("session_token") => "session_token",
+        Some("accounts_http") => "accounts_http",
+        Some("accounts_json") => "accounts_json",
+        Some("accounts_schema") => "accounts_schema",
+        Some("account_id_schema") => "account_id_schema",
+        Some("account_plan_schema") => "account_plan_schema",
+        Some("account_subscription_schema") => "account_subscription_schema",
+        Some("subscription_http") => "subscription_http",
+        Some("subscription_json") => "subscription_json",
+        Some("origin_guard") => "origin_guard",
+        Some("read_missing") => "read_missing",
+        Some("read_timeout") => "read_timeout",
+        Some("ready") => "ready",
+        _ => "unknown",
+    }
+}
+
+fn billing_http_status(status: Option<u16>) -> Option<u16> {
+    status.filter(|status| (100..=599).contains(status))
+}
+
+fn billing_read_error(read: &BillingRead) -> String {
+    format!(
+        "Billing diagnostic: stage={}, http_status={:?}, account_count={:?}, pending={}, temporary_target={:?}",
+        billing_stage(read.stage.as_deref()),
+        billing_http_status(read.status),
+        read.account_count.filter(|count| *count <= 33),
+        read.state == "pending",
+        read.temporary_target
+    )
+}
+
+fn billing_failure(stage: &'static str) -> String {
+    format!("Billing diagnostic: {stage}")
+}
+
+fn billing_account_stage<'a>(
+    reads: &'a [BillingRead],
+    provider: &str,
+    account: &str,
+    now: chrono::DateTime<Utc>,
+) -> (&'static str, Option<u16>, Option<&'a BillingOrganization>) {
+    let Some(read) = reads.first().filter(|_| reads.len() == 1) else {
+        return ("read_schema", None, None);
+    };
+    if read.state != "ready" {
+        return (
+            billing_stage(read.stage.as_deref()),
+            billing_http_status(read.status),
+            None,
+        );
+    }
+    let Some(org) = read
+        .organizations
+        .iter()
+        .find(|org| org.uuid.eq_ignore_ascii_case(account))
+    else {
+        return ("exact_account_missing", None, None);
+    };
+    let stage = if org.status != 200 {
+        "subscription_http"
+    } else if matches!(
+        (provider, org.plan_type.as_str()),
+        ("claude", "claude_free") | ("codex", "free")
+    ) {
+        "free_plan"
+    } else if uc_providers::BillingPeriods::plan_for(provider, &org.plan_type, org.tier.as_deref())
+        .is_none()
+    {
+        "unsupported_plan"
+    } else if let Some(end) = org
+        .details
+        .as_ref()
+        .and_then(|details| billing_end(provider, details))
+    {
+        if end > now {
+            "confirmed"
+        } else {
+            "expired_end"
+        }
+    } else if org.details.as_ref().is_some_and(|details| {
+        details["status"]
+            .as_str()
+            .is_some_and(|status| status.trim().eq_ignore_ascii_case("active"))
+    }) {
+        "active_missing_end"
+    } else {
+        "subscription_inactive_or_unknown"
+    };
+    (stage, billing_http_status(Some(org.status)), Some(org))
+}
+
+#[cfg(test)]
+fn billing_plan_label(plan: &str) -> &'static str {
+    match plan {
+        "claude_max" => "claude_max",
+        "claude_pro" => "claude_pro",
+        "claude_team" => "claude_team",
+        "claude_free" => "claude_free",
+        "free" => "free",
+        "plus" => "plus",
+        "pro" => "pro",
+        "prolite" => "prolite",
+        "team" => "team",
+        "business" => "business",
+        "enterprise" => "enterprise",
+        "edu" => "edu",
+        "go" => "go",
+        _ => "other",
+    }
 }
 
 fn billing_origin(provider: &str, url: &Url) -> bool {
@@ -435,24 +568,36 @@ fn billing_script(provider: &str, key: &str) -> String {
 const key = {key};
 window[key] = {{state: 'pending'}};
 (async () => {{
+let stage = 'session_http';
+let accountCount;
 try {{
+window[key].stage = stage;
 const session = await fetch('/api/auth/session', {{credentials: 'same-origin'}});
-if (!session.ok) {{ window[key] = {{state: 'failed', status: session.status}}; return; }}
+if (!session.ok) {{ window[key] = {{state: 'failed', stage, status: session.status}}; return; }}
+stage = 'session_json';
+window[key].stage = stage;
 const authentication = await session.json();
-if (typeof authentication.accessToken !== 'string' || !authentication.accessToken) {{ window[key] = {{state: 'failed', status: 401}}; return; }}
+if (typeof authentication.accessToken !== 'string' || !authentication.accessToken) {{ window[key] = {{state: 'failed', stage: 'session_token', status: 401}}; return; }}
+stage = 'accounts_http';
+window[key].stage = stage;
 const response = await fetch('/backend-api/accounts/check/v4-2023-04-27', {{credentials: 'same-origin', headers: {{Authorization: 'Bearer ' + authentication.accessToken}}}});
-if (!response.ok) {{ window[key] = {{state: 'failed', status: response.status}}; return; }}
+if (!response.ok) {{ window[key] = {{state: 'failed', stage, status: response.status}}; return; }}
+stage = 'accounts_json';
+window[key].stage = stage;
 const data = await response.json();
-if (!data.accounts || typeof data.accounts !== 'object' || Array.isArray(data.accounts) || Object.keys(data.accounts).length > 33) {{ window[key] = {{state: 'failed'}}; return; }}
+stage = 'accounts_schema';
+if (!data.accounts || typeof data.accounts !== 'object' || Array.isArray(data.accounts) || Object.keys(data.accounts).length > 33) {{ window[key] = {{state: 'failed', stage}}; return; }}
+accountCount = Object.keys(data.accounts).length;
 const rows = [];
 for (const [uuid, value] of Object.entries(data.accounts)) {{
 if (uuid === 'default') continue;
-if (!/^[0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}}$/i.test(uuid) || uuid === '00000000-0000-0000-0000-000000000000') {{ window[key] = {{state: 'failed'}}; return; }}
-if (typeof value?.account?.plan_type !== 'string' || typeof value?.entitlement?.has_active_subscription !== 'boolean') {{ window[key] = {{state: 'failed'}}; return; }}
+if (!/^[0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}}$/i.test(uuid) || uuid === '00000000-0000-0000-0000-000000000000') {{ window[key] = {{state: 'failed', stage: 'account_id_schema', accountCount}}; return; }}
+if (typeof value?.account?.plan_type !== 'string') {{ window[key] = {{state: 'failed', stage: 'account_plan_schema', accountCount}}; return; }}
+if (typeof value?.entitlement?.has_active_subscription !== 'boolean') {{ window[key] = {{state: 'failed', stage: 'account_subscription_schema', accountCount}}; return; }}
 rows.push({{uuid, planType: value.account.plan_type, tier: null, status: 200, details: {{status: value.entitlement.has_active_subscription ? 'active' : 'inactive', expires_at: value.entitlement.expires_at ?? null}}}});
 }}
-window[key] = {{state: 'ready', organizations: rows}};
-}} catch {{ window[key] = {{state: 'failed'}}; }}
+window[key] = {{state: 'ready', stage: 'ready', accountCount, organizations: rows}};
+}} catch {{ window[key] = {{state: 'failed', stage, accountCount}}; }}
 }})();
 }})()"#
         );
@@ -462,11 +607,16 @@ window[key] = {{state: 'ready', organizations: rows}};
 const key = {key};
 window[key] = {{state: 'pending'}};
 (async () => {{
+let stage = 'accounts_http';
 try {{
+window[key].stage = stage;
 const response = await fetch('/api/organizations', {{credentials: 'same-origin'}});
-if (!response.ok) {{ window[key] = {{state: 'failed', status: response.status}}; return; }}
+if (!response.ok) {{ window[key] = {{state: 'failed', stage, status: response.status}}; return; }}
+stage = 'accounts_json';
+window[key].stage = stage;
 const organizations = await response.json();
-if (!Array.isArray(organizations) || organizations.length > 32) {{ window[key] = {{state: 'failed'}}; return; }}
+stage = 'accounts_schema';
+if (!Array.isArray(organizations) || organizations.length > 32) {{ window[key] = {{state: 'failed', stage}}; return; }}
 const rows = [];
 for (const org of organizations) {{
 const capabilities = Array.isArray(org.capabilities) ? org.capabilities : [];
@@ -475,16 +625,20 @@ if (typeof org.uuid !== 'string' || !/^[0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}
 const planType = capabilities.find(value => ['claude_max', 'claude_pro', 'claude_team'].includes(value)) || 'claude_free';
 const tier = typeof org.rate_limit_tier === 'string' ? org.rate_limit_tier : null;
 if (planType === 'claude_free') {{ rows.push({{uuid: org.uuid, planType, tier, status: 200, details: {{status: 'inactive'}}}}); continue; }}
+stage = 'subscription_http';
+window[key].stage = stage;
 const billing = await fetch('/api/organizations/' + encodeURIComponent(org.uuid) + '/subscription_details', {{credentials: 'same-origin'}});
 let details = null;
 if (billing.ok) {{
+stage = 'subscription_json';
+window[key].stage = stage;
 const data = await billing.json();
 details = {{status: data.status ?? null, next_charge_at: data.next_charge_at ?? null, plan_ending_at: data.plan_ending_at ?? null}};
 }}
 rows.push({{uuid: org.uuid, planType, tier, status: billing.status, details}});
 }}
-window[key] = {{state: 'ready', organizations: rows}};
-}} catch {{ window[key] = {{state: 'failed'}}; }}
+window[key] = {{state: 'ready', stage: 'ready', accountCount: organizations.length, organizations: rows}};
+}} catch {{ window[key] = {{state: 'failed', stage}}; }}
 }})();
 }})()"#
     )
@@ -710,20 +864,23 @@ pub async fn run_billing_reader(app: AppHandle) {
                 continue;
             }
             match read_chrome_billing(provider, &windows.browser_billing).await {
-                Ok(reads) => match store_chrome_billing(&periods, provider, reads, Utc::now()) {
-                    Ok(true) => {
-                        tracing::info!(
-                            provider,
-                            "Billing refreshed from the existing browser login"
-                        );
-                        changed.insert(provider.to_string());
+                Ok(reads) => {
+                    report_browser_billing(&app, provider, &account_ids, &reads).await;
+                    match store_chrome_billing(&periods, provider, reads, Utc::now()) {
+                        Ok(true) => {
+                            tracing::info!(
+                                provider,
+                                "Billing refreshed from the existing browser login"
+                            );
+                            changed.insert(provider.to_string());
+                        }
+                        Ok(false) => {}
+                        Err(error) => {
+                            tracing::debug!(%error, provider, "Browser billing could not be saved")
+                        }
                     }
-                    Ok(false) => {}
-                    Err(error) => {
-                        tracing::debug!(%error, provider, "Browser billing could not be saved")
-                    }
-                },
-                Err(error) => tracing::debug!(%error, provider, "Browser billing is unavailable"),
+                }
+                Err(error) => tracing::info!(%error, provider, "Browser billing diagnostic"),
             }
         }
         for session in sessions
@@ -758,6 +915,40 @@ pub async fn run_billing_reader(app: AppHandle) {
         } else {
             0
         };
+    }
+}
+
+async fn report_browser_billing(
+    app: &AppHandle,
+    provider: &str,
+    account_ids: &[String],
+    reads: &[BillingRead],
+) {
+    let accounts = app.state::<crate::account_commands::Accounts>();
+    let now = Utc::now();
+    let account_count = reads
+        .first()
+        .map_or(0, |read| read.organizations.len().min(32));
+    for id in account_ids
+        .iter()
+        .filter(|id| billing_provider(id) == Some(provider))
+    {
+        let Ok(uuid) = accounts.billing_account_uuid(id).await else {
+            tracing::info!(
+                provider,
+                stage = "local_account_identity",
+                "Browser billing diagnostic"
+            );
+            continue;
+        };
+        let (stage, http_status, _) = billing_account_stage(reads, provider, &uuid, now);
+        tracing::info!(
+            provider,
+            stage,
+            ?http_status,
+            account_count,
+            "Browser billing diagnostic"
+        );
     }
 }
 
@@ -844,8 +1035,7 @@ async fn read_chrome_billing(
 }
 
 async fn chrome_billing_endpoint() -> Result<Url, String> {
-    let unavailable =
-        || "Open the signed-in Chrome Default profile with remote debugging enabled".to_string();
+    let unavailable = || billing_failure("chrome_endpoint_unavailable");
     let directory = chrome_data_directory().ok_or_else(unavailable)?;
     let state: Value = serde_json::from_slice(
         &tokio::fs::read(directory.join("Local State"))
@@ -854,7 +1044,7 @@ async fn chrome_billing_endpoint() -> Result<Url, String> {
     )
     .map_err(|_| unavailable())?;
     if !chrome_default_profile(&state) {
-        return Err(unavailable());
+        return Err(billing_failure("chrome_default_profile_guard"));
     }
     let port_file = directory.join("DevToolsActivePort");
     if tokio::fs::metadata(&port_file)
@@ -893,8 +1083,6 @@ async fn read_chrome_billing_shared(
     socket: &Url,
     shared: &SharedChromeConnection,
 ) -> Result<Vec<BillingRead>, String> {
-    let unavailable =
-        || "The signed-in Chrome Default profile could not confirm billing".to_string();
     let mut stored = shared.lock().await;
     if stored
         .as_ref()
@@ -907,8 +1095,18 @@ async fn read_chrome_billing_shared(
         let configuration = WebSocketConfig::default()
             .max_message_size(Some(1024 * 1024))
             .max_frame_size(Some(1024 * 1024));
+        let connect_timeout = Duration::from_secs(120);
+        #[cfg(test)]
+        let connect_timeout = if matches!(
+            std::env::var("UC_BILLING_PROBE_PROVIDER").as_deref(),
+            Ok("claude" | "codex")
+        ) {
+            Duration::from_secs(600)
+        } else {
+            connect_timeout
+        };
         let (connection, _) = tokio::time::timeout(
-            Duration::from_secs(120),
+            connect_timeout,
             tokio_tungstenite::connect_async_with_config(
                 socket.as_str(),
                 Some(configuration),
@@ -916,8 +1114,8 @@ async fn read_chrome_billing_shared(
             ),
         )
         .await
-        .map_err(|_| unavailable())?
-        .map_err(|_| unavailable())?;
+        .map_err(|_| billing_failure("chrome_connect_timeout"))?
+        .map_err(|_| billing_failure("chrome_connect_failed"))?;
         *stored = Some(ChromeConnection {
             id: uuid::Uuid::new_v4(),
             endpoint: socket.clone(),
@@ -932,7 +1130,7 @@ async fn read_chrome_billing_shared(
         collect_chrome_billing(provider, connection, shared),
     )
     .await
-    .map_err(|_| "The Chrome billing request timed out".to_string())?
+    .map_err(|_| billing_failure("chrome_collection_timeout"))?
 }
 
 async fn collect_chrome_billing(
@@ -940,8 +1138,6 @@ async fn collect_chrome_billing(
     connection: &mut ChromeConnection,
     shared: &SharedChromeConnection,
 ) -> Result<Vec<BillingRead>, String> {
-    let unavailable =
-        || "The signed-in Chrome Default profile could not confirm billing".to_string();
     let host = official_url(provider)?.host_str().unwrap().to_string();
     let version = chrome_request(
         connection,
@@ -952,7 +1148,7 @@ async fn collect_chrome_billing(
         .as_str()
         .is_some_and(|product| product.starts_with("Chrome/"))
     {
-        return Err(unavailable());
+        return Err(billing_failure("chrome_product_guard"));
     }
     let contexts = chrome_request(
         connection,
@@ -983,6 +1179,11 @@ async fn collect_chrome_billing(
         .and_then(|page| page["targetId"].as_str())
         .map(str::to_owned);
     let temporary = target.is_none();
+    tracing::info!(
+        provider,
+        temporary_target = temporary,
+        "Browser billing target"
+    );
     let mut cleanup = ChromeTargetGuard {
         connection: shared.clone(),
         connection_id: connection.id,
@@ -1008,7 +1209,7 @@ async fn collect_chrome_billing(
             let target = created["targetId"]
                 .as_str()
                 .filter(|id| !id.is_empty())
-                .ok_or_else(unavailable)?
+                .ok_or_else(|| billing_failure("chrome_create_target_schema"))?
                 .to_owned();
             cleanup.target = Some(target.clone());
             cleanup.creating_target = false;
@@ -1022,27 +1223,30 @@ async fn collect_chrome_billing(
         "targetId":target,"flatten":true}}),
     )
     .await?;
-    let session = attached["sessionId"].as_str().ok_or_else(unavailable)?;
+    let session = attached["sessionId"]
+        .as_str()
+        .ok_or_else(|| billing_failure("chrome_attach_schema"))?;
     cleanup.session = Some(session.to_string());
     cleanup.attaching_target = None;
     let key = format!("__ucBilling{}", uuid::Uuid::new_v4().simple());
     let script = billing_script(provider, &key);
+    let key_literal = serde_json::to_string(&key).unwrap();
+    let origin_guard = format!(
+        "if (location.protocol !== 'https:' || location.hostname !== {}) return {{state:'failed',stage:'origin_guard'}};",
+        serde_json::to_string(&host).unwrap()
+    );
     let expression = format!(
-        r#"(async () => {{
-if (location.protocol !== 'https:' || location.hostname !== {host_literal}) return {{state:'failed'}};
+        r#"(() => {{
+{origin_guard}
 {script};
-const key = {};
-const deadline = Date.now() + 20000;
-while (window[key]?.state === 'pending' && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 100));
-const read = window[key] ?? {{state:'failed'}};
-delete window[key];
-return read;
-}})()"#,
-        serde_json::to_string(&key).unwrap(),
-        host_literal = serde_json::to_string(&host).unwrap()
+return window[{key_literal}];
+}})()"#
+    );
+    let poll_expression = format!(
+        "(() => {{ {origin_guard} return window[{key_literal}] ?? {{state:'failed',stage:'read_missing'}}; }})()"
     );
     let request = serde_json::json!({"id":5,"sessionId":session,"method":"Runtime.evaluate","params":{
-        "expression":expression,"awaitPromise":true,"returnByValue":true}});
+        "expression":expression,"returnByValue":true}});
     let response = async {
         if temporary {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
@@ -1050,12 +1254,23 @@ return read;
                 let state = chrome_request(connection, serde_json::json!({"id":9,"sessionId":session,
                     "method":"Runtime.evaluate","params":{"expression":format!("location.protocol === 'https:' && location.hostname === {} && document.readyState === 'complete'", serde_json::to_string(&host).unwrap()),"returnByValue":true}})).await?;
                 if state["result"]["value"] == true { break; }
-                if tokio::time::Instant::now() >= deadline { return Err(unavailable()); }
+                if tokio::time::Instant::now() >= deadline { return Err(billing_failure("chrome_target_ready_timeout")); }
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
         }
-        chrome_request(connection, request).await
+        let response = chrome_request(connection, request).await?;
+        let mut read = parse_chrome_billing_response(&response)?;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        while read.state == "pending" && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let response = chrome_request(connection, serde_json::json!({"sessionId":session,"method":"Runtime.evaluate","params":{
+                "expression":poll_expression,"returnByValue":true}})).await?;
+            read = parse_chrome_billing_response(&response)?;
+        }
+        Ok::<_, String>(read)
     }.await;
+    let _ = chrome_request(connection, serde_json::json!({"sessionId":session,"method":"Runtime.evaluate","params":{
+        "expression":format!("(() => {{ {origin_guard} delete window[{key_literal}]; }})()"),"returnByValue":true}})).await;
     if chrome_request(connection, serde_json::json!({"id":6,"method":"Target.detachFromTarget","params":{"sessionId":session}})).await.is_ok() {
         cleanup.session = None;
     }
@@ -1069,16 +1284,20 @@ return read;
     {
         cleanup.target = None;
     }
-    let response = response?;
-    if response.get("exceptionDetails").is_some() {
-        return Err(unavailable());
-    }
-    let read: BillingRead =
-        serde_json::from_value(response["result"]["value"].clone()).map_err(|_| unavailable())?;
+    let mut read = response.map_err(|error| format!("{error}, temporary_target={temporary}"))?;
+    read.temporary_target = Some(temporary);
     if read.state != "ready" && !matches!(read.status, Some(401 | 403)) {
-        return Err(unavailable());
+        return Err(billing_read_error(&read));
     }
     Ok(vec![read])
+}
+
+fn parse_chrome_billing_response(response: &Value) -> Result<BillingRead, String> {
+    if response.get("exceptionDetails").is_some() {
+        return Err(billing_failure("chrome_evaluate_exception"));
+    }
+    serde_json::from_value(response["result"]["value"].clone())
+        .map_err(|_| billing_failure("chrome_read_schema"))
 }
 
 type ChromeSocket =
@@ -1155,7 +1374,19 @@ async fn chrome_request(
     mut request: Value,
 ) -> Result<Value, String> {
     use tokio_tungstenite::tungstenite::Message;
-    let unavailable = || "The signed-in browser session could not confirm billing".to_string();
+    let operation = match request["method"].as_str() {
+        Some("Browser.getVersion") => "version",
+        Some("Target.getBrowserContexts") => "contexts",
+        Some("Target.getTargets") => "targets",
+        Some("Target.createTarget") => "create_target",
+        Some("Target.attachToTarget") => "attach",
+        Some("Target.detachFromTarget") => "detach",
+        Some("Target.closeTarget") => "close_target",
+        Some("Runtime.evaluate") => "evaluate",
+        _ => "unknown",
+    };
+    let unavailable =
+        |reason: &'static str| format!("Billing diagnostic: chrome_{operation}_{reason}");
     let deadline = if request["params"]["awaitPromise"] == true {
         Duration::from_secs(24)
     } else {
@@ -1172,30 +1403,31 @@ async fn chrome_request(
             .is_err()
         {
             connection.broken = true;
-            return Err(unavailable());
+            return Err(unavailable("send"));
         }
         while let Some(message) = connection.socket.next().await {
             let message = message.map_err(|_| {
                 connection.broken = true;
-                unavailable()
+                unavailable("receive")
             })?;
             let Message::Text(text) = message else {
                 continue;
             };
-            let response: Value = serde_json::from_str(&text).map_err(|_| unavailable())?;
+            let response: Value =
+                serde_json::from_str(&text).map_err(|_| unavailable("protocol_json"))?;
             if response["id"] != id {
                 continue;
             }
             if response.get("error").is_some() {
-                return Err(unavailable());
+                return Err(unavailable("protocol_error"));
             }
             return Ok(response["result"].clone());
         }
         connection.broken = true;
-        Err(unavailable())
+        Err(unavailable("closed"))
     })
     .await
-    .map_err(|_| unavailable())?
+    .map_err(|_| unavailable("timeout"))?
 }
 
 fn store_chrome_billing(
@@ -1230,13 +1462,18 @@ mod tests {
         let provider =
             std::env::var("UC_BILLING_PROBE_PROVIDER").unwrap_or_else(|_| "codex".into());
         assert!(matches!(provider.as_str(), "claude" | "codex"));
-        let reads = read_chrome_billing(&provider, &Default::default())
-            .await
-            .unwrap();
+        let started = std::time::Instant::now();
+        let result = read_chrome_billing(&provider, &Default::default()).await;
+        eprintln!(
+            "Billing diagnostic: elapsed_ms={}",
+            started.elapsed().as_millis()
+        );
+        let reads = result.unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(reads.len(), 1);
-        assert_eq!(
-            reads[0].state, "ready",
-            "The existing browser session is not signed in"
+        eprintln!("{}", billing_read_error(&reads[0]));
+        assert!(
+            reads[0].state == "ready",
+            "The browser billing read did not complete"
         );
         let store = std::sync::Arc::new(uc_accounts::AccountStore::default_store());
         let records = store.list().unwrap();
@@ -1255,13 +1492,13 @@ mod tests {
         for id in ids {
             let Ok(uuid) = uc_providers::accounts::billing_account_uuid(store.clone(), &cli, &id)
             else {
+                eprintln!("Billing diagnostic: stage=local_account_identity");
                 continue;
             };
-            if let Some(org) = reads[0]
-                .organizations
-                .iter()
-                .find(|org| org.uuid.eq_ignore_ascii_case(&uuid) && org.status == 200)
-            {
+            let (stage, http_status, org) =
+                billing_account_stage(&reads, &provider, &uuid, Utc::now());
+            eprintln!("Billing diagnostic: stage={stage}, http_status={http_status:?}");
+            if let Some(org) = org {
                 matched += 1;
                 paid_accounts += usize::from(
                     uc_providers::BillingPeriods::plan_for(
@@ -1274,12 +1511,8 @@ mod tests {
                 confirmed_periods +=
                     usize::from(billing_read_confirms(&reads, &provider, &uuid, Utc::now()));
                 eprintln!(
-                    "Matched {provider} billing: plan={}, tier={:?}, status={:?}, confirmed_end={:?}",
-                    org.plan_type,
-                    org.tier,
-                    org.details
-                        .as_ref()
-                        .and_then(|details| details["status"].as_str()),
+                    "Matched {provider} billing: plan={}, confirmed_end={:?}",
+                    billing_plan_label(&org.plan_type),
                     org.details
                         .as_ref()
                         .and_then(|details| billing_end(&provider, details))
@@ -1294,6 +1527,205 @@ mod tests {
             "Existing {provider} browser login: {matched} matched accounts, {paid_accounts} paid accounts, {confirmed_periods} confirmed billing periods"
         );
         assert_eq!(confirmed_periods, paid_accounts);
+    }
+
+    #[test]
+    fn billing_diagnostics_redact_untrusted_values_and_classify_exact_matches() {
+        let untrusted = "https://example.invalid/?token=secret@example.invalid";
+        let read: BillingRead = serde_json::from_value(serde_json::json!({
+            "state":"failed", "stage":untrusted, "status":65535, "accountCount":100000
+        }))
+        .unwrap();
+        assert_eq!(
+            billing_read_error(&read),
+            "Billing diagnostic: stage=unknown, http_status=None, account_count=None, pending=false, temporary_target=None"
+        );
+        assert_eq!(billing_plan_label(untrusted), "other");
+        let now = Utc::now();
+        let account = "00000000-0000-4000-8000-000000000001";
+        let mut reads = vec![paid_read("codex", account, now + chrono::Duration::days(1))];
+        assert_eq!(
+            billing_account_stage(&reads, "codex", account, now).0,
+            "confirmed"
+        );
+        assert_eq!(
+            billing_account_stage(&reads, "codex", "00000000-0000-4000-8000-000000000002", now).0,
+            "exact_account_missing"
+        );
+        reads[0].organizations[0].details.as_mut().unwrap()["expires_at"] = Value::Null;
+        assert_eq!(
+            billing_account_stage(&reads, "codex", account, now).0,
+            "active_missing_end"
+        );
+        reads[0].organizations[0].status = 503;
+        assert_eq!(
+            billing_account_stage(&reads, "codex", account, now).0,
+            "subscription_http"
+        );
+        reads[0].organizations[0].status = 200;
+        reads[0].organizations[0].plan_type = "free".into();
+        assert_eq!(
+            billing_account_stage(&reads, "codex", account, now).0,
+            "free_plan"
+        );
+        assert_eq!(
+            billing_account_stage(&reads, "claude", account, now).0,
+            "unsupported_plan"
+        );
+    }
+
+    #[tokio::test]
+    async fn browser_diagnostics_keep_http_schema_and_protocol_failures_distinct() {
+        use tokio_tungstenite::tungstenite::Message;
+        for (payload, expected) in [
+            (
+                serde_json::json!({"state":"failed","stage":"session_http","status":401}),
+                "stage=session_http, http_status=Some(401)",
+            ),
+            (
+                serde_json::json!({"state":"failed","stage":"accounts_http","status":403}),
+                "stage=accounts_http, http_status=Some(403)",
+            ),
+            (
+                serde_json::json!({"state":"failed","stage":"account_subscription_schema","accountCount":3}),
+                "stage=account_subscription_schema, http_status=None, account_count=Some(3)",
+            ),
+            (
+                serde_json::json!({"state":"failed","stage":"secret@example.invalid","status":503}),
+                "stage=unknown, http_status=Some(503)",
+            ),
+            (Value::Null, "chrome_version_protocol_error"),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let socket = Url::parse(&format!(
+                "ws://{}/devtools/browser/fixture",
+                listener.local_addr().unwrap()
+            ))
+            .unwrap();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut connection = tokio_tungstenite::accept_async(stream).await.unwrap();
+                while let Some(Ok(Message::Text(text))) = connection.next().await {
+                    let request: Value = serde_json::from_str(&text).unwrap();
+                    let response = if payload.is_null() {
+                        serde_json::json!({"id":request["id"],"error":{"message":"secret@example.invalid", "code":-32000}})
+                    } else {
+                        let result = match request["method"].as_str().unwrap() {
+                            "Browser.getVersion" => serde_json::json!({"product":"Chrome/fixture"}),
+                            "Target.getBrowserContexts" => {
+                                serde_json::json!({"defaultBrowserContextId":"default"})
+                            }
+                            "Target.getTargets" => {
+                                serde_json::json!({"targetInfos":[{"type":"page","targetId":"existing","browserContextId":"default","url":"https://chatgpt.com/"}]})
+                            }
+                            "Target.attachToTarget" => serde_json::json!({"sessionId":"attached"}),
+                            "Runtime.evaluate" => serde_json::json!({"result":{"value":payload}}),
+                            "Target.detachFromTarget" => serde_json::json!({}),
+                            _ => panic!("Unexpected CDP method"),
+                        };
+                        serde_json::json!({"id":request["id"],"result":result})
+                    };
+                    connection
+                        .send(Message::Text(response.to_string().into()))
+                        .await
+                        .unwrap();
+                }
+            });
+            let diagnostic = match read_chrome_billing_socket("codex", &socket).await {
+                Ok(reads) => billing_read_error(&reads[0]),
+                Err(error) => error,
+            };
+            assert!(
+                diagnostic.contains(expected),
+                "Unexpected sanitized diagnostic: {diagnostic}"
+            );
+            assert!(!diagnostic.contains("secret"));
+            tokio::time::timeout(Duration::from_secs(2), server)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_billing_polls_natively_without_waiting_for_background_page_timers() {
+        use tokio_tungstenite::tungstenite::Message;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let socket = Url::parse(&format!(
+            "ws://{}/devtools/browser/fixture",
+            listener.local_addr().unwrap()
+        ))
+        .unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut connection = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let mut started = 0;
+            let mut polls = 0;
+            let mut cleared = false;
+            while let Some(Ok(Message::Text(text))) = connection.next().await {
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let result = match request["method"].as_str().unwrap() {
+                    "Browser.getVersion" => serde_json::json!({"product":"Chrome/fixture"}),
+                    "Target.getBrowserContexts" => {
+                        serde_json::json!({"defaultBrowserContextId":"default"})
+                    }
+                    "Target.getTargets" => {
+                        serde_json::json!({"targetInfos":[{"type":"page","targetId":"existing","browserContextId":"default","url":"https://chatgpt.com/"}]})
+                    }
+                    "Target.attachToTarget" => serde_json::json!({"sessionId":"attached"}),
+                    "Runtime.evaluate" => {
+                        assert_ne!(request["params"]["awaitPromise"], true);
+                        let expression = request["params"]["expression"].as_str().unwrap();
+                        assert!(!expression.contains("setTimeout"));
+                        assert!(expression.contains("location.hostname"));
+                        assert!(expression.contains("location.protocol"));
+                        if expression.contains("delete window[") {
+                            cleared = true;
+                            serde_json::json!({"result":{}})
+                        } else if expression.contains("/api/auth/session") {
+                            started += 1;
+                            serde_json::json!({"result":{"value":{"state":"pending","stage":"session_http"}}})
+                        } else {
+                            polls += 1;
+                            if polls == 1 {
+                                serde_json::json!({"result":{"value":{"state":"pending","stage":"accounts_http"}}})
+                            } else {
+                                serde_json::json!({"result":{"value":{"state":"ready","stage":"ready","organizations":[]}}})
+                            }
+                        }
+                    }
+                    "Target.detachFromTarget" => {
+                        assert!(cleared);
+                        serde_json::json!({})
+                    }
+                    _ => panic!("Unexpected CDP method"),
+                };
+                connection
+                    .send(Message::Text(
+                        serde_json::json!({"id":request["id"],"result":result})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+            assert_eq!(started, 1);
+            assert_eq!(polls, 2);
+            assert!(cleared);
+        });
+        let reads = tokio::time::timeout(
+            Duration::from_secs(2),
+            read_chrome_billing_socket("codex", &socket),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(reads[0].state, "ready");
+        assert_eq!(reads[0].temporary_target, Some(false));
+        tokio::time::timeout(Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     #[test]
@@ -2024,18 +2456,11 @@ mod tests {
                         serde_json::json!({"sessionId":"attached"})
                     }
                     "Runtime.evaluate" => {
-                        assert!(
-                            request["params"]["expression"]
-                                .as_str()
-                                .unwrap()
-                                .contains("/api/auth/session")
-                        );
-                        assert!(
-                            request["params"]["expression"]
-                                .as_str()
-                                .unwrap()
-                                .contains("Authorization: 'Bearer '")
-                        );
+                        let expression = request["params"]["expression"].as_str().unwrap();
+                        if !expression.contains("delete window[") {
+                            assert!(expression.contains("/api/auth/session"));
+                            assert!(expression.contains("Authorization: 'Bearer '"));
+                        }
                         serde_json::json!({"result":{"value":{"state":"failed","status":401}}})
                     }
                     "Target.detachFromTarget" => {
@@ -2106,7 +2531,12 @@ mod tests {
                             assert_eq!(request["params"]["targetId"], "temporary");
                             serde_json::json!({"sessionId":"attached"})
                         }
-                        "Runtime.evaluate" if request["params"]["awaitPromise"] != true => {
+                        "Runtime.evaluate"
+                            if request["params"]["expression"]
+                                .as_str()
+                                .unwrap()
+                                .contains("document.readyState") =>
+                        {
                             serde_json::json!({"result":{"value":true}})
                         }
                         "Runtime.evaluate" => {
@@ -2144,6 +2574,7 @@ mod tests {
         provider: uc_core::Provider,
         account: String,
         periods: uc_providers::BillingPeriods,
+        calls: std::sync::atomic::AtomicUsize,
     }
 
     #[async_trait::async_trait]
@@ -2158,6 +2589,7 @@ mod tests {
             true
         }
         async fn refresh(&self, _: uc_core::RefreshContext) -> uc_core::ProviderSnapshot {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let now = Utc::now();
             let mut snapshot = uc_core::ProviderSnapshot::make(
                 &self.provider,
@@ -2192,6 +2624,7 @@ mod tests {
                     provider: uc_core::Provider::new(format!("codex@{account}"), "Codex"),
                     account: account.into(),
                     periods: periods.clone(),
+                    calls: Default::default(),
                 }) as std::sync::Arc<dyn uc_core::ProviderRuntime>
             })
             .collect();
@@ -2235,6 +2668,93 @@ mod tests {
                 .plan_term
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn synchronized_billing_only_refreshes_changed_local_accounts() {
+        let directory = tempfile::tempdir().unwrap();
+        let periods = uc_providers::BillingPeriods::new(directory.path().join("billing"));
+        let first = "00000000-0000-4000-8000-000000000001";
+        let second = "00000000-0000-4000-8000-000000000002";
+        let now = Utc::now();
+        for account in [first, second] {
+            periods
+                .save_from(
+                    "codex",
+                    account,
+                    "Pro 5x",
+                    Some(now + chrono::Duration::days(7)),
+                    now,
+                    "fixture",
+                )
+                .unwrap();
+        }
+        let providers: Vec<_> = [("codex", first), ("codex", second), ("other", first)]
+            .into_iter()
+            .map(|(family, account)| {
+                std::sync::Arc::new(StoredBillingProvider {
+                    provider: uc_core::Provider::new(format!("{family}@{account}"), family),
+                    account: account.into(),
+                    periods: periods.clone(),
+                    calls: Default::default(),
+                })
+            })
+            .collect();
+        let config = uc_engine::EngineConfig::default();
+        let engine = uc_engine::Engine::new(
+            providers
+                .iter()
+                .map(|provider| provider.clone() as std::sync::Arc<dyn uc_core::ProviderRuntime>)
+                .collect(),
+            uc_engine::SnapshotCache::new(
+                directory.path().join("cache.json"),
+                config.refresh_interval,
+            ),
+            config,
+        );
+        let ids = engine.provider_ids();
+        for id in &ids {
+            engine.refresh(id, true).await;
+        }
+        for account in [first, second] {
+            periods.invalidate_for("codex", account).unwrap();
+        }
+
+        refresh_synced_billing_accounts(&engine, &[]).await;
+        for provider in &providers {
+            assert_eq!(provider.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert!(
+                engine.snapshots()[&provider.provider.id]
+                    .plan_term
+                    .is_some()
+            );
+        }
+
+        let changed = format!("codex@{first}");
+        refresh_synced_billing_accounts(
+            &engine,
+            &[
+                changed.clone(),
+                changed.clone(),
+                format!("other@{first}"),
+                "codex@unknown".into(),
+                "codex@".into(),
+            ],
+        )
+        .await;
+        assert!(engine.snapshots()[&changed].plan_term.is_none());
+        assert_eq!(
+            providers[0].calls.load(std::sync::atomic::Ordering::SeqCst),
+            2
+        );
+        for provider in &providers[1..] {
+            assert_eq!(provider.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert!(
+                engine.snapshots()[&provider.provider.id]
+                    .plan_term
+                    .is_some()
+            );
+        }
     }
 
     struct BlockingBillingProvider {

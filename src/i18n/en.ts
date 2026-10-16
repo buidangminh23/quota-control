@@ -398,6 +398,13 @@ export const en: Messages = {
   },
   accounts: {
     connected: "Connected Accounts",
+    synced: "Synced Accounts",
+    requiresLogin: "Connection needed on this device",
+    connectHere: "Connect",
+    connectHereLabel: (account) => `Connect ${account} on this device`,
+    removeSyncedMessage: "Removes this account from the synced list. Logins on other devices are kept.",
+    removeConnectedMessage: "This account's saved login is deleted from this computer and its entry is removed from the synced list. CLI logins and logins on other devices are kept.",
+    rosterRemovalNote: "The account is also removed from the synced list.",
     none: "No accounts yet. Add one below to see your limits.",
     mode: (mode, cliName) =>
       ({

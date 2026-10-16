@@ -101,6 +101,43 @@ usagectl codex --force
 The CLI returns JSON and works with the app closed. While the app runs, the local API is available at
 `http://127.0.0.1:6736/v1/limits`. It allows requests from any origin, so local programs and web pages can read these limits.
 
+## Synchronize devices
+
+Quota Control can exchange account metadata, preferences, layouts, and confirmed billing dates between devices through an existing authenticated SSH connection. Each device needs a version of `usagectl` that supports `--sync-export` and `--sync-import`. The export command writes a versioned JSON document to stdout; import reads that document from stdin.
+
+Keep the transport configuration outside the repository. For example, a private `sync.json` can describe the local device and an SSH host alias:
+
+```json
+{
+  "version": 1,
+  "timeoutMs": 45000,
+  "peers": [
+    {
+      "name": "local-device",
+      "export": { "command": "usagectl", "args": ["--sync-export"] },
+      "import": { "command": "usagectl", "args": ["--sync-import"] }
+    },
+    {
+      "name": "other-device",
+      "export": { "command": "ssh", "args": ["-o", "BatchMode=yes", "other-device", "usagectl", "--sync-export"] },
+      "import": { "command": "ssh", "args": ["-o", "BatchMode=yes", "other-device", "usagectl", "--sync-import"] }
+    }
+  ]
+}
+```
+
+Use an absolute executable path when `usagectl` is absent from a scheduler's or SSH session's PATH. Add another peer with the same structure for a third device, then run:
+
+```sh
+node scripts/sync-devices.mjs --config /absolute/path/sync.json --once
+```
+
+Use the operating system's scheduler, such as Windows Task Scheduler or a macOS LaunchAgent, to run this command every 60 seconds under the signed-in user's account. Prevent overlapping runs. The transport also holds a per-configuration lock, keeps payloads in memory, bounds subprocess time and output, and reports counts and error categories. Exit codes are `0` for a complete exchange, `1` for partial availability or a failed peer operation, and `2` for a configuration or lock failure. Available peers continue synchronizing when another device is offline; absence never deletes its data.
+
+Preferences merge by field revision, with a stable device ID resolving concurrent edits to the same field. Provider visibility is stored per provider and applied only to providers known on the receiving device. Explicit removals carry tombstones so an older offline copy cannot restore them. Imported billing retains the provider's original observation time and is applied only to the exact locally connected account with a recently confirmed matching plan. Newer confirmed billing changes and cancellation records take precedence over older dates. Running apps reload imported preferences and account metadata automatically.
+
+OAuth sessions, API keys, browser profiles and permissions, native OS registrations, and local token history remain on their original device. An account received without local credentials appears as requiring sign-in. Each device continues collecting its own billing through its locally authorized browser connection; synchronization does not copy or grant browser access.
+
 ## Development
 
 Requires Rust, Node.js, pnpm and the [Tauri platform prerequisites](https://v2.tauri.app/start/prerequisites/).

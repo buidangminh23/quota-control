@@ -163,8 +163,12 @@ export class TauriBackend implements Backend {
     return invoke<T | null>("load_document", { name });
   }
 
-  saveDocument(name: DocumentName, value: unknown): Promise<void> {
-    return invoke("save_document", { name, value });
+  saveDocument(name: DocumentName, value: unknown, previous?: unknown): Promise<void> {
+    return invoke("save_document", { name, value, previous });
+  }
+
+  onDocumentsChanged(listener: () => void): Unsubscribe {
+    return subscribe("documents-changed", listener);
   }
 
   resizePopup(height: number): Promise<void> {

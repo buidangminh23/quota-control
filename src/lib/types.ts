@@ -333,10 +333,11 @@ export interface ConnectedAccount {
   id: string;
   provider: AccountProvider;
   label: string;
-  connectedAt: string;
-  updatedAt: string;
+  connectedAt?: string;
+  updatedAt?: string;
   /** `cli`: the live login of Claude Code or the Codex CLI on this computer, listed automatically. */
-  credentialMode: "shared_cli" | "managed_oauth" | "cli";
+  credentialMode?: "shared_cli" | "managed_oauth" | "cli";
+  requiresLogin?: boolean;
 }
 
 /** A card of a service beyond Claude and Codex that this computer has without anything saved in Quota Control. */

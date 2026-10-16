@@ -25,12 +25,25 @@ import type {
   UpdateStatus,
 } from "./types";
 import { accountDescriptors, accountProvider, fixtureAccounts, fixtureCatalog, fixtureEngineState, fixtureServices } from "./fixtures";
+
 import { FEED_FIXTURES } from "./insightsFeedFixtures";
 import { mockQualityHistory, mockQualitySummary } from "./insightsMock";
 import type { PublicFeedName, PublicFeedSnapshot, QualityInfo, QualityQuery, QualitySummary } from "./insightsTypes";
 import { localDay } from "./days";
 import { sampleLedger, summarizeUsage } from "./ledgerFixtures";
 import type { ContextWindowSession, ExchangeRate, UsageGroupRow, UsageLedgerInfo, UsageQuery } from "./types";
+
+function mergeDocumentChanges(current: unknown, previous: unknown, next: unknown): unknown {
+  if (JSON.stringify(previous) === JSON.stringify(next)) return current;
+  const object = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+  if (!object(previous) || !object(next)) return next;
+  const result = object(current) ? { ...current } : {};
+  for (const key of new Set([...Object.keys(previous), ...Object.keys(next)])) {
+    if (!(key in next)) delete result[key];
+    else result[key] = mergeDocumentChanges(result[key], previous[key], next[key]);
+  }
+  return result;
+}
 
 /** Vietcombank's USD selling rate on 26/09/2026 16:07, as the core would report it. */
 const SAMPLE_RATE: ExchangeRate = { usdToVnd: 26_170, publishedAt: "2026-09-26T16:07:07+07:00", fetchedAt: "2026-09-26T16:10:00+07:00", stale: false };
@@ -68,6 +81,7 @@ export class MockBackend implements Backend {
   private readonly navigateListeners = new Set<(screen: PopoverScreen) => void>();
   private readonly glanceActionListeners = new Set<(action: unknown) => void>();
   private readonly documents = new Map<DocumentName, unknown>();
+  private readonly documentListeners = new Set<() => void>();
   private readonly accounts: ConnectedAccount[] = fixtureAccounts();
   private removedLogins: { account: ConnectedAccount; entry: ProviderEntry; runtime: ProviderRuntimeState | undefined }[] = [];
   private readonly pendingLogins = new Map<string, { provider: string; method: SignInMethod | "cli"; timer?: ReturnType<typeof setTimeout> }>();
@@ -330,8 +344,18 @@ export class MockBackend implements Backend {
     return (this.documents.get(name) as T | undefined) ?? null;
   }
 
-  async saveDocument(name: DocumentName, value: unknown): Promise<void> {
-    this.documents.set(name, structuredClone(value));
+  async saveDocument(name: DocumentName, value: unknown, previous?: unknown): Promise<void> {
+    const current = this.documents.get(name);
+    this.documents.set(name, structuredClone(previous === undefined ? value : mergeDocumentChanges(current, previous, value)));
+  }
+
+  onDocumentsChanged(listener: () => void): Unsubscribe {
+    this.documentListeners.add(listener);
+    return () => this.documentListeners.delete(listener);
+  }
+
+  documentsChanged(): void {
+    for (const listener of this.documentListeners) listener();
   }
 
   async resizePopup(): Promise<void> {}

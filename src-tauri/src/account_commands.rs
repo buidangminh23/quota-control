@@ -80,16 +80,25 @@ impl Accounts {
     fn entries(&self) -> Result<Vec<AccountEntry>, String> {
         let records = self.store.list().map_err(safe_error)?;
         let cli = self.services.lock().shown_logins(&self.cli.lock());
-        Ok(uc_providers::visible_accounts(&records, &cli)
+        let entries = uc_providers::visible_accounts(&records, &cli)
             .into_iter()
             .map(AccountEntry::from)
-            .collect())
+            .collect();
+        let pending = uc_providers::device_sync::pending_accounts().unwrap_or_else(|_| {
+            tracing::warn!("Synchronized account metadata could not be read");
+            Vec::new()
+        });
+        Ok(merge_pending_accounts(entries, pending))
     }
 
     pub fn billing_label(&self, id: &str) -> Result<String, String> {
         self.entries()?
             .into_iter()
-            .find(|entry| entry.id == id && matches!(entry.provider.as_str(), "claude" | "codex"))
+            .find(|entry| {
+                entry.id == id
+                    && entry.requires_login != Some(true)
+                    && matches!(entry.provider.as_str(), "claude" | "codex")
+            })
             .map(|entry| entry.label)
             .ok_or_else(|| "Billing connection requires a connected subscription account".into())
     }
@@ -128,9 +137,14 @@ pub struct AccountEntry {
     id: String,
     provider: String,
     label: String,
-    connected_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-    credential_mode: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connected_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    credential_mode: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requires_login: Option<bool>,
 }
 
 impl From<VisibleAccount<'_>> for AccountEntry {
@@ -140,23 +154,46 @@ impl From<VisibleAccount<'_>> for AccountEntry {
                 id: record.id.clone(),
                 provider: record.provider.clone(),
                 label: record.label.clone(),
-                connected_at: record.connected_at,
-                updated_at: record.updated_at,
-                credential_mode: match record.credential_mode {
+                connected_at: Some(record.connected_at),
+                updated_at: Some(record.updated_at),
+                credential_mode: Some(match record.credential_mode {
                     CredentialMode::SharedCli => "shared_cli",
                     CredentialMode::ManagedOauth => "managed_oauth",
-                },
+                }),
+                requires_login: None,
             },
             VisibleAccount::Cli(login) => Self {
                 id: login.id.clone(),
                 provider: login.kind.cli().into(),
                 label: login.kind.cli().into(),
-                connected_at: login.updated_at,
-                updated_at: login.updated_at,
-                credential_mode: "cli",
+                connected_at: Some(login.updated_at),
+                updated_at: Some(login.updated_at),
+                credential_mode: Some("cli"),
+                requires_login: None,
             },
         }
     }
+}
+
+fn merge_pending_accounts(
+    mut entries: Vec<AccountEntry>,
+    pending: Vec<uc_providers::device_sync::AccountMetadata>,
+) -> Vec<AccountEntry> {
+    for account in pending {
+        if entries.iter().any(|entry| entry.id == account.id) {
+            continue;
+        }
+        entries.push(AccountEntry {
+            id: account.id,
+            provider: account.provider,
+            label: account.label,
+            connected_at: None,
+            updated_at: None,
+            credential_mode: None,
+            requires_login: Some(true),
+        });
+    }
+    entries
 }
 
 #[derive(Serialize)]
@@ -533,6 +570,11 @@ fn unfinished(
 /// Bring the popup back for a connected or failed sign-in, and tell it how the sign-in ended.
 fn report(app: &AppHandle, outcome: LoginOutcome) {
     if let Some(account_id) = billing_account_after_login(&outcome) {
+        if uc_providers::device_sync::restore_synced_account(account_id).is_err() {
+            tracing::warn!(
+                "Account connected, but synchronized account metadata could not be restored"
+            );
+        }
         crate::chat_commands::request_account_billing(app, account_id);
     }
     if matches!(outcome.status, "connected" | "failed")
@@ -770,9 +812,18 @@ pub async fn remove_account(
     account_id: String,
 ) -> Result<(), String> {
     let _changes = accounts.changes.lock().await;
+    let entry = accounts
+        .entries()?
+        .into_iter()
+        .find(|entry| entry.id == account_id)
+        .ok_or("Account is no longer listed")?;
+    if entry.requires_login == Some(true) {
+        return uc_providers::device_sync::remove_synced_account(&account_id);
+    }
     if accounts.is_cli_card(&account_id)? {
         let keys = accounts.keys();
-        tauri::async_runtime::spawn_blocking(move || keys.dismiss(&account_id))
+        let id = account_id.clone();
+        tauri::async_runtime::spawn_blocking(move || keys.dismiss(&id))
             .await
             .map_err(safe_error)?
             .map_err(safe_error)?;
@@ -780,7 +831,13 @@ pub async fn remove_account(
     } else {
         accounts.store.remove(&account_id).map_err(safe_error)?;
     }
-    service.replace_runtimes(accounts.runtimes()?, &app)
+    let refreshed = accounts
+        .runtimes()
+        .and_then(|runtimes| service.replace_runtimes(runtimes, &app));
+    let synchronized = uc_providers::device_sync::remove_synced_account(&account_id)
+        .map_err(|_| "The account was removed from this device, but its synchronized entry could not be removed. Try removing it again.".to_string());
+    refreshed?;
+    synchronized
 }
 
 /// The Claude Code and Codex CLI logins on this computer that were removed from Quota Control.
@@ -817,12 +874,16 @@ pub async fn restore_removed_logins(
         return Ok(());
     }
     let keys = accounts.keys();
+    let restored_ids = ids.clone();
     tauri::async_runtime::spawn_blocking(move || keys.restore(&ids))
         .await
         .map_err(safe_error)?
         .map_err(safe_error)?;
     rescan_services(&accounts).await;
     service.replace_runtimes(accounts.runtimes()?, &app)?;
+    for id in restored_ids {
+        uc_providers::device_sync::restore_synced_account(&id)?;
+    }
     crate::chat_commands::request_billing_refresh(&app);
     Ok(())
 }
@@ -877,6 +938,53 @@ pub async fn backfill_account_labels(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn synchronized_metadata_requires_local_login_without_fabricated_connection_fields() {
+        let metadata = uc_providers::device_sync::AccountMetadata {
+            id: format!("codex@{}", "a".repeat(64)),
+            provider: "codex".into(),
+            label: "Office".into(),
+            account_uuid: "00000000-0000-4000-8000-000000000001".into(),
+        };
+        let entries = merge_pending_accounts(Vec::new(), vec![metadata.clone(), metadata]);
+        assert_eq!(entries.len(), 1);
+        let entry = serde_json::to_value(&entries[0]).unwrap();
+        assert_eq!(entry["requiresLogin"], true);
+        assert_eq!(entry["label"], "Office");
+        for field in ["connectedAt", "updatedAt", "credentialMode", "accountUuid"] {
+            assert!(entry.get(field).is_none());
+        }
+    }
+
+    #[test]
+    fn connected_account_takes_precedence_over_synchronized_metadata() {
+        let now = Utc::now();
+        let login = CliAccount {
+            kind: ProviderKind::Codex,
+            id: format!("codex@{}", "a".repeat(64)),
+            email: None,
+            updated_at: now,
+            location: uc_providers::CliLocation::File("auth.json".into()),
+            profile: None,
+        };
+        let metadata = uc_providers::device_sync::AccountMetadata {
+            id: login.id.clone(),
+            provider: "codex".into(),
+            label: "Remote label".into(),
+            account_uuid: "00000000-0000-4000-8000-000000000001".into(),
+        };
+        let entries = merge_pending_accounts(
+            vec![AccountEntry::from(VisibleAccount::Cli(&login))],
+            vec![metadata],
+        );
+        assert_eq!(entries.len(), 1);
+        let entry = serde_json::to_value(&entries[0]).unwrap();
+        assert_eq!(entry["credentialMode"], "cli");
+        assert_eq!(entry["label"], "codex");
+        assert!(entry["connectedAt"].is_string());
+        assert!(entry.get("requiresLogin").is_none());
+    }
 
     #[test]
     fn billing_follows_only_the_exact_successfully_connected_subscription_account() {

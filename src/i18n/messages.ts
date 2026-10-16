@@ -298,6 +298,13 @@ export interface SettingsMessages {
 
 export interface AccountsMessages {
   connected: string;
+  synced: string;
+  requiresLogin: string;
+  connectHere: string;
+  connectHereLabel(account: string): string;
+  removeSyncedMessage: string;
+  removeConnectedMessage: string;
+  rosterRemovalNote: string;
   none: string;
   /** `cliName`: Claude Code or the Codex CLI, whose login a `cli` account follows. */
   mode(mode: "shared_cli" | "managed_oauth" | "cli", cliName: string): string;

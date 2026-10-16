@@ -165,6 +165,35 @@ pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()>
     result
 }
 
+pub fn lock_documents(root: &std::path::Path) -> std::io::Result<std::fs::File> {
+    std::fs::create_dir_all(root)?;
+    let path = root.join("documents.lock");
+    for ancestor in path.ancestors() {
+        if let Ok(metadata) = std::fs::symlink_metadata(ancestor) {
+            if metadata.file_type().is_symlink() {
+                return Err(std::io::Error::other("Unsafe document lock path"));
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                if metadata.file_attributes() & 0x400 != 0 {
+                    return Err(std::io::Error::other("Unsafe document lock path"));
+                }
+            }
+        }
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    file.lock()?;
+    Ok(file)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -58,7 +58,11 @@ pub async fn save_document(
     service: State<'_, BackendService>,
     name: String,
     value: Value,
+    previous: Option<Value>,
 ) -> Result<(), String> {
+    if let Some(previous) = previous {
+        return service.save_changes(&name, &previous, &value);
+    }
     service.save(&name, &value)
 }
 

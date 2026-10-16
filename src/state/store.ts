@@ -204,24 +204,31 @@ let settingsWrites: Promise<void> = Promise.resolve();
 let layoutWrites: Promise<void> = Promise.resolve();
 
 /** Save the popup's settings over the freshly stored document (core-owned keys preserved). */
-function persistSettings(): void {
+function persistSettings(previous: AppSettings, next: AppSettings): void {
   settingsWrites = settingsWrites
     .then(async () => {
       const api = backend();
       const stored = await api.loadDocument<unknown>("settings");
       const known = new Set(get().catalog.map((entry) => entry.provider.id));
-      await api.saveDocument("settings", mergeSettingsDocument(stored, get().settings, known));
+      await api.saveDocument(
+        "settings",
+        mergeSettingsDocument(stored, next, known),
+        mergeSettingsDocument(stored, previous, known),
+      );
     })
     .catch(logFailure("Saving settings"));
 }
 
-function persistLayout(): void {
-  layoutWrites = layoutWrites.then(() => backend().saveDocument("layout", get().layout)).catch(logFailure("Saving layout"));
+function persistLayout(previous?: LayoutDocument): void {
+  const next = get().layout;
+  layoutWrites = layoutWrites.then(() => backend().saveDocument("layout", next, previous)).catch(logFailure("Saving layout"));
 }
 
 export function updateSettings(patch: Partial<AppSettings>): void {
-  set({ settings: { ...get().settings, ...patch } });
-  persistSettings();
+  const previous = get().settings;
+  const next = { ...previous, ...patch };
+  set({ settings: next });
+  persistSettings(previous, next);
   if (patch.showTotalSpend) enableTokenSources();
 }
 
@@ -261,7 +268,7 @@ export function updateLayout(mutate: (layout: LayoutDocument) => LayoutDocument,
     layout: next,
     undoStack: options.undoable === false ? undoStack : [...undoStack, layout].slice(-UNDO_DEPTH),
   });
-  persistLayout();
+  persistLayout(layout);
   return true;
 }
 
@@ -271,22 +278,24 @@ export function undoLayout(): boolean {
   const previous = undoStack.at(-1);
   if (!previous) return false;
   set({ layout: { ...previous, openProviders: layout.openProviders }, undoStack: undoStack.slice(0, -1) });
-  persistLayout();
+  persistLayout(layout);
   return true;
 }
 
 export function resetAllCustomization(): void {
+  const previous = get().layout;
   const layout = resetAllLayout(get().catalog);
   set({ layout, undoStack: [] });
-  persistLayout();
+  persistLayout(previous);
   const ids = get().catalog.map((entry) => entry.provider.id);
   set({ enabledProviders: ids });
   void backend().setEnabledProviders(ids).catch(logFailure("Enabling providers"));
 }
 
 export function resetAllSettings(): void {
+  const previous = get().settings;
   set({ settings: DEFAULT_SETTINGS });
-  persistSettings();
+  persistSettings(previous, DEFAULT_SETTINGS);
   resetAllCustomization();
 }
 
@@ -533,6 +542,30 @@ async function reloadEnabledProviders(): Promise<void> {
   }
 }
 
+async function reloadSyncedDocuments(): Promise<void> {
+  try {
+    for (;;) {
+      await Promise.all([settingsWrites, layoutWrites]);
+      const before = get();
+      const [settingsDoc, layoutDoc] = await Promise.all([
+        backend().loadDocument<unknown>("settings"),
+        backend().loadDocument<unknown>("layout"),
+      ]);
+      if (before.settings !== get().settings || before.layout !== get().layout) continue;
+      set({
+        settings: parseSettings(settingsDoc),
+        enabledProviders: enabledProvidersOf(settingsDoc),
+        layout: reconcileLayout(parseLayout(layoutDoc), get().catalog),
+        undoStack: [],
+      });
+      enableTokenSources();
+      return;
+    }
+  } catch (error) {
+    logFailure("Applying synchronized preferences")(error);
+  }
+}
+
 /** Open the saved in-app chat for this account label, creating one the first time. */
 export async function openChatFor(provider: AccountProvider, label: string): Promise<void> {
   const api = backend();
@@ -549,7 +582,7 @@ function applyCatalog(catalog: ProviderEntry[]): void {
   const previous = get().layout;
   const layout = reconcileLayout(previous, catalog);
   set({ catalog, layout });
-  if (!sameLayout(previous, layout)) persistLayout();
+  if (!sameLayout(previous, layout)) persistLayout(previous);
 }
 
 /** How often an import in progress may refresh the Token views. */
@@ -631,7 +664,7 @@ async function boot(): Promise<Array<() => void>> {
     layout,
     update,
   });
-  if (!stored || !sameLayout(stored, layout)) persistLayout();
+  if (!stored || !sameLayout(stored, layout)) persistLayout(stored ?? undefined);
   enableTokenSources();
   void reloadAccounts();
   void reloadServices();
@@ -639,6 +672,7 @@ async function boot(): Promise<Array<() => void>> {
   void reloadLedgerInfo();
   void reloadExchangeRate();
   return [
+    api.onDocumentsChanged?.(() => { void reloadSyncedDocuments(); }) ?? (() => {}),
     api.onUpdateStatus?.((next) => set({ update: next })) ?? (() => {}),
     api.onEngineState(applyEngineState),
     () => clearTimeout(windowResetTimer),

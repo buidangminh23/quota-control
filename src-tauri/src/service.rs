@@ -51,6 +51,7 @@ impl BackendService {
         match documents.load(DocumentName::Settings) {
             Ok(Some(mut settings)) => match enabled_ids(&settings) {
                 Ok(enabled) => {
+                    let original = settings.clone();
                     let ids = engine.provider_ids();
                     let fallback: Vec<String> = ids
                         .iter()
@@ -69,7 +70,13 @@ impl BackendService {
                     }
                     let listed = enabled.is_some().then_some(selection.enabled.as_slice());
                     if record_selection(&mut settings, listed, &selection.known)
-                        && documents.save(DocumentName::Settings, &settings).is_err()
+                        && uc_providers::device_sync::save_document_changes_at(
+                            documents.root(),
+                            "settings",
+                            Some(&original),
+                            &settings,
+                        )
+                        .is_err()
                     {
                         tracing::warn!("Provider selection could not be saved");
                     }
@@ -141,18 +148,31 @@ impl BackendService {
         let mut enabled = selection.enabled;
         enabled.sort();
         next.set_enabled(&enabled);
-        if let Ok(Some(mut settings)) = stored
-            && record_selection(&mut settings, Some(&enabled), &selection.known)
-            && documents.save(DocumentName::Settings, &settings).is_err()
-        {
-            tracing::warn!("Account catalog updated, but provider selection could not be saved");
+        if let Ok(Some(mut settings)) = stored {
+            let original = settings.clone();
+            if record_selection(&mut settings, Some(&enabled), &selection.known)
+                && uc_providers::device_sync::save_document_changes_at(
+                    documents.root(),
+                    "settings",
+                    Some(&original),
+                    &settings,
+                )
+                .is_err()
+            {
+                tracing::warn!(
+                    "Account catalog updated, but provider selection could not be saved"
+                );
+            }
         }
         for task in self.tasks.lock().drain(..) {
             task.abort();
         }
         *self.engine.write() = next;
         self.start(app);
-        if app.emit_to("popup", "catalog-changed", self.engine().catalog()).is_err() {
+        if app
+            .emit_to("popup", "catalog-changed", self.engine().catalog())
+            .is_err()
+        {
             tracing::warn!("Could not publish the updated account catalog");
         }
         Ok(())
@@ -253,6 +273,34 @@ impl BackendService {
         Ok(())
     }
 
+    pub fn save_changes(&self, name: &str, previous: &Value, value: &Value) -> Result<(), String> {
+        let document = document_name(name)?;
+        if serde_json::to_vec(value).map_err(safe_error)?.len() > 1_048_576
+            || serde_json::to_vec(previous).map_err(safe_error)?.len() > 1_048_576
+        {
+            return Err("Document exceeds the 1 MiB limit".into());
+        }
+        if document == DocumentName::Settings
+            && let Some(ids) = enabled_ids(value)?
+        {
+            self.validate_provider_ids(&ids)?;
+        }
+        let documents = self.documents.lock();
+        uc_providers::device_sync::save_document_changes_at(
+            documents.root(),
+            name,
+            Some(previous),
+            value,
+        )?;
+        if document == DocumentName::Settings
+            && let Some(saved) = documents.load(document).map_err(safe_error)?
+            && let Some(ids) = enabled_ids(&saved)?
+        {
+            self.engine().set_enabled(&ids);
+        }
+        Ok(())
+    }
+
     pub fn set_enabled(&self, ids: &[String]) -> Result<(), String> {
         let documents = self.documents.lock();
         self.validate_provider_ids(ids)?;
@@ -263,6 +311,7 @@ impl BackendService {
         if !settings.is_object() {
             return Err("Settings must be an object".into());
         }
+        let original = settings.clone();
         let known = uc_api::settings_list(Some(&settings), "knownProviders");
         let selection = uc_api::select_providers(
             &self.engine().provider_ids(),
@@ -271,10 +320,29 @@ impl BackendService {
             &[],
         );
         record_selection(&mut settings, Some(ids), &selection.known);
-        documents
-            .save(DocumentName::Settings, &settings)
-            .map_err(safe_error)?;
+        uc_providers::device_sync::save_document_changes_at(
+            documents.root(),
+            "settings",
+            Some(&original),
+            &settings,
+        )?;
         self.engine().set_enabled(ids);
+        Ok(())
+    }
+
+    pub fn apply_saved_provider_selection(&self) -> Result<(), String> {
+        let documents = self.documents.lock();
+        let Some(settings) = documents.load(DocumentName::Settings).map_err(safe_error)? else {
+            return Ok(());
+        };
+        if let Some(ids) = enabled_ids(&settings)? {
+            let engine = self.engine();
+            let local: Vec<String> = ids
+                .into_iter()
+                .filter(|id| engine.runtime(id).is_some())
+                .collect();
+            engine.set_enabled(&local);
+        }
         Ok(())
     }
 
@@ -385,8 +453,38 @@ mod tests {
 
     fn fixture_runtimes(ids: &[&str]) -> Vec<Arc<dyn ProviderRuntime>> {
         ids.iter()
-            .map(|id| Arc::new(FixtureProvider(Provider::new(*id, *id))) as Arc<dyn ProviderRuntime>)
+            .map(|id| {
+                Arc::new(FixtureProvider(Provider::new(*id, *id))) as Arc<dyn ProviderRuntime>
+            })
             .collect()
+    }
+
+    #[test]
+    fn preference_delta_preserves_remote_fields_in_the_service_store() {
+        let directory = tempfile::tempdir().unwrap();
+        let service = fixture_service(directory.path());
+        let previous = serde_json::json!({"language":"en","notifications":{"almostOut":false,"willRunOut":false}});
+        let remote = serde_json::json!({"language":"vi","notifications":{"almostOut":false,"willRunOut":true}});
+        service.save("settings", &remote).unwrap();
+        let next = serde_json::json!({"language":"en","notifications":{"almostOut":true,"willRunOut":false}});
+        service.save_changes("settings", &previous, &next).unwrap();
+        assert_eq!(
+            service.load("settings").unwrap().unwrap(),
+            serde_json::json!({"language":"vi","notifications":{"almostOut":true,"willRunOut":true}})
+        );
+    }
+
+    #[test]
+    fn synchronized_selection_only_applies_local_providers_and_preserves_the_document() {
+        let directory = tempfile::tempdir().unwrap();
+        let service = fixture_service(directory.path());
+        let documents = DocumentStore::new(directory.path().join("config"));
+        let saved = serde_json::json!({"enabledProviders":["codex@retained","codex@foreign"],"language":"vi"});
+        documents.save(DocumentName::Settings, &saved).unwrap();
+        service.apply_saved_provider_selection().unwrap();
+        assert!(service.engine().is_enabled("codex@retained"));
+        assert!(!service.engine().is_enabled("codex@removed"));
+        assert_eq!(documents.load(DocumentName::Settings).unwrap(), Some(saved));
     }
 
     fn fixture_service(root: &std::path::Path) -> BackendService {
@@ -467,7 +565,10 @@ mod tests {
         assert!(engine.is_enabled("codex@retained"));
         assert!(!engine.is_enabled("claude@disabled"));
         assert_eq!(std::fs::read(&settings_path).unwrap(), original_bytes);
-        assert_eq!(documents.load(DocumentName::Settings).unwrap(), Some(original));
+        assert_eq!(
+            documents.load(DocumentName::Settings).unwrap(),
+            Some(original)
+        );
     }
 
     #[test]
@@ -547,7 +648,9 @@ mod tests {
             ("claude@disabled", "Claude · hidden@example.com"),
         ]
         .into_iter()
-        .map(|(id, name)| Arc::new(FixtureProvider(Provider::new(id, name))) as Arc<dyn ProviderRuntime>)
+        .map(|(id, name)| {
+            Arc::new(FixtureProvider(Provider::new(id, name))) as Arc<dyn ProviderRuntime>
+        })
         .collect();
 
         service.replace_runtimes(runtimes, app.handle()).unwrap();
@@ -557,7 +660,11 @@ mod tests {
         assert!(!engine.is_enabled("claude@disabled"));
         assert!(!engine.is_enabled("codex@removed"));
         assert_eq!(
-            engine.runtime("claude@disabled").unwrap().provider().display_name,
+            engine
+                .runtime("claude@disabled")
+                .unwrap()
+                .provider()
+                .display_name,
             "Claude · hidden@example.com"
         );
         assert_eq!(

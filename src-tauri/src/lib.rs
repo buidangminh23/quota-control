@@ -300,6 +300,7 @@ pub fn run() -> anyhow::Result<()> {
             });
             tauri::async_runtime::spawn(activity_refresh::run(app.handle().clone()));
             tauri::async_runtime::spawn(chat_commands::run_billing_reader(app.handle().clone()));
+            tauri::async_runtime::spawn(run_device_sync_updates(app.handle().clone()));
             if let Err(error) = shortcut::restore(app.handle()) {
                 tracing::warn!("The saved global shortcut is unavailable: {error}");
             }
@@ -817,6 +818,37 @@ fn popup_origin(
         top - size.height as i32 - POPUP_GAP
     };
     PhysicalPosition::new(x.clamp(min_x, max_x), y.clamp(min_y, max_y))
+}
+
+async fn run_device_sync_updates(app: AppHandle) {
+    let mut revision = uc_providers::device_sync::status_revision().unwrap_or_default();
+    loop {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let Ok(Ok(next)) =
+            tauri::async_runtime::spawn_blocking(uc_providers::device_sync::status_revision).await
+        else {
+            continue;
+        };
+        if next == revision {
+            continue;
+        }
+        let Ok(Ok(billing_accounts)) = tauri::async_runtime::spawn_blocking(move || {
+            uc_providers::device_sync::billing_updates_since(revision)
+        })
+        .await
+        else {
+            continue;
+        };
+        revision = next;
+        let service = app.state::<BackendService>();
+        if let Err(error) = service.apply_saved_provider_selection() {
+            tracing::warn!(%error, "Synchronized provider selection could not be applied");
+        }
+        let engine = service.engine();
+        let _ = app.emit_to("popup", "documents-changed", ());
+        let _ = app.emit_to("popup", "catalog-changed", engine.catalog());
+        chat_commands::refresh_synced_billing_accounts(&engine, &billing_accounts).await;
+    }
 }
 
 fn diagnose() -> anyhow::Result<()> {

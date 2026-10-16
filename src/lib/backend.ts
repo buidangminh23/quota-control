@@ -79,7 +79,8 @@ export interface Backend {
   /** Which providers the engine refreshes; the popup owns enablement (Customize). */
   setEnabledProviders(providerIds: string[]): Promise<void>;
   loadDocument<T>(name: DocumentName): Promise<T | null>;
-  saveDocument(name: DocumentName, value: unknown): Promise<void>;
+  saveDocument(name: DocumentName, value: unknown, previous?: unknown): Promise<void>;
+  onDocumentsChanged?(listener: () => void): Unsubscribe;
   /** Report the content height (CSS px) so the core can size and re-anchor the popup window. */
   resizePopup(height: number): Promise<void>;
   hidePopup(): Promise<void>;

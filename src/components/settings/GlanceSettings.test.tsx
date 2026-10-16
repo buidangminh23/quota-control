@@ -165,7 +165,7 @@ describe("whose reset tracker the island and the widgets show", () => {
     await act(() => new Promise((resolve) => setTimeout(resolve, 5)));
     const saved = await api.loadDocument<{ island: { resetsProvider?: string }; widget: { resetsProvider?: string } }>("settings");
     expect(saved?.island.resetsProvider).toBe("claude");
-    expect(saved?.widget.resetsProvider ?? "app").toBe("app");
+    expect(saved?.widget?.resetsProvider ?? "app").toBe("app");
 
     fireEvent.click(within(island).getByRole("radio", { name: "Codex" }));
     expect(useApp.getState().settings.island.resetsProvider).toBe("codex");

@@ -436,6 +436,13 @@ export const vi: Messages = {
   },
   accounts: {
     connected: "Tài khoản đã kết nối",
+    synced: "Tài khoản đã đồng bộ",
+    requiresLogin: "Cần kết nối trên máy này",
+    connectHere: "Kết nối",
+    connectHereLabel: (account) => `Kết nối ${account} trên máy này`,
+    removeSyncedMessage: "Xóa tài khoản khỏi danh sách đồng bộ. Đăng nhập trên các máy khác vẫn được giữ nguyên.",
+    removeConnectedMessage: "Xóa thông tin đăng nhập đã lưu trên máy này và tài khoản khỏi danh sách đồng bộ. Đăng nhập CLI và đăng nhập trên các máy khác vẫn được giữ nguyên.",
+    rosterRemovalNote: "Tài khoản cũng được xóa khỏi danh sách đồng bộ.",
     none: "Chưa có tài khoản nào. Thêm một tài khoản bên dưới để xem hạn mức.",
     mode: (mode, cliName) =>
       ({

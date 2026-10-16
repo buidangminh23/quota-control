@@ -19,6 +19,7 @@ pub(crate) const TERM_RECHECK: chrono::Duration = chrono::Duration::hours(1);
 #[derive(Clone, Debug)]
 pub struct BillingPeriods {
     store: KeyStore,
+    revocations: KeyStore,
 }
 
 impl BillingPeriods {
@@ -35,8 +36,10 @@ impl BillingPeriods {
     }
 
     pub fn new(root: impl Into<PathBuf>) -> Self {
+        let root = root.into();
         Self {
-            store: KeyStore::new(root.into()),
+            revocations: KeyStore::new(root.join("revocations")),
+            store: KeyStore::new(root),
         }
     }
 
@@ -129,13 +132,19 @@ impl BillingPeriods {
             .flatten()
             .filter(|ends_at| *ends_at > observed_at);
         let (Some(plan), Some(ends_at)) = (plan, ends_at) else {
-            return self.invalidate(&organization_uuid);
+            return self.invalidate_for_at("claude", &organization_uuid, observed_at);
         };
         let id = billing_id(&organization_uuid);
         let _lock = self
             .store
             .renewal_lock(&id)
             .map_err(|_| billing_error(ErrorCategory::CredentialAccess))?;
+        if self
+            .revoked_at("claude", &organization_uuid)?
+            .is_some_and(|at| at >= observed_at)
+        {
+            return Ok(());
+        }
         self.store
             .add_login(
                 &id,
@@ -163,6 +172,18 @@ impl BillingPeriods {
         provider: &str,
         account_uuid: &str,
     ) -> Result<(), SimpleProviderError> {
+        self.invalidate_for_at(provider, account_uuid, Utc::now())
+    }
+
+    pub(crate) fn invalidate_for_at(
+        &self,
+        provider: &str,
+        account_uuid: &str,
+        observed_at: DateTime<Utc>,
+    ) -> Result<(), SimpleProviderError> {
+        if !matches!(provider, "claude" | "codex") {
+            return Err(billing_error(ErrorCategory::Decoding));
+        }
         let organization_uuid = organization_uuid_value(account_uuid)
             .ok_or_else(|| billing_error(ErrorCategory::Decoding))?;
         let id = billing_id_for(provider, &organization_uuid);
@@ -170,6 +191,14 @@ impl BillingPeriods {
             .store
             .renewal_lock(&id)
             .map_err(|_| billing_error(ErrorCategory::CredentialAccess))?;
+        let confirmations = self.confirmations(provider, &organization_uuid)?;
+        if confirmations
+            .values()
+            .any(|value| billing_timestamp(&value["observedAt"]).is_some_and(|at| at > observed_at))
+        {
+            return Ok(());
+        }
+        self.record_revocation(provider, &organization_uuid, observed_at)?;
         self.remove(&id)
     }
 
@@ -200,14 +229,19 @@ impl BillingPeriods {
         let id = billing_id_for(provider, &account_uuid);
         let _lock = self.store.renewal_lock(&id).ok()?;
         let Some(plan) = fresh_profile_plan.filter(|plan| paid_plan_for(provider, plan)) else {
+            if fresh_profile_plan.is_some() {
+                let _ = self.record_revocation(provider, &account_uuid, now);
+            }
             let _ = self.remove(&id);
             return None;
         };
         let confirmations = self.confirmations(provider, &account_uuid).ok()?;
-        if confirmations
-            .values()
-            .all(|evidence| evidence["plan"].as_str() != Some(plan))
+        if !confirmations.is_empty()
+            && confirmations
+                .values()
+                .all(|evidence| evidence["plan"].as_str() != Some(plan))
         {
+            let _ = self.record_revocation(provider, &account_uuid, now);
             let _ = self.remove(&id);
         }
         latest_billing_term(
@@ -251,6 +285,12 @@ impl BillingPeriods {
             .renewal_lock(&id)
             .map_err(|_| billing_error(ErrorCategory::CredentialAccess))?;
         let mut confirmations = self.confirmations(provider, &account_uuid)?;
+        if self
+            .revoked_at(provider, &account_uuid)?
+            .is_some_and(|at| at >= observed_at)
+        {
+            return Ok(());
+        }
         supersede_billing_conflicts(&mut confirmations, observed_at);
         if confirmations
             .get(source)
@@ -284,6 +324,141 @@ impl BillingPeriods {
                 && billing_timestamp(&evidence["endsAt"]).is_some_and(|end| end > observed_at)
         });
         self.write_confirmations(provider, &account_uuid, confirmations)
+    }
+
+    fn revoked_at(
+        &self,
+        provider: &str,
+        account_uuid: &str,
+    ) -> Result<Option<DateTime<Utc>>, SimpleProviderError> {
+        match self
+            .revocations
+            .secret(&billing_id_for(provider, account_uuid))
+        {
+            Ok(value) if value["provider"] == provider && value["accountUuid"] == account_uuid => {
+                billing_timestamp(&value["observedAt"])
+                    .map(Some)
+                    .ok_or_else(|| billing_error(ErrorCategory::Decoding))
+            }
+            Err(AccountError::NotFound) => Ok(None),
+            _ => Err(billing_error(ErrorCategory::CredentialAccess)),
+        }
+    }
+
+    fn record_revocation(
+        &self,
+        provider: &str,
+        account_uuid: &str,
+        observed_at: DateTime<Utc>,
+    ) -> Result<(), SimpleProviderError> {
+        if self
+            .revoked_at(provider, account_uuid)?
+            .is_some_and(|at| at >= observed_at)
+        {
+            return Ok(());
+        }
+        self.revocations.add_login(&billing_id_for(provider, account_uuid), provider, "Billing revocation", "billing", &json!({
+            "schemaVersion": 1, "provider": provider, "accountUuid": account_uuid, "observedAt": observed_at.to_rfc3339()
+        })).map(|_| ()).map_err(|_| billing_error(ErrorCategory::CredentialAccess))
+    }
+
+    pub(crate) fn sync_evidence(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<crate::device_sync::BillingEvidence>, SimpleProviderError> {
+        use crate::device_sync::BillingEvidence;
+        let mut output = std::collections::BTreeMap::new();
+        for entry in self
+            .store
+            .list()
+            .map_err(|_| billing_error(ErrorCategory::CredentialAccess))?
+        {
+            let value = self
+                .store
+                .secret(&entry.id)
+                .map_err(|_| billing_error(ErrorCategory::CredentialAccess))?;
+            let raw = value["accountUuid"]
+                .as_str()
+                .or_else(|| value["organizationUuid"].as_str());
+            let Some(account_uuid) = raw.and_then(organization_uuid_value) else {
+                continue;
+            };
+            if entry.id != billing_id_for(&entry.service, &account_uuid) {
+                continue;
+            }
+            let confirmations = self.confirmations(&entry.service, &account_uuid)?;
+            if let Some((observed_at, evidence)) = confirmations
+                .values()
+                .filter_map(|value| {
+                    let at = billing_timestamp(&value["observedAt"])?;
+                    (at <= now).then_some((at, value))
+                })
+                .max_by_key(|(at, _)| *at)
+            {
+                let Some(plan) = evidence["plan"]
+                    .as_str()
+                    .filter(|plan| paid_plan_for(&entry.service, plan))
+                else {
+                    continue;
+                };
+                let Some(ends_at) =
+                    billing_timestamp(&evidence["endsAt"]).filter(|end| *end > observed_at)
+                else {
+                    continue;
+                };
+                output.insert(
+                    entry.id,
+                    BillingEvidence {
+                        provider: entry.service,
+                        account_uuid,
+                        plan: Some(plan.into()),
+                        ends_at: Some(ends_at),
+                        observed_at,
+                    },
+                );
+            }
+        }
+        for entry in self
+            .revocations
+            .list()
+            .map_err(|_| billing_error(ErrorCategory::CredentialAccess))?
+        {
+            let value = self
+                .revocations
+                .secret(&entry.id)
+                .map_err(|_| billing_error(ErrorCategory::CredentialAccess))?;
+            let Some(account_uuid) = value["accountUuid"]
+                .as_str()
+                .and_then(organization_uuid_value)
+            else {
+                continue;
+            };
+            let Some(observed_at) = billing_timestamp(&value["observedAt"]).filter(|at| *at <= now)
+            else {
+                continue;
+            };
+            if value["provider"] != entry.service
+                || entry.id != billing_id_for(&entry.service, &account_uuid)
+            {
+                continue;
+            }
+            if output
+                .get(&entry.id)
+                .is_none_or(|positive| positive.observed_at <= observed_at)
+            {
+                output.insert(
+                    entry.id,
+                    BillingEvidence {
+                        provider: entry.service,
+                        account_uuid,
+                        plan: None,
+                        ends_at: None,
+                        observed_at,
+                    },
+                );
+            }
+        }
+        Ok(output.into_values().collect())
     }
 
     pub fn invalidate_source(
@@ -910,6 +1085,8 @@ mod tests {
             json!({"status":"active", "next_charge_at":"bad-date"}),
             json!({"status":"active", "next_charge_at":now().to_rfc3339()}),
         ] {
+            let case_directory = tempfile::tempdir().unwrap();
+            let periods = BillingPeriods::new(case_directory.path());
             periods
                 .save(org, "claude_pro", None, &active, now())
                 .unwrap();

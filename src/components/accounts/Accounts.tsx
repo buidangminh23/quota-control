@@ -34,6 +34,8 @@ function accountTitle(provider: AccountProvider, label: string): string {
 }
 
 function AccountRow({ account, runtime, messages, language }: { account: ConnectedAccount; runtime: ProviderRuntimeState | undefined; messages: Messages; language: Language }) {
+  const login = useApp((state) => state.accountLogin);
+  const pending = account.requiresLogin === true;
   const status = statusOf(runtime);
   const notice = status === "error" ? headerNotice(runtime, language) : null;
   const title = accountTitle(account.provider, account.label);
@@ -43,13 +45,13 @@ function AccountRow({ account, runtime, messages, language }: { account: Connect
       cli
         ? {
             title: messages.accounts.dismissTitle(title),
-            message: messages.accounts.dismissMessage("login", CLI_PRODUCTS[account.provider], brandName(account.provider)),
+            message: `${messages.accounts.dismissMessage("login", CLI_PRODUCTS[account.provider], brandName(account.provider))} ${messages.accounts.rosterRemovalNote}`,
             confirmLabel: messages.accounts.remove,
             cancelLabel: messages.accounts.cancel,
           }
         : {
             title: messages.accounts.removeTitle(title),
-            message: messages.accounts.removeMessage,
+            message: pending ? messages.accounts.removeSyncedMessage : messages.accounts.removeConnectedMessage,
             confirmLabel: messages.accounts.removeConfirm,
             cancelLabel: messages.accounts.cancel,
           },
@@ -71,12 +73,19 @@ function AccountRow({ account, runtime, messages, language }: { account: Connect
         <span className="uc-list-title uc-truncate" {...truncatedTooltipProps(title)}>
           {title}
         </span>
-        <span className="uc-list-subtitle uc-truncate">{messages.accounts.mode(account.credentialMode, CLI_PRODUCTS[account.provider])}</span>
-        <span className={`uc-account-status is-${status}`} {...tooltipProps(notice)}>
-          {status === "refreshing" ? <Spinner size={9} /> : <span className="uc-status-dot" />}
-          {messages.accounts.status(status)}
-        </span>
+        <span className="uc-list-subtitle uc-truncate" {...tooltipProps(pending ? messages.accounts.requiresLogin : null)}>{pending ? messages.accounts.requiresLogin : account.credentialMode ? messages.accounts.mode(account.credentialMode, CLI_PRODUCTS[account.provider]) : null}</span>
+        {!pending ? (
+          <span className={`uc-account-status is-${status}`} {...tooltipProps(notice)}>
+            {status === "refreshing" ? <Spinner size={9} /> : <span className="uc-status-dot" />}
+            {messages.accounts.status(status)}
+          </span>
+        ) : null}
       </span>
+      {pending ? (
+        <Button className="is-small" aria-label={messages.accounts.connectHereLabel(title)} disabled={login !== null} onClick={() => void startAccountLogin(account.provider)}>
+          {messages.accounts.connectHere}
+        </Button>
+      ) : null}
       <button type="button" className="uc-icon-button" aria-label={`${messages.accounts.remove} ${title}`} onClick={() => void remove()} {...tooltipProps(messages.accounts.remove)}>
         <CloseIcon size={11} />
       </button>
@@ -301,6 +310,8 @@ export function Accounts() {
   const language = useLanguage();
   const messages = messagesFor(language);
   const accounts = useApp((state) => state.accounts);
+  const connectedAccounts = accounts.filter((account) => !account.requiresLogin);
+  const pendingAccounts = accounts.filter((account) => account.requiresLogin);
   const engine = useApp((state) => state.engine);
   const services = useApp((state) => state.services);
   const serviceRows = useMemo(() => serviceCardRows(services), [services]);
@@ -315,8 +326,8 @@ export function Accounts() {
       <section className="uc-group">
         <h2 className="uc-group-title">{messages.accounts.connected}</h2>
         <div className="uc-card uc-list-card">
-          {accounts.length === 0 && serviceRows.length === 0 ? <p className="uc-card-empty">{messages.accounts.none}</p> : null}
-          {accounts.map((account) => (
+          {connectedAccounts.length === 0 && serviceRows.length === 0 ? <p className="uc-card-empty">{messages.accounts.none}</p> : null}
+          {connectedAccounts.map((account) => (
             <AccountRow key={account.id} account={account} runtime={engine?.providers[account.id]} messages={messages} language={language} />
           ))}
           {serviceRows.map((row) => (
@@ -324,6 +335,17 @@ export function Accounts() {
           ))}
         </div>
       </section>
+
+      {pendingAccounts.length > 0 ? (
+        <section className="uc-group">
+          <h2 className="uc-group-title">{messages.accounts.synced}</h2>
+          <div className="uc-card uc-list-card">
+            {pendingAccounts.map((account) => (
+              <AccountRow key={account.id} account={account} runtime={undefined} messages={messages} language={language} />
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <section className="uc-group">
         <h2 className="uc-group-title">{messages.accounts.add}</h2>

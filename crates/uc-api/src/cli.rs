@@ -7,7 +7,7 @@
 //! (the JSON is still printed, with the failure in its `errors`).
 
 use std::collections::HashSet;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -28,6 +28,8 @@ A provider is an exact card id (codex@1a2b...) or a family (claude, codex) namin
 
 Options:
   --force      Refresh even when the shared cache is still fresh
+  --sync-export  Export portable preferences, account metadata and confirmed billing
+  --sync-import  Merge a portable state document from standard input
   -v, --version
   -h, --help";
 
@@ -201,6 +203,13 @@ fn ascii_json(body: &[u8]) -> Vec<u8> {
 
 /// The whole command: parse, read, print. Returns the process exit code.
 pub fn main<I: IntoIterator<Item = String>>(arguments: I) -> i32 {
+    let arguments: Vec<_> = arguments.into_iter().collect();
+    if arguments
+        .iter()
+        .any(|argument| argument.starts_with("--sync-"))
+    {
+        return sync_command(&arguments);
+    }
     let arguments = match parse(arguments) {
         Ok(arguments) => arguments,
         Err(message) => {
@@ -250,6 +259,51 @@ pub fn main<I: IntoIterator<Item = String>>(arguments: I) -> i32 {
     }
     eprint!("{}", output.stderr);
     output.code
+}
+
+fn sync_command(arguments: &[String]) -> i32 {
+    if arguments.len() != 1 || !matches!(arguments[0].as_str(), "--sync-export" | "--sync-import") {
+        eprintln!("{NAME}: use --sync-export or --sync-import as the only argument");
+        return 2;
+    }
+    let result = (|| -> Result<Vec<u8>, String> {
+        match arguments {
+            [mode] if mode == "--sync-export" => uc_providers::device_sync::export_state()
+                .and_then(|envelope| envelope.to_bytes())
+                .map_err(|error| error.to_string()),
+            [mode] if mode == "--sync-import" => {
+                let mut bytes = Vec::new();
+                std::io::stdin()
+                    .take(1_048_577)
+                    .read_to_end(&mut bytes)
+                    .map_err(|_| "Could not read synchronized state".to_string())?;
+                let envelope = uc_providers::device_sync::Envelope::from_slice(&bytes)
+                    .map_err(|error| error.to_string())?;
+                let report = uc_providers::device_sync::import_state(envelope)
+                    .map_err(|error| error.to_string())?;
+                serde_json::to_vec(&report)
+                    .map_err(|_| "Could not encode synchronization result".to_string())
+            }
+            _ => Err("Use --sync-export or --sync-import without other arguments".into()),
+        }
+    })();
+    match result {
+        Ok(bytes) => {
+            let mut stdout = std::io::stdout().lock();
+            if stdout
+                .write_all(&ascii_json(&bytes))
+                .and_then(|()| stdout.write_all(b"\n"))
+                .is_err()
+            {
+                return 4;
+            }
+            0
+        }
+        Err(error) => {
+            eprintln!("{NAME}: {error}");
+            4
+        }
+    }
 }
 
 #[cfg(test)]

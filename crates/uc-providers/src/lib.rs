@@ -1,5 +1,6 @@
 pub mod accounts;
 pub mod credentials;
+pub mod device_sync;
 pub mod keychain;
 pub mod mapping;
 pub mod oauth;
