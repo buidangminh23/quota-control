@@ -436,12 +436,6 @@ export const vi: Messages = {
   },
   accounts: {
     connected: "Tài khoản đã kết nối",
-    connectBilling: "Làm mới Billing",
-    connectBillingNote: (provider) =>
-      `Billing tự dùng phiên đăng nhập ${provider} đã có để cập nhật ngày hết kỳ, không cần đăng nhập lần hai. Bấm để kiểm tra lại ngay.`,
-    billingConnected: (provider) => `Đã kết nối Billing ${provider} từ phiên đăng nhập đã có`,
-    billingWaiting: (provider) =>
-      `Đang kiểm tra tài khoản ${provider} khớp trong trình duyệt đang mở. Khi trang Billing ${provider} ở đó hiện đúng tài khoản, bấm Làm mới Billing.`,
     none: "Chưa có tài khoản nào. Thêm một tài khoản bên dưới để xem hạn mức.",
     mode: (mode, cliName) =>
       ({

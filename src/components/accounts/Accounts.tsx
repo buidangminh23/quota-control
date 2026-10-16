@@ -7,7 +7,7 @@
  * or a session cookie, or signing in to the app whose login they read). Claude Code and the Codex
  * CLI signed in on this computer are listed automatically. Billing follows the provider sign-in by
  * itself: the core verifies the matching account in the browser that is already signed in, at
- * login and at startup, so an account row only offers a manual refresh of that check.
+ * login and at startup.
  */
 import { useEffect, useMemo, useState } from "react";
 import { messagesFor, type Language, type Messages } from "@/i18n";
@@ -38,19 +38,6 @@ function AccountRow({ account, runtime, messages, language }: { account: Connect
   const notice = status === "error" ? headerNotice(runtime, language) : null;
   const title = accountTitle(account.provider, account.label);
   const cli = account.credentialMode === "cli";
-  const billingBrand = account.provider === "codex" ? "ChatGPT" : "Claude";
-  const [billingRefreshing, setBillingRefreshing] = useState(false);
-  const refreshBilling = async () => {
-    setBillingRefreshing(true);
-    try {
-      const verified = await backend().openAccountBilling(account.id);
-      showNotice(verified ? messages.accounts.billingConnected(billingBrand) : messages.accounts.billingWaiting(billingBrand), verified ? "positive" : "notice");
-    } catch (error) {
-      showNotice(messages.accounts.failed(errorText(error, language)), "notice");
-    } finally {
-      setBillingRefreshing(false);
-    }
-  };
   const remove = async () => {
     const confirmed = await confirmAction(
       cli
@@ -90,9 +77,6 @@ function AccountRow({ account, runtime, messages, language }: { account: Connect
           {messages.accounts.status(status)}
         </span>
       </span>
-      <Button className="is-small" disabled={billingRefreshing} onClick={() => void refreshBilling()} {...tooltipProps(messages.accounts.connectBillingNote(billingBrand))}>
-        {messages.accounts.connectBilling}
-      </Button>
       <button type="button" className="uc-icon-button" aria-label={`${messages.accounts.remove} ${title}`} onClick={() => void remove()} {...tooltipProps(messages.accounts.remove)}>
         <CloseIcon size={11} />
       </button>

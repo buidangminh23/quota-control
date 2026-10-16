@@ -364,7 +364,11 @@ mod tests {
             200,
             ACCOUNT,
         );
-        let scope = context_at(&http, json!({"apiKey":"test"}), Utc::now());
+        let scope = context_at(
+            &http,
+            json!({"apiKey":"test"}),
+            Utc.with_ymd_and_hms(2026, 10, 10, 10, 0, 0).unwrap(),
+        );
         let reading = Warp.fetch(&scope.context()).await.unwrap();
         assert_eq!(reading.plan.as_deref(), Some("Build"));
         assert_eq!(reading.account.as_deref(), Some("fixture@example.com"));

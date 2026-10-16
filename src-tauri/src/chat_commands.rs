@@ -16,7 +16,7 @@ use crate::service::safe_error;
 #[derive(Default)]
 pub struct ChatWindows {
     operations: tokio::sync::Mutex<()>,
-    browser_billing: tokio::sync::Mutex<()>,
+    browser_billing: SharedChromeConnection,
     loaded: parking_lot::Mutex<HashSet<String>>,
     billing_requested: tokio::sync::Notify,
 }
@@ -250,13 +250,11 @@ pub fn request_account_billing(app: &AppHandle, account_id: &str) {
     if billing_provider(account_id).is_none() {
         return;
     }
-    let app = app.clone();
-    let account_id = account_id.to_owned();
-    tauri::async_runtime::spawn(async move {
-        if let Err(error) = connect_account_billing(&app, &account_id).await {
-            tracing::debug!(%error, "Automatic billing could not reuse the connected account");
-        }
-    });
+    request_billing_refresh(app);
+}
+
+pub fn request_billing_refresh(app: &AppHandle) {
+    app.state::<ChatWindows>().billing_requested.notify_one();
 }
 
 async fn connect_account_billing(app: &AppHandle, account_id: &str) -> Result<bool, String> {
@@ -266,8 +264,7 @@ async fn connect_account_billing(app: &AppHandle, account_id: &str) -> Result<bo
         billing_provider(account_id).ok_or("Billing requires a supported connected account")?;
     let periods = uc_providers::BillingPeriods::default_store();
     let windows = app.state::<ChatWindows>();
-    let _billing = windows.browser_billing.lock().await;
-    let chrome = read_chrome_billing(provider).await;
+    let chrome = read_chrome_billing(provider, &windows.browser_billing).await;
     if let Err(error) = &chrome {
         tracing::debug!(%error, "The billing connection could not use Chrome");
     }
@@ -617,7 +614,6 @@ fn store_billing_read(
         periods,
         &session.provider,
         &format!("session:{}", session.id),
-        &session.billing_organizations,
         read,
         now,
     )?;
@@ -629,7 +625,6 @@ fn store_source_billing(
     periods: &uc_providers::BillingPeriods,
     provider: &str,
     source: &str,
-    previous: &[String],
     read: BillingRead,
     now: chrono::DateTime<Utc>,
 ) -> Result<(bool, Vec<String>), String> {
@@ -644,82 +639,65 @@ fn store_source_billing(
     {
         return Err("Billing account metadata is invalid".into());
     }
-    if read.state != "ready" && !matches!(read.status, Some(401 | 403)) {
+    if read.state != "ready" {
         return Err("The subscription billing request did not complete".into());
     }
     let mut changed = false;
     let mut organizations = Vec::new();
-    if read.state == "ready" {
-        for org in read.organizations {
-            let uuid = uuid::Uuid::parse_str(&org.uuid).unwrap().to_string();
-            organizations.push(uuid.clone());
-            let before = periods.peek_for(provider, &uuid, now);
-            if org.status == 200 {
-                let plan = uc_providers::BillingPeriods::plan_for(
-                    provider,
-                    &org.plan_type,
-                    org.tier.as_deref(),
-                );
-                let details = org.details.unwrap_or(Value::Null);
-                let end = billing_end(provider, &details);
-                if plan.is_none()
-                    || details["status"].as_str().is_some_and(|status| {
-                        matches!(
-                            status.trim().to_ascii_lowercase().as_str(),
-                            "inactive" | "canceled" | "cancelled" | "expired"
-                        )
-                    })
-                {
-                    periods
-                        .invalidate_for(provider, &uuid)
-                        .map_err(safe_error)?;
-                } else {
-                    periods
-                        .save_from(
-                            provider,
-                            &uuid,
-                            plan.as_deref().unwrap_or(""),
-                            end,
-                            now,
-                            source,
-                        )
-                        .map_err(safe_error)?;
-                }
-            } else if matches!(org.status, 401 | 403 | 404) {
+    for org in read.organizations {
+        let uuid = uuid::Uuid::parse_str(&org.uuid).unwrap().to_string();
+        organizations.push(uuid.clone());
+        let before = periods.peek_for(provider, &uuid, now);
+        if org.status == 200 {
+            let plan = uc_providers::BillingPeriods::plan_for(
+                provider,
+                &org.plan_type,
+                org.tier.as_deref(),
+            );
+            let details = org.details.unwrap_or(Value::Null);
+            let end = billing_end(provider, &details);
+            if matches!(
+                (provider, org.plan_type.as_str()),
+                ("claude", "claude_free") | ("codex", "free")
+            ) || end.is_some_and(|end| end <= now)
+                || details["status"].as_str().is_some_and(|status| {
+                    matches!(
+                        status.trim().to_ascii_lowercase().as_str(),
+                        "inactive" | "canceled" | "cancelled" | "expired"
+                    )
+                })
+            {
                 periods
-                    .invalidate_source(provider, &uuid, source)
+                    .invalidate_for(provider, &uuid)
+                    .map_err(safe_error)?;
+                changed = true;
+            } else if let (Some(plan), Some(end)) = (plan, end) {
+                periods
+                    .save_from(provider, &uuid, &plan, Some(end), now, source)
                     .map_err(safe_error)?;
             }
-            let after = periods.peek_for(provider, &uuid, now);
-            changed |=
-                before != after || (matches!(org.status, 401 | 403 | 404) && after.is_none());
         }
-    }
-    for account in previous {
-        if !organizations.contains(account) {
-            let before = periods.peek_for(provider, account, now);
-            periods
-                .invalidate_source(provider, account, source)
-                .map_err(safe_error)?;
-            let after = periods.peek_for(provider, account, now);
-            changed |= before != after || after.is_none();
-        }
+        let after = periods.peek_for(provider, &uuid, now);
+        changed |= before != after;
     }
     Ok((changed, organizations))
 }
 
 pub async fn run_billing_reader(app: AppHandle) {
     let windows = app.state::<ChatWindows>();
-    let mut ticks = tokio::time::interval(Duration::from_secs(300));
-    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut delay = Duration::ZERO;
+    let mut retries = 0_u32;
     loop {
         tokio::select! {
-            _ = ticks.tick() => {},
-            _ = windows.billing_requested.notified() => {},
+            _ = tokio::time::sleep(delay) => {},
+            _ = windows.billing_requested.notified() => { retries = 0; },
         }
         let sessions = match app.state::<ChatStore>().list() {
             Ok(sessions) => sessions,
-            Err(_) => continue,
+            Err(error) => {
+                tracing::debug!(%error, "Saved billing sessions could not be read");
+                Vec::new()
+            }
         };
         let mut changed = HashSet::new();
         let periods = uc_providers::BillingPeriods::default_store();
@@ -731,8 +709,7 @@ pub async fn run_billing_reader(app: AppHandle) {
             if !browser_billing_enabled(provider, &account_ids) {
                 continue;
             }
-            let _billing = windows.browser_billing.lock().await;
-            match read_chrome_billing(provider).await {
+            match read_chrome_billing(provider, &windows.browser_billing).await {
                 Ok(reads) => match store_chrome_billing(&periods, provider, reads, Utc::now()) {
                     Ok(true) => {
                         tracing::info!(
@@ -769,7 +746,42 @@ pub async fn run_billing_reader(app: AppHandle) {
                 refresh_billing_provider(&engine, &provider).await;
             }
         }
+        let engine = app.state::<crate::service::BackendService>().engine();
+        let snapshots = engine.snapshots();
+        let now = Utc::now();
+        let pending = engine.provider_ids().iter().any(|id| {
+            billing_provider(id).is_some() && !billing_refresh_complete(snapshots.get(id), now)
+        });
+        delay = billing_refresh_delay(pending, retries);
+        retries = if pending {
+            retries.saturating_add(1)
+        } else {
+            0
+        };
     }
+}
+
+fn billing_refresh_complete(
+    snapshot: Option<&uc_core::ProviderSnapshot>,
+    now: chrono::DateTime<Utc>,
+) -> bool {
+    snapshot.is_some_and(|snapshot| {
+        snapshot
+            .plan
+            .as_deref()
+            .is_some_and(|plan| plan.eq_ignore_ascii_case("free"))
+            || matches!(snapshot.plan_term,
+                Some(uc_core::PlanTerm::Stated { ends_at, checked_at: Some(_) })
+                if ends_at > now)
+    })
+}
+
+fn billing_refresh_delay(pending: bool, retries: u32) -> Duration {
+    Duration::from_secs(if pending {
+        (30_u64 << retries.min(4)).min(300)
+    } else {
+        300
+    })
 }
 
 fn chrome_data_directory() -> Option<PathBuf> {
@@ -823,13 +835,15 @@ fn local_debugger_url(raw: &str, port: u16) -> Option<Url> {
     Some(url)
 }
 
-async fn read_chrome_billing(provider: &str) -> Result<Vec<BillingRead>, String> {
-    tokio::time::timeout(Duration::from_secs(30), read_chrome_billing_inner(provider))
-        .await
-        .map_err(|_| "The Chrome billing request timed out".to_string())?
+async fn read_chrome_billing(
+    provider: &str,
+    shared: &SharedChromeConnection,
+) -> Result<Vec<BillingRead>, String> {
+    let socket = chrome_billing_endpoint().await?;
+    read_chrome_billing_shared(provider, &socket, shared).await
 }
 
-async fn read_chrome_billing_inner(provider: &str) -> Result<Vec<BillingRead>, String> {
+async fn chrome_billing_endpoint() -> Result<Url, String> {
     let unavailable =
         || "Open the signed-in Chrome Default profile with remote debugging enabled".to_string();
     let directory = chrome_data_directory().ok_or_else(unavailable)?;
@@ -855,9 +869,8 @@ async fn read_chrome_billing_inner(provider: &str) -> Result<Vec<BillingRead>, S
         .await
         .map_err(|_| unavailable())?;
     let (port, browser_path) = chrome_port(&text).ok_or_else(unavailable)?;
-    let socket = local_debugger_url(&format!("ws://127.0.0.1:{port}{browser_path}"), port)
-        .ok_or_else(unavailable)?;
-    read_chrome_billing_socket(provider, &socket).await
+    local_debugger_url(&format!("ws://127.0.0.1:{port}{browser_path}"), port)
+        .ok_or_else(unavailable)
 }
 
 fn chrome_default_profile(state: &Value) -> bool {
@@ -867,23 +880,71 @@ fn chrome_default_profile(state: &Value) -> bool {
             .is_none_or(|last_used| matches!(last_used.as_str(), Some("Default" | "")))
 }
 
+#[cfg(test)]
 async fn read_chrome_billing_socket(
     provider: &str,
     socket: &Url,
 ) -> Result<Vec<BillingRead>, String> {
+    read_chrome_billing_shared(provider, socket, &Default::default()).await
+}
+
+async fn read_chrome_billing_shared(
+    provider: &str,
+    socket: &Url,
+    shared: &SharedChromeConnection,
+) -> Result<Vec<BillingRead>, String> {
+    let unavailable =
+        || "The signed-in Chrome Default profile could not confirm billing".to_string();
+    let mut stored = shared.lock().await;
+    if stored
+        .as_ref()
+        .is_some_and(|connection| connection.endpoint != *socket || connection.broken)
+    {
+        stored.take();
+    }
+    if stored.is_none() {
+        use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+        let configuration = WebSocketConfig::default()
+            .max_message_size(Some(1024 * 1024))
+            .max_frame_size(Some(1024 * 1024));
+        let (connection, _) = tokio::time::timeout(
+            Duration::from_secs(120),
+            tokio_tungstenite::connect_async_with_config(
+                socket.as_str(),
+                Some(configuration),
+                false,
+            ),
+        )
+        .await
+        .map_err(|_| unavailable())?
+        .map_err(|_| unavailable())?;
+        *stored = Some(ChromeConnection {
+            id: uuid::Uuid::new_v4(),
+            endpoint: socket.clone(),
+            socket: connection,
+            next_id: 0,
+            broken: false,
+        });
+    }
+    let connection = stored.as_mut().unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        collect_chrome_billing(provider, connection, shared),
+    )
+    .await
+    .map_err(|_| "The Chrome billing request timed out".to_string())?
+}
+
+async fn collect_chrome_billing(
+    provider: &str,
+    connection: &mut ChromeConnection,
+    shared: &SharedChromeConnection,
+) -> Result<Vec<BillingRead>, String> {
     let unavailable =
         || "The signed-in Chrome Default profile could not confirm billing".to_string();
     let host = official_url(provider)?.host_str().unwrap().to_string();
-    use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
-    let configuration = WebSocketConfig::default()
-        .max_message_size(Some(1024 * 1024))
-        .max_frame_size(Some(1024 * 1024));
-    let (mut connection, _) =
-        tokio_tungstenite::connect_async_with_config(socket.as_str(), Some(configuration), false)
-            .await
-            .map_err(|_| unavailable())?;
     let version = chrome_request(
-        &mut connection,
+        connection,
         serde_json::json!({"id":1,"method":"Browser.getVersion"}),
     )
     .await?;
@@ -894,7 +955,7 @@ async fn read_chrome_billing_socket(
         return Err(unavailable());
     }
     let contexts = chrome_request(
-        &mut connection,
+        connection,
         serde_json::json!({"id":2,"method":"Target.getBrowserContexts"}),
     )
     .await?;
@@ -902,7 +963,7 @@ async fn read_chrome_billing_socket(
         .as_str()
         .filter(|id| !id.is_empty());
     let targets = chrome_request(
-        &mut connection,
+        connection,
         serde_json::json!({"id":3,"method":"Target.getTargets"}),
     )
     .await?;
@@ -923,18 +984,24 @@ async fn read_chrome_billing_socket(
         .map(str::to_owned);
     let temporary = target.is_none();
     let mut cleanup = ChromeTargetGuard {
-        socket: socket.clone(),
+        connection: shared.clone(),
+        connection_id: connection.id,
+        endpoint: connection.endpoint.clone(),
         target: None,
+        session: None,
+        attaching_target: None,
+        creating_target: false,
     };
     let target = match target {
         Some(target) => target,
         None => {
+            cleanup.creating_target = true;
             let mut params = serde_json::json!({"url":format!("https://{host}/robots.txt"),"background":true,"hidden":true});
             if let Some(context) = default_context {
                 params["browserContextId"] = context.into();
             }
             let created = chrome_request(
-                &mut connection,
+                connection,
                 serde_json::json!({"id":8,"method":"Target.createTarget","params":params}),
             )
             .await?;
@@ -944,16 +1011,20 @@ async fn read_chrome_billing_socket(
                 .ok_or_else(unavailable)?
                 .to_owned();
             cleanup.target = Some(target.clone());
+            cleanup.creating_target = false;
             target
         }
     };
+    cleanup.attaching_target = Some(target.clone());
     let attached = chrome_request(
-        &mut connection,
+        connection,
         serde_json::json!({"id":4,"method":"Target.attachToTarget","params":{
         "targetId":target,"flatten":true}}),
     )
     .await?;
     let session = attached["sessionId"].as_str().ok_or_else(unavailable)?;
+    cleanup.session = Some(session.to_string());
+    cleanup.attaching_target = None;
     let key = format!("__ucBilling{}", uuid::Uuid::new_v4().simple());
     let script = billing_script(provider, &key);
     let expression = format!(
@@ -976,19 +1047,21 @@ return read;
         if temporary {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
             loop {
-                let state = chrome_request(&mut connection, serde_json::json!({"id":9,"sessionId":session,
+                let state = chrome_request(connection, serde_json::json!({"id":9,"sessionId":session,
                     "method":"Runtime.evaluate","params":{"expression":format!("location.protocol === 'https:' && location.hostname === {} && document.readyState === 'complete'", serde_json::to_string(&host).unwrap()),"returnByValue":true}})).await?;
                 if state["result"]["value"] == true { break; }
                 if tokio::time::Instant::now() >= deadline { return Err(unavailable()); }
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
         }
-        chrome_request(&mut connection, request).await
+        chrome_request(connection, request).await
     }.await;
-    let _ = chrome_request(&mut connection, serde_json::json!({"id":6,"method":"Target.detachFromTarget","params":{"sessionId":session}})).await;
+    if chrome_request(connection, serde_json::json!({"id":6,"method":"Target.detachFromTarget","params":{"sessionId":session}})).await.is_ok() {
+        cleanup.session = None;
+    }
     if temporary
         && chrome_request(
-            &mut connection,
+            connection,
             serde_json::json!({"id":10,"method":"Target.closeTarget","params":{"targetId":target}}),
         )
         .await
@@ -996,7 +1069,6 @@ return read;
     {
         cleanup.target = None;
     }
-    let _ = connection.close(None).await;
     let response = response?;
     if response.get("exceptionDetails").is_some() {
         return Err(unavailable());
@@ -1012,32 +1084,76 @@ return read;
 type ChromeSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
+type SharedChromeConnection = std::sync::Arc<tokio::sync::Mutex<Option<ChromeConnection>>>;
+
+struct ChromeConnection {
+    id: uuid::Uuid,
+    endpoint: Url,
+    socket: ChromeSocket,
+    next_id: u64,
+    broken: bool,
+}
+
 struct ChromeTargetGuard {
-    socket: Url,
+    connection: SharedChromeConnection,
+    connection_id: uuid::Uuid,
+    endpoint: Url,
     target: Option<String>,
+    session: Option<String>,
+    attaching_target: Option<String>,
+    creating_target: bool,
 }
 
 impl Drop for ChromeTargetGuard {
     fn drop(&mut self) {
-        let Some(target) = self.target.take() else {
+        let target = self.target.take();
+        let session = self.session.take();
+        let attaching_target = self.attaching_target.take();
+        let creating_target = self.creating_target;
+        if target.is_none() && session.is_none() && attaching_target.is_none() && !creating_target {
             return;
-        };
-        let socket = self.socket.clone();
+        }
+        let shared = self.connection.clone();
+        let connection_id = self.connection_id;
+        let endpoint = self.endpoint.clone();
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
         runtime.spawn(async move {
-            let _ = tokio::time::timeout(Duration::from_secs(4), async {
-                if let Ok((mut connection, _)) = tokio_tungstenite::connect_async(socket.as_str()).await {
-                    let _ = chrome_request(&mut connection, serde_json::json!({"id":1,"method":"Target.closeTarget","params":{"targetId":target}})).await;
-                    let _ = connection.close(None).await;
+            let mut stored = shared.lock().await;
+            if stored.as_ref().is_some_and(|connection| connection.id == connection_id && connection.endpoint == endpoint && (connection.broken || creating_target)) {
+                stored.take();
+                return;
+            }
+            if let Some(connection) = stored.as_mut()
+                && connection.id == connection_id
+                && connection.endpoint == endpoint
+                && !connection.broken
+            {
+                let detach = session.map(|session| serde_json::json!({"sessionId":session}))
+                    .or_else(|| attaching_target.map(|target| serde_json::json!({"targetId":target})));
+                if let Some(params) = detach
+                    && chrome_request(connection, serde_json::json!({"method":"Target.detachFromTarget","params":params})).await.is_err()
+                {
+                    connection.broken = true;
                 }
-            }).await;
+                if let Some(target) = target {
+                    let _ = chrome_request(connection,
+                        serde_json::json!({"method":"Target.closeTarget","params":{"targetId":target}}),
+                    ).await;
+                }
+            }
+            if stored.as_ref().is_some_and(|connection| connection.id == connection_id && connection.broken) {
+                stored.take();
+            }
         });
     }
 }
 
-async fn chrome_request(connection: &mut ChromeSocket, request: Value) -> Result<Value, String> {
+async fn chrome_request(
+    connection: &mut ChromeConnection,
+    mut request: Value,
+) -> Result<Value, String> {
     use tokio_tungstenite::tungstenite::Message;
     let unavailable = || "The signed-in browser session could not confirm billing".to_string();
     let deadline = if request["params"]["awaitPromise"] == true {
@@ -1045,14 +1161,24 @@ async fn chrome_request(connection: &mut ChromeSocket, request: Value) -> Result
     } else {
         Duration::from_secs(3)
     };
+    connection.next_id += 1;
+    let id = Value::from(connection.next_id);
+    request["id"] = id.clone();
     tokio::time::timeout(deadline, async {
-        let id = request["id"].clone();
-        connection
+        if connection
+            .socket
             .send(Message::Text(request.to_string().into()))
             .await
-            .map_err(|_| unavailable())?;
-        while let Some(message) = connection.next().await {
-            let message = message.map_err(|_| unavailable())?;
+            .is_err()
+        {
+            connection.broken = true;
+            return Err(unavailable());
+        }
+        while let Some(message) = connection.socket.next().await {
+            let message = message.map_err(|_| {
+                connection.broken = true;
+                unavailable()
+            })?;
             let Message::Text(text) = message else {
                 continue;
             };
@@ -1065,6 +1191,7 @@ async fn chrome_request(connection: &mut ChromeSocket, request: Value) -> Result
             }
             return Ok(response["result"].clone());
         }
+        connection.broken = true;
         Err(unavailable())
     })
     .await
@@ -1084,7 +1211,6 @@ fn store_chrome_billing(
         periods,
         provider,
         "browser",
-        &periods.browser_accounts(provider),
         reads.into_iter().next().unwrap(),
         now,
     )?;
@@ -1104,7 +1230,9 @@ mod tests {
         let provider =
             std::env::var("UC_BILLING_PROBE_PROVIDER").unwrap_or_else(|_| "codex".into());
         assert!(matches!(provider.as_str(), "claude" | "codex"));
-        let reads = read_chrome_billing(&provider).await.unwrap();
+        let reads = read_chrome_billing(&provider, &Default::default())
+            .await
+            .unwrap();
         assert_eq!(reads.len(), 1);
         assert_eq!(
             reads[0].state, "ready",
@@ -1122,20 +1250,40 @@ mod tests {
             .filter(|id| billing_provider(id) == Some(provider.as_str()))
             .collect();
         let mut matched = 0;
+        let mut paid_accounts = 0;
         let mut confirmed_periods = 0;
         for id in ids {
             let Ok(uuid) = uc_providers::accounts::billing_account_uuid(store.clone(), &cli, &id)
             else {
                 continue;
             };
-            if reads[0]
+            if let Some(org) = reads[0]
                 .organizations
                 .iter()
-                .any(|org| org.uuid.eq_ignore_ascii_case(&uuid) && org.status == 200)
+                .find(|org| org.uuid.eq_ignore_ascii_case(&uuid) && org.status == 200)
             {
                 matched += 1;
+                paid_accounts += usize::from(
+                    uc_providers::BillingPeriods::plan_for(
+                        &provider,
+                        &org.plan_type,
+                        org.tier.as_deref(),
+                    )
+                    .is_some(),
+                );
                 confirmed_periods +=
                     usize::from(billing_read_confirms(&reads, &provider, &uuid, Utc::now()));
+                eprintln!(
+                    "Matched {provider} billing: plan={}, tier={:?}, status={:?}, confirmed_end={:?}",
+                    org.plan_type,
+                    org.tier,
+                    org.details
+                        .as_ref()
+                        .and_then(|details| details["status"].as_str()),
+                    org.details
+                        .as_ref()
+                        .and_then(|details| billing_end(&provider, details))
+                );
             }
         }
         assert!(
@@ -1143,8 +1291,9 @@ mod tests {
             "The browser session must match a connected provider account"
         );
         eprintln!(
-            "Existing {provider} browser login: {matched} matched accounts, {confirmed_periods} confirmed billing periods"
+            "Existing {provider} browser login: {matched} matched accounts, {paid_accounts} paid accounts, {confirmed_periods} confirmed billing periods"
         );
+        assert_eq!(confirmed_periods, paid_accounts);
     }
 
     #[test]
@@ -1186,7 +1335,7 @@ mod tests {
     }
 
     #[test]
-    fn billing_reader_saves_only_the_current_organization_and_clears_rejected_sessions() {
+    fn billing_reader_keeps_confirmed_dates_through_rejected_sessions() {
         let temporary = tempfile::tempdir().unwrap();
         let store = ChatStore::new(temporary.path().join("chat"));
         let periods = uc_providers::BillingPeriods::new(temporary.path().join("billing"));
@@ -1216,15 +1365,15 @@ mod tests {
         assert!(periods.get(org, Some("Max 20x"), now).is_some());
         let rejected =
             serde_json::from_value(serde_json::json!({"state":"failed","status":403})).unwrap();
-        assert!(store_billing_read(&periods, &store, &session, rejected, now).unwrap());
-        assert_eq!(periods.get(org, Some("Max 20x"), now), None);
-        assert!(
-            store
-                .get(&session.id)
-                .unwrap()
-                .billing_organizations
-                .is_empty()
+        assert!(store_billing_read(&periods, &store, &session, rejected, now).is_err());
+        assert_eq!(
+            periods.get(org, Some("Max 20x"), now),
+            Some(uc_core::PlanTerm::Stated {
+                ends_at: end,
+                checked_at: Some(now)
+            })
         );
+        assert_eq!(store.get(&session.id).unwrap().billing_organizations, [org]);
     }
 
     #[test]
@@ -1264,8 +1413,9 @@ mod tests {
         let removed =
             serde_json::from_value(serde_json::json!({"state":"ready","organizations":[]}))
                 .unwrap();
-        assert!(store_chrome_billing(&periods, "claude", vec![removed], now).unwrap());
-        assert_eq!(periods.get(org, Some("Max"), now), None);
+        assert!(!store_chrome_billing(&periods, "claude", vec![removed], now).unwrap());
+        assert!(periods.get(org, Some("Max"), now).is_some());
+        assert!(periods.browser_organizations().is_empty());
     }
 
     #[test]
@@ -1331,7 +1481,7 @@ mod tests {
     }
 
     #[test]
-    fn browser_and_app_session_auth_failures_only_revoke_their_own_evidence() {
+    fn browser_and_app_session_failures_preserve_dates_until_authoritative_cancellation() {
         for provider in ["claude", "codex"] {
             let temporary = tempfile::tempdir().unwrap();
             let store = ChatStore::new(temporary.path().join("chat"));
@@ -1372,18 +1522,18 @@ mod tests {
             let rejected = || {
                 serde_json::from_value(serde_json::json!({"state":"failed","status":403})).unwrap()
             };
-            assert!(!store_billing_read(&periods, &store, &session, rejected(), now).unwrap());
+            assert!(store_billing_read(&periods, &store, &session, rejected(), now).is_err());
             assert_eq!(periods.get_for(provider, account, Some(plan), now), term);
             let limited =
                 serde_json::from_value(serde_json::json!({"state":"failed","status":429})).unwrap();
             assert!(store_chrome_billing(&periods, provider, vec![limited], now).is_err());
             assert_eq!(periods.get_for(provider, account, Some(plan), now), term);
-            assert!(store_chrome_billing(&periods, provider, vec![rejected()], now).unwrap());
-            assert_eq!(periods.get_for(provider, account, Some(plan), now), None);
+            assert!(store_chrome_billing(&periods, provider, vec![rejected()], now).is_err());
+            assert_eq!(periods.get_for(provider, account, Some(plan), now), term);
             assert!(periods.browser_enabled_for(provider));
-            assert!(periods.browser_accounts(provider).is_empty());
+            assert_eq!(periods.browser_accounts(provider), [account]);
             assert!(
-                store_chrome_billing(
+                !store_chrome_billing(
                     &periods,
                     provider,
                     vec![paid_read(provider, account, end)],
@@ -1397,6 +1547,134 @@ mod tests {
             }]})).unwrap();
             assert!(store_chrome_billing(&periods, provider, vec![free], now).unwrap());
             assert_eq!(periods.peek_for(provider, account, now), None);
+        }
+    }
+
+    #[test]
+    fn incomplete_billing_responses_keep_only_the_previously_confirmed_date() {
+        for provider in ["claude", "codex"] {
+            let temporary = tempfile::tempdir().unwrap();
+            let periods = uc_providers::BillingPeriods::new(temporary.path());
+            let account = "00000000-0000-4000-8000-000000000001";
+            let other = "00000000-0000-4000-8000-000000000002";
+            let now = Utc::now();
+            let end = now + chrono::Duration::days(24);
+            store_chrome_billing(
+                &periods,
+                provider,
+                vec![paid_read(provider, account, end)],
+                now,
+            )
+            .unwrap();
+            let before = periods.peek_for(provider, account, now);
+            for status in [401, 403, 404, 429, 500] {
+                let mut read = paid_read(provider, account, end);
+                read.organizations[0].status = status;
+                read.organizations[0].details = None;
+                assert!(!store_chrome_billing(&periods, provider, vec![read], now).unwrap());
+                assert_eq!(periods.peek_for(provider, account, now), before);
+            }
+            for details in [
+                serde_json::json!({"status":"active"}),
+                serde_json::json!({"next_charge_at":end.to_rfc3339(),"expires_at":end.to_rfc3339()}),
+                serde_json::json!({"status":"active","next_charge_at":"invalid","expires_at":"invalid"}),
+            ] {
+                let mut read = paid_read(provider, account, end);
+                read.organizations[0].details = Some(details);
+                assert!(!store_chrome_billing(&periods, provider, vec![read], now).unwrap());
+                assert_eq!(periods.peek_for(provider, account, now), before);
+            }
+            let mut read = paid_read(provider, account, end);
+            read.organizations[0].plan_type = String::new();
+            assert!(!store_chrome_billing(&periods, provider, vec![read], now).unwrap());
+            assert_eq!(periods.peek_for(provider, account, now), before);
+            assert_eq!(periods.peek_for(provider, other, now), None);
+            assert_eq!(periods.peek_for(provider, account, end), None);
+            let mut read = paid_read(provider, account, end);
+            read.organizations[0].details = Some(serde_json::json!({"status":"cancelled"}));
+            assert!(store_chrome_billing(&periods, provider, vec![read], now).unwrap());
+            assert_eq!(periods.peek_for(provider, account, now), None);
+        }
+    }
+
+    #[test]
+    fn authoritative_expiry_clears_older_confirmations_from_every_source() {
+        for provider in ["claude", "codex"] {
+            let temporary = tempfile::tempdir().unwrap();
+            let periods = uc_providers::BillingPeriods::new(temporary.path());
+            let account = "00000000-0000-4000-8000-000000000001";
+            let now = Utc::now();
+            let end = now + chrono::Duration::days(24);
+            store_source_billing(
+                &periods,
+                provider,
+                "session:fixture",
+                paid_read(provider, account, end),
+                now - chrono::Duration::minutes(1),
+            )
+            .unwrap();
+            store_chrome_billing(
+                &periods,
+                provider,
+                vec![paid_read(provider, account, end)],
+                now,
+            )
+            .unwrap();
+            assert!(periods.peek_for(provider, account, now).is_some());
+            assert!(
+                store_chrome_billing(
+                    &periods,
+                    provider,
+                    vec![paid_read(provider, account, now)],
+                    now + chrono::Duration::seconds(1),
+                )
+                .unwrap()
+            );
+            assert_eq!(periods.peek_for(provider, account, now), None);
+        }
+    }
+
+    #[test]
+    fn automatic_billing_retries_unconfirmed_accounts_with_bounded_backoff() {
+        let now = Utc::now();
+        let provider = uc_core::Provider::new("claude@fixture", "Claude");
+        let mut snapshot =
+            uc_core::ProviderSnapshot::make(&provider, Some("Max 20x".into()), Vec::new(), now);
+        assert!(!billing_refresh_complete(None, now));
+        assert!(!billing_refresh_complete(Some(&snapshot), now));
+        snapshot.plan_term = Some(uc_core::PlanTerm::Stated {
+            ends_at: now + chrono::Duration::days(7),
+            checked_at: None,
+        });
+        assert!(!billing_refresh_complete(Some(&snapshot), now));
+        snapshot.plan_term = Some(uc_core::PlanTerm::Stated {
+            ends_at: now + chrono::Duration::days(7),
+            checked_at: Some(now - chrono::Duration::days(1)),
+        });
+        assert!(billing_refresh_complete(Some(&snapshot), now));
+        assert!(!billing_refresh_complete(
+            Some(&snapshot),
+            now + chrono::Duration::days(7)
+        ));
+        snapshot.plan_term = None;
+        snapshot.plan = Some("Free".into());
+        assert!(billing_refresh_complete(Some(&snapshot), now));
+        for (attempt, seconds) in [
+            (0, 30),
+            (1, 60),
+            (2, 120),
+            (3, 240),
+            (4, 300),
+            (u32::MAX, 300),
+        ] {
+            assert_eq!(
+                billing_refresh_delay(true, attempt),
+                Duration::from_secs(seconds)
+            );
+            assert_eq!(
+                billing_refresh_delay(false, attempt),
+                Duration::from_secs(300)
+            );
         }
     }
 
@@ -1466,6 +1744,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn billing_polls_and_providers_reuse_one_approved_browser_connection() {
+        use tokio_tungstenite::tungstenite::Message;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let socket = Url::parse(&format!(
+            "ws://{}/devtools/browser/fixture",
+            listener.local_addr().unwrap()
+        ))
+        .unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut connection = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let mut reads = 0;
+            let mut previous_id = 0;
+            while let Some(Ok(Message::Text(text))) = connection.next().await {
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let id = request["id"].as_u64().unwrap();
+                assert!(id > previous_id);
+                previous_id = id;
+                let result = match request["method"].as_str().unwrap() {
+                    "Browser.getVersion" => serde_json::json!({"product":"Chrome/fixture"}),
+                    "Target.getBrowserContexts" => {
+                        serde_json::json!({"defaultBrowserContextId":"default-profile"})
+                    }
+                    "Target.getTargets" => serde_json::json!({"targetInfos":[
+                        {"type":"page","targetId":"claude","browserContextId":"default-profile","url":"https://claude.ai/new"},
+                        {"type":"page","targetId":"codex","browserContextId":"default-profile","url":"https://chatgpt.com/"}
+                    ]}),
+                    "Target.attachToTarget" => {
+                        let expected = if reads % 2 == 0 { "claude" } else { "codex" };
+                        assert_eq!(request["params"]["targetId"], expected);
+                        serde_json::json!({"sessionId":"attached"})
+                    }
+                    "Runtime.evaluate" => {
+                        serde_json::json!({"result":{"value":{"state":"ready","organizations":[]}}})
+                    }
+                    "Target.detachFromTarget" => {
+                        reads += 1;
+                        serde_json::json!({})
+                    }
+                    method => panic!("Unexpected CDP method: {method}"),
+                };
+                connection
+                    .send(Message::Text(
+                        serde_json::json!({"id":id,"result":result})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .unwrap();
+                if reads == 4 {
+                    return;
+                }
+            }
+            panic!("The approved browser connection was closed between billing polls");
+        });
+        let shared = Default::default();
+        for (index, provider) in ["claude", "codex", "claude", "codex"]
+            .into_iter()
+            .enumerate()
+        {
+            let reads = read_chrome_billing_shared(provider, &socket, &shared)
+                .await
+                .unwrap();
+            assert_eq!(reads[0].state, "ready");
+            if index == 0 {
+                let current_id = shared.lock().await.as_ref().unwrap().id;
+                drop(ChromeTargetGuard {
+                    connection: shared.clone(),
+                    connection_id: uuid::Uuid::new_v4(),
+                    endpoint: socket.clone(),
+                    target: None,
+                    session: None,
+                    attaching_target: Some("stale-session-target".into()),
+                    creating_target: true,
+                });
+                tokio::task::yield_now().await;
+                assert_eq!(shared.lock().await.as_ref().unwrap().id, current_id);
+            }
+        }
+        tokio::time::timeout(Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
     async fn cancelled_browser_reads_close_hidden_targets_and_never_attach_to_incognito() {
         use tokio_tungstenite::tungstenite::Message;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1501,6 +1865,22 @@ mod tests {
                         attached.take().unwrap().send(()).unwrap();
                         continue;
                     }
+                    "Target.detachFromTarget" => {
+                        assert_eq!(request["params"]["targetId"], "temporary");
+                        serde_json::json!({})
+                    }
+                    "Target.closeTarget" => {
+                        assert_eq!(request["params"]["targetId"], "temporary");
+                        connection
+                            .send(Message::Text(
+                                serde_json::json!({"id":request["id"],"result":{"success":true}})
+                                    .to_string()
+                                    .into(),
+                            ))
+                            .await
+                            .unwrap();
+                        return;
+                    }
                     method => panic!("Unexpected CDP method: {method}"),
                 };
                 connection
@@ -1512,22 +1892,7 @@ mod tests {
                     .await
                     .unwrap();
             }
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut cleanup = tokio_tungstenite::accept_async(stream).await.unwrap();
-            let Message::Text(text) = cleanup.next().await.unwrap().unwrap() else {
-                panic!("Missing cleanup request");
-            };
-            let request: Value = serde_json::from_str(&text).unwrap();
-            assert_eq!(request["method"], "Target.closeTarget");
-            assert_eq!(request["params"]["targetId"], "temporary");
-            cleanup
-                .send(Message::Text(
-                    serde_json::json!({"id":request["id"],"result":{"success":true}})
-                        .to_string()
-                        .into(),
-                ))
-                .await
-                .unwrap();
+            panic!("The approved browser connection closed before target cleanup");
         });
         let reader =
             tokio::spawn(async move { read_chrome_billing_socket("claude", &socket).await });
@@ -1537,6 +1902,93 @@ mod tests {
             .unwrap();
         reader.abort();
         assert!(reader.await.is_err_and(|error| error.is_cancelled()));
+        tokio::time::timeout(Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn delayed_attach_reply_detaches_existing_tab_without_losing_browser_approval() {
+        use tokio_tungstenite::tungstenite::Message;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let socket = Url::parse(&format!(
+            "ws://{}/devtools/browser/fixture",
+            listener.local_addr().unwrap()
+        ))
+        .unwrap();
+        let shared: SharedChromeConnection = Default::default();
+        let (cleaned, cleanup) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut connection = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let mut cleaned = Some(cleaned);
+            let mut detaches = 0;
+            while let Some(Ok(Message::Text(text))) = connection.next().await {
+                let request: Value = serde_json::from_str(&text).unwrap();
+                let result = match request["method"].as_str().unwrap() {
+                    "Browser.getVersion" => serde_json::json!({"product":"Chrome/fixture"}),
+                    "Target.getBrowserContexts" => {
+                        serde_json::json!({"defaultBrowserContextId":"default-profile"})
+                    }
+                    "Target.getTargets" => serde_json::json!({"targetInfos":[
+                        {"type":"page","targetId":"existing","browserContextId":"default-profile","url":"https://claude.ai/new"}
+                    ]}),
+                    "Target.attachToTarget" => {
+                        if detaches == 0 {
+                            tokio::time::sleep(Duration::from_millis(3500)).await;
+                        }
+                        serde_json::json!({"sessionId":"attached"})
+                    }
+                    "Runtime.evaluate" => {
+                        serde_json::json!({"result":{"value":{"state":"ready","organizations":[]}}})
+                    }
+                    "Target.detachFromTarget" => {
+                        if detaches == 0 {
+                            assert_eq!(request["params"]["targetId"], "existing");
+                        } else {
+                            assert_eq!(request["params"]["sessionId"], "attached");
+                        }
+                        detaches += 1;
+                        serde_json::json!({})
+                    }
+                    method => panic!("Unexpected CDP method: {method}"),
+                };
+                connection
+                    .send(Message::Text(
+                        serde_json::json!({"id":request["id"],"result":result})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .unwrap();
+                if detaches == 1
+                    && let Some(cleaned) = cleaned.take()
+                {
+                    cleaned.send(()).unwrap();
+                }
+                if detaches == 2 {
+                    return;
+                }
+            }
+            panic!("The existing user tab's browser connection was closed");
+        });
+        assert!(
+            read_chrome_billing_shared("claude", &socket, &shared)
+                .await
+                .is_err()
+        );
+        tokio::time::timeout(Duration::from_secs(2), cleanup)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            read_chrome_billing_shared("claude", &socket, &shared)
+                .await
+                .unwrap()[0]
+                .state,
+            "ready"
+        );
         tokio::time::timeout(Duration::from_secs(2), server)
             .await
             .unwrap()
@@ -1720,7 +2172,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn switching_browser_accounts_refreshes_every_affected_billing_card() {
+    async fn switching_browser_accounts_keeps_each_accounts_confirmed_billing_date() {
         let directory = tempfile::tempdir().unwrap();
         let periods = uc_providers::BillingPeriods::new(directory.path().join("billing"));
         let first = "00000000-0000-4000-8000-000000000001";
@@ -1776,7 +2228,7 @@ mod tests {
         assert!(
             engine.snapshots()[&format!("codex@{first}")]
                 .plan_term
-                .is_none()
+                .is_some()
         );
         assert!(
             engine.snapshots()[&format!("codex@{second}")]

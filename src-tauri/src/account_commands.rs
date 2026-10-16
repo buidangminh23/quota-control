@@ -822,7 +822,9 @@ pub async fn restore_removed_logins(
         .map_err(safe_error)?
         .map_err(safe_error)?;
     rescan_services(&accounts).await;
-    service.replace_runtimes(accounts.runtimes()?, &app)
+    service.replace_runtimes(accounts.runtimes()?, &app)?;
+    crate::chat_commands::request_billing_refresh(&app);
+    Ok(())
 }
 
 fn bindings(logins: &[CliAccount]) -> Vec<(String, uc_providers::CliLocation)> {
@@ -855,6 +857,8 @@ pub async fn sync_logins(app: &AppHandle) {
             .replace_runtimes(runtimes, app)
     }) {
         tracing::warn!("Logins changed, but the cards were not rebuilt: {error}");
+    } else if cli_changed {
+        crate::chat_commands::request_billing_refresh(app);
     }
 }
 
