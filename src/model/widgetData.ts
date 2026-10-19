@@ -69,6 +69,7 @@ export interface WidgetData extends DisplayOptions {
   infoNote?: string;
   valueTooltipNote?: string;
   hasData: boolean;
+  hasReading?: boolean;
   values: MetricValue[];
   /** Which values the tile renders; absent = every value. */
   selectionKind?: MetricKind;
@@ -190,8 +191,11 @@ export function resolveLine(line: MetricLine, descriptor: WidgetDescriptor, disp
 export function widgetDataFor(descriptor: WidgetDescriptor, snapshot: ProviderSnapshot | undefined, display: DisplayOptions): WidgetData {
   const line = snapshot?.lines.find((candidate) => candidate.label === descriptor.metricLabel);
   const resolved = line ? resolveLine(line, descriptor, display) : null;
-  if (resolved) return hasDashboardCard(descriptor.providerId) && (snapshot?.usageUnavailable || snapshot?.errorCategory) ? { ...resolved, hasData: false } : resolved;
-  return { ...sampleFromTemplate(descriptor.template, display), hasData: false };
+  if (resolved) {
+    const reading = { ...resolved, hasReading: resolved.hasData };
+    return hasDashboardCard(descriptor.providerId) && (snapshot?.usageUnavailable || snapshot?.errorCategory) ? { ...reading, hasData: false } : reading;
+  }
+  return { ...sampleFromTemplate(descriptor.template, display), hasData: false, hasReading: snapshot?.lines.length ? false : undefined };
 }
 
 /**

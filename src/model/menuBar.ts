@@ -4,13 +4,13 @@
  * Port of upstream `Models/MenuBarContent.swift` and the pure fill geometry of
  * `Support/MenuBarStripRenderer.swift` (`MenuBarBarGeometry`).
  *
- * The strip is dynamic: a metric without data is dropped, and a provider whose metrics all lack data
- * contributes nothing (no orphan mark). Nothing left means the app icon.
+ * Selected accounts stay visible with unavailable readings while refreshing or recovering from an
+ * error. Reported windows keep their labels; unsupported windows and missing local history are omitted.
  */
 import type { Provider, WidgetDescriptor } from "@/lib/types";
 import { hourWindowLabel } from "./format";
 import type { ProviderMetrics } from "./layout";
-import { brandOf } from "./layout";
+import { brandOf, hasDashboardCard } from "./layout";
 import { fraction, isBounded, menuBarValue, type WidgetData } from "./widgetData";
 
 export const MAX_BARS = 4;
@@ -47,10 +47,11 @@ export function buildStripContent(
   perGroup = 2,
 ): StripContent {
   const resolved = groups.flatMap((group) => {
-    const metrics = [...group.always, ...group.onDemand].flatMap((descriptor): StripMetric[] => {
-      const data = dataFor(descriptor);
-      if (!data.hasData) return [];
-      return [{ id: descriptor.id, label: data.title, period: periodLabel(data.periodDurationMs), value: menuBarValue(data), fraction: fraction(data), bounded: isBounded(data) }];
+    const candidates = [...group.always, ...group.onDemand].map((descriptor) => ({ descriptor, data: dataFor(descriptor) }));
+    const reported = candidates.filter(({ data }) => data.hasData || data.hasReading);
+    const selected = reported.length > 0 || !hasDashboardCard(group.provider.id) ? reported : candidates.filter(({ data }) => data.hasReading !== false);
+    const metrics = selected.map(({ descriptor, data }): StripMetric => {
+      return { id: descriptor.id, label: data.title, period: periodLabel(data.periodDurationMs), value: menuBarValue(data), fraction: data.hasData ? fraction(data) : 0, bounded: data.hasData && isBounded(data) };
     }).slice(0, Math.max(1, perGroup));
     if (metrics.length === 0) return [];
     return [{ providerId: group.provider.id, displayName: displayName(group.provider), brand: brandOf(group.provider.icon || group.provider.id), metrics }];
