@@ -43,6 +43,14 @@ curl -fsSL https://raw.githubusercontent.com/buidangminh23/quota-control/main/sc
 ```
 
 Downloads the latest release, verifies its SHA-256 checksum, installs the app and opens it.
+
+Or install with [Homebrew](https://github.com/buidangminh23/homebrew-tap):
+
+```sh
+brew install --cask buidangminh23/tap/quota-control
+```
+
+The cask follows each release within a few hours and links `usagectl` into Homebrew's `bin`.
 For a manual install, download the `.dmg` and drag **Quota Control** to **Applications**.
 The app is not notarized by Apple; a browser download may require **System Settings → Privacy & Security → Open Anyway**.
 
