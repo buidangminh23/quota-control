@@ -281,6 +281,13 @@ export const insightsEn: InsightsMessages = {
   freeResetWithin: (duration) => `within ${duration}`,
   freeResetNoTime: "time not given",
   freeResetAwaiting: "awaiting confirmation",
+  quotaResetTitle: "Quota reset",
+  quotaResetConfirmed: "confirmed",
+  quotaResetBanked: "reset received",
+  quotaResetChecked: (at, offset) => `Verified ${at} · ${offset}`,
+  quotaResetEvidence: (before, after, banked) => banked
+    ? `This account's available banked resets increased from ${before} to ${after}, verified by two real quota readings.`
+    : `This account's weekly usage fell from ${before}% to ${after}% before its regular reset, verified by two real quota readings. This confirms a reset for this account; quota does not identify its cause.`,
   freeResetAt: (time, offset) => `At ${time} · ${offset}`,
   freeResetAround: (time, offset) => `Around ${time} · ${offset}`,
   freeResetBy: (time, offset, chance) => (chance ? `${chance} · by ${time} · ${offset}` : `By ${time} · ${offset}`),

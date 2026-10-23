@@ -7,15 +7,20 @@ import { useMemo } from "react";
 import { insightsFor } from "@/i18n/insights";
 import { buildResetPresentation } from "@/model/glanceResets";
 import { dailyReliability } from "@/model/insights/claudePresentation";
+import { freeResetLines } from "@/model/insights/freeResetLines";
 import { feedOutdated, parseResets, parseResetStatus, resetTrackerOutdated } from "@/model/insights/resets";
+import { upcomingReset } from "@/model/insights/upcomingReset";
+import { isLocalHistoryCard } from "@/model/layout";
 import { SOURCE_COLORS } from "@/model/palette";
+import { providerBrand } from "@/model/providerText";
 import { RESET_PROVIDERS, type ResetProvider } from "@/model/settings";
 import { dayNumber } from "@/model/timeZone";
-import { useNow, useSettings } from "@/state/hooks";
+import { useIsEnabled, useNow, useSettings } from "@/state/hooks";
 import { useInsights } from "@/state/insights";
-import { updateSettings } from "@/state/store";
+import { updateSettings, useApp } from "@/state/store";
 import { Capsules } from "../tokens/parts";
 import { ProviderMark } from "../ui/ProviderMark";
+import { tooltipProps } from "../ui/tooltip";
 import { ClaudeResets } from "./ClaudeResets";
 import { useFeeds } from "./data";
 import { Disclosure, FeedStatus, SourceLine } from "./parts";
@@ -33,6 +38,14 @@ function CodexResets() {
   const status = useMemo(() => parseResetStatus(feeds.codexResetStatus?.body), [feeds.codexResetStatus]);
   const resets = useMemo(() => parseResets(feeds.codexResets?.body, [status?.latest ?? null]), [feeds.codexResets, status]);
   const now = useNow();
+  const catalog = useApp((state) => state.catalog);
+  const engine = useApp((state) => state.engine);
+  const isEnabled = useIsEnabled();
+  const confirmations = catalog.flatMap(({ provider }) => {
+    if (isLocalHistoryCard(provider.id) || providerBrand(provider) !== "codex" || !isEnabled(provider.id)) return [];
+    const next = upcomingReset(status, now, engine?.providers[provider.id]?.snapshot?.quotaReset);
+    return next?.confirmation ? [{ provider, lines: freeResetLines(next, now, timeFormat, language) }] : [];
+  });
   const today = dayNumber(now);
   const reliability = useMemo(() => dailyReliability(resets, now, language, text), [resets, today, language, text]);
   const presentation = useMemo(
@@ -51,6 +64,22 @@ function CodexResets() {
 
   return (
     <>
+      {confirmations.length > 0 ? (
+        <section className="uc-group" aria-label={text.quotaResetTitle}>
+          <h2 className="uc-group-title">{text.quotaResetTitle}</h2>
+          <div className="uc-card">
+            {confirmations.map(({ provider, lines }) => (
+              <div key={provider.id} className="uc-row uc-free-reset" role="group" aria-label={provider.displayName} {...tooltipProps(lines.details)}>
+                <span className="uc-row-primary">
+                  <span className="uc-free-reset-title"><ProviderMark brand="codex" size={MARK_SIZE} /><span>{provider.displayName}</span></span>
+                  <span className="uc-row-trailing uc-free-reset-value">{lines.value}</span>
+                </span>
+                <span className="uc-row-restore uc-num">{lines.caption}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
       {!loaded ? <p className="uc-empty">{text.loading}</p> : null}
       {empty ? <p className="uc-insight-error">{text.failed(error ?? "")}</p> : null}
       {stale && !empty ? <p className="uc-insight-note">{text.staleNote}</p> : null}

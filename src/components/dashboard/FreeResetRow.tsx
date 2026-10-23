@@ -6,6 +6,7 @@
  */
 import { useEffect, useMemo } from "react";
 import { insightsFor } from "@/i18n/insights";
+import type { ProviderSnapshot } from "@/lib/types";
 import { freeResetLines } from "@/model/insights/freeResetLines";
 import { parseResetStatus } from "@/model/insights/resets";
 import { upcomingReset } from "@/model/insights/upcomingReset";
@@ -13,6 +14,7 @@ import { useSettings } from "@/state/hooks";
 import { ensureFeed, useInsights } from "@/state/insights";
 import { selectDashboardTab, updateSettings } from "@/state/store";
 import { ResetAuthorAvatar } from "../ui/ResetAuthorAvatar";
+import { ProviderMark } from "../ui/ProviderMark";
 import { tooltipProps } from "../ui/tooltip";
 
 function openCodexResets(): void {
@@ -20,7 +22,7 @@ function openCodexResets(): void {
   selectDashboardTab("resets");
 }
 
-export function FreeResetRow({ now }: { now: Date }) {
+export function FreeResetRow({ now, evidence }: { now: Date; evidence?: ProviderSnapshot["quotaReset"] }) {
   const { showResetsTab, notifyCodexResets, timeFormat, language } = useSettings();
   const tracking = showResetsTab || notifyCodexResets;
   const body = useInsights((state) => state.feeds.codexResetStatus?.body ?? null);
@@ -30,7 +32,7 @@ export function FreeResetRow({ now }: { now: Date }) {
     if (tracking) ensureFeed("codexResetStatus");
   }, [tracking]);
 
-  const next = tracking ? upcomingReset(status, now) : null;
+  const next = tracking ? upcomingReset(status, now, evidence) : null;
   if (!next) return null;
   const lines = freeResetLines(next, now, timeFormat, language);
   const details = showResetsTab ? `${lines.details}\n${insightsFor(language).freeResetOpenTab}` : lines.details;
@@ -40,7 +42,7 @@ export function FreeResetRow({ now }: { now: Date }) {
     <>
       <span className="uc-row-primary">
         <span className="uc-free-reset-title">
-          <ResetAuthorAvatar size={14} />
+          {next.confirmation ? <ProviderMark brand="codex" size={14} /> : <ResetAuthorAvatar size={14} />}
           <span>{lines.title}</span>
         </span>
         <span className="uc-row-trailing uc-free-reset-value uc-num">{lines.value}</span>

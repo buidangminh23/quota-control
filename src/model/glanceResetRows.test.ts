@@ -1,5 +1,6 @@
 import { FEED_FIXTURES } from "@/lib/insightsFeedFixtures";
 import type { Language } from "@/i18n";
+import type { QuotaReset } from "@/lib/types";
 import { compactDuration, timeOnDayLabel, type TimeFormat } from "./format";
 import type { GlanceResetRow } from "./glance";
 import { claudeResetRow, codexResetRow, freeResetRow, MOMENT_PLACEHOLDER, resetRowAvatars } from "./glanceResetRows";
@@ -13,6 +14,16 @@ import { setSystemTimeZone } from "./timeZone";
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
+
+it("exports the same confirmed quota row without a running native countdown", () => {
+  const now = new Date("2026-09-27T16:00:00Z");
+  const evidence: QuotaReset = { observedAt: now.toISOString(), previousObservedAt: new Date(now.getTime() - 120_000).toISOString(), kind: "usage", previousValue: 80, currentValue: 0 };
+  const row = codexResetRow(null, now, "auto", "vi", true, evidence);
+  expect(row).toMatchObject({ title: "Reset hạn mức", value: "đã xác nhận", author: "Codex", tone: "positive", opens: true });
+  expect(row?.countdown).toBeUndefined();
+  expect(row?.hideAt).toBe(new Date(now.getTime() + DAY).toISOString());
+  expect(codexResetRow(null, now, "auto", "vi", true)).toBeNull();
+});
 /** Sunday 27/09/2026 07:00 in Vietnam. */
 const NOW = new Date("2026-09-27T00:00:00Z");
 const POSTED = new Date("2026-09-26T21:41:35Z");

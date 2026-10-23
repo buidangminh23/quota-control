@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { QuotaReset } from "@/lib/types";
 import { parseResetStatus } from "./resets";
 import { AWAITING_MS, timingFromText, timingMoment, upcomingReset, type ResetTiming } from "./upcomingReset";
 
@@ -86,6 +87,51 @@ describe("timingFromText", () => {
 });
 
 describe("upcomingReset", () => {
+  const evidence: QuotaReset = {
+    observedAt: "2026-09-26T22:02:00Z",
+    previousObservedAt: "2026-09-26T22:00:00Z",
+    kind: "usage",
+    previousValue: 72,
+    currentValue: 1,
+  };
+
+  it("confirms a real quota reset before the announcement countdown ends", () => {
+    const parsed = parseResetStatus(status(scheduled("Resets coming tomorrow")));
+    const now = new Date(evidence.observedAt);
+    expect(upcomingReset(parsed, now, evidence)?.confirmation).toEqual(evidence);
+    expect(upcomingReset(parsed, now)?.confirmation).toBeUndefined();
+  });
+
+  it("shows a real quota reset even without a public announcement", () => {
+    expect(upcomingReset(null, new Date(evidence.observedAt), evidence)).toMatchObject({
+      source: { kind: "observed", url: null }, confirmation: evidence,
+    });
+    expect(upcomingReset(null, new Date(new Date(evidence.observedAt).getTime() + AWAITING_MS), evidence)).toBeNull();
+  });
+
+  it("does not reuse an earlier or different-kind observation for a new announcement", () => {
+    const now = new Date(evidence.observedAt);
+    const newer = scheduled("Another reset tomorrow");
+    newer.announced_at = now.toISOString();
+    expect(upcomingReset(parseResetStatus(status(newer)), now, evidence)?.confirmation).toBeUndefined();
+    expect(upcomingReset(parseResetStatus(status(scheduled("Banked reset tomorrow", null, "banked"))), now, evidence)?.confirmation).toBeUndefined();
+    const banked = { ...evidence, kind: "banked" as const, previousValue: 1, currentValue: 2 };
+    expect(upcomingReset(parseResetStatus(status(scheduled("Banked reset tomorrow", null, "banked"))), now, banked)?.confirmation).toEqual(banked);
+  });
+
+  it("rejects invalid, future and stale evidence without confirming elapsed countdowns", () => {
+    const parsed = parseResetStatus(status(scheduled("Resetting in 1 hour")));
+    const now = new Date("2026-09-26T23:00:00Z");
+    for (const invalid of [
+      { ...evidence, observedAt: "invalid" },
+      { ...evidence, observedAt: "2026-09-27T00:00:00Z" },
+      { ...evidence, previousObservedAt: evidence.observedAt },
+      { ...evidence, previousValue: NaN },
+      { ...evidence, observedAt: "2026-09-18T00:00:00Z", previousObservedAt: "2026-09-17T23:59:00Z" },
+    ]) expect(upcomingReset(parsed, now, invalid)?.confirmation).toBeUndefined();
+    expect(upcomingReset(parsed, now)?.confirmation).toBeUndefined();
+  });
+
   it("counts down to scheduled_for when the site knows the time", () => {
     const parsed = parseResetStatus(status(scheduled("Resets at noon", "2026-09-27T01:00:00.000Z")));
     const next = upcomingReset(parsed, new Date("2026-09-26T22:00:00Z"));

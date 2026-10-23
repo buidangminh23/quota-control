@@ -6,12 +6,13 @@ import type { AppInfo } from "@/lib/types";
 import type { PublicFeedName, PublicFeedSnapshot } from "@/lib/insightsTypes";
 import { MockBackend } from "@/lib/mockBackend";
 import { FEED_FIXTURES } from "@/lib/insightsFeedFixtures";
+import { accountDescriptors, accountProvider } from "@/lib/fixtures";
 import type { GlanceDocument } from "@/model/glance";
 import { parseResetFeeds } from "@/model/glanceResets";
 import { buildClaudePresentation, dailyReliability } from "@/model/insights/claudePresentation";
 import { parseClaudeResets } from "@/model/insights/claudeResets";
 import { parseResets } from "@/model/insights/resets";
-import { setProviderOpen } from "@/model/layout";
+import { reconcileLayout, setProviderOpen } from "@/model/layout";
 import { resetInsights } from "@/state/insights";
 import { updateLayout, updateSettings, useApp } from "@/state/store";
 import { useWidgetResetAsks } from "./widgetResets";
@@ -455,6 +456,30 @@ describe("the row each Codex and Claude account starts with", () => {
   afterEach(() => vi.useRealTimers());
 
   const rowOf = (document: GlanceDocument | undefined, id: string) => document?.providers.find((provider) => provider.id === id)?.resetRow;
+
+  it("sends quota confirmation only for its account while other accounts keep the public announcement", async () => {
+    const api = await start({});
+    await waitFor(() => expect(rowOf(api.latest, "codex@52d0")).toBeDefined());
+    const other = accountProvider("codex", "second", "Second");
+    act(() => {
+      const catalog = [...useApp.getState().catalog, { provider: other, descriptors: accountDescriptors(other, "codex") }];
+      useApp.setState({ catalog, layout: reconcileLayout(useApp.getState().layout, catalog), enabledProviders: null });
+      api.editEngineState((state) => {
+        const original = state.providers["codex@52d0"]!;
+        state.providers[other.id] = structuredClone(original);
+        state.providers[other.id]!.snapshot!.providerID = other.id;
+        original.snapshot!.quotaReset = {
+          observedAt: new Date(Date.now() - 30_000).toISOString(),
+          previousObservedAt: new Date(Date.now() - 60_000).toISOString(),
+          kind: "usage", previousValue: 76, currentValue: 0,
+        };
+      });
+    });
+    await waitFor(() => expect(rowOf(api.latest, "codex@52d0")?.value).toBe("đã xác nhận"));
+    expect(rowOf(api.latest, "codex@52d0")?.author).toBe("Codex");
+    expect(rowOf(api.latest, other.id)).toMatchObject({ title: "Reset free", value: "chưa rõ giờ", author: "@thsottiaux" });
+    expect(api.latest!.widget.providers.find((provider) => provider.id === "codex@52d0")?.resetRow).toEqual(rowOf(api.latest, "codex@52d0"));
+  });
 
   it("starts every Codex and Claude account with its card's row, on the island and in the widgets, whichever tracker they show", async () => {
     const api = await start({});

@@ -10,6 +10,7 @@ import claudeDevsAvatar from "@/assets/claudedevs.webp?inline";
 import resetAvatar from "@/assets/thsottiaux.webp?inline";
 import type { Language } from "@/i18n";
 import { insightsFor } from "@/i18n/insights";
+import type { QuotaReset } from "@/lib/types";
 import { timeOnDayLabel, type TimeFormat } from "./format";
 import type { GlanceCountdown, GlanceProvider, GlanceResetRow } from "./glance";
 import { COUNTDOWN_SPAN, RESET_PRESENTATION_AUTHOR } from "./glanceResets";
@@ -35,8 +36,8 @@ const AVATARS: Readonly<Record<string, string>> = {
  * A Codex card's first row while codex-resets.com knows a free reset is coming (`FreeResetRow`):
  * the announced reset, else the site's watch. `opens` while the Reset tab is on, which the row opens.
  */
-export function codexResetRow(status: ResetStatus | null, now: Date, timeFormat: TimeFormat, language: Language, opens: boolean): GlanceResetRow | null {
-  const next = upcomingReset(status, now);
+export function codexResetRow(status: ResetStatus | null, now: Date, timeFormat: TimeFormat, language: Language, opens: boolean, evidence?: QuotaReset): GlanceResetRow | null {
+  const next = upcomingReset(status, now, evidence);
   return next ? freeResetRow(next, now, timeFormat, language, opens) : null;
 }
 
@@ -48,6 +49,21 @@ export function codexResetRow(status: ResetStatus | null, now: Date, timeFormat:
 export function freeResetRow(next: UpcomingReset, now: Date, timeFormat: TimeFormat, language: Language, opens: boolean): GlanceResetRow {
   const text = insightsFor(language);
   const lines = freeResetLines(next, now, timeFormat, language);
+  if (next.confirmation) {
+    const at = new Date(next.confirmation.observedAt);
+    return {
+      tracker: "codex",
+      title: lines.title,
+      tone: "positive",
+      author: "Codex",
+      value: lines.value,
+      caption: text.quotaResetChecked(MOMENT_PLACEHOLDER, offsetLabel(at, deviceTimeZone())),
+      at: at.toISOString(),
+      hideAt: new Date(at.getTime() + (next.source.kind === "observed" ? AWAITING_MS : UNTIMED_LIFETIME_MS)).toISOString(),
+      details: opens ? `${lines.details}\n${text.freeResetOpenTab}` : lines.details,
+      ...(opens ? { opens: true as const } : {}),
+    };
+  }
   const timing = next.timing;
   const at = timingMoment(timing);
   const offset = offsetLabel(at ?? now, deviceTimeZone());

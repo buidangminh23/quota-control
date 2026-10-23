@@ -10,6 +10,7 @@
  * weekend") or a post without timing words gets no countdown. The screen shows every time in the
  * device's own zone.
  */
+import type { QuotaReset } from "@/lib/types";
 import { dayNumber, instantOnDay, startOfDayIn, zonedParts } from "@/model/timeZone";
 import { activeWatch, type ResetKind, type ResetSource, type ResetStatus } from "./resets";
 
@@ -39,6 +40,7 @@ export type ResetTiming =
   | { kind: "unknown" };
 
 export interface UpcomingReset {
+  confirmation?: QuotaReset;
   origin: "scheduled" | "watch";
   /** The announced kind; `null` for a watch. */
   kind: ResetKind | null;
@@ -223,7 +225,7 @@ function stillShown(timing: ResetTiming, announcedAt: Date, now: Date): boolean 
 }
 
 /** The free reset to count down to now: the announced one first, else the site's watch; `null` when neither is current. */
-export function upcomingReset(status: ResetStatus | null, now: Date): UpcomingReset | null {
+function announcedReset(status: ResetStatus | null, now: Date): UpcomingReset | null {
   const scheduled = status?.scheduled ?? null;
   if (scheduled) {
     const timing: ResetTiming = scheduled.scheduledFor ? { kind: "exact", at: scheduled.scheduledFor, from: "site" } : timingFromText(scheduled.text, scheduled.announcedAt);
@@ -241,5 +243,32 @@ export function upcomingReset(status: ResetStatus | null, now: Date): UpcomingRe
     announcedAt: watch.observedAt,
     text: watch.text,
     source: watch.source,
+  };
+}
+
+export function upcomingReset(status: ResetStatus | null, now: Date, evidence?: QuotaReset): UpcomingReset | null {
+  const next = announcedReset(status, now);
+  if (!evidence) return next;
+  const observed = new Date(evidence.observedAt);
+  const previous = new Date(evidence.previousObservedAt);
+  const age = now.getTime() - observed.getTime();
+  if (!Number.isFinite(age) || !Number.isFinite(previous.getTime()) || previous >= observed || age < 0 || age >= UNTIMED_LIFETIME_MS) return next;
+  if (!Number.isFinite(evidence.previousValue) || !Number.isFinite(evidence.currentValue)) return next;
+  if (evidence.kind !== "usage" && evidence.kind !== "banked") return next;
+  if (next) {
+    const matchesKind = next.kind === null || (next.kind === "banked") === (evidence.kind === "banked");
+    if (!matchesKind || previous < next.announcedAt) return next;
+    return { ...next, confirmation: evidence };
+  }
+  if (age >= AWAITING_MS) return null;
+  return {
+    origin: "scheduled",
+    kind: evidence.kind === "banked" ? "banked" : "regular",
+    timing: { kind: "unknown" },
+    chancePercent: null,
+    announcedAt: previous,
+    text: "",
+    source: { kind: "observed", url: null },
+    confirmation: evidence,
   };
 }

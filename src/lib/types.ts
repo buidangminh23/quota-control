@@ -139,6 +139,14 @@ export type PlanTerm =
   /** A monthly estimate from a verified paid subscription, bounded by its last confirmation. */
   | { basis: "monthlyFrom"; startedAt: string; checkedAt?: string };
 
+export interface QuotaReset {
+  observedAt: string;
+  previousObservedAt: string;
+  kind: "usage" | "banked";
+  previousValue: number;
+  currentValue: number;
+}
+
 export interface ProviderSnapshot {
   providerID: string;
   displayName: string;
@@ -149,6 +157,7 @@ export interface ProviderSnapshot {
   account?: string;
   lines: MetricLine[];
   refreshedAt: string;
+  quotaReset?: QuotaReset;
   usageUnavailable?: boolean;
   usageHistory?: ProviderUsageHistory;
   warning?: string;

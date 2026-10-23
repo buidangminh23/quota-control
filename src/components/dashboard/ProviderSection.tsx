@@ -197,7 +197,7 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
         {termLines ? <PlanTermCorner lines={termLines} /> : null}
       </header>
       <div className="uc-card uc-metric-card">
-        {!tokenSource && providerBrand(group.provider) === "codex" ? <FreeResetRow now={now} /> : null}
+        {!tokenSource && providerBrand(group.provider) === "codex" ? <FreeResetRow now={now} evidence={runtime?.snapshot?.quotaReset} /> : null}
         {!tokenSource && providerBrand(group.provider) === "claude" ? <BankedResetRow now={now} plan={plan} /> : null}
         {always.map(renderRow)}
         {hasExpandable ? (

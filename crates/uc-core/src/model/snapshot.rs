@@ -32,6 +32,23 @@ pub enum PlanTerm {
     },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QuotaResetKind {
+    Usage,
+    Banked,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaReset {
+    pub observed_at: DateTime<Utc>,
+    pub previous_observed_at: DateTime<Utc>,
+    pub kind: QuotaResetKind,
+    pub previous_value: f64,
+    pub current_value: f64,
+}
+
 /// Latest normalized output for one provider refresh.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProviderSnapshot {
@@ -49,6 +66,8 @@ pub struct ProviderSnapshot {
     /// The signed-in account's email as the provider reports it, when its API names one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
+    #[serde(rename = "quotaReset", default, skip_serializing_if = "Option::is_none")]
+    pub quota_reset: Option<QuotaReset>,
     pub lines: Vec<MetricLine>,
     #[serde(rename = "refreshedAt")]
     pub refreshed_at: DateTime<Utc>,
@@ -73,6 +92,7 @@ impl ProviderSnapshot {
             plan_checked_at: None,
             plan_term: None,
             account: None,
+            quota_reset: None,
             lines,
             refreshed_at,
             usage_history: None,
@@ -115,6 +135,7 @@ impl ProviderSnapshot {
             plan_checked_at: None,
             plan_term: None,
             account: None,
+            quota_reset: None,
             lines: vec![MetricLine::Badge(BadgeLine {
                 label: MetricLine::ERROR_BADGE_LABEL.to_string(),
                 text: message.into(),
@@ -213,5 +234,27 @@ mod tests {
         assert_eq!(value["planCheckedAt"], "2026-10-09T10:00:00Z");
         let restored: ProviderSnapshot = serde_json::from_value(value).unwrap();
         assert_eq!(restored.plan_checked_at, Some(checked_at));
+    }
+
+    #[test]
+    fn quota_reset_evidence_round_trips_and_old_snapshots_remain_valid() {
+        let mut snapshot: ProviderSnapshot = serde_json::from_value(serde_json::json!({
+            "providerID": "codex", "displayName": "Codex", "lines": [], "refreshedAt": "2026-10-23T10:00:00Z"
+        })).unwrap();
+        assert!(snapshot.quota_reset.is_none());
+        snapshot.quota_reset = Some(QuotaReset {
+            observed_at: snapshot.refreshed_at,
+            previous_observed_at: snapshot.refreshed_at - chrono::Duration::minutes(2),
+            kind: QuotaResetKind::Usage,
+            previous_value: 64.0,
+            current_value: 1.0,
+        });
+        let value = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(value["quotaReset"], serde_json::json!({
+            "observedAt": "2026-10-23T10:00:00Z",
+            "previousObservedAt": "2026-10-23T09:58:00Z",
+            "kind": "usage", "previousValue": 64.0, "currentValue": 1.0
+        }));
+        assert_eq!(serde_json::from_value::<ProviderSnapshot>(value).unwrap(), snapshot);
     }
 }

@@ -30,6 +30,19 @@ export interface FreeResetLines {
 
 export function freeResetLines(next: UpcomingReset, now: Date, timeFormat: TimeFormat, language: Language): FreeResetLines {
   const text = insightsFor(language);
+  if (next.confirmation) {
+    const evidence = next.confirmation;
+    const at = new Date(evidence.observedAt);
+    const banked = evidence.kind === "banked";
+    return {
+      title: banked ? text.freeResetTitle("scheduled", "banked") : text.quotaResetTitle,
+      value: banked ? text.quotaResetBanked : text.quotaResetConfirmed,
+      caption: text.quotaResetChecked(timeOnDayLabel(at, now, timeFormat, language), offsetLabel(at, deviceTimeZone())),
+      note: null,
+      details: text.quotaResetEvidence(evidence.previousValue, evidence.currentValue, banked),
+      awaiting: false,
+    };
+  }
   const timing = next.timing;
   const at = timingMoment(timing);
   const zone = deviceTimeZone();

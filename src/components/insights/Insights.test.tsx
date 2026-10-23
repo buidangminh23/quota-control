@@ -1,6 +1,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { setBackend } from "@/lib/backend";
 import { MockBackend } from "@/lib/mockBackend";
+import { accountDescriptors, accountProvider } from "@/lib/fixtures";
+import { reconcileLayout } from "@/model/layout";
 import { resetInsights, useInsights } from "@/state/insights";
 import { updateSettings, useApp } from "@/state/store";
 import { App } from "@/App";
@@ -347,6 +349,54 @@ describe("free reset on the Codex card", () => {
       name: /^Reset free: sau ~23 giờ 5\d phút\. Khoảng .+ · GMT([+-]\d+(:\d{2})?)?\. “Ngày mai” theo giờ Mỹ$/,
     });
     expect(within(row).getByText("“Ngày mai” theo giờ Mỹ")).toBeInTheDocument();
+  });
+
+  it("confirms only the account with real quota evidence and keeps that confirmation after a later read fails", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-09-29T13:00:00Z") });
+    const api = await renderApp({ notifyCodexResets: false });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    await pushScheduled(api, {
+      announced_at: new Date(Date.now() - 3_600_000).toISOString(),
+      scheduled_for: new Date(Date.now() + 3_600_000).toISOString(),
+      text: "Resetting everyone soon",
+    });
+    const other = accountProvider("codex", "second", "Second");
+    act(() => {
+      const catalog = [...useApp.getState().catalog, { provider: other, descriptors: accountDescriptors(other, "codex") }];
+      useApp.setState({ catalog, layout: reconcileLayout(useApp.getState().layout, catalog), enabledProviders: null });
+      api.editEngineState((state) => {
+        const original = state.providers["codex@52d0"]!;
+        state.providers[other.id] = structuredClone(original);
+        state.providers[other.id]!.snapshot!.providerID = other.id;
+        original.snapshot!.quotaReset = {
+          observedAt: new Date(Date.now() - 30_000).toISOString(),
+          previousObservedAt: new Date(Date.now() - 60_000).toISOString(),
+          kind: "usage", previousValue: 76, currentValue: 0,
+        };
+        original.error = "refresh failed";
+        for (const line of state.providers[other.id]!.snapshot!.lines) {
+          if (line.type === "progress") {
+            line.used = 0;
+            line.resetsAt = new Date(Date.now() - 1_000).toISOString();
+          }
+        }
+      });
+    });
+    const confirmed = within(screen.getByRole("region", { name: "Codex" })).getByRole("button", { name: /^Reset hạn mức: đã xác nhận/ });
+    expect(confirmed.querySelector(".uc-mark")).not.toBeNull();
+    expect(confirmed.querySelector(".uc-reset-avatar")).toBeNull();
+    const pending = screen.getByRole("region", { name: "Codex · Second" });
+    expect(within(pending).getByRole("button", { name: /^Reset free: sau 1 giờ/ })).toBeInTheDocument();
+    expect(within(pending).queryByText("đã xác nhận")).not.toBeInTheDocument();
+    expect(useApp.getState().engine!.providers[other.id]!.snapshot!.usageUnavailable).toBe(true);
+    expect(notify).not.toHaveBeenCalled();
+
+    fireEvent.click(confirmed);
+    const confirmations = screen.getByRole("region", { name: "Reset hạn mức" });
+    expect(within(confirmations).getByRole("group", { name: "Codex · codex" })).toHaveTextContent("đã xác nhận");
+    expect(within(confirmations).queryByRole("group", { name: "Codex · Second" })).not.toBeInTheDocument();
+    act(() => useApp.setState({ enabledProviders: useApp.getState().catalog.map(({ provider }) => provider.id).filter((id) => id !== "codex@52d0") }));
+    expect(screen.queryByRole("region", { name: "Reset hạn mức" })).not.toBeInTheDocument();
   });
 
   it("stays away while reset tracking is off", async () => {

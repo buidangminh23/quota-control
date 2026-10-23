@@ -163,17 +163,13 @@ export function useGlance(): void {
     [claudeTracking, claudeRead, claudeResets, claudeFeed, claudeError, display.language],
   );
 
-  const codexRow = useMemo(
-    () => (tracking ? codexResetRow(feeds.status, now, timeFormat, display.language, showResetsTab) : null),
-    [tracking, feeds, now, timeFormat, display.language, showResetsTab],
-  );
   const resetRowFor = useMemo(() => {
     const claudeResets = claudeFollowed ? (claudeParsed?.resets ?? null) : null;
     return (provider: Provider): GlanceResetRow | null => {
       if (isLocalHistoryCard(provider.id)) return null;
       switch (providerBrand(provider)) {
         case "codex":
-          return codexRow;
+          return tracking ? codexResetRow(feeds.status, now, timeFormat, display.language, showResetsTab, engine?.providers[provider.id]?.snapshot?.quotaReset) : null;
         case "claude":
           return claudeResets
             ? claudeResetRow(claudeResets, engine?.providers[provider.id]?.snapshot?.plan, usedBankedResets, now, timeFormat, display.language, showResetsTab)
@@ -182,7 +178,7 @@ export function useGlance(): void {
           return null;
       }
     };
-  }, [codexRow, claudeFollowed, claudeParsed, engine, usedBankedResets, now, timeFormat, display.language, showResetsTab]);
+  }, [tracking, feeds.status, claudeFollowed, claudeParsed, engine, usedBankedResets, now, timeFormat, display.language, showResetsTab]);
 
   const document = useMemo(() => {
     if (!supported) return null;

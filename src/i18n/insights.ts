@@ -245,6 +245,11 @@ export interface InsightsMessages {
   freeResetWithin(duration: string): string;
   freeResetNoTime: string;
   freeResetAwaiting: string;
+  quotaResetTitle: string;
+  quotaResetConfirmed: string;
+  quotaResetBanked: string;
+  quotaResetChecked(at: string, offset: string): string;
+  quotaResetEvidence(before: number, after: number, banked: boolean): string;
   /** Captions; `time` is a clock time with its day, e.g. `08:00 · T2 28/09`. */
   freeResetAt(time: string, offset: string): string;
   freeResetAround(time: string, offset: string): string;

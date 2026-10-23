@@ -282,6 +282,13 @@ export const insightsVi: InsightsMessages = {
   freeResetWithin: (duration) => `trong ${duration} tới`,
   freeResetNoTime: "chưa rõ giờ",
   freeResetAwaiting: "chờ xác nhận",
+  quotaResetTitle: "Reset hạn mức",
+  quotaResetConfirmed: "đã xác nhận",
+  quotaResetBanked: "đã nhận lượt",
+  quotaResetChecked: (at, offset) => `Xác nhận ${at} · ${offset}`,
+  quotaResetEvidence: (before, after, banked) => banked
+    ? `Số lượt reset để dành của tài khoản này tăng từ ${before} lên ${after}, xác nhận qua hai lần đọc quota thật.`
+    : `Mức sử dụng tuần của tài khoản này giảm từ ${before}% xuống ${after}% trước hạn reset định kỳ, xác nhận qua hai lần đọc quota thật. Đây là xác nhận cho tài khoản này; quota không cho biết nguyên nhân reset.`,
   freeResetAt: (time, offset) => `Lúc ${time} · ${offset}`,
   freeResetAround: (time, offset) => `Khoảng ${time} · ${offset}`,
   freeResetBy: (time, offset, chance) => (chance ? `${chance} · trước ${time} · ${offset}` : `Trước ${time} · ${offset}`),

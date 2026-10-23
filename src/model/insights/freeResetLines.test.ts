@@ -24,6 +24,17 @@ beforeEach(() => setSystemTimeZone("Asia/Saigon"));
 afterEach(() => setSystemTimeZone(null));
 
 describe("freeResetLines", () => {
+  it("replaces the countdown with account quota evidence and no public-post attribution", () => {
+    const confirmation = { observedAt: NOW.toISOString(), previousObservedAt: new Date(NOW.getTime() - 120_000).toISOString(), kind: "usage" as const, previousValue: 72, currentValue: 1 };
+    const next = reset({ kind: "exact", at: new Date("2026-09-28T01:00:00Z"), from: "site" }, { confirmation });
+    const lines = freeResetLines(next, NOW, "24h", "vi");
+    expect(lines).toMatchObject({ title: "Reset hạn mức", value: "đã xác nhận", awaiting: false, note: null });
+    expect(lines.caption).toContain("7:00");
+    expect(lines.details).toContain("72% xuống 1%");
+    expect(lines.details).not.toContain("Resets coming tomorrow");
+    expect(freeResetLines({ ...next, confirmation: { ...confirmation, kind: "banked", previousValue: 0, currentValue: 1 } }, NOW, "auto", "en")).toMatchObject({ value: "reset received", title: "Banked reset" });
+  });
+
   it("counts down to an exact time and shows it in the device's zone", () => {
     const lines = freeResetLines(reset({ kind: "exact", at: new Date("2026-09-28T01:00:00Z"), from: "site" }), NOW, "auto", "vi");
     expect(lines).toMatchObject({ title: "Reset free", value: "sau 1 ngày 1 giờ", caption: "Lúc 8:00 · ngày mai · GMT+7", note: null, awaiting: false });

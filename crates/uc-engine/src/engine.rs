@@ -25,6 +25,101 @@ use uc_core::{
 };
 
 use crate::cache::SnapshotCache;
+use uc_core::model::snapshot::{QuotaReset, QuotaResetKind};
+
+fn same_quota_account(previous: &ProviderSnapshot, current: &ProviderSnapshot) -> bool {
+    current.provider_id.strip_prefix("codex@").is_some_and(|id| {
+        id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit())
+    }) && previous.provider_id == current.provider_id
+        && previous.account == current.account
+        && current.plan.as_ref().is_some_and(|plan| {
+            !plan.trim().is_empty() && !plan.eq_ignore_ascii_case("unknown")
+        })
+        && previous.plan == current.plan
+}
+
+fn reset_credit_count(snapshot: &ProviderSnapshot) -> Option<f64> {
+    let MetricLine::Values(line) = snapshot.line("Rate Limit Resets")? else {
+        return None;
+    };
+    let value = line.values.iter().find(|value| {
+        value.kind == uc_core::MetricKind::Count
+            && value.label.as_deref() == Some("available")
+            && !value.estimated
+    })?;
+    (value.number.is_finite() && value.number >= 0.0 && value.number.fract() == 0.0)
+        .then_some(value.number)
+}
+
+fn quota_reset_evidence(
+    previous: Option<&ProviderSnapshot>,
+    current: &ProviderSnapshot,
+    now: DateTime<Utc>,
+    previous_failed: bool,
+) -> Option<QuotaReset> {
+    let previous = previous?;
+    if !same_quota_account(previous, current)
+        || current.error_category.is_some()
+        || current.is_error()
+        || current.refreshed_at > now
+        || now - current.refreshed_at > chrono::Duration::minutes(5)
+    {
+        return None;
+    }
+    let retained = previous.quota_reset.as_ref().filter(|evidence| {
+        evidence.observed_at <= current.refreshed_at
+            && evidence.previous_observed_at < evidence.observed_at
+            && now - evidence.observed_at <= chrono::Duration::days(7)
+            && evidence.previous_value.is_finite()
+            && evidence.current_value.is_finite()
+    }).cloned();
+    if previous_failed
+        || previous.error_category.is_some()
+        || previous.is_error()
+        || current.refreshed_at <= previous.refreshed_at
+        || current.refreshed_at - previous.refreshed_at > chrono::Duration::minutes(15)
+    {
+        return retained;
+    }
+    let Some((previous_credits, current_credits)) = reset_credit_count(previous).zip(reset_credit_count(current)) else {
+        return retained;
+    };
+    let observed = |kind, previous_value, current_value| Some(QuotaReset {
+        observed_at: current.refreshed_at,
+        previous_observed_at: previous.refreshed_at,
+        kind,
+        previous_value,
+        current_value,
+    });
+    if current_credits > previous_credits {
+        return observed(QuotaResetKind::Banked, previous_credits, current_credits);
+    }
+    if current_credits < previous_credits {
+        return retained;
+    }
+    for line in &previous.lines {
+        let MetricLine::Progress(before) = line else { continue };
+        let Some(MetricLine::Progress(after)) = current.line(&before.label) else { continue };
+        if before.label == "Weekly"
+            && before.format == uc_core::ProgressFormat::Percent
+            && after.format == before.format
+            && before.period_duration_ms == Some(7 * 24 * 60 * 60 * 1000)
+            && after.period_duration_ms == before.period_duration_ms
+            && before.limit == 100.0
+            && after.limit == before.limit
+            && before.used.is_finite()
+            && after.used.is_finite()
+            && (0.0..=100.0).contains(&before.used)
+            && (0.0..=5.0).contains(&after.used)
+            && before.used - after.used >= 10.0
+            && before.resets_at.is_some_and(|reset| reset > current.refreshed_at + chrono::Duration::seconds(60))
+            && after.resets_at.is_none_or(|reset| reset > current.refreshed_at)
+        {
+            return observed(QuotaResetKind::Usage, before.used, after.used);
+        }
+    }
+    retained
+}
 
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
@@ -649,6 +744,9 @@ impl Engine {
                             && snapshot.plan == previous.plan
                             && snapshot.plan_term != previous.plan_term) =>
                 {
+                    if previous.plan != snapshot.plan {
+                        previous.quota_reset = None;
+                    }
                     previous.plan = snapshot.plan.clone();
                     previous.plan_term = snapshot.plan_term.clone();
                     previous.plan_checked_at = Some(checked_at);
@@ -732,6 +830,12 @@ impl Engine {
             {
                 snapshot.plan_term = None;
             }
+            snapshot.quota_reset = quota_reset_evidence(
+                inner.snapshots.get(provider_id),
+                &snapshot,
+                (self.clock)(),
+                inner.errors.contains_key(provider_id),
+            );
             inner.errors.remove(provider_id);
             inner.rate_limited.remove(provider_id);
             inner.retry_after.remove(provider_id);
@@ -916,6 +1020,166 @@ mod tests {
 
     use async_trait::async_trait;
     use uc_core::{MetricLine, ProgressFormat};
+
+    fn reset_snapshot(used: f64, credits: f64, when: &str) -> ProviderSnapshot {
+        ProviderSnapshot::make(
+            &Provider::new(format!("codex@{}", "a".repeat(64)), "Codex"),
+            Some("Pro".into()),
+            vec![
+                MetricLine::progress("Weekly", used, 100.0, ProgressFormat::Percent)
+                    .period_ms(Some(604_800_000))
+                    .resets_at(Some(at("2026-10-25T10:00:00Z")))
+                    .into(),
+                MetricLine::values("Rate Limit Resets", vec![uc_core::MetricValue::count(credits, "available")]).into(),
+            ],
+            at(when),
+        )
+    }
+
+    #[test]
+    fn quota_observer_detects_early_weekly_drop_and_new_banked_credit() {
+        let before = reset_snapshot(70.0, 1.0, "2026-10-23T10:00:00Z");
+        let after = reset_snapshot(2.0, 1.0, "2026-10-23T10:02:00Z");
+        let observed = quota_reset_evidence(Some(&before), &after, after.refreshed_at, false).unwrap();
+        assert_eq!(observed.kind, QuotaResetKind::Usage);
+        assert_eq!((observed.previous_value, observed.current_value), (70.0, 2.0));
+        assert_eq!(observed.previous_observed_at, before.refreshed_at);
+        let no_credits_before = reset_snapshot(70.0, 0.0, "2026-10-23T10:00:00Z");
+        let no_credits_after = reset_snapshot(0.0, 0.0, "2026-10-23T10:02:00Z");
+        assert_eq!(quota_reset_evidence(Some(&no_credits_before), &no_credits_after, after.refreshed_at, false).unwrap().kind, QuotaResetKind::Usage);
+        let mut without_next_deadline = after.clone();
+        if let MetricLine::Progress(line) = &mut without_next_deadline.lines[0] {
+            line.used = 0.0;
+            line.resets_at = None;
+        }
+        assert_eq!(quota_reset_evidence(Some(&before), &without_next_deadline, after.refreshed_at, false).unwrap().kind, QuotaResetKind::Usage);
+        let banked = reset_snapshot(70.0, 2.0, "2026-10-23T10:02:00Z");
+        let observed = quota_reset_evidence(Some(&before), &banked, banked.refreshed_at, false).unwrap();
+        assert_eq!(observed.kind, QuotaResetKind::Banked);
+        assert_eq!((observed.previous_value, observed.current_value), (1.0, 2.0));
+        assert!(quota_reset_evidence(None, &after, after.refreshed_at, false).is_none());
+        assert!(quota_reset_evidence(Some(&before), &after, after.refreshed_at, true).is_none());
+    }
+
+    #[test]
+    fn quota_observer_rejects_rollover_manual_redemption_and_unreliable_comparisons() {
+        let before = reset_snapshot(70.0, 1.0, "2026-10-23T10:00:00Z");
+        let after = reset_snapshot(2.0, 1.0, "2026-10-23T10:02:00Z");
+        let mut cases = Vec::new();
+        let mut changed = after.clone();
+        changed.plan = Some("Plus".into());
+        cases.push((before.clone(), changed));
+        let mut changed = after.clone();
+        changed.plan = None;
+        cases.push((before.clone(), changed));
+        let mut old = before.clone();
+        let mut changed = after.clone();
+        old.plan = Some("Unknown".into());
+        changed.plan = old.plan.clone();
+        cases.push((old, changed));
+        let mut changed = after.clone();
+        changed.account = Some("different@example.test".into());
+        cases.push((before.clone(), changed));
+        let mut changed = after.clone();
+        changed.provider_id = format!("codex@{}", "b".repeat(64));
+        cases.push((before.clone(), changed));
+        let mut old = before.clone();
+        let mut changed = after.clone();
+        old.provider_id = "codex".into();
+        changed.provider_id = "codex".into();
+        cases.push((old, changed));
+        cases.push((before.clone(), reset_snapshot(2.0, 0.0, "2026-10-23T10:02:00Z")));
+        cases.push((before.clone(), reset_snapshot(60.0, 1.0, "2026-10-23T10:02:00Z")));
+        cases.push((reset_snapshot(9.0, 1.0, "2026-10-23T10:00:00Z"), after.clone()));
+        cases.push((before.clone(), reset_snapshot(2.0, 1.0, "2026-10-23T10:16:00Z")));
+        cases.push((before.clone(), reset_snapshot(2.0, 1.0, "2026-10-23T10:00:00Z")));
+        cases.push((before.clone(), reset_snapshot(2.0, 1.0, "2026-10-23T09:59:00Z")));
+        for reset in ["2026-10-23T10:01:00Z", "2026-10-23T10:02:30Z"] {
+            let mut old = before.clone();
+            if let MetricLine::Progress(line) = &mut old.lines[0] {
+                line.resets_at = Some(at(reset));
+            }
+            cases.push((old, after.clone()));
+        }
+        let mut old = before.clone();
+        old.error_category = Some(ErrorCategory::Network);
+        cases.push((old, after.clone()));
+        let mut changed = after.clone();
+        changed.error_category = Some(ErrorCategory::Network);
+        cases.push((before.clone(), changed));
+        for mode in 0..4 {
+            let mut changed = after.clone();
+            if mode == 0 {
+                changed.lines.pop();
+            } else if let MetricLine::Values(line) = &mut changed.lines[1] {
+                match mode {
+                    1 => line.values[0].number = f64::NAN,
+                    2 => line.values[0].number = 1.5,
+                    _ => line.values[0].estimated = true,
+                }
+            }
+            cases.push((before.clone(), changed));
+        }
+        for mode in 0..6 {
+            let mut changed = after.clone();
+            if let MetricLine::Progress(line) = &mut changed.lines[0] {
+                match mode {
+                    0 => line.used = f64::NAN,
+                    1 => line.used = -1.0,
+                    2 => line.limit = 200.0,
+                    3 => line.period_duration_ms = Some(18_000_000),
+                    4 => line.resets_at = Some(at("2026-10-23T10:01:00Z")),
+                    _ => line.format = ProgressFormat::Dollars,
+                }
+            }
+            cases.push((before.clone(), changed));
+        }
+        for (index, (old, changed)) in cases.iter().enumerate() {
+            assert!(quota_reset_evidence(Some(old), changed, changed.refreshed_at, false).is_none(), "case {index}");
+        }
+        assert!(quota_reset_evidence(Some(&before), &after, after.refreshed_at - chrono::Duration::seconds(1), false).is_none());
+        assert!(quota_reset_evidence(Some(&before), &after, after.refreshed_at + chrono::Duration::minutes(6), false).is_none());
+    }
+
+    #[test]
+    fn quota_evidence_is_retained_bounded_and_cached_across_restart() {
+        let clock = TestClock::starting("2026-10-23T10:00:00Z");
+        let before = reset_snapshot(70.0, 1.0, "2026-10-23T10:00:00Z");
+        let id = before.provider_id.clone();
+        let fake = FakeProvider::new(&id, false, false);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshots.json");
+        let make_engine = || Engine::with_options(
+            vec![fake.clone()],
+            SnapshotCache::with_options(path.clone(), Duration::from_secs(300), false, clock.clock()),
+            EngineConfig::default(), HashMap::new(), None, clock.clock(),
+        );
+        let engine = make_engine();
+        engine.record_success(&id, before, Duration::ZERO, false, 0);
+        assert!(engine.snapshots()[&id].quota_reset.is_none());
+        clock.set("2026-10-23T10:02:00Z");
+        engine.record_success(&id, reset_snapshot(2.0, 1.0, "2026-10-23T10:02:00Z"), Duration::ZERO, false, 0);
+        let evidence = engine.snapshots()[&id].quota_reset.clone().unwrap();
+        drop(engine);
+        let reopened = make_engine();
+        assert_eq!(reopened.snapshots()[&id].quota_reset, Some(evidence.clone()));
+        clock.set("2026-10-23T10:04:00Z");
+        reopened.record_success(&id, reset_snapshot(3.0, 1.0, "2026-10-23T10:04:00Z"), Duration::ZERO, false, 0);
+        assert_eq!(reopened.snapshots()[&id].quota_reset, Some(evidence.clone()));
+        let previous = reopened.snapshots()[&id].clone();
+        let mut changed = reset_snapshot(3.0, 1.0, "2026-10-23T10:06:00Z");
+        changed.plan = Some("Plus".into());
+        assert!(quota_reset_evidence(Some(&previous), &changed, changed.refreshed_at, false).is_none());
+        clock.set("2026-10-31T10:04:00Z");
+        reopened.record_success(&id, reset_snapshot(3.0, 1.0, "2026-10-31T10:04:00Z"), Duration::ZERO, false, 0);
+        assert!(reopened.snapshots()[&id].quota_reset.is_none());
+        let metadata_engine = make_engine();
+        metadata_engine.inner.lock().snapshots.insert(id.clone(), previous.clone());
+        clock.set("2026-10-23T10:06:00Z");
+        changed.plan_checked_at = Some(changed.refreshed_at);
+        metadata_engine.reconcile_plan(&id, &changed, 0);
+        assert!(metadata_engine.snapshots()[&id].quota_reset.is_none());
+    }
 
     struct FakeProvider {
         provider: Provider,
