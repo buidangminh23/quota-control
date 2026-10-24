@@ -167,6 +167,7 @@ impl BackendService {
         for task in self.tasks.lock().drain(..) {
             task.abort();
         }
+        next.inherit_rate_limits(&prior);
         *self.engine.write() = next;
         self.start(app);
         if app

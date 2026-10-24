@@ -487,6 +487,42 @@ impl Engine {
         self.inner.lock().rate_limited.contains(provider_id)
     }
 
+    pub fn inherit_rate_limits(&self, prior: &Self) {
+        let retained: Vec<_> = {
+            let inner = prior.inner.lock();
+            inner
+                .rate_limited
+                .iter()
+                .filter(|id| {
+                    self.by_id.contains_key(*id)
+                        && self
+                            .identity_keys
+                            .get(*id)
+                            .is_some_and(|identity| prior.identity_keys.get(*id) == Some(identity))
+                })
+                .filter_map(|id| {
+                    Some((
+                        id.clone(),
+                        *inner.retry_after.get(id)?,
+                        inner.errors.get(id).cloned(),
+                        inner.attempted_at.get(id).copied(),
+                    ))
+                })
+                .collect()
+        };
+        let mut inner = self.inner.lock();
+        for (id, retry_after, error, attempted_at) in retained {
+            inner.rate_limited.insert(id.clone());
+            inner.retry_after.insert(id.clone(), retry_after);
+            if let Some(error) = error {
+                inner.errors.insert(id.clone(), error);
+            }
+            if let Some(attempted_at) = attempted_at {
+                inner.attempted_at.insert(id, attempted_at);
+            }
+        }
+    }
+
     fn publish(&self) {
         let _ = self.events.send(self.state());
     }
@@ -2401,6 +2437,114 @@ mod tests {
             RefreshOutcome::Failed
         );
         assert_eq!(claude.calls(), 3);
+    }
+
+    #[tokio::test]
+    async fn replacement_startup_keeps_the_exact_accounts_rate_limit_deadline() {
+        let clock = TestClock::starting("2026-09-29T03:35:00Z");
+        let claude = WindowProvider::new(clock.clock(), 60.0, "2026-09-29T07:50:00Z");
+        let (mut prior, _prior_dir) = clocked_engine(vec![claude.clone()], &clock);
+        prior
+            .identity_keys
+            .insert("claude".into(), "account-a".into());
+        claude.refuse.store(true, Ordering::SeqCst);
+        assert_eq!(prior.refresh("claude", false).await, RefreshOutcome::Failed);
+        let deadline = prior.inner.lock().retry_after["claude"];
+        clock.set("2026-09-29T03:36:00Z");
+        let (mut next, _next_dir) = clocked_engine(vec![claude.clone()], &clock);
+        next.identity_keys
+            .insert("claude".into(), "account-a".into());
+        next.inherit_rate_limits(&prior);
+        assert!(next.rate_limited("claude"));
+        assert_eq!(next.error_message("claude"), prior.error_message("claude"));
+        assert_eq!(next.inner.lock().retry_after["claude"], deadline);
+        assert_eq!(
+            next.inner.lock().attempted_at["claude"],
+            at("2026-09-29T03:35:00Z")
+        );
+        assert_eq!(
+            next.refresh_all(false).await,
+            vec![RefreshOutcome::BackedOff]
+        );
+        assert_eq!(claude.calls(), 1);
+        clock.set("2026-09-29T03:40:00Z");
+        claude.refuse.store(false, Ordering::SeqCst);
+        assert_eq!(
+            next.refresh_all(false).await,
+            vec![RefreshOutcome::Refreshed]
+        );
+        assert_eq!(claude.calls(), 2);
+        assert!(!next.rate_limited("claude"));
+    }
+
+    #[tokio::test]
+    async fn replacement_startup_does_not_inherit_a_changed_or_unknown_identity() {
+        for identity in [Some("account-b"), None] {
+            let clock = TestClock::starting("2026-09-29T03:35:00Z");
+            let claude = WindowProvider::new(clock.clock(), 60.0, "2026-09-29T07:50:00Z");
+            let (mut prior, _prior_dir) = clocked_engine(vec![claude.clone()], &clock);
+            prior
+                .identity_keys
+                .insert("claude".into(), "account-a".into());
+            claude.refuse.store(true, Ordering::SeqCst);
+            assert_eq!(prior.refresh("claude", false).await, RefreshOutcome::Failed);
+            let (mut next, _next_dir) = clocked_engine(vec![claude.clone()], &clock);
+            if let Some(identity) = identity {
+                next.identity_keys.insert("claude".into(), identity.into());
+            }
+            next.inherit_rate_limits(&prior);
+            assert!(!next.rate_limited("claude"));
+            assert!(next.error_message("claude").is_none());
+            assert!(!next.inner.lock().attempted_at.contains_key("claude"));
+            claude.refuse.store(false, Ordering::SeqCst);
+            assert_eq!(
+                next.refresh_all(false).await,
+                vec![RefreshOutcome::Refreshed]
+            );
+            assert_eq!(claude.calls(), 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn replacement_startup_does_not_inherit_authentication_failures() {
+        for category in [
+            ErrorCategory::NotLoggedIn,
+            ErrorCategory::AuthExpired,
+            ErrorCategory::AuthInvalid,
+        ] {
+            let clock = TestClock::starting("2026-09-29T03:35:00Z");
+            let provider = Provider::new("codex@account", "Codex");
+            let runtime = Arc::new(SnapshotProvider {
+                snapshot: Mutex::new(ProviderSnapshot::error_message(
+                    &provider,
+                    "Reconnect",
+                    Some(category),
+                )),
+                provider,
+                calls: AtomicUsize::new(0),
+            });
+            let (mut prior, _prior_dir) = clocked_engine(vec![runtime.clone()], &clock);
+            prior
+                .identity_keys
+                .insert("codex@account".into(), "account-a".into());
+            assert_eq!(
+                prior.refresh("codex@account", false).await,
+                RefreshOutcome::Failed
+            );
+            let (mut next, _next_dir) = clocked_engine(vec![runtime.clone()], &clock);
+            next.identity_keys
+                .insert("codex@account".into(), "account-a".into());
+            next.inherit_rate_limits(&prior);
+            assert!(next.error_message("codex@account").is_none());
+            assert!(!next.inner.lock().retry_after.contains_key("codex@account"));
+            *runtime.snapshot.lock() =
+                ProviderSnapshot::make(&runtime.provider, None, Vec::new(), (clock.clock())());
+            assert_eq!(
+                next.refresh_all(false).await,
+                vec![RefreshOutcome::Refreshed]
+            );
+            assert_eq!(runtime.calls.load(Ordering::SeqCst), 2);
+        }
     }
 
     #[tokio::test]

@@ -651,6 +651,50 @@ async fn managed_refresh_is_serialized_across_distinct_runtime_instances() {
     assert!(saved["claudeAiOauth"]["expiresAt"].as_i64().unwrap() > Utc::now().timestamp_millis());
 }
 
+#[tokio::test]
+async fn claude_refresh_retains_only_provider_confirmed_refresh_expiry() {
+    for supplied in [
+        json!(86400),
+        Value::Null,
+        json!(-1),
+        json!("86400"),
+        json!(i64::MAX),
+    ] {
+        let (_dir, store) = store();
+        let mut document = claude_doc(1);
+        let original = Utc::now().timestamp_millis() + 600_000;
+        document["claudeAiOauth"]["refreshTokenExpiresAt"] = json!(original);
+        let record = store
+            .import(
+                "claude",
+                "Managed",
+                "account-a|org-a",
+                &document,
+                CredentialMode::ManagedOauth,
+            )
+            .unwrap();
+        let client = http(
+            json!({"access_token":"fixture-new","refresh_token":"fixture-next",
+            "expires_in":3600,"refresh_token_expires_in":supplied}),
+        );
+        let before = Utc::now().timestamp_millis();
+        let provider = runtimes_with_client(store.clone(), client)
+            .unwrap()
+            .remove(0);
+        assert!(!provider.refresh(RefreshContext::manual()).await.is_error());
+        let saved = store.credentials(&record.id).unwrap();
+        let expiry = saved["claudeAiOauth"]["refreshTokenExpiresAt"]
+            .as_i64()
+            .unwrap();
+        if supplied == json!(86400) {
+            assert!(expiry >= before + 86_400_000);
+            assert!(expiry <= Utc::now().timestamp_millis() + 86_400_000);
+        } else {
+            assert_eq!(expiry, original);
+        }
+    }
+}
+
 /// Play the browser coming back to the callback: request `target` on the redirect's port.
 fn return_to(redirect: &str, target: String) -> tokio::task::JoinHandle<String> {
     let port = url::Url::parse(redirect).unwrap().port().unwrap();

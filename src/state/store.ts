@@ -514,7 +514,9 @@ function applyLoginResult(result: AccountLoginResult): void {
     void reloadAccounts();
     void reloadServices();
     void reloadEnabledProviders();
-    showNotice(messages.connectedNotice(brand), "positive");
+    const label = result.accountLabel?.trim();
+    const identity = label && label !== result.provider && label !== brand ? `${brand} · ${label}` : brand;
+    showNotice(messages.connectedNotice(identity), "positive");
   }
   const current = get().accountLogin;
   if (current?.phase !== "waiting" || current.flowId !== result.flowId) return;

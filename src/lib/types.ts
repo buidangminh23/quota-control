@@ -421,6 +421,7 @@ export interface AccountLoginResult {
   /** `expired`: nobody finished the sign-in in the browser in time. */
   status: "connected" | "cancelled" | "expired" | "failed";
   accountId?: string;
+  accountLabel?: string;
   error?: string;
 }
 

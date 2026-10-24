@@ -1,10 +1,11 @@
 import { setBackend } from "@/lib/backend";
 import { fixtureAccounts } from "@/lib/fixtures";
 import { MockBackend } from "@/lib/mockBackend";
-import type { ConnectedAccount } from "@/lib/types";
-import { reloadAccounts, useApp } from "./store";
+import type { AccountLoginResult, ConnectedAccount } from "@/lib/types";
+import { clearNotice, reloadAccounts, startApp, useApp } from "./store";
 
 const fresh = useApp.getState();
+let stop: (() => void) | undefined;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -21,9 +22,37 @@ beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
-afterEach(() => {
+afterEach(async () => {
+  stop?.();
+  stop = undefined;
+  clearNotice();
+  await new Promise((resolve) => setTimeout(resolve, 5));
   vi.restoreAllMocks();
   useApp.setState(fresh, true);
+});
+
+it.each([
+  ["vi", "second@example.com", "Đã kết nối Codex · second@example.com"],
+  ["en", "second@example.com", "Codex · second@example.com connected"],
+  ["vi", undefined, "Đã kết nối Codex"],
+  ["vi", "codex", "Đã kết nối Codex"],
+] as const)("identifies the completed account in %s without relying on the current login", async (language, accountLabel, expected) => {
+  const api = new MockBackend();
+  setBackend(api);
+  let receive: ((result: AccountLoginResult) => void) | undefined;
+  vi.spyOn(api, "onAccountLogin").mockImplementation((listener) => {
+    receive = listener;
+    return () => {};
+  });
+  stop = startApp();
+  await vi.waitFor(() => expect(receive).toBeDefined());
+  useApp.setState({
+    settings: { ...useApp.getState().settings, language },
+    accountLogin: { phase: "waiting", provider: "codex", method: "google", flowId: "newer-flow", browser: "chrome" },
+  });
+  receive!({ flowId: "finished-flow", provider: "codex", status: "connected", accountId: "codex@second", accountLabel });
+  expect(useApp.getState().notice?.text).toBe(expected);
+  expect(useApp.getState().accountLogin).toMatchObject({ flowId: "newer-flow" });
 });
 
 it("keeps newly connected accounts when an older reload responds last", async () => {

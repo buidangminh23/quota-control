@@ -219,6 +219,8 @@ struct LoginOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     account_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    account_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
 
@@ -563,12 +565,19 @@ fn unfinished(
         provider,
         status,
         account_id: None,
+        account_label: None,
         error,
     }
 }
 
 /// Bring the popup back for a connected or failed sign-in, and tell it how the sign-in ended.
 fn report(app: &AppHandle, outcome: LoginOutcome) {
+    tracing::info!(
+        provider = outcome.provider,
+        status = outcome.status,
+        account_id = outcome.account_id.as_deref(),
+        "Account sign-in completed"
+    );
     if let Some(account_id) = billing_account_after_login(&outcome) {
         if uc_providers::device_sync::restore_synced_account(account_id).is_err() {
             tracing::warn!(
@@ -603,10 +612,11 @@ async fn finish_login(app: AppHandle, flow_id: String, kind: ProviderKind) {
     let outcome = match accounts.oauth.complete_login(&flow_id).await {
         Ok(record) => {
             let _changes = accounts.changes.lock().await;
-            let rebuilt = accounts.runtimes().and_then(|runtimes| {
-                app.state::<BackendService>()
-                    .replace_runtimes(runtimes, &app)
-            });
+            let service = app.state::<BackendService>();
+            let rebuilt = accounts
+                .runtimes()
+                .and_then(|runtimes| service.replace_runtimes(runtimes, &app))
+                .and_then(|()| show_card(&service, &record.id));
             if let Err(error) = rebuilt {
                 tracing::warn!("Account connected, but the cards were not rebuilt: {error}");
             }
@@ -615,6 +625,7 @@ async fn finish_login(app: AppHandle, flow_id: String, kind: ProviderKind) {
                 provider: kind.cli(),
                 status: "connected",
                 account_id: Some(record.id),
+                account_label: Some(record.label),
                 error: None,
             }
         }
@@ -642,6 +653,7 @@ async fn finish_service_login(app: AppHandle, flow_id: String, provider: &'stati
                 provider,
                 status: "connected",
                 account_id: Some(record.id),
+                account_label: Some(record.label),
                 error: None,
             }
         }
@@ -746,6 +758,7 @@ async fn finish_cli_login(
         provider: kind.cli(),
         status,
         account_id: None,
+        account_label: None,
         error,
     };
     let outcome = match end {
@@ -761,6 +774,7 @@ async fn finish_cli_login(
                 provider: kind.cli(),
                 status: "connected",
                 account_id: Some(id),
+                account_label: None,
                 error: None,
             },
             Err(error) => failed("failed", Some(error)),
@@ -830,6 +844,7 @@ pub async fn remove_account(
         rescan_services(&accounts).await;
     } else {
         accounts.store.remove(&account_id).map_err(safe_error)?;
+        tracing::info!(account_id, "Saved account explicitly removed");
     }
     let refreshed = accounts
         .runtimes()
@@ -939,6 +954,85 @@ pub async fn backfill_account_labels(app: &AppHandle) {
 mod tests {
     use super::*;
 
+    struct IdleProvider(uc_core::Provider);
+
+    #[async_trait::async_trait]
+    impl ProviderRuntime for IdleProvider {
+        fn provider(&self) -> &uc_core::Provider {
+            &self.0
+        }
+
+        fn widget_descriptors(&self) -> Vec<uc_core::WidgetDescriptor> {
+            Vec::new()
+        }
+
+        async fn refresh(&self, _: uc_core::RefreshContext) -> uc_core::ProviderSnapshot {
+            std::future::pending().await
+        }
+
+        async fn has_local_credentials(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn reconnect_shows_only_its_card_and_preserves_other_account_selection() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = uc_engine::EngineConfig::default();
+        let cache = uc_engine::SnapshotCache::new(
+            directory.path().join("cache.json"),
+            config.refresh_interval,
+        );
+        let runtimes = [
+            "codex@active",
+            "codex@reconnected",
+            "codex@hidden",
+            "claude@active",
+        ]
+        .into_iter()
+        .map(|id| {
+            Arc::new(IdleProvider(uc_core::Provider::new(id, id))) as Arc<dyn ProviderRuntime>
+        })
+        .collect();
+        let engine = Arc::new(uc_engine::Engine::new(runtimes, cache.clone(), config));
+        let documents = uc_engine::DocumentStore::new(directory.path().join("config"));
+        let service = BackendService::with_storage(engine, documents, cache, &[]).unwrap();
+        service
+            .set_enabled(&["codex@active".into(), "claude@active".into()])
+            .unwrap();
+
+        show_card(&service, "codex@reconnected").unwrap();
+
+        let engine = service.engine();
+        assert!(engine.is_enabled("codex@reconnected"));
+        assert!(engine.is_enabled("codex@active"));
+        assert!(engine.is_enabled("claude@active"));
+        assert!(!engine.is_enabled("codex@hidden"));
+        let saved = service.load("settings").unwrap().unwrap();
+        let enabled = saved["enabledProviders"].as_array().unwrap();
+        assert_eq!(enabled.len(), 3);
+        assert!(enabled.contains(&serde_json::json!("codex@reconnected")));
+        show_card(&service, "codex@missing").unwrap();
+        show_card(&service, "codex@reconnected").unwrap();
+        assert_eq!(service.load("settings").unwrap().unwrap(), saved);
+    }
+
+    #[test]
+    fn login_feedback_names_the_saved_identity_without_credentials() {
+        let outcome = LoginOutcome {
+            flow_id: "flow".into(),
+            provider: "codex",
+            status: "connected",
+            account_id: Some("codex@second".into()),
+            account_label: Some("second@example.com".into()),
+            error: None,
+        };
+        let value = serde_json::to_value(outcome).unwrap();
+        assert_eq!(value["accountLabel"], "second@example.com");
+        assert_eq!(value["accountId"], "codex@second");
+        assert_eq!(value.as_object().unwrap().len(), 5);
+    }
+
     #[test]
     fn synchronized_metadata_requires_local_login_without_fabricated_connection_fields() {
         let metadata = uc_providers::device_sync::AccountMetadata {
@@ -995,6 +1089,7 @@ mod tests {
                 provider,
                 status: "connected",
                 account_id: Some(id.clone()),
+                account_label: None,
                 error: None,
             };
             assert_eq!(billing_account_after_login(&outcome), Some(id.as_str()));

@@ -633,6 +633,15 @@ async fn ready_credentials_inner(
                 "This account needs to be connected again.",
             )
         })?;
+    let reason = if rejected_token == Some(credentials.access_token.as_str()) {
+        "usage_rejected"
+    } else {
+        "access_expiring"
+    };
+    tracing::info!(target: "account_session", account = %record.id, reason,
+        access_expires_at = ?credentials.expires_at,
+        refresh_expires_at = ?document["claudeAiOauth"]["refreshTokenExpiresAt"].as_i64(),
+        "renewal_started");
     let request = match kind {
         ProviderKind::Claude => HttpRequest::post(endpoint).json_body(&json!({"grant_type":"refresh_token","refresh_token":refresh,"client_id":CLAUDE_CLIENT,"scope":CLAUDE_SCOPE})),
         ProviderKind::Codex => {
@@ -647,7 +656,10 @@ async fn ready_credentials_inner(
         )
     })?;
     if !response.is_success() {
-        return Err(renewal_error(response.status, &response.body));
+        let error = renewal_error(response.status, &response.body);
+        tracing::warn!(target: "account_session", account = %record.id,
+            status = response.status, reason = %error.message, "renewal_rejected");
+        return Err(error);
     }
     let refreshed: Value = response
         .json()
@@ -664,8 +676,10 @@ async fn ready_credentials_inner(
     let id = record.id.clone();
     let replacement = uc_core::load_blocking(move || {
         if snapshot.replace(&document).map_err(|_| account_error())? {
+            tracing::info!(target: "account_session", account = %id, "renewal_saved");
             return Ok(None);
         }
+        tracing::info!(target: "account_session", account = %id, "renewal_superseded");
         let current = store.credentials(&id).map_err(|_| account_error())?;
         if account_id(kind, &identity(kind, &current)?) != id {
             return Err(auth_error(
@@ -753,6 +767,14 @@ pub(crate) fn apply_tokens(
                 .filter(|value| !value.is_empty())
             {
                 document["claudeAiOauth"]["refreshToken"] = json!(refresh);
+            }
+            if let Some(expiry) = tokens["refresh_token_expires_in"]
+                .as_i64()
+                .filter(|seconds| *seconds > 0 && *seconds <= 31_536_000)
+                .and_then(|seconds| now.checked_add_signed(chrono::Duration::seconds(seconds)))
+            {
+                document["claudeAiOauth"]["refreshTokenExpiresAt"] =
+                    json!(expiry.timestamp_millis());
             }
             if let Some(scope) = tokens["scope"].as_str() {
                 document["claudeAiOauth"]["scopes"] =
