@@ -21,11 +21,11 @@ function engineWith(lines: Record<string, MetricLine[]>): EngineState {
 }
 
 describe("quota validity", () => {
-  it.each(["claude@work", "codex@personal", "cursor", "glm@account"])("withholds %s readings after reset without fabricating restored allowance", (id) => {
+  it.each(["claude@work", "codex@personal", "cursor", "glm@account"])("withholds only the reset window for %s without fabricating restored allowance", (id) => {
     const state = engineWith({ [id]: [meter("Session", 100, "2026-09-27T06:10:00Z"), meter("Weekly", 68, "2026-09-29T03:00:00Z")] });
     const snapshot = state.providers[id]!.snapshot!;
     const unavailable = rollOverPassedWindows(state, now).providers[id]!.snapshot!;
-    expect(unavailable).toEqual({ ...snapshot, usageUnavailable: true });
+    expect(unavailable).toEqual({ ...snapshot, unavailableMetrics: ["Session"] });
     expect(unavailable.lines).toBe(snapshot.lines);
     expect(snapshot.usageUnavailable).toBeUndefined();
     expect(unavailable.plan).toBe("Plus");
@@ -34,7 +34,22 @@ describe("quota validity", () => {
 
   it("withholds a reset at the exact deadline", () => {
     const state = engineWith({ codex: [meter("Weekly", 90, now.toISOString())] });
-    expect(rollOverPassedWindows(state, now).providers.codex!.snapshot).toMatchObject({ usageUnavailable: true, lines: [{ used: 90 }] });
+    expect(rollOverPassedWindows(state, now).providers.codex!.snapshot).toMatchObject({ unavailableMetrics: ["Weekly"], lines: [{ used: 90 }] });
+  });
+
+  it("marks subsequent windows once without changing credit readings", () => {
+    const state = engineWith({ codex: [
+      meter("Session", 100, "2026-09-27T06:10:00Z"),
+      meter("Weekly", 68, "2026-09-27T06:11:00Z"),
+      { type: "values", label: "Rate Limit Resets", values: [{ number: 3, kind: "count", estimated: false }] },
+    ] });
+    const first = rollOverPassedWindows(state, now);
+    expect(first.providers.codex!.snapshot!.unavailableMetrics).toEqual(["Session"]);
+    const second = rollOverPassedWindows(first, new Date("2026-09-27T06:11:00Z"));
+    expect(second.providers.codex!.snapshot!.unavailableMetrics).toEqual(["Session", "Weekly"]);
+    expect(second.providers.codex!.snapshot!.usageUnavailable).toBeUndefined();
+    expect(second.providers.codex!.snapshot!.lines).toBe(state.providers.codex!.snapshot!.lines);
+    expect(rollOverPassedWindows(second, new Date("2026-09-27T06:11:01Z"))).toBe(second);
   });
 
   it.each(["network", "rate_limited", "auth_expired"] as const)("withholds cached readings on a %s failure", (errorCategory) => {
@@ -60,7 +75,7 @@ describe("quota validity", () => {
 
   it("restores readings only from a valid successful provider snapshot", () => {
     const stale = engineWith({ codex: [meter("Session", 100, "2026-09-27T06:10:00Z")] });
-    expect(rollOverPassedWindows(stale, now).providers.codex!.snapshot!.usageUnavailable).toBe(true);
+    expect(rollOverPassedWindows(stale, now).providers.codex!.snapshot!.unavailableMetrics).toEqual(["Session"]);
     const confirmed = structuredClone(stale);
     confirmed.providers.codex!.snapshot!.refreshedAt = now.toISOString();
     confirmed.providers.codex!.snapshot!.lines = [meter("Session", 9, "2026-09-27T11:10:00Z")];

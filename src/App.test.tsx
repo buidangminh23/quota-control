@@ -109,7 +109,8 @@ describe("popup", () => {
     expect(within(work).queryByText("Chưa bắt đầu")).not.toBeInTheDocument();
     expect(within(work).queryByText("Còn 0%")).not.toBeInTheDocument();
     expect(within(work).getByText("Phiên 5h")).toBeInTheDocument();
-    expect(within(work).getAllByText("—").length).toBeGreaterThanOrEqual(2);
+    expect(within(work).getByText("—")).toBeInTheDocument();
+    expect(within(work).getByText("Còn 42%")).toBeInTheDocument();
     act(() => api.editEngineState((state) => {
       spendWorkSession(state, 5 * 3_600_000);
       const snapshot = state.providers["claude@7c1e"]!.snapshot!;
@@ -125,7 +126,8 @@ describe("popup", () => {
     const work = screen.getByRole("region", { name: "Claude · Công ty" });
     expect(within(work).queryByText("Còn 100%")).not.toBeInTheDocument();
     expect(within(work).queryByText("Chưa bắt đầu")).not.toBeInTheDocument();
-    expect(within(work).getAllByText("—").length).toBeGreaterThanOrEqual(2);
+    expect(within(work).getByText("—")).toBeInTheDocument();
+    expect(within(work).getByText("Còn 42%")).toBeInTheDocument();
   });
 
   it("removes the inline outdated label while keeping the failed fetch and last successful usage time accessible", async () => {
@@ -153,7 +155,8 @@ describe("popup", () => {
     await act(() => new Promise((resolve) => setTimeout(resolve, 250)));
     expect(within(work).queryByText("Còn 100%")).not.toBeInTheDocument();
     expect(within(work).queryByText("Còn 0%")).not.toBeInTheDocument();
-    expect(within(work).getAllByText("—").length).toBeGreaterThanOrEqual(2);
+    expect(within(work).getByText("—")).toBeInTheDocument();
+    expect(within(work).getByText("Còn 42%")).toBeInTheDocument();
   });
 
   it("withholds obsolete quota at its freshness deadline without a backend event", async () => {

@@ -65,6 +65,15 @@ describe("offered rows", () => {
     const onDemand = [row("Sonnet", false)];
     expect(offeredRows(always, onDemand, true)).toEqual({ always, onDemand });
   });
+
+  it("keeps pending reported windows beside valid readings and omits unsupported windows", () => {
+    const pending = { ...row("Session", false), data: makeWidget("Session", "percent", 100, 100, { hasData: false, hasReading: true }) };
+    const unsupported = { ...row("Sonnet", false), data: makeWidget("Sonnet", "percent", 0, 100, { hasData: false, hasReading: false }) };
+    const weekly = row("Weekly", true);
+    expect(offeredRows([pending, weekly], [unsupported], true)).toEqual({ always: [pending, weekly], onDemand: [] });
+    expect(offeredRows([weekly], [pending, unsupported], true)).toEqual({ always: [weekly], onDemand: [pending] });
+    expect(offeredRows([pending], [unsupported], true)).toEqual({ always: [pending], onDemand: [] });
+  });
 });
 
 describe("quota availability", () => {
@@ -84,6 +93,22 @@ describe("quota availability", () => {
     ] as ProviderSnapshot["lines"]) {
       const reading = { ...snapshot([line]), usageUnavailable: true };
       expect(widgetDataFor(descriptor("Session"), reading, DEFAULT_DISPLAY).hasData).toBe(false);
+    }
+  });
+
+  it("withholds only the expired window while keeping sibling windows and credits available", () => {
+    const reading = { ...snapshot([
+      { type: "progress", label: "Session", used: 82, limit: 100, format: { kind: "percent" }, periodDurationMs: 5 * HOUR, resetsAt: "2026-09-27T10:00:00Z" },
+      { type: "progress", label: "Weekly", used: 64, limit: 100, format: { kind: "percent" }, periodDurationMs: 7 * 24 * HOUR, resetsAt: "2026-10-01T10:00:00Z" },
+      { type: "values", label: "Rate Limit Resets", values: [{ number: 3, kind: "count", estimated: false }] },
+    ]), unavailableMetrics: ["Session"] };
+    const session = widgetDataFor(descriptor("Session"), reading, DEFAULT_DISPLAY);
+    expect(session).toMatchObject({ hasData: false, hasReading: true, used: 82, periodDurationMs: 5 * HOUR });
+    expect(widgetDataFor(descriptor("Weekly"), reading, DEFAULT_DISPLAY)).toMatchObject({ hasData: true, hasReading: true, used: 64 });
+    expect(widgetDataFor(descriptor("Rate Limit Resets"), reading, DEFAULT_DISPLAY)).toMatchObject({ hasData: true, hasReading: true, values: [{ number: 3 }] });
+    expect(widgetDataFor(descriptor("Sonnet"), reading, DEFAULT_DISPLAY)).toMatchObject({ hasData: false, hasReading: false });
+    for (const label of ["Session", "Weekly", "Rate Limit Resets"]) {
+      expect(widgetDataFor(descriptor(label), { ...reading, usageUnavailable: true }, DEFAULT_DISPLAY).hasData).toBe(false);
     }
   });
 

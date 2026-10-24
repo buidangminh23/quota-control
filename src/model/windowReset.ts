@@ -25,9 +25,13 @@ function validateRuntime(runtime: ProviderRuntimeState, now: number, lifetime: n
     || snapshot.errorCategory !== undefined
     || !Number.isFinite(reading)
     || reading > now
-    || now - reading >= lifetime
-    || snapshot.lines.some((line) => line.type === "progress" && (resetTime(line) ?? Number.POSITIVE_INFINITY) <= now);
-  return unavailable && !snapshot.usageUnavailable ? { ...runtime, snapshot: { ...snapshot, usageUnavailable: true } } : runtime;
+    || now - reading >= lifetime;
+  if (unavailable) return snapshot.usageUnavailable ? runtime : { ...runtime, snapshot: { ...snapshot, usageUnavailable: true } };
+  const unavailableMetrics = new Set(snapshot.unavailableMetrics);
+  for (const line of snapshot.lines) {
+    if (line.type === "progress" && (resetTime(line) ?? Number.POSITIVE_INFINITY) <= now) unavailableMetrics.add(line.label);
+  }
+  return unavailableMetrics.size === (snapshot.unavailableMetrics?.length ?? 0) ? runtime : { ...runtime, snapshot: { ...snapshot, unavailableMetrics: [...unavailableMetrics] } };
 }
 
 export function rollOverPassedWindows(state: EngineState, now: Date): EngineState {

@@ -193,7 +193,7 @@ export function widgetDataFor(descriptor: WidgetDescriptor, snapshot: ProviderSn
   const resolved = line ? resolveLine(line, descriptor, display) : null;
   if (resolved) {
     const reading = { ...resolved, hasReading: resolved.hasData };
-    return hasDashboardCard(descriptor.providerId) && (snapshot?.usageUnavailable || snapshot?.errorCategory) ? { ...reading, hasData: false } : reading;
+    return hasDashboardCard(descriptor.providerId) && (snapshot?.usageUnavailable || snapshot?.errorCategory || snapshot?.unavailableMetrics?.includes(descriptor.metricLabel)) ? { ...reading, hasData: false } : reading;
   }
   return { ...sampleFromTemplate(descriptor.template, display), hasData: false, hasReading: snapshot?.lines.length ? false : undefined };
 }
@@ -210,9 +210,9 @@ export function offeredRows<Row extends { data: WidgetData }>(
   onDemand: Row[],
   successfulRead: boolean,
 ): { always: Row[]; onDemand: Row[] } {
-  const hasData = (row: Row) => row.data.hasData;
-  if (!successfulRead || !(always.some(hasData) || onDemand.some(hasData))) return { always, onDemand };
-  return { always: always.filter(hasData), onDemand: onDemand.filter(hasData) };
+  const hasReading = (row: Row) => row.data.hasReading ?? row.data.hasData;
+  if (!successfulRead || !(always.some(hasReading) || onDemand.some(hasReading))) return { always, onDemand };
+  return { always: always.filter(hasReading), onDemand: onDemand.filter(hasReading) };
 }
 
 /** How many banked resets the row reports, or 0 for any other row: the count under which the popup

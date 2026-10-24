@@ -92,7 +92,16 @@ describe("taskbar strip content", () => {
     const validated = rollOverPassedWindows(state, now);
     const strip = content(DEFAULT_DISPLAY, Object.fromEntries(Object.entries(validated.providers).map(([id, runtime]) => [id, runtime.snapshot])));
     expect(strip.groups.map((group) => group.providerId)).toEqual(content().groups.map((group) => group.providerId));
-    expect(strip.groups[2]!.metrics.map((metric) => metric.value)).toEqual(["—", "—"]);
+    expect(strip.groups[2]!.metrics.map((metric) => metric.value)).toEqual(["—", reason === "expired" ? "36%" : "—"]);
+  });
+
+  it("keeps selected windows available when an unselected window resets", () => {
+    const now = new Date("2026-10-19T05:30:00Z");
+    const state = fixtureEngineState(now.getTime());
+    state.providers["codex@52d0"]!.snapshot!.lines.push({ type: "progress", label: "Spark Session", used: 100, limit: 100, format: { kind: "percent" }, periodDurationMs: 5 * 3_600_000, resetsAt: now.toISOString() });
+    const validated = rollOverPassedWindows(state, now);
+    const strip = content(DEFAULT_DISPLAY, Object.fromEntries(Object.entries(validated.providers).map(([id, runtime]) => [id, runtime.snapshot])));
+    expect(strip.groups[2]!.metrics.map((metric) => metric.value)).toEqual(["18%", "36%"]);
   });
 
   it("keeps only the plan's reported windows during an unavailable reading", () => {

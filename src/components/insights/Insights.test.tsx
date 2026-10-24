@@ -388,7 +388,7 @@ describe("free reset on the Codex card", () => {
     const pending = screen.getByRole("region", { name: "Codex · Second" });
     expect(within(pending).getByRole("button", { name: /^Reset free: sau 1 giờ/ })).toBeInTheDocument();
     expect(within(pending).queryByText("đã xác nhận")).not.toBeInTheDocument();
-    expect(useApp.getState().engine!.providers[other.id]!.snapshot!.usageUnavailable).toBe(true);
+    expect(useApp.getState().engine!.providers[other.id]!.snapshot!.unavailableMetrics).toEqual(["Session", "Weekly", "Spark", "Spark Weekly"]);
     expect(notify).not.toHaveBeenCalled();
 
     fireEvent.click(confirmed);

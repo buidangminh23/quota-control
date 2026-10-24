@@ -159,6 +159,7 @@ export interface ProviderSnapshot {
   refreshedAt: string;
   quotaReset?: QuotaReset;
   usageUnavailable?: boolean;
+  unavailableMetrics?: string[];
   usageHistory?: ProviderUsageHistory;
   warning?: string;
   errorCategory?: ErrorCategory;
