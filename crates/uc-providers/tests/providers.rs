@@ -1120,18 +1120,6 @@ async fn codex_cached_billing_keeps_its_original_confirmation_time_during_quota_
     );
 }
 
-fn subscription_token(
-    plan: &str,
-    checked: chrono::DateTime<Utc>,
-    ends: chrono::DateTime<Utc>,
-) -> String {
-    let claims = json!({"https://api.openai.com/auth":{"chatgpt_account_id":"account-one", "chatgpt_user_id":"user-one", "chatgpt_plan_type":plan, "chatgpt_subscription_last_checked":checked.to_rfc3339(), "chatgpt_subscription_active_until":ends.to_rfc3339()}});
-    format!(
-        "header.{}.signature",
-        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap())
-    )
-}
-
 #[tokio::test]
 async fn a_fresh_signed_codex_period_survives_a_revoked_browser_source_during_quota_failure() {
     let account = "00000000-0000-4000-8000-000000000041";
@@ -1171,14 +1159,23 @@ async fn a_fresh_signed_codex_period_survives_a_revoked_browser_source_during_qu
 }
 
 #[tokio::test]
-async fn managed_codex_renews_stale_subscription_metadata_without_repeated_rotation() {
-    for token_status in [200, 503] {
+async fn managed_codex_restarts_do_not_rotate_tokens_for_missing_or_stale_billing() {
+    for (checked, end) in [
+        (None, None),
+        (
+            Some(now() - chrono::Duration::days(20)),
+            Some(now() - chrono::Duration::days(1)),
+        ),
+        (
+            Some(now() - chrono::Duration::hours(2)),
+            Some(now() + chrono::Duration::days(30)),
+        ),
+    ] {
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(uc_accounts::AccountStore::new(
             directory.path().join("accounts"),
         ));
-        let end = now() + chrono::Duration::days(30);
-        let document = json!({"tokens":{"access_token":"fixture-old", "refresh_token":"fixture-refresh", "account_id":"account-one", "id_token":subscription_token("plus", now() - chrono::Duration::days(20), now() - chrono::Duration::days(1))}});
+        let document = managed_codex_document(now() + chrono::Duration::days(1), checked, end);
         let record = store
             .import(
                 "codex",
@@ -1189,42 +1186,133 @@ async fn managed_codex_renews_stale_subscription_metadata_without_repeated_rotat
             )
             .unwrap();
         let client = Arc::new(CodexSubscriptionHttp {
-            tokens: json!({"access_token":"fixture-new", "refresh_token":"fixture-next", "expires_in":3600, "id_token":subscription_token("plus", now(), end)}),
-            token_status,
+            tokens: json!({}),
+            token_status: 503,
             plan: "plus",
             renewals: Default::default(),
         });
+        for _ in 0..3 {
+            let provider = LocalProvider::new(
+                ProviderKind::Codex,
+                CredentialStore::for_account(ProviderKind::Codex, store.clone(), record.clone()),
+                client.clone(),
+            )
+            .with_clock(fixed_clock(now()));
+            let snapshot = provider.refresh(RefreshContext::scheduled()).await;
+            assert_eq!(snapshot.error_category, None);
+            assert_eq!(snapshot.plan.as_deref(), Some("Plus"));
+            assert_eq!(snapshot.plan_checked_at, Some(now()));
+            assert_eq!(snapshot.plan_term, None);
+        }
+        assert_eq!(client.renewals.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(store.credentials(&record.id).unwrap(), document);
+    }
+}
+
+fn managed_codex_document(
+    expires: chrono::DateTime<Utc>,
+    checked: Option<chrono::DateTime<Utc>>,
+    ends: Option<chrono::DateTime<Utc>>,
+) -> Value {
+    let claims = json!({"https://api.openai.com/auth":{
+        "chatgpt_account_id":"account-one",
+        "chatgpt_user_id":"user-one",
+        "chatgpt_plan_type":"plus",
+        "chatgpt_subscription_last_checked":checked.map(|value| value.to_rfc3339()),
+        "chatgpt_subscription_active_until":ends.map(|value| value.to_rfc3339())
+    }});
+    json!({
+        "tokens":{
+            "access_token":"fixture-old",
+            "refresh_token":"fixture-refresh",
+            "account_id":"account-one",
+            "id_token":format!("header.{}.signature", URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap()))
+        },
+        "_usageControl":{"expiresAt":expires.timestamp_millis()}
+    })
+}
+
+#[tokio::test]
+async fn managed_codex_expiry_renews_once_when_billing_metadata_is_absent() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Arc::new(uc_accounts::AccountStore::new(
+        directory.path().join("accounts"),
+    ));
+    let document = managed_codex_document(now() - chrono::Duration::seconds(1), None, None);
+    let record = store
+        .import(
+            "codex",
+            "Managed",
+            "account-one|user-one",
+            &document,
+            uc_accounts::CredentialMode::ManagedOauth,
+        )
+        .unwrap();
+    let client = Arc::new(CodexSubscriptionHttp {
+        tokens: json!({"access_token":"fixture-new", "refresh_token":"fixture-next", "expires_in":3600}),
+        token_status: 200,
+        plan: "plus",
+        renewals: Default::default(),
+    });
+    for _ in 0..3 {
         let provider = LocalProvider::new(
             ProviderKind::Codex,
             CredentialStore::for_account(ProviderKind::Codex, store.clone(), record.clone()),
             client.clone(),
         )
         .with_clock(fixed_clock(now()));
-        for _ in 0..3 {
-            let snapshot = provider.refresh(RefreshContext::scheduled()).await;
-            assert_eq!(snapshot.error_category, None);
-            assert_eq!(snapshot.plan.as_deref(), Some("Plus"));
-            assert_eq!(snapshot.plan_checked_at, Some(now()));
-            assert_eq!(
-                snapshot.plan_term,
-                if token_status == 200 {
-                    Some(uc_core::PlanTerm::Stated {
-                        ends_at: end,
-                        checked_at: Some(now()),
-                    })
-                } else {
-                    None
-                }
-            );
-        }
-        assert_eq!(client.renewals.load(std::sync::atomic::Ordering::SeqCst), 1);
-        assert_eq!(
-            store.credentials(&record.id).unwrap()["tokens"]["access_token"],
-            if token_status == 200 {
-                "fixture-new"
-            } else {
-                "fixture-old"
-            }
-        );
+        let snapshot = provider.refresh(RefreshContext::scheduled()).await;
+        assert_eq!(snapshot.error_category, None);
+        assert_eq!(snapshot.plan.as_deref(), Some("Plus"));
+        assert_eq!(snapshot.plan_term, None);
     }
+    assert_eq!(client.renewals.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let saved = store.credentials(&record.id).unwrap();
+    assert_eq!(saved["tokens"]["access_token"], "fixture-new");
+    assert_eq!(saved["tokens"]["refresh_token"], "fixture-next");
+    assert_eq!(
+        saved["_usageControl"]["expiresAt"],
+        (now() + chrono::Duration::hours(1)).timestamp_millis()
+    );
+}
+
+#[tokio::test]
+async fn managed_codex_live_plan_change_does_not_rotate_valid_tokens() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Arc::new(uc_accounts::AccountStore::new(
+        directory.path().join("accounts"),
+    ));
+    let document = managed_codex_document(
+        now() + chrono::Duration::days(1),
+        Some(now()),
+        Some(now() + chrono::Duration::days(30)),
+    );
+    let record = store
+        .import(
+            "codex",
+            "Managed",
+            "account-one|user-one",
+            &document,
+            uc_accounts::CredentialMode::ManagedOauth,
+        )
+        .unwrap();
+    let client = Arc::new(CodexSubscriptionHttp {
+        tokens: json!({}),
+        token_status: 503,
+        plan: "prolite",
+        renewals: Default::default(),
+    });
+    let provider = LocalProvider::new(
+        ProviderKind::Codex,
+        CredentialStore::for_account(ProviderKind::Codex, store.clone(), record.clone()),
+        client.clone(),
+    )
+    .with_clock(fixed_clock(now()));
+    let snapshot = provider.refresh(RefreshContext::scheduled()).await;
+    assert_eq!(snapshot.error_category, None);
+    assert_eq!(snapshot.plan.as_deref(), Some("Pro 5x"));
+    assert_eq!(snapshot.plan_checked_at, Some(now()));
+    assert_eq!(snapshot.plan_term, None);
+    assert_eq!(client.renewals.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(store.credentials(&record.id).unwrap(), document);
 }

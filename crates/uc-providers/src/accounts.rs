@@ -605,14 +605,17 @@ async fn ready_credentials_inner(
     }
     let renewal_store = store.clone();
     let renewal_id = record.id.clone();
-    let source_copy = source.clone();
-    let (_renewal, mut document) = uc_core::load_blocking(move || {
+    let (_renewal, mut snapshot) = uc_core::load_blocking(move || {
         let renewal = renewal_store
             .renewal_lock(&renewal_id)
             .map_err(|_| account_error())?;
-        Ok::<_, SimpleProviderError>((renewal, source_copy.read_document()?))
+        let snapshot = renewal_store
+            .credential_snapshot(&renewal_id)
+            .map_err(|_| account_error())?;
+        Ok::<_, SimpleProviderError>((renewal, snapshot))
     })
     .await?;
+    let mut document = snapshot.document().clone();
     let credentials = parse_credentials(kind, &document)?;
     if !needs_renewal(&credentials, rejected_token, now) {
         return Ok(credentials);
@@ -644,15 +647,7 @@ async fn ready_credentials_inner(
         )
     })?;
     if !response.is_success() {
-        let category = if matches!(response.status, 400 | 401 | 403) {
-            ErrorCategory::AuthExpired
-        } else {
-            ErrorCategory::http(response.status)
-        };
-        return Err(SimpleProviderError::new(
-            category,
-            "This account session could not be renewed. Reconnect it if the problem persists.",
-        ));
+        return Err(renewal_error(response.status, &response.body));
     }
     let refreshed: Value = response
         .json()
@@ -667,13 +662,55 @@ async fn ready_credentials_inner(
     let parsed = parse_credentials(kind, &document)?;
     let store = store.clone();
     let id = record.id.clone();
-    uc_core::load_blocking(move || {
-        store
-            .update_credentials(&id, &document)
-            .map_err(|_| account_error())
+    let replacement = uc_core::load_blocking(move || {
+        if snapshot.replace(&document).map_err(|_| account_error())? {
+            return Ok(None);
+        }
+        let current = store.credentials(&id).map_err(|_| account_error())?;
+        if account_id(kind, &identity(kind, &current)?) != id {
+            return Err(auth_error(
+                "The saved session belongs to a different account. Reconnect this account.",
+            ));
+        }
+        parse_credentials(kind, &current).map(Some)
     })
     .await?;
-    Ok(parsed)
+    Ok(replacement.unwrap_or(parsed))
+}
+
+fn renewal_error(status: u16, body: &[u8]) -> SimpleProviderError {
+    let fallback =
+        "This account session could not be renewed. Reconnect it if the problem persists.";
+    if !matches!(status, 400 | 401 | 403) {
+        return SimpleProviderError::new(
+            ErrorCategory::http(status),
+            if status == 429 || status >= 500 {
+                "The login service is temporarily unavailable. Try again later."
+            } else {
+                fallback
+            },
+        );
+    }
+    let body: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let code = body["error"]["code"]
+        .as_str()
+        .or_else(|| body["error"].as_str());
+    let message = match code {
+        Some("refresh_token_invalidated") => {
+            "The provider revoked this account session. Sign in again in Accounts."
+        }
+        Some("refresh_token_expired") => {
+            "The provider expired this account session. Sign in again in Accounts."
+        }
+        Some("invalid_grant") if body["error_description"] == "Refresh token expired" => {
+            "The provider expired this account session. Sign in again in Accounts."
+        }
+        Some("refresh_token_reused") => {
+            "This account session was already renewed elsewhere. Sign in again in Accounts."
+        }
+        _ => fallback,
+    };
+    SimpleProviderError::new(ErrorCategory::AuthExpired, message)
 }
 
 /// True when the stored session was just rejected or is about to expire. Re-checked after the

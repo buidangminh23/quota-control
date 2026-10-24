@@ -10,6 +10,89 @@ fn secret(token: &str) -> Value {
 }
 
 #[test]
+fn credential_snapshots_preserve_reconnected_and_recreated_accounts() {
+    let (store, _dir) = store();
+    let original = secret("original");
+    let record = store
+        .import(
+            "codex",
+            "Original",
+            "fixture",
+            &original,
+            CredentialMode::ManagedOauth,
+        )
+        .unwrap();
+    let mut stale = store.credential_snapshot(&record.id).unwrap();
+    let reconnected = store
+        .import(
+            "codex",
+            "Reconnected",
+            "fixture",
+            &original,
+            CredentialMode::ManagedOauth,
+        )
+        .unwrap();
+    assert!(!stale.replace(&secret("stale")).unwrap());
+    assert_eq!(store.credentials(&record.id).unwrap(), original);
+    assert_eq!(store.list().unwrap(), vec![reconnected]);
+
+    let mut deleted = store.credential_snapshot(&record.id).unwrap();
+    store.remove(&record.id).unwrap();
+    assert!(matches!(
+        deleted.replace(&secret("stale")),
+        Err(AccountError::NotFound)
+    ));
+    assert!(store.list().unwrap().is_empty());
+    store
+        .import(
+            "codex",
+            "Recreated",
+            "fixture",
+            &original,
+            CredentialMode::ManagedOauth,
+        )
+        .unwrap();
+    assert!(!deleted.replace(&secret("stale")).unwrap());
+    assert_eq!(store.credentials(&record.id).unwrap(), original);
+    assert_eq!(
+        std::fs::read_dir(store.root.join("credentials"))
+            .unwrap()
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn credential_snapshots_advance_revision_and_preserve_label_changes() {
+    let (store, _dir) = store();
+    let record = store
+        .import(
+            "codex",
+            "codex",
+            "fixture",
+            &secret("original"),
+            CredentialMode::ManagedOauth,
+        )
+        .unwrap();
+    let mut snapshot = store.credential_snapshot(&record.id).unwrap();
+    let mut stale = store.credential_snapshot(&record.id).unwrap();
+    assert!(store.set_label_if_default(&record, "Renamed").unwrap());
+    for generation in ["first", "second"] {
+        assert!(snapshot.replace(&secret(generation)).unwrap());
+        assert_eq!(snapshot.document(), &secret(generation));
+        assert_eq!(store.credentials(&record.id).unwrap(), secret(generation));
+    }
+    assert!(!stale.replace(&secret("stale")).unwrap());
+    assert_eq!(store.list().unwrap()[0].label, "Renamed");
+    assert_eq!(
+        std::fs::read_dir(store.root.join("credentials"))
+            .unwrap()
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn default_label_update_changes_only_label_and_update_time() {
     let (store, _dir) = store();
     let record = store

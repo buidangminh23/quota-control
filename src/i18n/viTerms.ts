@@ -138,6 +138,16 @@ const EXACT: Readonly<Record<string, string>> = {
     "Phiên vừa gia hạn thuộc một tài khoản khác. Hãy kết nối lại tài khoản này.",
   "This account session could not be renewed. Reconnect it if the problem persists.":
     "Chưa gia hạn được phiên của tài khoản này. Nếu lỗi còn lặp lại, hãy kết nối lại.",
+  "The provider revoked this account session. Sign in again in Accounts.":
+    "Nhà cung cấp đã thu hồi phiên đăng nhập này. Hãy đăng nhập lại trong Tài khoản.",
+  "The provider expired this account session. Sign in again in Accounts.":
+    "Phiên đăng nhập này đã hết hạn tại nhà cung cấp. Hãy đăng nhập lại trong Tài khoản.",
+  "This account session was already renewed elsewhere. Sign in again in Accounts.":
+    "Phiên đăng nhập này đã được gia hạn ở nơi khác. Hãy đăng nhập lại trong Tài khoản.",
+  "The login service is temporarily unavailable. Try again later.":
+    "Dịch vụ đăng nhập tạm thời không khả dụng. Hãy thử lại sau.",
+  "The saved session belongs to a different account. Reconnect this account.":
+    "Phiên đã lưu thuộc một tài khoản khác. Hãy kết nối lại tài khoản này.",
   "Too many pending logins. Cancel an existing login first.": "Có quá nhiều lần đăng nhập đang chờ. Hãy hủy bớt một lần trước.",
   "Cannot start a sign-in on this computer.": "Không bắt đầu đăng nhập được trên máy này.",
   "The sign-in page address is invalid.": "Địa chỉ trang đăng nhập không hợp lệ.",

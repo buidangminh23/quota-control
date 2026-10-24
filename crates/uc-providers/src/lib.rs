@@ -71,7 +71,6 @@ pub struct LocalProvider {
     cli: Option<CliBinding>,
     profile_term: plan_term::ProfileTerm,
     billing_periods: Option<BillingPeriods>,
-    metadata_retry: tokio::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>>,
 }
 
 /// The CLI login a card follows, checked on every refresh so that a CLI that switched accounts
@@ -115,7 +114,6 @@ impl LocalProvider {
             cli: None,
             profile_term: Default::default(),
             billing_periods: None,
-            metadata_retry: Default::default(),
         }
     }
 
@@ -212,7 +210,7 @@ impl LocalProvider {
         rejected_token: Option<&str>,
     ) -> Result<credentials::Credentials, SimpleProviderError> {
         let Some(binding) = &self.cli else {
-            let credentials = accounts::ready_credentials(
+            return accounts::ready_credentials(
                 &self.credentials,
                 self.kind,
                 &self.http,
@@ -220,33 +218,7 @@ impl LocalProvider {
                 &self.refresh_endpoint,
                 rejected_token,
             )
-            .await?;
-            if self.kind == ProviderKind::Codex
-                && rejected_token.is_none()
-                && self.credentials.is_managed()
-                && (matches!(&credentials.plan_term, Some(uc_core::PlanTerm::Stated { ends_at, checked_at }) if *ends_at <= now || checked_at.is_none_or(|checked| checked > now || now - checked >= plan_term::TERM_RECHECK))
-                    || credentials.plan_term.is_none()
-                        && credentials
-                            .plan
-                            .as_deref()
-                            .is_some_and(|plan| plan != "Free"))
-            {
-                let mut retry = self.metadata_retry.lock().await;
-                if retry.is_none_or(|next| now >= next) {
-                    *retry = Some(now + plan_term::TERM_RECHECK);
-                    return Ok(accounts::ready_credentials(
-                        &self.credentials,
-                        self.kind,
-                        &self.http,
-                        now,
-                        &self.refresh_endpoint,
-                        Some(&credentials.access_token),
-                    )
-                    .await
-                    .unwrap_or(credentials));
-                }
-            }
-            return Ok(credentials);
+            .await;
         };
         let (kind, location, profile) =
             (self.kind, binding.location.clone(), binding.profile.clone());
@@ -416,25 +388,6 @@ impl LocalProvider {
         }
         self.record_cooldown(&response, now).await;
         let mut mapped = mapping::map_response(self.kind, &response, now)?;
-        if self.kind == ProviderKind::Codex
-            && self.credentials.is_managed()
-            && mapped
-                .plan
-                .as_deref()
-                .zip(credentials.plan.as_deref())
-                .is_some_and(|(live, stored)| live != stored)
-        {
-            let mut retry = self.metadata_retry.lock().await;
-            if retry.is_none_or(|next| now >= next) {
-                *retry = Some(now + plan_term::TERM_RECHECK);
-                if let Ok(renewed) = self
-                    .ready_credentials(now, Some(&credentials.access_token))
-                    .await
-                {
-                    credentials = renewed;
-                }
-            }
-        }
         if self.kind == ProviderKind::Codex
             && let Some(uc_core::MetricLine::Values(line)) = mapped
                 .lines

@@ -1,6 +1,18 @@
 import { viTerm } from "./viTerms";
 
 describe("viTerm", () => {
+  it("distinguishes revoked, expired, reused and temporary login failures", () => {
+    for (const [message, expected] of [
+      ["The provider revoked this account session. Sign in again in Accounts.", "Nhà cung cấp đã thu hồi phiên đăng nhập này. Hãy đăng nhập lại trong Tài khoản."],
+      ["The provider expired this account session. Sign in again in Accounts.", "Phiên đăng nhập này đã hết hạn tại nhà cung cấp. Hãy đăng nhập lại trong Tài khoản."],
+      ["This account session was already renewed elsewhere. Sign in again in Accounts.", "Phiên đăng nhập này đã được gia hạn ở nơi khác. Hãy đăng nhập lại trong Tài khoản."],
+      ["The login service is temporarily unavailable. Try again later.", "Dịch vụ đăng nhập tạm thời không khả dụng. Hãy thử lại sau."],
+      ["The saved session belongs to a different account. Reconnect this account.", "Phiên đã lưu thuộc một tài khoản khác. Hãy kết nối lại tài khoản này."],
+    ] as const) {
+      expect(viTerm(message)).toBe(expected);
+    }
+  });
+
   it("translates the metric titles, labels and units the service readers emit", () => {
     expect(viTerm("Spend This Month")).toBe("Chi tiêu tháng này");
     expect(viTerm("Weekly limit")).toBe("Hạn mức tuần");

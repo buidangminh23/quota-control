@@ -88,6 +88,31 @@ pub struct AccountStore {
     root: PathBuf,
 }
 
+pub struct CredentialSnapshot {
+    store: AccountStore,
+    id: String,
+    revision: Uuid,
+    document: Value,
+}
+
+impl CredentialSnapshot {
+    pub fn document(&self) -> &Value {
+        &self.document
+    }
+
+    pub fn replace(&mut self, document: &Value) -> Result<bool> {
+        let Some(revision) =
+            self.store
+                .update_credentials_revision(&self.id, document, Some(self.revision))?
+        else {
+            return Ok(false);
+        };
+        self.revision = revision;
+        self.document = document.clone();
+        Ok(true)
+    }
+}
+
 impl AccountStore {
     pub fn new(root: PathBuf) -> Self {
         Self { root }
@@ -170,6 +195,11 @@ impl AccountStore {
     }
 
     pub fn credentials(&self, id: &str) -> Result<Value> {
+        self.credential_snapshot(id)
+            .map(|snapshot| snapshot.document)
+    }
+
+    pub fn credential_snapshot(&self, id: &str) -> Result<CredentialSnapshot> {
         let _lock = storage::lock(&self.root)?;
         let registry = self.registry()?;
         let entry = registry.accounts.get(id).ok_or(AccountError::NotFound)?;
@@ -185,10 +215,25 @@ impl AccountStore {
         if !secret.is_object() {
             return Err(AccountError::CredentialsUnavailable);
         }
-        Ok(secret)
+        Ok(CredentialSnapshot {
+            store: self.clone(),
+            id: id.into(),
+            revision: entry.credential_revision,
+            document: secret,
+        })
     }
 
     pub fn update_credentials(&self, id: &str, secret: &Value) -> Result<()> {
+        self.update_credentials_revision(id, secret, None)
+            .map(|_| ())
+    }
+
+    fn update_credentials_revision(
+        &self,
+        id: &str,
+        secret: &Value,
+        expected: Option<Uuid>,
+    ) -> Result<Option<Uuid>> {
         let bytes = credential_bytes(secret)?;
         let _lock = storage::lock(&self.root)?;
         let mut registry = self.registry()?;
@@ -196,6 +241,9 @@ impl AccountStore {
             .accounts
             .get_mut(id)
             .ok_or(AccountError::NotFound)?;
+        if expected.is_some_and(|revision| revision != entry.credential_revision) {
+            return Ok(None);
+        }
         let previous_revision = entry.credential_revision;
         let revision = self.write_credentials(id, &bytes)?;
         entry.credential_revision = revision;
@@ -205,7 +253,7 @@ impl AccountStore {
             return Err(error);
         }
         let _ = storage::remove(&self.secret_path(id, previous_revision));
-        Ok(())
+        Ok(Some(revision))
     }
 
     pub fn set_label_if_default(&self, expected: &AccountRecord, label: &str) -> Result<bool> {

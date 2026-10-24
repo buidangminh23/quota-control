@@ -5,7 +5,7 @@ use std::sync::Arc;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use uc_accounts::{AccountRecord, AccountStore, CredentialMode};
+use uc_accounts::{AccountRecord, AccountStore};
 use uc_core::{ErrorCategory, SimpleProviderError, paths};
 
 use crate::ProviderKind;
@@ -97,11 +97,6 @@ impl CredentialStore {
 
     pub fn path(&self) -> Option<&Path> {
         self.location().and_then(CliLocation::path)
-    }
-
-    /// True for a browser-connected account, whose session this app owns and renews.
-    pub(crate) fn is_managed(&self) -> bool {
-        matches!(&self.source, CredentialSource::Account { record, .. } if record.credential_mode == CredentialMode::ManagedOauth)
     }
 
     pub fn for_account(

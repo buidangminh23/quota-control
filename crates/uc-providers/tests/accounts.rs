@@ -377,6 +377,153 @@ fn store() -> (tempfile::TempDir, Arc<AccountStore>) {
     (dir, store)
 }
 
+struct FailedRenewalHttp {
+    status: u16,
+    body: Vec<u8>,
+}
+
+#[async_trait]
+impl HttpClient for FailedRenewalHttp {
+    async fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        assert_eq!(request.method, "POST");
+        Ok(HttpResponse {
+            status: self.status,
+            headers: HashMap::new(),
+            body: self.body.clone(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn renewal_failures_report_safe_recovery_without_changing_credentials() {
+    let expired = "The provider expired this account session. Sign in again in Accounts.";
+    let revoked = "The provider revoked this account session. Sign in again in Accounts.";
+    let reused = "This account session was already renewed elsewhere. Sign in again in Accounts.";
+    let fallback =
+        "This account session could not be renewed. Reconnect it if the problem persists.";
+    let temporary = "The login service is temporarily unavailable. Try again later.";
+    let cases = [
+        (
+            400,
+            json!({"error":"invalid_grant","error_description":"Refresh token expired"}),
+            ErrorCategory::AuthExpired,
+            expired,
+        ),
+        (
+            401,
+            json!({"error":{"code":"refresh_token_invalidated","message":"secret-fixture"}}),
+            ErrorCategory::AuthExpired,
+            revoked,
+        ),
+        (
+            401,
+            json!({"error":"refresh_token_invalidated","access_token":"secret-fixture"}),
+            ErrorCategory::AuthExpired,
+            revoked,
+        ),
+        (
+            401,
+            json!({"error":{"code":"refresh_token_expired"}}),
+            ErrorCategory::AuthExpired,
+            expired,
+        ),
+        (
+            401,
+            json!({"error":"refresh_token_expired"}),
+            ErrorCategory::AuthExpired,
+            expired,
+        ),
+        (
+            401,
+            json!({"error":{"code":"refresh_token_reused"}}),
+            ErrorCategory::AuthExpired,
+            reused,
+        ),
+        (
+            401,
+            json!({"error":"refresh_token_reused"}),
+            ErrorCategory::AuthExpired,
+            reused,
+        ),
+        (
+            400,
+            json!({"error":"invalid_grant","error_description":"Refresh token expired secret-fixture"}),
+            ErrorCategory::AuthExpired,
+            fallback,
+        ),
+        (
+            401,
+            json!({"error":{"code":"secret-fixture","message":"secret-fixture"}}),
+            ErrorCategory::AuthExpired,
+            fallback,
+        ),
+        (
+            403,
+            json!({"error":"secret-fixture"}),
+            ErrorCategory::AuthExpired,
+            fallback,
+        ),
+        (
+            429,
+            json!({"error":"refresh_token_expired"}),
+            ErrorCategory::RateLimited,
+            temporary,
+        ),
+        (
+            503,
+            json!({"error":{"code":"refresh_token_invalidated"}}),
+            ErrorCategory::Http5xx,
+            temporary,
+        ),
+        (
+            404,
+            json!({"error":"secret-fixture"}),
+            ErrorCategory::Http4xx,
+            fallback,
+        ),
+    ];
+    let mut cases: Vec<_> = cases
+        .into_iter()
+        .map(|(status, body, category, message)| {
+            (
+                status,
+                serde_json::to_vec(&body).unwrap(),
+                category,
+                message,
+            )
+        })
+        .collect();
+    cases.push((
+        403,
+        b"<html>secret-fixture</html>".to_vec(),
+        ErrorCategory::AuthExpired,
+        fallback,
+    ));
+    for (status, body, category, message) in cases {
+        let (_dir, store) = store();
+        let document = claude_doc(1);
+        let record = store
+            .import(
+                "claude",
+                "Managed",
+                "account-a|org-a",
+                &document,
+                CredentialMode::ManagedOauth,
+            )
+            .unwrap();
+        let provider =
+            runtimes_with_client(store.clone(), Arc::new(FailedRenewalHttp { status, body }))
+                .unwrap()
+                .remove(0);
+        let snapshot = provider.refresh(RefreshContext::manual()).await;
+        assert_eq!(snapshot.error_category, Some(category));
+        assert_eq!(snapshot.error_text(), Some(message));
+        assert!(!snapshot.error_text().unwrap().contains("secret-fixture"));
+        assert_eq!(store.credentials(&record.id).unwrap(), document);
+        assert_eq!(store.list().unwrap(), vec![record]);
+    }
+}
+
 #[tokio::test]
 async fn importing_distinct_accounts_and_reimporting_preserves_rows_and_cli_file() {
     let (dir, store) = store();
@@ -747,6 +894,7 @@ struct PausedRefresh {
     started: tokio::sync::Notify,
     resume: tokio::sync::Notify,
     posts: std::sync::atomic::AtomicUsize,
+    reads: Mutex<Vec<HttpRequest>>,
 }
 
 #[async_trait]
@@ -758,6 +906,7 @@ impl HttpClient for PausedRefresh {
             self.resume.notified().await;
             json!({"access_token":"fixture-rotated","refresh_token":"fixture-rotated-refresh","expires_in":3600})
         } else {
+            self.reads.lock().unwrap().push(request);
             json!({"five_hour":{"utilization":1}})
         };
         Ok(HttpResponse {
@@ -784,6 +933,7 @@ async fn cancelled_runtime_keeps_rotated_token_transaction_alive() {
         started: Default::default(),
         resume: Default::default(),
         posts: Default::default(),
+        reads: Default::default(),
     });
     let first = runtimes_with_client(store.clone(), client.clone())
         .unwrap()
@@ -809,6 +959,119 @@ async fn cancelled_runtime_keeps_rotated_token_transaction_alive() {
         store.credentials(&record.id).unwrap()["claudeAiOauth"]["refreshToken"],
         "fixture-rotated-refresh"
     );
+}
+
+#[tokio::test]
+async fn in_flight_renewal_preserves_new_login_and_uses_its_credentials() {
+    for recreate in [false, true] {
+        let (dir, store) = store();
+        let record = store
+            .import(
+                "claude",
+                "Original",
+                "account-a|org-a",
+                &claude_doc(1),
+                CredentialMode::ManagedOauth,
+            )
+            .unwrap();
+        let client = Arc::new(PausedRefresh {
+            started: Default::default(),
+            resume: Default::default(),
+            posts: Default::default(),
+            reads: Default::default(),
+        });
+        let provider = runtimes_with_client(store.clone(), client.clone())
+            .unwrap()
+            .remove(0);
+        let refresh = tokio::spawn(async move { provider.refresh(RefreshContext::manual()).await });
+        tokio::time::timeout(std::time::Duration::from_secs(2), client.started.notified())
+            .await
+            .unwrap();
+        let other_process = AccountStore::new(dir.path().join("accounts"));
+        if recreate {
+            other_process.remove(&record.id).unwrap();
+        }
+        let mut current = claude_doc(Utc::now().timestamp_millis() + 3_600_000);
+        current["claudeAiOauth"]["accessToken"] = json!("fixture-reconnected");
+        current["claudeAiOauth"]["refreshToken"] = json!("fixture-reconnected-refresh");
+        let reconnected = other_process
+            .import(
+                "claude",
+                "Reconnected",
+                "account-a|org-a",
+                &current,
+                CredentialMode::ManagedOauth,
+            )
+            .unwrap();
+        client.resume.notify_one();
+        let snapshot = tokio::time::timeout(std::time::Duration::from_secs(2), refresh)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!snapshot.is_error(), "{:?}", snapshot.error_category);
+        assert_eq!(store.credentials(&record.id).unwrap(), current);
+        assert_eq!(store.list().unwrap(), vec![reconnected]);
+        assert_eq!(client.posts.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let reads = client.reads.lock().unwrap();
+        assert!(!reads.is_empty());
+        assert!(reads.iter().all(|request| {
+            request
+                .headers
+                .contains(&("Authorization".into(), "Bearer fixture-reconnected".into()))
+        }));
+    }
+}
+
+#[tokio::test]
+async fn in_flight_renewal_does_not_restore_deleted_or_mismatched_accounts() {
+    for mismatch in [false, true] {
+        let (dir, store) = store();
+        let record = store
+            .import(
+                "claude",
+                "Original",
+                "account-a|org-a",
+                &claude_doc(1),
+                CredentialMode::ManagedOauth,
+            )
+            .unwrap();
+        let client = Arc::new(PausedRefresh {
+            started: Default::default(),
+            resume: Default::default(),
+            posts: Default::default(),
+            reads: Default::default(),
+        });
+        let provider = runtimes_with_client(store.clone(), client.clone())
+            .unwrap()
+            .remove(0);
+        let refresh = tokio::spawn(async move { provider.refresh(RefreshContext::manual()).await });
+        tokio::time::timeout(std::time::Duration::from_secs(2), client.started.notified())
+            .await
+            .unwrap();
+        let other_process = AccountStore::new(dir.path().join("accounts"));
+        let mut current = claude_doc(Utc::now().timestamp_millis() + 3_600_000);
+        current["oauthAccount"]["accountUuid"] = json!("different-account");
+        if mismatch {
+            other_process
+                .update_credentials(&record.id, &current)
+                .unwrap();
+        } else {
+            other_process.remove(&record.id).unwrap();
+        }
+        client.resume.notify_one();
+        let snapshot = tokio::time::timeout(std::time::Duration::from_secs(2), refresh)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(snapshot.is_error());
+        assert!(client.reads.lock().unwrap().is_empty());
+        if mismatch {
+            assert_eq!(snapshot.error_category, Some(ErrorCategory::AuthInvalid));
+            assert_eq!(store.credentials(&record.id).unwrap(), current);
+        } else {
+            assert!(store.list().unwrap().is_empty());
+        }
+    }
 }
 
 #[tokio::test]
