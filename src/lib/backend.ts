@@ -5,7 +5,7 @@
  * Rust command names live in `src-tauri/src/commands.rs`; keep both sides in sync.
  */
 import type { Language } from "@/i18n/language";
-import type { AccountLogin, AccountLoginResult, AccountProvider, AppInfo, ChatSession, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, SavedKey, ServiceEntry, SignInMethod, StripFrame, SystemNotification, SystemNotificationAccess, TaskbarInfo, UpdateStatus } from "./types";
+import type { AccountLogin, AccountLoginResult, AccountProvider, PendingLogin, AppInfo, ChatSession, ConnectedAccount, EngineState, LoginBrowser, PopoverScreen, ProviderEntry, SavedKey, ServiceEntry, SignInMethod, StripFrame, SystemNotification, SystemNotificationAccess, TaskbarInfo, UpdateStatus } from "./types";
 
 import type { ContextWindowSession, ExchangeRate, UsageGroupRow, UsageLedgerInfo, UsageQuery } from "./types";
 import type { LimitResetResult } from "./types";
@@ -45,6 +45,8 @@ export interface Backend {
   reopenAccountLogin(flowId: string): Promise<LoginBrowser>;
   /** Finish a `remote` sign-in with the address the browser landed on after signing in. */
   completeAccountLogin?(flowId: string, address: string): Promise<void>;
+  /** `remote` sign-ins still waiting, so a reloaded page can pick them up again. */
+  listPendingLogins?(): Promise<PendingLogin[]>;
   cancelAccountLogin(flowId: string): Promise<void>;
   onAccountLogin(listener: (result: AccountLoginResult) => void): Unsubscribe;
   /** Remove an account card. A Claude Code or Codex CLI login is only hidden; the CLI stays signed in. */

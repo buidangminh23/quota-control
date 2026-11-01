@@ -51,6 +51,63 @@ fn remember_login(payload: &str) {
     }
 }
 
+const REMOTE_LOGINS_KEPT: usize = 8;
+
+fn remote_logins() -> &'static Mutex<Vec<serde_json::Value>> {
+    static LOGINS: OnceLock<Mutex<Vec<serde_json::Value>>> = OnceLock::new();
+    LOGINS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn remember_remote_login<T: serde::Serialize>(provider: &str, opened: &T) {
+    let Ok(serde_json::Value::Object(mut login)) = serde_json::to_value(opened) else {
+        return;
+    };
+    login.insert("provider".into(), provider.into());
+    if let Ok(mut logins) = remote_logins().lock() {
+        if logins.len() >= REMOTE_LOGINS_KEPT {
+            logins.remove(0);
+        }
+        logins.push(serde_json::Value::Object(login));
+    }
+}
+
+fn flow_id(value: &serde_json::Value) -> &str {
+    value
+        .get("flowId")
+        .and_then(|id| id.as_str())
+        .unwrap_or_default()
+}
+
+/// Sign-ins started from a browser that still wait for their callback, so a reloaded page can
+/// offer the address box again.
+async fn pending_logins<R: tauri::Runtime>(app: &AppHandle<R>) -> Vec<serde_json::Value> {
+    let started = remote_logins()
+        .lock()
+        .map(|logins| logins.clone())
+        .unwrap_or_default();
+    let finished: Vec<String> = login_results()
+        .lock()
+        .map(|results| {
+            results
+                .iter()
+                .map(|result| flow_id(result).to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    let accounts = app.state::<Accounts>();
+    let mut pending = Vec::new();
+    for login in started {
+        let id = flow_id(&login);
+        if !finished.iter().any(|done| done == id) && accounts.login_waiting(id).await {
+            pending.push(login);
+        }
+    }
+    if let Ok(mut logins) = remote_logins().lock() {
+        logins.retain(|login| pending.iter().any(|kept| flow_id(kept) == flow_id(login)));
+    }
+    pending
+}
+
 pub fn handler(app: AppHandle) -> uc_api::server::AppHandler {
     app.listen_any("account-login", |event| remember_login(event.payload()));
     Arc::new(move |request| {
@@ -135,8 +192,9 @@ async fn act(app: &AppHandle, name: &str, body: &str) -> Option<Response> {
     };
     let response = match name {
         "begin_account_login" => match body.args::<LoginArgs>() {
-            Ok(args) => outcome(
-                account_commands::begin_login(
+            Ok(args) => {
+                let provider = args.provider.clone();
+                let opened = account_commands::begin_login(
                     app.clone(),
                     &app.state::<Accounts>(),
                     args.provider,
@@ -144,8 +202,12 @@ async fn act(app: &AppHandle, name: &str, body: &str) -> Option<Response> {
                     args.method,
                     false,
                 )
-                .await,
-            ),
+                .await;
+                if let Ok(opened) = &opened {
+                    remember_remote_login(&provider, opened);
+                }
+                outcome(opened)
+            }
             Err(response) => response,
         },
         "complete_account_login" => match body.args::<CompleteArgs>() {
@@ -235,6 +297,7 @@ async fn respond<R: tauri::Runtime>(app: &AppHandle<R>, request: AppRequest) -> 
         "list_accounts" => json(app.state::<Accounts>().entries()),
         "list_services" => json(Ok(app.state::<Accounts>().service_list())),
         "list_removed_logins" => json(app.state::<Accounts>().removed_logins()),
+        "pending_logins" => json(Ok(pending_logins(app).await)),
         "login_results" => json(Ok(login_results()
             .lock()
             .map(|results| results.iter().cloned().collect::<Vec<_>>())

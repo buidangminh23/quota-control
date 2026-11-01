@@ -414,6 +414,11 @@ export interface AccountLogin {
   userCode?: string;
 }
 
+/** A sign-in started from a browser away from the app that still waits for its callback. */
+export interface PendingLogin extends AccountLogin {
+  provider: string;
+}
+
 /** How a browser sign-in ended. The core finishes it on its own and reports it through `account-login`. */
 export interface AccountLoginResult {
   flowId: string;

@@ -487,6 +487,17 @@ async function beginLogin(provider: string, method: LoginMethod, begin: () => Pr
   }
 }
 
+/** Pick up a sign-in this browser started before the page was reloaded. */
+async function resumePendingLogin(): Promise<void> {
+  const list = backend().listPendingLogins;
+  if (!list) return;
+  const pending = await list.call(backend()).catch(() => []);
+  const latest = pending.at(-1);
+  if (!latest || get().accountLogin) return;
+  const userCode = latest.userCode ? { userCode: latest.userCode } : {};
+  set({ accountLogin: { phase: "waiting", provider: latest.provider, method: "google", flowId: latest.flowId, browser: latest.browser, ...userCode } });
+}
+
 /** Show the waiting login's sign-in page again, in the same browser. */
 export async function reopenAccountLogin(): Promise<void> {
   const current = get().accountLogin;
@@ -681,6 +692,7 @@ async function boot(): Promise<Array<() => void>> {
   void reloadChats();
   void reloadLedgerInfo();
   void reloadExchangeRate();
+  void resumePendingLogin();
   return [
     api.onDocumentsChanged?.(() => { void reloadSyncedDocuments(); }) ?? (() => {}),
     api.onUpdateStatus?.((next) => set({ update: next })) ?? (() => {}),

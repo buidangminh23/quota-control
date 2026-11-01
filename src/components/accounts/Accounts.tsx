@@ -251,6 +251,8 @@ interface AddOption {
   kind: string;
   quickLabel: string;
   quick: () => void;
+  /** Picking it starts the sign-in at once, because there is nothing else to choose. */
+  direct?: boolean;
 }
 
 function AddAccount({ messages, language }: { messages: Messages; language: Language }) {
@@ -259,6 +261,7 @@ function AddAccount({ messages, language }: { messages: Messages; language: Lang
   const [query, setQuery] = useState("");
   const [choice, setChoice] = useState<string | null>(null);
   const addable = useMemo(() => services.filter(isAddable).sort((a, b) => a.name.localeCompare(b.name)), [services]);
+  const remote = backend().remote === true;
   if (login) return <LoginProgress messages={messages} />;
   const back = () => setChoice(null);
   const google = PROVIDERS.find((provider) => provider === choice);
@@ -285,6 +288,7 @@ function AddAccount({ messages, language }: { messages: Messages; language: Lang
         setChoice(provider);
         void startAccountLogin(provider);
       },
+      direct: remote,
     })),
     ...addable
       .filter((candidate) => matchesProvider(candidate.name, candidate.id, query))
@@ -322,7 +326,7 @@ function AddAccount({ messages, language }: { messages: Messages; language: Lang
         <ul className="uc-service-results" aria-label={messages.accounts.add}>
           {options.map((option) => (
             <li key={option.id} className="uc-service-result">
-              <button type="button" aria-label={option.name} className="uc-service-pick" onClick={() => setChoice(option.id)}>
+              <button type="button" aria-label={option.name} className="uc-service-pick" onClick={() => (option.direct ? option.quick() : setChoice(option.id))}>
                 <ProviderMark brand={option.id} size={14} />
                 <span className="uc-service-text">
                   <span className="uc-service-name uc-truncate" {...truncatedTooltipProps(option.name)}>

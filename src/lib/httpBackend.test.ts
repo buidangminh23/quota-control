@@ -68,4 +68,30 @@ describe("HttpBackend", () => {
     expect(JSON.parse(String(init.body))).toEqual({ flowId: "f1", address: "http://localhost:1455/auth/callback?code=x" });
     await expect(backend.beginCliLogin("codex")).rejects.toThrow("Đăng nhập CLI");
   });
+
+  it("opens the sign-in page in a tab reserved during the click, and closes it when starting fails", async () => {
+    const page = { opener: {} as unknown, location: { href: "" }, close: vi.fn() };
+    const open = vi.fn(() => page);
+    vi.stubGlobal("open", open);
+    respondWith({ flowId: "f3", authorizationUrl: "https://auth.example/claude", expiresInSeconds: 600, browser: "remote" });
+    const backend = new HttpBackend(base);
+    await backend.beginAccountLogin("claude", "vi");
+    expect(open).toHaveBeenCalledWith("", "_blank");
+    expect(page.opener).toBeNull();
+    expect(page.location.href).toBe("https://auth.example/claude");
+    respondWith({ error: "No sign-in" }, 422);
+    await expect(backend.beginAccountLogin("claude", "vi")).rejects.toThrow("No sign-in");
+    expect(page.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("picks up a sign-in still waiting after the page reloads and can reopen its page", async () => {
+    respondWith([{ flowId: "f2", provider: "claude", authorizationUrl: "https://auth.example/claude", expiresInSeconds: 600, browser: "remote" }]);
+    const open = vi.fn();
+    vi.stubGlobal("open", open);
+    const backend = new HttpBackend(base);
+    const pending = await backend.listPendingLogins();
+    expect(pending.map((login) => [login.flowId, login.provider])).toEqual([["f2", "claude"]]);
+    expect(await backend.reopenAccountLogin("f2")).toBe("remote");
+    expect(open).toHaveBeenCalledWith("https://auth.example/claude", "_blank", "noopener,noreferrer");
+  });
 });

@@ -1,5 +1,6 @@
 import type { Backend, DocumentName, Unsubscribe } from "./backend";
 import type {
+  PendingLogin,
   AccountLogin,
   AccountLoginResult,
   AccountProvider,
@@ -125,9 +126,19 @@ export class HttpBackend implements Backend {
   }
 
   async beginAccountLogin(provider: string, language: Language, method?: SignInMethod): Promise<AccountLogin> {
-    const login = await this.act<AccountLogin>("begin_account_login", { provider, language, method: method ?? null });
-    this.loginPages.set(login.flowId, login.authorizationUrl);
-    return login;
+    const page = window.open("", "_blank");
+    try {
+      const login = await this.act<AccountLogin>("begin_account_login", { provider, language, method: method ?? null });
+      this.loginPages.set(login.flowId, login.authorizationUrl);
+      if (page) {
+        page.opener = null;
+        page.location.href = login.authorizationUrl;
+      }
+      return login;
+    } catch (error) {
+      page?.close();
+      throw error;
+    }
   }
 
   beginCliLogin(_provider: AccountProvider): Promise<AccountLogin> {
@@ -139,6 +150,12 @@ export class HttpBackend implements Backend {
     if (!page) throw new Error("Phiên đăng nhập này đã hết. Bắt đầu lại.");
     window.open(page, "_blank", "noopener,noreferrer");
     return "remote";
+  }
+
+  async listPendingLogins(): Promise<PendingLogin[]> {
+    const pending = await this.call<PendingLogin[]>("pending_logins");
+    for (const login of pending) this.loginPages.set(login.flowId, login.authorizationUrl);
+    return pending;
   }
 
   async completeAccountLogin(flowId: string, address: string): Promise<void> {

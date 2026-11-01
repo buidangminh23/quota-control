@@ -971,6 +971,12 @@ pub async fn list_removed_logins(
 }
 
 impl Accounts {
+    /// Whether a browser sign-in is still waiting for its callback.
+    pub(crate) async fn login_waiting(&self, flow_id: &str) -> bool {
+        self.oauth.authorization_url(flow_id).await.is_some()
+            || self.sign_ins.authorization_url(flow_id).await.is_some()
+    }
+
     pub(crate) fn removed_logins(&self) -> Result<Vec<AccountEntry>, String> {
         let hidden = self.services.lock().hidden_logins(&self.cli.lock());
         Ok(hidden
@@ -1311,8 +1317,15 @@ mod remote_login_tests {
 
     #[test]
     fn a_pasted_callback_goes_back_to_the_flow_listener_on_this_computer() {
-        let target = callback_target(CODEX, " http://localhost:1455/auth/callback?code=abc&state=s ").unwrap();
-        assert_eq!(target.as_str(), "http://127.0.0.1:1455/auth/callback?code=abc&state=s");
+        let target = callback_target(
+            CODEX,
+            " http://localhost:1455/auth/callback?code=abc&state=s ",
+        )
+        .unwrap();
+        assert_eq!(
+            target.as_str(),
+            "http://127.0.0.1:1455/auth/callback?code=abc&state=s"
+        );
     }
 
     #[test]
@@ -1324,11 +1337,18 @@ mod remote_login_tests {
         ] {
             assert!(callback_target(CODEX, pasted).is_err(), "{pasted}");
         }
-        let target = callback_target(CODEX, "http://evil.example:9999/auth/callback?code=abc").unwrap();
+        let target =
+            callback_target(CODEX, "http://evil.example:9999/auth/callback?code=abc").unwrap();
         assert_eq!(target.host_str(), Some("127.0.0.1"));
         assert_eq!(target.port(), Some(1455));
         let remote = "https://x.example/authorize?redirect_uri=https%3A%2F%2Fx.example%2Fcb";
         assert!(callback_target(remote, "https://x.example/cb?code=1").is_err());
-        assert!(callback_target("https://github.com/login/device", "http://localhost/cb?code=1").is_err());
+        assert!(
+            callback_target(
+                "https://github.com/login/device",
+                "http://localhost/cb?code=1"
+            )
+            .is_err()
+        );
     }
 }
