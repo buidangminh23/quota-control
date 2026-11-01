@@ -5,10 +5,13 @@ import "./index.css";
 import { App } from "./App";
 import { isTauri, setBackend } from "./lib/backend";
 import { TauriBackend } from "./lib/tauriBackend";
+import { HttpBackend, isWebPopup } from "./lib/httpBackend";
 
 async function bootstrap(): Promise<void> {
   if (isTauri()) {
     setBackend(new TauriBackend());
+  } else if (isWebPopup(window.location)) {
+    setBackend(new HttpBackend());
   } else {
     const { MockBackend } = await import("./lib/mockBackend");
     setBackend(new MockBackend());

@@ -2,7 +2,9 @@
 //! `LocalUsageServer.swift`). When the port is taken the API is simply off for the session. At most
 //! 16 requests are served at once; beyond that a connection gets `503 {"error":"server_busy"}`.
 
+use std::future::Future;
 use std::net::Ipv4Addr;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,7 +12,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 
-use crate::router::{Response, respond};
+use crate::router::{AppRequest, Response, app_request, respond};
 use crate::state::ApiState;
 
 pub const PORT: u16 = 6736;
@@ -24,8 +26,18 @@ pub async fn bind() -> std::io::Result<TcpListener> {
     TcpListener::bind((Ipv4Addr::LOCALHOST, PORT)).await
 }
 
+pub type AppHandler =
+    Arc<dyn Fn(AppRequest) -> Pin<Box<dyn Future<Output = Option<Response>> + Send>> + Send + Sync>;
+
 /// Answer requests on `listener` forever; `state` is captured once per request.
 pub async fn serve<F>(listener: TcpListener, state: F)
+where
+    F: Fn() -> ApiState + Send + Sync + 'static,
+{
+    serve_with(listener, state, None).await;
+}
+
+pub async fn serve_with<F>(listener: TcpListener, state: F, app: Option<AppHandler>)
 where
     F: Fn() -> ApiState + Send + Sync + 'static,
 {
@@ -45,6 +57,7 @@ where
             continue;
         };
         let state = state.clone();
+        let app = app.clone();
         tokio::spawn(async move {
             let _permit = permit;
             let Ok(Some(head)) = tokio::time::timeout(HEAD_TIMEOUT, read_head(&mut stream)).await
@@ -53,7 +66,13 @@ where
             };
             let (method, path) = parse_request_line(&head);
             tracing::debug!(target: "local_api", "{method} {path}");
-            send(&mut stream, &respond(&method, &path, &state())).await;
+            let response = match (app_request(&method, &path), app) {
+                (Some(request), Some(app)) => app(request)
+                    .await
+                    .unwrap_or_else(|| Response::error(404, "not_found")),
+                _ => respond(&method, &path, &state()),
+            };
+            send(&mut stream, &response).await;
         });
     }
 }
@@ -90,8 +109,10 @@ pub(crate) fn parse_request_line(head: &str) -> (String, String) {
 async fn send(stream: &mut TcpStream, response: &Response) {
     let reason = match response.status {
         204 => "No Content",
+        400 => "Bad Request",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        500 => "Internal Server Error",
         503 => "Service Unavailable",
         _ => "OK",
     };
@@ -104,7 +125,11 @@ async fn send(stream: &mut TcpStream, response: &Response) {
         Some(body) => {
             bytes.extend_from_slice(
                 format!(
-                    "Content-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                    "Content-Type: {}\r\nContent-Length: {}\r\n\r\n",
+                    response
+                        .content_type
+                        .as_deref()
+                        .unwrap_or("application/json"),
                     body.len()
                 )
                 .as_bytes(),
@@ -162,6 +187,49 @@ mod tests {
         let mut reply = Vec::new();
         stream.read_to_end(&mut reply).await.unwrap();
         String::from_utf8(reply).unwrap()
+    }
+
+    #[tokio::test]
+    async fn app_routes_reach_the_handler_and_the_rest_reach_the_router() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let handler: AppHandler = Arc::new(|request: AppRequest| {
+            Box::pin(async move {
+                match request {
+                    AppRequest::Command { name, query } if name == "echo" => {
+                        Some(Response::ok(query.unwrap_or_default().into_bytes()))
+                    }
+                    AppRequest::Asset(path) if path == "index.html" => Some(Response::file(
+                        b"<html></html>".to_vec(),
+                        "text/html".into(),
+                    )),
+                    _ => None,
+                }
+            })
+        });
+        tokio::spawn(serve_with(listener, empty_state, Some(handler)));
+        let echo = exchange(
+            address,
+            b"GET /v1/app/echo?q=%7B%7D HTTP/1.1\r\nHost: x\r\n\r\n",
+        )
+        .await;
+        assert!(echo.starts_with("HTTP/1.1 200 OK\r\n"), "{echo}");
+        assert!(echo.ends_with("\r\n\r\n{}"), "{echo}");
+        let page = exchange(address, b"GET /web/ HTTP/1.1\r\nHost: x\r\n\r\n").await;
+        assert!(page.contains("Content-Type: text/html\r\n"), "{page}");
+        assert!(page.ends_with("<html></html>"), "{page}");
+        let missing = exchange(address, b"GET /v1/app/nope HTTP/1.1\r\nHost: x\r\n\r\n").await;
+        assert!(
+            missing.starts_with("HTTP/1.1 404 Not Found\r\n"),
+            "{missing}"
+        );
+        let limits = exchange(address, b"GET /v1/limits HTTP/1.1\r\nHost: x\r\n\r\n").await;
+        assert!(limits.starts_with("HTTP/1.1 200 OK\r\n"), "{limits}");
+        let without = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let plain = without.local_addr().unwrap();
+        tokio::spawn(serve(without, empty_state));
+        let none = exchange(plain, b"GET /v1/app/echo HTTP/1.1\r\nHost: x\r\n\r\n").await;
+        assert!(none.starts_with("HTTP/1.1 404 Not Found\r\n"), "{none}");
     }
 
     #[test]

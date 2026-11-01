@@ -1,5 +1,6 @@
 mod account_commands;
 mod activity_refresh;
+mod app_api;
 mod browser;
 mod chat_commands;
 mod chat_store;
@@ -310,9 +311,12 @@ pub fn run() -> anyhow::Result<()> {
                 match uc_api::server::bind().await {
                     Ok(listener) => {
                         tracing::info!(target: "local_api", "listening on 127.0.0.1:{}", uc_api::server::PORT);
-                        uc_api::server::serve(listener, move || {
-                            api_app.state::<BackendService>().api_state()
-                        })
+                        let handler = app_api::handler(api_app.clone());
+                        uc_api::server::serve_with(
+                            listener,
+                            move || api_app.state::<BackendService>().api_state(),
+                            Some(handler),
+                        )
                         .await;
                     }
                     Err(error) => tracing::info!(target: "local_api", "disabled: {error}"),

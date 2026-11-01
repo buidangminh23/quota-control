@@ -6,9 +6,10 @@ use std::collections::BTreeMap;
 
 use chrono::Duration;
 use serde::Serialize;
+use uc_core::model::snapshot::QuotaReset;
 use uc_core::{
-    LimitResourceDescriptor, LimitResourceKind, LimitResourceSource, MetricLine, ProgressFormat,
-    ProgressLine, ProviderSnapshot, WidgetDescriptor,
+    LimitResourceDescriptor, LimitResourceKind, LimitResourceSource, MetricLine, PlanTerm,
+    ProgressFormat, ProgressLine, ProviderSnapshot, WidgetDescriptor,
 };
 
 use crate::state::ApiState;
@@ -67,6 +68,8 @@ struct WireError {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WireProvider {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account: Option<String>,
     display_name: String,
     expires_at: String,
     fetched_at: String,
@@ -74,6 +77,10 @@ struct WireProvider {
     plan: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     plan_checked_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plan_term: Option<PlanTerm>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    quota_reset: Option<QuotaReset>,
     resources: BTreeMap<String, WireResource>,
     stale: bool,
 }
@@ -102,11 +109,14 @@ impl WireProvider {
             }
         }
         Self {
+            account: snapshot.account.clone(),
             display_name: snapshot.display_name.clone(),
             expires_at: iso(expiry),
             fetched_at: iso(snapshot.refreshed_at),
             plan: snapshot.plan.clone(),
             plan_checked_at: snapshot.plan_checked_at.map(iso),
+            plan_term: snapshot.plan_term.clone(),
+            quota_reset: snapshot.quota_reset.clone(),
             resources,
             stale: snapshot.error_category.is_some()
                 || state.errors.contains_key(&snapshot.provider_id)
@@ -354,6 +364,25 @@ mod tests {
         assert_eq!(provider["plan"], "Free");
         assert_eq!(provider["stale"], true);
         assert_eq!(provider["resources"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn account_and_plan_term_travel_with_the_card_only_when_known() {
+        let mut snapshot = codex_snapshot();
+        let state_without = state(snapshot.clone(), codex_descriptors());
+        let bare = &envelope(&["codex"], &state_without)["providers"]["codex"];
+        assert!(bare.get("account").is_none());
+        assert!(bare.get("planTerm").is_none());
+        snapshot.account = Some("owner@example.com".into());
+        snapshot.plan_term = Some(PlanTerm::Stated {
+            ends_at: fetched_at() + Duration::days(20),
+            checked_at: Some(fetched_at()),
+        });
+        let state = state(snapshot, codex_descriptors());
+        let provider = &envelope(&["codex"], &state)["providers"]["codex"];
+        assert_eq!(provider["account"], "owner@example.com");
+        assert_eq!(provider["planTerm"]["basis"], "stated");
+        assert!(provider["planTerm"]["endsAt"].as_str().is_some());
     }
 
     #[test]

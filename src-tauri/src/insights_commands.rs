@@ -130,16 +130,35 @@ impl InsightsService {
     }
 }
 
+impl InsightsService {
+    pub(crate) async fn quality(&self, query: QualityQuery) -> Result<QualitySummary, String> {
+        let store = self.quality.clone();
+        tauri::async_runtime::spawn_blocking(move || store.summary(&query))
+            .await
+            .map_err(|_| "Model quality is unavailable".to_string())?
+            .map_err(|_| "Could not read model quality. Check the date range.".to_string())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn at(root: &std::path::Path) -> Self {
+        Self {
+            quality: Arc::new(QualityStore::open(root.join("model-quality.json"))),
+            feeds: Arc::new(PublicFeeds::new(root.join("feeds"))),
+            scan_now: Arc::new(tokio::sync::Notify::new()),
+        }
+    }
+
+    pub(crate) async fn feed(&self, name: FeedName) -> FeedSnapshot {
+        self.feeds.snapshot(name).await
+    }
+}
+
 #[tauri::command]
 pub async fn model_quality(
     service: State<'_, InsightsService>,
     query: QualityQuery,
 ) -> Result<QualitySummary, String> {
-    let store = service.quality.clone();
-    tauri::async_runtime::spawn_blocking(move || store.summary(&query))
-        .await
-        .map_err(|_| "Model quality is unavailable".to_string())?
-        .map_err(|_| "Could not read model quality. Check the date range.".to_string())
+    service.quality(query).await
 }
 
 #[tauri::command]
@@ -152,7 +171,7 @@ pub async fn public_feed(
     service: State<'_, InsightsService>,
     name: FeedName,
 ) -> Result<FeedSnapshot, String> {
-    Ok(service.feeds.snapshot(name).await)
+    Ok(service.feed(name).await)
 }
 
 #[tauri::command]

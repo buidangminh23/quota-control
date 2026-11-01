@@ -19,5 +19,5 @@ pub use assembly::{
     select_providers, settings_list, starts_hidden,
 };
 pub use limits::SCHEMA;
-pub use router::{Response, respond};
+pub use router::{AppRequest, Response, app_request, respond};
 pub use state::ApiState;

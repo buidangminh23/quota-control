@@ -8,20 +8,31 @@ use crate::{limits, usage};
 pub struct Response {
     pub status: u16,
     pub body: Option<Vec<u8>>,
+    pub content_type: Option<String>,
 }
 
 impl Response {
-    fn ok(body: Vec<u8>) -> Self {
+    pub fn ok(body: Vec<u8>) -> Self {
         Self {
             status: 200,
             body: Some(body),
+            content_type: None,
         }
     }
 
-    fn error(status: u16, code: &str) -> Self {
+    pub fn file(body: Vec<u8>, content_type: String) -> Self {
+        Self {
+            status: 200,
+            body: Some(body),
+            content_type: Some(content_type),
+        }
+    }
+
+    pub fn error(status: u16, code: &str) -> Self {
         Self {
             status,
             body: Some(format!(r#"{{"error":"{code}"}}"#).into_bytes()),
+            content_type: None,
         }
     }
 
@@ -30,11 +41,73 @@ impl Response {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AppRequest {
+    Command { name: String, query: Option<String> },
+    Asset(String),
+}
+
+pub fn app_request(method: &str, path: &str) -> Option<AppRequest> {
+    if method != "GET" {
+        return None;
+    }
+    let (route, query) = path.split_once('?').unwrap_or((path, ""));
+    let segments: Vec<&str> = route
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    match segments.as_slice() {
+        ["web", rest @ ..] => {
+            if rest.iter().any(|part| *part == ".." || part.contains('\\')) {
+                return None;
+            }
+            Some(AppRequest::Asset(if rest.is_empty() {
+                "index.html".to_string()
+            } else {
+                rest.join("/")
+            }))
+        }
+        ["v1", "app", command] => Some(AppRequest::Command {
+            name: (*command).to_string(),
+            query: query
+                .split('&')
+                .find_map(|pair| pair.strip_prefix("q="))
+                .and_then(percent_decode),
+        }),
+        _ => None,
+    }
+}
+
+fn percent_decode(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'%' => {
+                let hex = std::str::from_utf8(bytes.get(index + 1..index + 3)?).ok()?;
+                out.push(u8::from_str_radix(hex, 16).ok()?);
+                index += 3;
+            }
+            b'+' => {
+                out.push(b' ');
+                index += 1;
+            }
+            byte => {
+                out.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
 pub fn respond(method: &str, path: &str, state: &ApiState) -> Response {
     if method == "OPTIONS" {
         return Response {
             status: 204,
             body: None,
+            content_type: None,
         };
     }
     let path = path.split('?').next().unwrap_or_default();
@@ -172,6 +245,45 @@ mod tests {
     }
 
     #[test]
+    fn app_requests_decode_the_command_and_its_query() {
+        let command = |name: &str, query: Option<&str>| {
+            Some(AppRequest::Command {
+                name: name.into(),
+                query: query.map(String::from),
+            })
+        };
+        assert_eq!(
+            app_request(
+                "GET",
+                "/v1/app/public_feed?q=%7B%22name%22%3A%22claudeResets%22%7D"
+            ),
+            command("public_feed", Some(r#"{"name":"claudeResets"}"#))
+        );
+        assert_eq!(
+            app_request("GET", "/v1/app/prices"),
+            command("prices", None)
+        );
+        assert_eq!(
+            app_request("GET", "/v1/app/x?q=%E1%BA%A1%2"),
+            command("x", None)
+        );
+        assert_eq!(app_request("POST", "/v1/app/prices"), None);
+        assert_eq!(app_request("GET", "/v1/app"), None);
+        assert_eq!(app_request("GET", "/v1/app/a/b"), None);
+        assert_eq!(app_request("GET", "/v1/limits"), None);
+        assert_eq!(
+            app_request("GET", "/web"),
+            Some(AppRequest::Asset("index.html".into()))
+        );
+        assert_eq!(
+            app_request("GET", "/web/assets/index-1.js?v=2"),
+            Some(AppRequest::Asset("assets/index-1.js".into()))
+        );
+        assert_eq!(app_request("GET", "/web/../secret"), None);
+        assert_eq!(app_request("GET", r"/web/a\b"), None);
+    }
+
+    #[test]
     fn methods_routes_and_preflight_follow_the_contract() {
         let state = state();
         assert_eq!(respond("POST", "/v1/limits", &state).status, 405);
@@ -182,6 +294,7 @@ mod tests {
         assert_eq!(respond("POST", "/v2/limits", &state).status, 404);
         assert_eq!(json(&respond("GET", "/", &state))["error"], "not_found");
         assert_eq!(respond("GET", "/v1/limits/codex/extra", &state).status, 404);
+        assert_eq!(respond("GET", "/v1/app/usage_summary", &state).status, 404);
         let preflight = respond("OPTIONS", "/anything", &state);
         assert_eq!((preflight.status, preflight.body), (204, None));
         assert_eq!(respond("GET", "//v1//limits", &state).status, 200);

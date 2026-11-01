@@ -77,7 +77,7 @@ impl Accounts {
         self.services.lock().store.clone()
     }
 
-    fn entries(&self) -> Result<Vec<AccountEntry>, String> {
+    pub(crate) fn entries(&self) -> Result<Vec<AccountEntry>, String> {
         let records = self.store.list().map_err(safe_error)?;
         let cli = self.services.lock().shown_logins(&self.cli.lock());
         let entries = uc_providers::visible_accounts(&records, &cli)
@@ -260,8 +260,14 @@ pub struct ServiceEntry {
 
 #[tauri::command]
 pub async fn list_services(accounts: State<'_, Accounts>) -> Result<Vec<ServiceEntry>, String> {
-    let cards = accounts.services.lock().clone();
-    Ok(service_entries(&cards))
+    Ok(accounts.service_list())
+}
+
+impl Accounts {
+    pub(crate) fn service_list(&self) -> Vec<ServiceEntry> {
+        let cards = self.services.lock().clone();
+        service_entries(&cards)
+    }
 }
 
 fn service_entries(cards: &uc_api::ServiceCards) -> Vec<ServiceEntry> {

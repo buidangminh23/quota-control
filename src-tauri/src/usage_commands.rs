@@ -67,49 +67,79 @@ impl UsageService {
     }
 }
 
+impl UsageService {
+    pub(crate) async fn summary(&self, query: UsageQuery) -> Result<Vec<UsageGroupRow>, String> {
+        let ledger = self.ledger.clone();
+        tauri::async_runtime::spawn_blocking(move || ledger.summary(&query))
+            .await
+            .map_err(|_| "Usage history is unavailable".to_string())?
+            .map_err(|_| "Could not query usage history. Check the date range.".to_string())
+    }
+
+    pub(crate) async fn ledger_info(&self) -> Result<UsageLedgerInfo, String> {
+        let ledger = self.ledger.clone();
+        tauri::async_runtime::spawn_blocking(move || ledger.info())
+            .await
+            .map_err(|_| "Usage history is unavailable".to_string())?
+            .map_err(|_| "Could not read usage history status".to_string())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn at(root: &std::path::Path) -> Self {
+        Self {
+            ledger: Arc::new(UsageLedger::open(root.join("ledger.sqlite3")).unwrap()),
+            rate: Arc::new(ExchangeRateStore::new(root.to_path_buf())),
+            contexts: Arc::new(Mutex::new(ContextWindows::new(
+                root.join("claude"),
+                root.join("codex"),
+            ))),
+        }
+    }
+
+    pub(crate) async fn rate(&self) -> Option<ExchangeRate> {
+        self.rate.get().await
+    }
+
+    pub(crate) async fn contexts(&self) -> Result<Vec<ContextWindowSession>, String> {
+        let contexts = self.contexts.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            contexts
+                .lock()
+                .map(|mut reader| reader.scan(chrono::Utc::now()))
+                .map_err(|_| "Session context is unavailable".to_string())
+        })
+        .await
+        .map_err(|_| "Session context is unavailable".to_string())?
+    }
+}
+
 #[tauri::command]
 pub async fn usage_summary(
     service: State<'_, UsageService>,
     query: UsageQuery,
 ) -> Result<Vec<UsageGroupRow>, String> {
-    let ledger = service.ledger.clone();
-    tauri::async_runtime::spawn_blocking(move || ledger.summary(&query))
-        .await
-        .map_err(|_| "Usage history is unavailable".to_string())?
-        .map_err(|_| "Could not query usage history. Check the date range.".to_string())
+    service.summary(query).await
 }
 
 #[tauri::command]
 pub async fn usage_ledger_info(
     service: State<'_, UsageService>,
 ) -> Result<UsageLedgerInfo, String> {
-    let ledger = service.ledger.clone();
-    tauri::async_runtime::spawn_blocking(move || ledger.info())
-        .await
-        .map_err(|_| "Usage history is unavailable".to_string())?
-        .map_err(|_| "Could not read usage history status".to_string())
+    service.ledger_info().await
 }
 
 #[tauri::command]
 pub async fn exchange_rate(
     service: State<'_, UsageService>,
 ) -> Result<Option<ExchangeRate>, String> {
-    Ok(service.rate.get().await)
+    Ok(service.rate().await)
 }
 
 #[tauri::command]
 pub async fn context_windows(
     service: State<'_, UsageService>,
 ) -> Result<Vec<ContextWindowSession>, String> {
-    let contexts = service.contexts.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        contexts
-            .lock()
-            .map(|mut reader| reader.scan(chrono::Utc::now()))
-            .map_err(|_| "Session context is unavailable".to_string())
-    })
-    .await
-    .map_err(|_| "Session context is unavailable".to_string())?
+    service.contexts().await
 }
 
 pub fn start(app: &AppHandle) {
