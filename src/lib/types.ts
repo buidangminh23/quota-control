@@ -403,7 +403,7 @@ export interface ServiceEntry {
 }
 
 /** Where a sign-in page opened: Google Chrome when it is installed, otherwise the default browser. */
-export type LoginBrowser = "chrome" | "default";
+export type LoginBrowser = "chrome" | "default" | "remote";
 
 export interface AccountLogin {
   flowId: string;

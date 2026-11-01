@@ -45,12 +45,27 @@ describe("HttpBackend", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("refuses actions that would change accounts or spend a reset", async () => {
-    const fetchMock = respondWith({});
+  it("sends actions as POST with the write header and reports the app's own error", async () => {
+    const fetchMock = respondWith({ error: "This account is not connected." }, 422);
+    await expect(new HttpBackend(base).redeemLimitReset("codex@a")).rejects.toThrow("This account is not connected.");
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [URL, RequestInit];
+    expect(String(url)).toBe("https://hub.example/quota/v1/app/redeem_limit_reset");
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>)["x-quota-control"]).toBe("write");
+    expect(JSON.parse(String(init.body))).toEqual({ providerId: "codex@a" });
+  });
+
+  it("opens a remote sign-in in the viewer's browser and finishes it with the pasted address", async () => {
+    const fetchMock = respondWith({ flowId: "f1", authorizationUrl: "https://auth.example/login", expiresInSeconds: 600, browser: "remote" });
+    const open = vi.fn();
+    vi.stubGlobal("open", open);
     const backend = new HttpBackend(base);
-    await expect(backend.redeemLimitReset("codex@a")).rejects.toThrow("Bản web chỉ để xem");
-    await expect(backend.removeAccount("codex@a")).rejects.toThrow("Bản web chỉ để xem");
-    await expect(backend.addApiKey("cursor", "key")).rejects.toThrow("Bản web chỉ để xem");
-    expect(fetchMock).not.toHaveBeenCalled();
+    await backend.beginAccountLogin("codex", "vi");
+    expect(await backend.reopenAccountLogin("f1")).toBe("remote");
+    expect(open).toHaveBeenCalledWith("https://auth.example/login", "_blank", "noopener,noreferrer");
+    await backend.completeAccountLogin("f1", "http://localhost:1455/auth/callback?code=x");
+    const [, init] = fetchMock.mock.calls[1] as unknown as [URL, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ flowId: "f1", address: "http://localhost:1455/auth/callback?code=x" });
+    await expect(backend.beginCliLogin("codex")).rejects.toThrow("Đăng nhập CLI");
   });
 });

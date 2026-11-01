@@ -499,6 +499,14 @@ export async function reopenAccountLogin(): Promise<void> {
   }
 }
 
+/** Finish a sign-in done in another browser by handing its landing address to the app. */
+export async function completeRemoteLogin(address: string): Promise<void> {
+  const current = get().accountLogin;
+  const complete = backend().completeAccountLogin;
+  if (current?.phase !== "waiting" || !complete) return;
+  await complete.call(backend(), current.flowId, address.trim());
+}
+
 export function cancelAccountLogin(): void {
   const current = get().accountLogin;
   loginAttempt += 1;

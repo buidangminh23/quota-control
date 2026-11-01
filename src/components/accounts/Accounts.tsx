@@ -15,7 +15,7 @@ import { backend } from "@/lib/backend";
 import type { AccountProvider, ConnectedAccount, ProviderRuntimeState } from "@/lib/types";
 import { brandName, headerNotice } from "@/model/providerText";
 import { useLanguage } from "@/state/hooks";
-import { cancelAccountLogin, loginBrandIn, reloadAccounts, reloadServices, reopenAccountLogin, showNotice, startAccountLogin, startCliLogin, useApp } from "@/state/store";
+import { cancelAccountLogin, completeRemoteLogin, loginBrandIn, reloadAccounts, reloadServices, reopenAccountLogin, showNotice, startAccountLogin, startCliLogin, useApp } from "@/state/store";
 import { Button } from "../ui/controls";
 import { confirmAction } from "../ui/dialog";
 import { CloseIcon, PlusIcon, Spinner } from "../ui/icons";
@@ -104,6 +104,7 @@ export function LoginProgress({ messages }: { messages: Messages }) {
   const cli = login.method === "cli" && (login.provider === "claude" || login.provider === "codex") ? CLI_PRODUCTS[login.provider] : null;
   const brand = cli ?? loginBrandIn(login.provider, services);
   const userCode = login.phase === "waiting" ? login.userCode : undefined;
+  const remote = login.phase === "waiting" && login.browser === "remote";
   return (
     <div className="uc-card uc-add-account">
       <div className="uc-login-flow" role="status">
@@ -116,16 +117,48 @@ export function LoginProgress({ messages }: { messages: Messages }) {
           <span>{login.phase !== "waiting" ? messages.accounts.starting : cli ? messages.accounts.waitingCli(cli) : messages.accounts.waiting(brand, login.browser)}</span>
         </p>
         {userCode ? <UserCode code={userCode} messages={messages} /> : null}
-        <p className="uc-settings-note is-flush">{messages.accounts.waitingNote}</p>
+        {remote && !userCode ? <RemoteAddress messages={messages} /> : <p className="uc-settings-note is-flush">{messages.accounts.waitingNote}</p>}
         <div className="uc-settings-actions is-split">
           <Button onClick={cancelAccountLogin} className="is-small">
             {messages.accounts.cancel}
           </Button>
           <Button onClick={() => void reopenAccountLogin()} disabled={login.phase !== "waiting"} className="is-small">
-            {messages.accounts.openSignInPage}
+            {remote ? messages.accounts.remoteOpen : messages.accounts.openSignInPage}
           </Button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function RemoteAddress({ messages }: { messages: Messages }) {
+  const [address, setAddress] = useState("");
+  const [busy, setBusy] = useState(false);
+  const finish = () => {
+    if (!address.trim() || busy) return;
+    setBusy(true);
+    completeRemoteLogin(address)
+      .then(() => setAddress(""))
+      .catch((error: unknown) => showNotice(error instanceof Error ? error.message : String(error), "notice"))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <div className="uc-remote-login">
+      <p className="uc-settings-note is-flush">{messages.accounts.remoteSteps}</p>
+      <input
+        className="uc-text-field"
+        type="url"
+        value={address}
+        placeholder="http://localhost:…/callback?code=…"
+        aria-label={messages.accounts.remoteAddress}
+        onChange={(event) => setAddress(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") finish();
+        }}
+      />
+      <Button onClick={finish} disabled={!address.trim() || busy} className="is-small">
+        {busy ? messages.accounts.remoteFinishing : messages.accounts.remoteFinish}
+      </Button>
     </div>
   );
 }
@@ -179,6 +212,7 @@ function RestoreRemovedLogin({ provider, messages, language }: { provider: Accou
 
 function GoogleSignIn({ provider, messages, language, onBack }: { provider: AccountProvider; messages: Messages; language: Language; onBack: () => void }) {
   const error = useApp((state) => state.accountLoginError);
+  const remote = backend().remote === true;
   return (
     <div className="uc-card uc-add-account">
       <div className="uc-login-head">
@@ -192,11 +226,15 @@ function GoogleSignIn({ provider, messages, language, onBack }: { provider: Acco
       <Button variant="prominent" onClick={() => void startAccountLogin(provider)} className="is-small is-wide">
         {messages.accounts.signInWithGoogle}
       </Button>
-      <p className="uc-settings-note is-flush">{messages.accounts.signInNote(brandName(provider))}</p>
-      <Button onClick={() => void startCliLogin(provider)} className="is-small is-wide">
-        {messages.accounts.signInWithCli(CLI_PRODUCTS[provider])}
-      </Button>
-      <p className="uc-settings-note is-flush">{messages.accounts.cliSignInNote(CLI_PRODUCTS[provider])}</p>
+      <p className="uc-settings-note is-flush">{remote ? messages.accounts.remoteSignInNote(brandName(provider)) : messages.accounts.signInNote(brandName(provider))}</p>
+      {remote ? null : (
+        <>
+          <Button onClick={() => void startCliLogin(provider)} className="is-small is-wide">
+            {messages.accounts.signInWithCli(CLI_PRODUCTS[provider])}
+          </Button>
+          <p className="uc-settings-note is-flush">{messages.accounts.cliSignInNote(CLI_PRODUCTS[provider])}</p>
+        </>
+      )}
       {error ? <p className="uc-settings-notice is-flush">{messages.accounts.loginFailed(brandName(error.provider), error.text)}</p> : null}
     </div>
   );

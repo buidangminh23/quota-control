@@ -313,6 +313,7 @@ export interface AccountsMessages {
   signInWithGoogle: string;
   signInWithGitHub: string;
   signInNote(brand: string): string;
+  remoteSignInNote(brand: string): string;
   /** Run the Claude Code or Codex CLI's own login command. */
   signInWithCli(product: string): string;
   cliSignInNote(product: string): string;
@@ -331,7 +332,12 @@ export interface AccountsMessages {
   userCodeNote: string;
   cliNote: string;
   starting: string;
-  waiting(brand: string, browser: "chrome" | "default"): string;
+  waiting(brand: string, browser: "chrome" | "default" | "remote"): string;
+  remoteSteps: string;
+  remoteOpen: string;
+  remoteAddress: string;
+  remoteFinish: string;
+  remoteFinishing: string;
   waitingNote: string;
   cancel: string;
   openSignInPage: string;

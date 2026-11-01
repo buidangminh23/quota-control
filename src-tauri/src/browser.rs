@@ -15,6 +15,7 @@ use crate::service::{safe_error, validate_url};
 pub enum LoginBrowser {
     Chrome,
     Default,
+    Remote,
 }
 
 pub fn open_login_page<R: tauri::Runtime>(

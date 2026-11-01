@@ -487,11 +487,30 @@ pub async fn begin_account_login(
     language: Option<String>,
     method: Option<String>,
 ) -> Result<LoginOpened, String> {
+    begin_login(app, &accounts, provider, language, method, true).await
+}
+
+pub(crate) async fn begin_login(
+    app: AppHandle,
+    accounts: &Accounts,
+    provider: String,
+    language: Option<String>,
+    method: Option<String>,
+    open_here: bool,
+) -> Result<LoginOpened, String> {
     let language = LoginLanguage::parse(language.as_deref().unwrap_or_default());
     let kind = match login_target(&provider)? {
         LoginTarget::Account(kind) => kind,
         LoginTarget::Service(known) => {
-            return begin_service_login(app, &accounts, known, method.as_deref(), language).await;
+            return begin_service_login(
+                app,
+                accounts,
+                known,
+                method.as_deref(),
+                language,
+                open_here,
+            )
+            .await;
         }
     };
     let start = accounts
@@ -499,7 +518,12 @@ pub async fn begin_account_login(
         .begin_login_in(kind, kind.cli().into(), language)
         .await
         .map_err(safe_error)?;
-    let browser = match open_login_page(&app, &start.authorization_url) {
+    let opened = if open_here {
+        open_login_page(&app, &start.authorization_url)
+    } else {
+        Ok(LoginBrowser::Remote)
+    };
+    let browser = match opened {
         Ok(browser) => browser,
         Err(error) => {
             let _ = accounts.oauth.cancel_login(&start.flow_id).await;
@@ -525,6 +549,7 @@ async fn begin_service_login(
     known: &'static dyn uc_services::Service,
     method: Option<&str>,
     language: LoginLanguage,
+    open_here: bool,
 ) -> Result<LoginOpened, String> {
     let method = Method::parse(method.unwrap_or("google")).ok_or("Unsupported sign-in")?;
     let started = accounts
@@ -537,7 +562,12 @@ async fn begin_service_login(
         started.flow_id.clone(),
         known.id(),
     ));
-    let browser = match open_login_page(&app, &started.authorization_url) {
+    let opened = if open_here {
+        open_login_page(&app, &started.authorization_url)
+    } else {
+        Ok(LoginBrowser::Remote)
+    };
+    let browser = match opened {
         Ok(browser) => browser,
         Err(error) => {
             accounts.sign_ins.cancel(&started.flow_id).await;
@@ -551,6 +581,77 @@ async fn begin_service_login(
         browser,
         user_code: started.user_code,
     })
+}
+
+pub(crate) fn callback_target(authorization_url: &str, pasted: &str) -> Result<url::Url, String> {
+    let authorization =
+        url::Url::parse(authorization_url).map_err(|_| INVALID_CALLBACK.to_string())?;
+    let redirect = authorization
+        .query_pairs()
+        .find(|(key, _)| key == "redirect_uri")
+        .map(|(_, value)| value.into_owned())
+        .ok_or("This sign-in does not take a pasted address.")?;
+    let mut target = url::Url::parse(&redirect).map_err(|_| INVALID_CALLBACK.to_string())?;
+    let local = matches!(target.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+    let pasted = url::Url::parse(pasted.trim()).map_err(|_| INVALID_CALLBACK.to_string())?;
+    if !local
+        || target.scheme() != "http"
+        || pasted.path() != target.path()
+        || pasted.query().is_none()
+    {
+        return Err(INVALID_CALLBACK.into());
+    }
+    target.set_query(pasted.query());
+    if target.host_str() == Some("localhost") {
+        target
+            .set_host(Some("127.0.0.1"))
+            .map_err(|_| INVALID_CALLBACK.to_string())?;
+    }
+    Ok(target)
+}
+
+const INVALID_CALLBACK: &str =
+    "Paste the whole address the browser showed after signing in, starting with http://localhost.";
+
+pub(crate) async fn complete_remote_login(
+    accounts: &Accounts,
+    flow_id: &str,
+    pasted: &str,
+) -> Result<(), String> {
+    let authorization = match accounts.oauth.authorization_url(flow_id).await {
+        Some(url) => url,
+        None => accounts
+            .sign_ins
+            .authorization_url(flow_id)
+            .await
+            .ok_or("This login is no longer active. Start again.")?,
+    };
+    let target = callback_target(&authorization, pasted)?;
+    tokio::time::timeout(std::time::Duration::from_secs(20), local_get(&target))
+        .await
+        .ok()
+        .flatten()
+        .ok_or_else(|| {
+            "The sign-in on the server did not accept the address. Start again.".to_string()
+        })
+}
+
+async fn local_get(target: &url::Url) -> Option<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let port = target.port_or_known_default()?;
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .ok()?;
+    let path = match target.query() {
+        Some(query) => format!("{}?{query}", target.path()),
+        None => target.path().to_string(),
+    };
+    let request =
+        format!("GET {path} HTTP/1.1\r\nHost: localhost:{port}\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes()).await.ok()?;
+    let mut reply = Vec::new();
+    stream.read_to_end(&mut reply).await.ok()?;
+    reply.starts_with(b"HTTP/1.1 2").then_some(())
 }
 
 /// How a sign-in that did not connect is reported.
@@ -866,11 +967,17 @@ pub async fn remove_account(
 pub async fn list_removed_logins(
     accounts: State<'_, Accounts>,
 ) -> Result<Vec<AccountEntry>, String> {
-    let hidden = accounts.services.lock().hidden_logins(&accounts.cli.lock());
-    Ok(hidden
-        .iter()
-        .map(|login| AccountEntry::from(VisibleAccount::Cli(login)))
-        .collect())
+    accounts.removed_logins()
+}
+
+impl Accounts {
+    pub(crate) fn removed_logins(&self) -> Result<Vec<AccountEntry>, String> {
+        let hidden = self.services.lock().hidden_logins(&self.cli.lock());
+        Ok(hidden
+            .iter()
+            .map(|login| AccountEntry::from(VisibleAccount::Cli(login)))
+            .collect())
+    }
 }
 
 /// Show again the removed CLI login of `provider` (`claude`, `codex`).
@@ -1193,5 +1300,35 @@ mod tests {
         assert_eq!(entry["credentialMode"], "cli");
         assert_eq!(entry["provider"], "codex");
         assert_eq!(entry["label"], "codex");
+    }
+}
+
+#[cfg(test)]
+mod remote_login_tests {
+    use super::callback_target;
+
+    const CODEX: &str = "https://auth.openai.com/oauth/authorize?client_id=x&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&state=s";
+
+    #[test]
+    fn a_pasted_callback_goes_back_to_the_flow_listener_on_this_computer() {
+        let target = callback_target(CODEX, " http://localhost:1455/auth/callback?code=abc&state=s ").unwrap();
+        assert_eq!(target.as_str(), "http://127.0.0.1:1455/auth/callback?code=abc&state=s");
+    }
+
+    #[test]
+    fn only_the_flow_own_listener_is_reachable() {
+        for pasted in [
+            "http://localhost:1455/other?code=abc",
+            "http://localhost:1455/auth/callback",
+            "not a url",
+        ] {
+            assert!(callback_target(CODEX, pasted).is_err(), "{pasted}");
+        }
+        let target = callback_target(CODEX, "http://evil.example:9999/auth/callback?code=abc").unwrap();
+        assert_eq!(target.host_str(), Some("127.0.0.1"));
+        assert_eq!(target.port(), Some(1455));
+        let remote = "https://x.example/authorize?redirect_uri=https%3A%2F%2Fx.example%2Fcb";
+        assert!(callback_target(remote, "https://x.example/cb?code=1").is_err());
+        assert!(callback_target("https://github.com/login/device", "http://localhost/cb?code=1").is_err());
     }
 }

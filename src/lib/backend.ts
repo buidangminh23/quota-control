@@ -18,6 +18,8 @@ export type Unsubscribe = () => void;
 export type DocumentName = "settings" | "layout";
 
 export interface Backend {
+  /** True when the popup runs in a browser away from the app, so sign-in pages open on the viewer's side. */
+  readonly remote?: boolean;
   usageSummary(query: UsageQuery): Promise<UsageGroupRow[]>;
   usageLedgerInfo(): Promise<UsageLedgerInfo>;
   onUsageLedgerChanged(listener: (info: UsageLedgerInfo) => void): Unsubscribe;
@@ -41,6 +43,8 @@ export interface Backend {
   beginCliLogin(provider: AccountProvider): Promise<AccountLogin>;
   /** Show the sign-in page of a login that is still waiting. */
   reopenAccountLogin(flowId: string): Promise<LoginBrowser>;
+  /** Finish a `remote` sign-in with the address the browser landed on after signing in. */
+  completeAccountLogin?(flowId: string, address: string): Promise<void>;
   cancelAccountLogin(flowId: string): Promise<void>;
   onAccountLogin(listener: (result: AccountLoginResult) => void): Unsubscribe;
   /** Remove an account card. A Claude Code or Codex CLI login is only hidden; the CLI stays signed in. */

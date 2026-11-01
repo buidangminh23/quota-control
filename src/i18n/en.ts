@@ -426,6 +426,8 @@ export const en: Messages = {
     userCodeLabel: "Verification code",
     copyCode: "Copy Code",
     userCodeNote: "Enter this code on the page that opened, then allow access.",
+    remoteSignInNote: (brand) =>
+      `The ${brand} sign-in page opens in this browser. When you finish, paste the address the browser shows into the box Quota Control offers.`,
     signInNote: (brand) =>
       `Opens the ${brand} sign-in page in Google Chrome. Choose Continue with Google, then allow access. The account connects by itself, with no code to copy.`,
     signInWithCli: (product) => `Sign In to ${product}`,
@@ -435,7 +437,17 @@ export const en: Messages = {
     cliNote: "Claude Code and the Codex CLI signed in on this computer appear here automatically.",
     starting: "Opening the sign-in page…",
     waiting: (brand, browser) =>
-      browser === "chrome" ? `Waiting for you to sign in to ${brand} in Google Chrome…` : `Waiting for you to sign in to ${brand} in the browser…`,
+      browser === "chrome"
+        ? `Waiting for you to sign in to ${brand} in Google Chrome…`
+        : browser === "remote"
+          ? `Sign in to ${brand} in this browser`
+          : `Waiting for you to sign in to ${brand} in the browser…`,
+    remoteSteps:
+      "Choose Open Sign-In Page and sign in as usual. The browser then goes to an address starting with http://localhost and says the page cannot open. Copy that whole address, paste it below and choose Finish.",
+    remoteOpen: "Open Sign-In Page",
+    remoteAddress: "The address the browser shows after signing in",
+    remoteFinish: "Finish",
+    remoteFinishing: "Finishing…",
     waitingNote: "When you finish, Quota Control comes back with the new account.",
     cancel: "Cancel",
     openSignInPage: "Open Sign-In Page Again",

@@ -329,6 +329,16 @@
   gap: 6px;
 }
 
+.uc-remote-login {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.uc-remote-login .uc-button {
+  align-self: flex-end;
+}
+
 .uc-user-code-label {
   font-size: var(--uc-caption-size);
   color: var(--uc-secondary);

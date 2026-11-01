@@ -23,7 +23,9 @@ import type {
 import type { PublicFeedName, PublicFeedSnapshot, QualityInfo, QualityQuery, QualitySummary } from "./insightsTypes";
 import type { Language } from "@/i18n/language";
 
-const READ_ONLY = "Bản web chỉ để xem. Thao tác này làm trong app Quota Control.";
+const SERVER_ONLY = "Đăng nhập CLI chạy lệnh trên máy cài Quota Control, nên làm trong app trên máy đó.";
+const LOGIN_POLL_MS = 3_000;
+const ACTION_HEADER = { "x-quota-control": "write", "content-type": "application/json" };
 const ENGINE_POLL_MS = 15_000;
 const LEDGER_POLL_MS = 60_000;
 const FEED_POLL_MS = 5 * 60_000;
@@ -51,6 +53,8 @@ export function isWebPopup(location: Location): boolean {
 
 export class HttpBackend implements Backend {
   private readonly base: URL;
+  private readonly loginPages = new Map<string, string>();
+  readonly remote = true;
 
   constructor(base = new URL("../v1/app/", document.baseURI)) {
     this.base = base;
@@ -64,6 +68,18 @@ export class HttpBackend implements Backend {
     return (await response.json()) as T;
   }
 
+  private async act<T>(command: string, args: unknown = {}): Promise<T> {
+    const response = await fetch(new URL(command, this.base), {
+      method: "POST",
+      cache: "no-store",
+      headers: ACTION_HEADER,
+      body: JSON.stringify(args),
+    });
+    const body = (await response.json().catch(() => null)) as { error?: string } | null;
+    if (!response.ok) throw new Error(body?.error ?? `Quota Control trả lỗi ${response.status}`);
+    return body as T;
+  }
+
   private poll<T>(interval: number, read: () => Promise<T>, listener: (value: T) => void): Unsubscribe {
     const timer = window.setInterval(() => {
       read().then(listener, () => undefined);
@@ -71,9 +87,6 @@ export class HttpBackend implements Backend {
     return () => window.clearInterval(timer);
   }
 
-  private refused<T>(): Promise<T> {
-    return Promise.reject(new Error(READ_ONLY));
-  }
 
   usageSummary(query: UsageQuery): Promise<UsageGroupRow[]> {
     return this.call("usage_summary", { query });
@@ -111,54 +124,81 @@ export class HttpBackend implements Backend {
     return this.call("list_accounts");
   }
 
-  beginAccountLogin(_provider: string, _language: Language, _method?: SignInMethod): Promise<AccountLogin> {
-    return this.refused();
+  async beginAccountLogin(provider: string, language: Language, method?: SignInMethod): Promise<AccountLogin> {
+    const login = await this.act<AccountLogin>("begin_account_login", { provider, language, method: method ?? null });
+    this.loginPages.set(login.flowId, login.authorizationUrl);
+    return login;
   }
 
   beginCliLogin(_provider: AccountProvider): Promise<AccountLogin> {
-    return this.refused();
+    return Promise.reject(new Error(SERVER_ONLY));
   }
 
-  reopenAccountLogin(_flowId: string): Promise<LoginBrowser> {
-    return this.refused();
+  async reopenAccountLogin(flowId: string): Promise<LoginBrowser> {
+    const page = this.loginPages.get(flowId);
+    if (!page) throw new Error("Phiên đăng nhập này đã hết. Bắt đầu lại.");
+    window.open(page, "_blank", "noopener,noreferrer");
+    return "remote";
   }
 
-  async cancelAccountLogin(_flowId: string): Promise<void> {}
-
-  onAccountLogin(_listener: (result: AccountLoginResult) => void): Unsubscribe {
-    return () => undefined;
+  async completeAccountLogin(flowId: string, address: string): Promise<void> {
+    await this.act("complete_account_login", { flowId, address });
   }
 
-  removeAccount(_accountId: string): Promise<void> {
-    return this.refused();
+  async cancelAccountLogin(flowId: string): Promise<void> {
+    this.loginPages.delete(flowId);
+    await this.act("cancel_account_login", { flowId });
   }
 
-  async listRemovedLogins(): Promise<ConnectedAccount[]> {
-    return [];
+  onAccountLogin(listener: (result: AccountLoginResult) => void): Unsubscribe {
+    const seen = new Set<string>();
+    let primed = false;
+    const check = () => {
+      this.call<AccountLoginResult[]>("login_results").then((results) => {
+        for (const result of results) {
+          const key = `${result.flowId}:${result.status}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          if (primed) listener(result);
+        }
+        primed = true;
+      }, () => undefined);
+    };
+    check();
+    const timer = window.setInterval(check, LOGIN_POLL_MS);
+    return () => window.clearInterval(timer);
   }
 
-  restoreRemovedLogins(_provider: AccountProvider): Promise<void> {
-    return this.refused();
+  async removeAccount(accountId: string): Promise<void> {
+    await this.act("remove_account", { accountId });
+  }
+
+  listRemovedLogins(): Promise<ConnectedAccount[]> {
+    return this.call("list_removed_logins");
+  }
+
+  async restoreRemovedLogins(provider: AccountProvider): Promise<void> {
+    await this.act("restore_removed_logins", { provider });
   }
 
   listServices(): Promise<ServiceEntry[]> {
     return this.call("list_services");
   }
 
-  addApiKey(_serviceId: string, _key: string, _label?: string, _fields?: Record<string, string>): Promise<SavedKey> {
-    return this.refused();
+  addApiKey(serviceId: string, key: string, label?: string, fields?: Record<string, string>): Promise<SavedKey> {
+    return this.act("add_api_key", { serviceId, key, label: label ?? null, fields: fields ?? null });
   }
 
-  removeApiKey(_keyId: string): Promise<void> {
-    return this.refused();
+  async removeApiKey(keyId: string): Promise<void> {
+    await this.act("remove_api_key", { keyId });
   }
 
-  dismissDetectedCard(_cardId: string): Promise<void> {
-    return this.refused();
+  async dismissDetectedCard(cardId: string): Promise<void> {
+    await this.act("dismiss_detected_card", { cardId });
   }
 
-  restoreDismissedCards(_serviceId: string): Promise<void> {
-    return this.refused();
+  async restoreDismissedCards(serviceId: string): Promise<void> {
+    await this.act("restore_dismissed_cards", { serviceId });
   }
 
   async listChatSessions(): Promise<ChatSession[]> {
@@ -166,11 +206,11 @@ export class HttpBackend implements Backend {
   }
 
   createChatSession(_provider: AccountProvider, _label?: string): Promise<ChatSession> {
-    return this.refused();
+    return Promise.reject(new Error(SERVER_ONLY));
   }
 
   openChatSession(_sessionId: string): Promise<void> {
-    return this.refused();
+    return Promise.reject(new Error(SERVER_ONLY));
   }
 
   engineState(): Promise<EngineState> {
@@ -181,10 +221,12 @@ export class HttpBackend implements Backend {
     return this.poll(ENGINE_POLL_MS, () => this.engineState(), listener);
   }
 
-  async refresh(_providerId?: string): Promise<void> {}
+  async refresh(providerId?: string): Promise<void> {
+    await this.act("refresh", { providerId: providerId ?? null });
+  }
 
-  redeemLimitReset(_providerId: string): Promise<LimitResetResult> {
-    return this.refused();
+  redeemLimitReset(providerId: string): Promise<LimitResetResult> {
+    return this.act("redeem_limit_reset", { providerId });
   }
 
   async setEnabledProviders(_providerIds: string[]): Promise<void> {}

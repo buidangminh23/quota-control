@@ -464,6 +464,8 @@ export const vi: Messages = {
     userCodeLabel: "Mã xác nhận",
     copyCode: "Sao chép mã",
     userCodeNote: "Nhập mã này trên trang vừa mở rồi cho phép truy cập.",
+    remoteSignInNote: (brand) =>
+      `Trang đăng nhập ${brand} mở ngay trên trình duyệt này. Đăng nhập xong, dán địa chỉ trình duyệt hiện ra vào ô Quota Control đưa.`,
     signInNote: (brand) =>
       `Trang đăng nhập ${brand} mở trong Google Chrome. Chọn Continue with Google rồi cho phép truy cập. Tài khoản tự kết nối, không cần copy mã.`,
     signInWithCli: (product) => `Đăng nhập ${product}`,
@@ -473,7 +475,17 @@ export const vi: Messages = {
     cliNote: "Claude Code và Codex CLI đã đăng nhập trên máy này tự hiện ở đây, không cần thêm.",
     starting: "Đang mở trang đăng nhập…",
     waiting: (brand, browser) =>
-      browser === "chrome" ? `Đang chờ bạn đăng nhập ${brand} trong Google Chrome…` : `Đang chờ bạn đăng nhập ${brand} trong trình duyệt…`,
+      browser === "chrome"
+        ? `Đang chờ bạn đăng nhập ${brand} trong Google Chrome…`
+        : browser === "remote"
+          ? `Đăng nhập ${brand} ngay trên trình duyệt này`
+          : `Đang chờ bạn đăng nhập ${brand} trong trình duyệt…`,
+    remoteSteps:
+      "Bấm Mở trang đăng nhập và đăng nhập như bình thường. Xong, trình duyệt chuyển sang một địa chỉ bắt đầu bằng http://localhost và báo không mở được trang. Chép nguyên địa chỉ đó, dán vào ô dưới rồi bấm Hoàn tất.",
+    remoteOpen: "Mở trang đăng nhập",
+    remoteAddress: "Địa chỉ trình duyệt hiện sau khi đăng nhập",
+    remoteFinish: "Hoàn tất",
+    remoteFinishing: "Đang hoàn tất…",
     waitingNote: "Đăng nhập xong, Quota Control tự hiện lại với tài khoản mới.",
     cancel: "Hủy",
     openSignInPage: "Mở lại trang đăng nhập",

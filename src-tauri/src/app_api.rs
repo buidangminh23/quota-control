@@ -1,14 +1,16 @@
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Listener, Manager};
 use uc_api::{AppRequest, Response};
 use uc_logscan::ledger::UsageQuery;
 use uc_logscan::quality::QualityQuery;
 
-use crate::account_commands::Accounts;
+use crate::account_commands::{self, Accounts};
 use crate::insights_commands::InsightsService;
+use crate::limit_resets::{self, Redemptions};
 use crate::public_feeds::FeedName;
 use crate::service::BackendService;
 use crate::usage_commands::UsageService;
@@ -30,11 +32,179 @@ struct DocumentArgs {
     name: String,
 }
 
+const LOGIN_RESULTS_KEPT: usize = 20;
+
+fn login_results() -> &'static Mutex<VecDeque<serde_json::Value>> {
+    static RESULTS: OnceLock<Mutex<VecDeque<serde_json::Value>>> = OnceLock::new();
+    RESULTS.get_or_init(|| Mutex::new(VecDeque::new()))
+}
+
+fn remember_login(payload: &str) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
+        return;
+    };
+    if let Ok(mut results) = login_results().lock() {
+        if results.len() >= LOGIN_RESULTS_KEPT {
+            results.pop_front();
+        }
+        results.push_back(value);
+    }
+}
+
 pub fn handler(app: AppHandle) -> uc_api::server::AppHandler {
+    app.listen_any("account-login", |event| remember_login(event.payload()));
     Arc::new(move |request| {
         let app = app.clone();
-        Box::pin(async move { respond(&app, request).await })
+        Box::pin(async move {
+            match request {
+                AppRequest::Action { name, body } => act(&app, &name, &body).await,
+                request => respond(&app, request).await,
+            }
+        })
     })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LoginArgs {
+    provider: String,
+    language: Option<String>,
+    method: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CompleteArgs {
+    flow_id: String,
+    address: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiKeyArgs {
+    service_id: String,
+    key: String,
+    label: Option<String>,
+    fields: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+#[derive(Deserialize)]
+struct Id {
+    #[serde(
+        alias = "flowId",
+        alias = "accountId",
+        alias = "keyId",
+        alias = "cardId",
+        alias = "serviceId",
+        alias = "providerId",
+        alias = "provider"
+    )]
+    id: Option<String>,
+}
+
+fn refused(message: String) -> Response {
+    Response {
+        status: 422,
+        body: Some(
+            serde_json::json!({ "error": message })
+                .to_string()
+                .into_bytes(),
+        ),
+        content_type: None,
+    }
+}
+
+fn outcome<T: serde::Serialize>(value: Result<T, String>) -> Response {
+    match value {
+        Ok(value) => json(Ok(value)),
+        Err(message) => refused(message),
+    }
+}
+
+async fn act(app: &AppHandle, name: &str, body: &str) -> Option<Response> {
+    let body = Query(Some(if body.trim().is_empty() {
+        "{}".to_string()
+    } else {
+        body.to_string()
+    }));
+    let id = || {
+        body.args::<Id>()
+            .ok()
+            .and_then(|args| args.id)
+            .unwrap_or_default()
+    };
+    let response = match name {
+        "begin_account_login" => match body.args::<LoginArgs>() {
+            Ok(args) => outcome(
+                account_commands::begin_login(
+                    app.clone(),
+                    &app.state::<Accounts>(),
+                    args.provider,
+                    args.language,
+                    args.method,
+                    false,
+                )
+                .await,
+            ),
+            Err(response) => response,
+        },
+        "complete_account_login" => match body.args::<CompleteArgs>() {
+            Ok(args) => outcome(
+                account_commands::complete_remote_login(
+                    &app.state::<Accounts>(),
+                    &args.flow_id,
+                    &args.address,
+                )
+                .await,
+            ),
+            Err(response) => response,
+        },
+        "cancel_account_login" => {
+            outcome(account_commands::cancel_account_login(app.state(), id()).await)
+        }
+        "remove_account" => outcome(
+            account_commands::remove_account(app.clone(), app.state(), app.state(), id()).await,
+        ),
+        "restore_removed_logins" => outcome(
+            account_commands::restore_removed_logins(app.clone(), app.state(), app.state(), id())
+                .await,
+        ),
+        "add_api_key" => match body.args::<ApiKeyArgs>() {
+            Ok(args) => outcome(
+                account_commands::add_api_key(
+                    app.clone(),
+                    app.state(),
+                    app.state(),
+                    args.service_id,
+                    args.label,
+                    args.key,
+                    args.fields,
+                )
+                .await,
+            ),
+            Err(response) => response,
+        },
+        "remove_api_key" => outcome(
+            account_commands::remove_api_key(app.clone(), app.state(), app.state(), id()).await,
+        ),
+        "dismiss_detected_card" => outcome(
+            account_commands::dismiss_detected_card(app.clone(), app.state(), app.state(), id())
+                .await,
+        ),
+        "restore_dismissed_cards" => outcome(
+            account_commands::restore_dismissed_cards(app.clone(), app.state(), app.state(), id())
+                .await,
+        ),
+        "redeem_limit_reset" => outcome(
+            limit_resets::redeem_limit_reset(app.state(), app.state::<Redemptions>(), id()).await,
+        ),
+        "refresh" => {
+            let provider = body.args::<Id>().ok().and_then(|args| args.id);
+            outcome(crate::commands::refresh(app.state(), provider).await)
+        }
+        _ => return None,
+    };
+    Some(response)
 }
 
 fn json<T: serde::Serialize>(value: Result<T, String>) -> Response {
@@ -48,6 +218,7 @@ async fn respond<R: tauri::Runtime>(app: &AppHandle<R>, request: AppRequest) -> 
     let (name, query) = match request {
         AppRequest::Asset(path) => return asset(app, &path),
         AppRequest::Command { name, query } => (name, query),
+        AppRequest::Action { .. } => return None,
     };
     let request = Query(query);
     let response = match name.as_str() {
@@ -63,6 +234,11 @@ async fn respond<R: tauri::Runtime>(app: &AppHandle<R>, request: AppRequest) -> 
         },
         "list_accounts" => json(app.state::<Accounts>().entries()),
         "list_services" => json(Ok(app.state::<Accounts>().service_list())),
+        "list_removed_logins" => json(app.state::<Accounts>().removed_logins()),
+        "login_results" => json(Ok(login_results()
+            .lock()
+            .map(|results| results.iter().cloned().collect::<Vec<_>>())
+            .unwrap_or_default())),
         "system_time_zone" => json(Ok(iana_time_zone::get_timezone()
             .ok()
             .filter(|zone| !zone.is_empty()))),

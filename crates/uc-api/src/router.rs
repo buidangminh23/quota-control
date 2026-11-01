@@ -44,7 +44,51 @@ impl Response {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AppRequest {
     Command { name: String, query: Option<String> },
+    Action { name: String, body: String },
     Asset(String),
+}
+
+pub const ACTION_HEADER: &str = "x-quota-control";
+pub const ACTION_HEADER_VALUE: &str = "write";
+pub const ACTION_BODY_LIMIT: usize = 64 * 1024;
+const SAME_ORIGINS: [&str; 2] = ["http://127.0.0.1:6736", "http://localhost:6736"];
+
+fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+    head.split("\r\n").skip(1).find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.trim().eq_ignore_ascii_case(name).then(|| value.trim())
+    })
+}
+
+pub fn action_request(
+    method: &str,
+    path: &str,
+    head: &str,
+) -> Option<Result<(String, usize), Response>> {
+    if method != "POST" {
+        return None;
+    }
+    let route = path.split('?').next().unwrap_or_default();
+    let segments: Vec<&str> = route
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let ["v1", "app", name] = segments.as_slice() else {
+        return None;
+    };
+    if header(head, ACTION_HEADER) != Some(ACTION_HEADER_VALUE) {
+        return Some(Err(Response::error(403, "forbidden")));
+    }
+    if header(head, "origin").is_some_and(|origin| !SAME_ORIGINS.contains(&origin)) {
+        return Some(Err(Response::error(403, "forbidden")));
+    }
+    let length = header(head, "content-length")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    if length > ACTION_BODY_LIMIT {
+        return Some(Err(Response::error(413, "too_large")));
+    }
+    Some(Ok(((*name).to_string(), length)))
 }
 
 pub fn app_request(method: &str, path: &str) -> Option<AppRequest> {
@@ -242,6 +286,52 @@ mod tests {
         let unknown = respond("GET", "/v1/limits/cursor", &state);
         assert_eq!(unknown.status, 404);
         assert_eq!(json(&unknown)["error"], "provider_not_found");
+    }
+
+    #[test]
+    fn actions_need_the_write_header_and_no_foreign_origin() {
+        let head = |extra: &str| {
+            format!(
+                "POST /v1/app/remove_account HTTP/1.1\r\nHost: x\r\n{extra}Content-Length: 12\r\n"
+            )
+        };
+        assert_eq!(
+            action_request(
+                "POST",
+                "/v1/app/remove_account",
+                &head("X-Quota-Control: write\r\n")
+            ),
+            Some(Ok(("remove_account".into(), 12)))
+        );
+        assert_eq!(
+            action_request(
+                "POST",
+                "/v1/app/remove_account",
+                &head("x-quota-control: write\r\nOrigin: http://127.0.0.1:6736\r\n")
+            ),
+            Some(Ok(("remove_account".into(), 12)))
+        );
+        for extra in [
+            "",
+            "X-Quota-Control: read\r\n",
+            "X-Quota-Control: write\r\nOrigin: https://evil.example\r\n",
+        ] {
+            let refused = action_request("POST", "/v1/app/remove_account", &head(extra))
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(refused.status, 403, "{extra}");
+        }
+        let large =
+            "POST /v1/app/x HTTP/1.1\r\nX-Quota-Control: write\r\nContent-Length: 70000\r\n";
+        assert_eq!(
+            action_request("POST", "/v1/app/x", large)
+                .unwrap()
+                .unwrap_err()
+                .status,
+            413
+        );
+        assert_eq!(action_request("GET", "/v1/app/x", large), None);
+        assert_eq!(action_request("POST", "/v1/limits", large), None);
     }
 
     #[test]

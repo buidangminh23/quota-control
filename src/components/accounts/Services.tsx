@@ -245,7 +245,7 @@ function ServiceSignIn({ service, method, messages }: { service: ServiceEntry; m
       <Button variant="prominent" onClick={() => void startAccountLogin(service.id, method)} className="is-small is-wide">
         {method === "google" ? messages.accounts.signInWithGoogle : messages.accounts.signInWithGitHub}
       </Button>
-      <p className="uc-settings-note is-flush">{messages.accounts.serviceSignInNote(service.name, method)}</p>
+      <p className="uc-settings-note is-flush">{backend().remote ? messages.accounts.remoteSignInNote(service.name) : messages.accounts.serviceSignInNote(service.name, method)}</p>
       {error?.provider === service.id ? <p className="uc-settings-notice is-flush">{messages.accounts.loginFailed(service.name, error.text)}</p> : null}
     </>
   );

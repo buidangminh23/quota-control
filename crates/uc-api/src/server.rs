@@ -12,7 +12,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 
-use crate::router::{AppRequest, Response, app_request, respond};
+use crate::router::{AppRequest, Response, action_request, app_request, respond};
 use crate::state::ApiState;
 
 pub const PORT: u16 = 6736;
@@ -60,12 +60,34 @@ where
         let app = app.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            let Ok(Some(head)) = tokio::time::timeout(HEAD_TIMEOUT, read_head(&mut stream)).await
+            let Ok(Some((head, rest))) =
+                tokio::time::timeout(HEAD_TIMEOUT, read_head(&mut stream)).await
             else {
                 return;
             };
             let (method, path) = parse_request_line(&head);
             tracing::debug!(target: "local_api", "{method} {path}");
+            if let Some(action) = action_request(&method, &path, &head) {
+                let response = match (action, app) {
+                    (Err(refused), _) => refused,
+                    (Ok(_), None) => Response::error(404, "not_found"),
+                    (Ok((name, length)), Some(app)) => {
+                        match tokio::time::timeout(
+                            HEAD_TIMEOUT,
+                            read_body(&mut stream, rest, length),
+                        )
+                        .await
+                        {
+                            Ok(Some(body)) => app(AppRequest::Action { name, body })
+                                .await
+                                .unwrap_or_else(|| Response::error(404, "not_found")),
+                            _ => Response::error(400, "bad_body"),
+                        }
+                    }
+                };
+                send(&mut stream, &response).await;
+                return;
+            }
             let response = match (app_request(&method, &path), app) {
                 (Some(request), Some(app)) => app(request)
                     .await
@@ -79,7 +101,20 @@ where
 
 /// Read up to the end of the request head. GET and OPTIONS bodies are irrelevant, so the head is
 /// all the router needs. `None` when the client stops early or sends an oversized head.
-async fn read_head(stream: &mut TcpStream) -> Option<String> {
+async fn read_body(stream: &mut TcpStream, mut body: Vec<u8>, length: usize) -> Option<String> {
+    let mut chunk = [0_u8; 4096];
+    while body.len() < length {
+        let read = stream.read(&mut chunk).await.ok()?;
+        if read == 0 {
+            return None;
+        }
+        body.extend_from_slice(&chunk[..read]);
+    }
+    body.truncate(length);
+    String::from_utf8(body).ok()
+}
+
+async fn read_head(stream: &mut TcpStream) -> Option<(String, Vec<u8>)> {
     let mut buffer = Vec::with_capacity(1024);
     let mut chunk = [0_u8; 1024];
     loop {
@@ -89,7 +124,8 @@ async fn read_head(stream: &mut TcpStream) -> Option<String> {
         }
         buffer.extend_from_slice(&chunk[..read]);
         if let Some(end) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
-            return Some(String::from_utf8_lossy(&buffer[..end]).into_owned());
+            let rest = buffer[end + 4..].to_vec();
+            return Some((String::from_utf8_lossy(&buffer[..end]).into_owned(), rest));
         }
         if buffer.len() >= HEAD_LIMIT {
             return None;
@@ -110,6 +146,8 @@ async fn send(stream: &mut TcpStream, response: &Response) {
     let reason = match response.status {
         204 => "No Content",
         400 => "Bad Request",
+        403 => "Forbidden",
+        413 => "Payload Too Large",
         404 => "Not Found",
         405 => "Method Not Allowed",
         500 => "Internal Server Error",
@@ -199,6 +237,9 @@ mod tests {
                     AppRequest::Command { name, query } if name == "echo" => {
                         Some(Response::ok(query.unwrap_or_default().into_bytes()))
                     }
+                    AppRequest::Action { name, body } if name == "echo" => {
+                        Some(Response::ok(body.into_bytes()))
+                    }
                     AppRequest::Asset(path) if path == "index.html" => Some(Response::file(
                         b"<html></html>".to_vec(),
                         "text/html".into(),
@@ -218,6 +259,21 @@ mod tests {
         let page = exchange(address, b"GET /web/ HTTP/1.1\r\nHost: x\r\n\r\n").await;
         assert!(page.contains("Content-Type: text/html\r\n"), "{page}");
         assert!(page.ends_with("<html></html>"), "{page}");
+        let action = exchange(
+            address,
+            b"POST /v1/app/echo HTTP/1.1\r\nX-Quota-Control: write\r\nContent-Length: 9\r\n\r\n{\"a\":\"b\"}",
+        )
+        .await;
+        assert!(action.ends_with("\r\n\r\n{\"a\":\"b\"}"), "{action}");
+        let refused = exchange(
+            address,
+            b"POST /v1/app/echo HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}",
+        )
+        .await;
+        assert!(
+            refused.starts_with("HTTP/1.1 403 Forbidden\r\n"),
+            "{refused}"
+        );
         let missing = exchange(address, b"GET /v1/app/nope HTTP/1.1\r\nHost: x\r\n\r\n").await;
         assert!(
             missing.starts_with("HTTP/1.1 404 Not Found\r\n"),
