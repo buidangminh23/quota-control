@@ -7,6 +7,7 @@
 }
 
 .uc-scroll {
+  container: uc-scroll / inline-size;
   flex: 1 1 auto;
   min-height: 0;
   overflow-x: hidden;

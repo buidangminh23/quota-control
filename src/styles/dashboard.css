@@ -4,6 +4,20 @@
   gap: var(--uc-section-gap);
 }
 
+@container uc-scroll (min-width: 46rem) {
+  .uc-limits {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(22rem, 1fr));
+    align-items: start;
+    column-gap: calc(var(--uc-section-gap) * 2);
+    row-gap: calc(var(--uc-section-gap) * 2);
+  }
+
+  .uc-limits > :not(.uc-section) {
+    grid-column: 1 / -1;
+  }
+}
+
 .uc-card {
   background: var(--uc-card);
   border-radius: var(--uc-card-radius);

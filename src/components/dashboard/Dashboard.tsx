@@ -103,7 +103,7 @@ export function Dashboard() {
   const panel = tabbed ? { role: "tabpanel", id: DASHBOARD_PANEL_ID, "aria-labelledby": dashboardTabId(tab) } : {};
 
   return (
-    <div className="uc-stack" {...panel}>
+    <div className={tab === "quota" ? "uc-stack uc-limits" : "uc-stack"} {...panel}>
       <LoginProgress messages={messages} />
       {tab === "tokens" ? (
         <TokensTab />
