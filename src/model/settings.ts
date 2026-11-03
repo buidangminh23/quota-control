@@ -529,6 +529,20 @@ function storedSurface<T extends GlanceSurfaceSettings>(stored: unknown, surface
   return rest;
 }
 
+/**
+ * A settings copy kept outside the core (the web popup's browser storage) with every core-owned key
+ * replaced by the core's current value, so accounts connected after the copy was saved still show.
+ */
+export function withCoreOwnedKeys(copy: unknown, stored: unknown): Record<string, unknown> {
+  const merged = { ...asRecord(copy) };
+  const current = asRecord(stored);
+  for (const key of CORE_OWNED_KEYS) {
+    if (key in current) merged[key] = current[key];
+    else delete merged[key];
+  }
+  return merged;
+}
+
 /** The providers the core refreshes, or `null` when the document leaves them at the default (all). */
 export function enabledProvidersOf(raw: unknown): string[] | null {
   const ids = asRecord(raw).enabledProviders;

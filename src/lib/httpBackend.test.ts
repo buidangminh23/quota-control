@@ -40,9 +40,35 @@ describe("HttpBackend", () => {
     const fetchMock = respondWith({ fromApp: true });
     const backend = new HttpBackend(base);
     expect(await backend.loadDocument("settings")).toEqual({ fromApp: true });
+    const callsBeforeSave = fetchMock.mock.calls.length;
     await backend.saveDocument("settings", { fromWeb: true });
+    expect(fetchMock).toHaveBeenCalledTimes(callsBeforeSave);
     expect(await backend.loadDocument("settings")).toEqual({ fromWeb: true });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows accounts connected after the web saved its settings copy", async () => {
+    const backend = new HttpBackend(base);
+    respondWith({ enabledProviders: ["codex@old"], density: "regular" });
+    await backend.saveDocument("settings", { ...(await backend.loadDocument<Record<string, unknown>>("settings")), density: "compact" });
+    respondWith({ enabledProviders: ["codex@old", "claude@new"], density: "regular" });
+    expect(await backend.loadDocument("settings")).toEqual({ enabledProviders: ["codex@old", "claude@new"], density: "compact" });
+    respondWith({ density: "regular" });
+    expect(await backend.loadDocument("settings")).toEqual({ density: "compact" });
+  });
+
+  it("falls back to the browser's settings copy when the app cannot be reached", async () => {
+    const backend = new HttpBackend(base);
+    await backend.saveDocument("settings", { enabledProviders: ["codex@old"] });
+    respondWith({ error: "unavailable" }, 502);
+    expect(await backend.loadDocument("settings")).toEqual({ enabledProviders: ["codex@old"] });
+  });
+
+  it("keeps the browser's layout copy as it was saved", async () => {
+    const backend = new HttpBackend(base);
+    await backend.saveDocument("layout", { providerOrder: ["a"] });
+    const fetchMock = respondWith({ providerOrder: ["b"] });
+    expect(await backend.loadDocument("layout")).toEqual({ providerOrder: ["a"] });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("sends actions as POST with the write header and reports the app's own error", async () => {

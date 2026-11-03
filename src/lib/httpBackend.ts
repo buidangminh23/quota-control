@@ -23,6 +23,7 @@ import type {
 } from "./types";
 import type { PublicFeedName, PublicFeedSnapshot, QualityInfo, QualityQuery, QualitySummary } from "./insightsTypes";
 import type { Language } from "@/i18n/language";
+import { withCoreOwnedKeys } from "@/model/settings";
 
 const SERVER_ONLY = "Đăng nhập CLI chạy lệnh trên máy cài Quota Control, nên làm trong app trên máy đó.";
 const LOGIN_POLL_MS = 3_000;
@@ -250,7 +251,11 @@ export class HttpBackend implements Backend {
 
   async loadDocument<T>(name: DocumentName): Promise<T | null> {
     const saved = readStorage(name);
-    return saved !== null ? (JSON.parse(saved) as T) : this.call<T | null>("load_document", { name });
+    if (saved === null) return this.call<T | null>("load_document", { name });
+    const copy = JSON.parse(saved) as T;
+    if (name !== "settings") return copy;
+    const stored = await this.call<unknown>("load_document", { name }).catch(() => undefined);
+    return stored === undefined ? copy : (withCoreOwnedKeys(copy, stored) as T);
   }
 
   async saveDocument(name: DocumentName, value: unknown): Promise<void> {
