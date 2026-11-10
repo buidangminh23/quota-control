@@ -271,6 +271,26 @@ describe("island wings", () => {
     const document = glance();
     expect([...document.providers, ...document.widget.providers].flatMap((entry) => entry.metrics).some((metric) => "period" in metric)).toBe(false);
   });
+
+  it.each([false, true])("distinguishes weekly and Fable in the island wings with explicit selection %s", (explicit) => {
+    const providerId = "claude@7c1e";
+    const weekly = descriptors.get(`${providerId}.weekly`)!;
+    const fable = descriptors.get(`${providerId}.fable`)!;
+    const data = {
+      [providerId]: {
+        ...snapshots[providerId]!,
+        lines: [
+          { type: "progress" as const, label: "Weekly", used: 15, limit: 100, format: { kind: "percent" as const }, periodDurationMs: 604_800_000 },
+          { type: "progress" as const, label: "Fable", used: 12, limit: 100, format: { kind: "percent" as const }, periodDurationMs: 604_800_000 },
+        ],
+      },
+    };
+    const document = glance({ data, island: { content: "custom", metrics: [weekly.id, fable.id], showProblems: false }, wings: explicit ? [weekly, fable] : [null, null] });
+    expect(document.island.wings.map((wing) => ({ period: wing.metrics[0]!.period, value: wing.metrics[0]!.value }))).toEqual([
+      { period: "week", value: "85%" },
+      { period: "Fable", value: "88%" },
+    ]);
+  });
 });
 
 describe("the rows of each account", () => {

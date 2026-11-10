@@ -51,7 +51,7 @@ export function buildStripContent(
     const reported = candidates.filter(({ data }) => data.hasData || data.hasReading);
     const selected = reported.length > 0 || !hasDashboardCard(group.provider.id) ? reported : candidates.filter(({ data }) => data.hasReading !== false);
     const metrics = selected.map(({ descriptor, data }): StripMetric => {
-      return { id: descriptor.id, label: data.title, period: periodLabel(data.periodDurationMs), value: menuBarValue(data), fraction: data.hasData ? fraction(data) : 0, bounded: data.hasData && isBounded(data) };
+      return { id: descriptor.id, label: data.title, period: metricPeriodLabel(descriptor, data), value: menuBarValue(data), fraction: data.hasData ? fraction(data) : 0, bounded: data.hasData && isBounded(data) };
     }).slice(0, Math.max(1, perGroup));
     if (metrics.length === 0) return [];
     return [{ providerId: group.provider.id, displayName: displayName(group.provider), brand: brandOf(group.provider.icon || group.provider.id), metrics }];
@@ -62,6 +62,20 @@ export function buildStripContent(
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
+
+export function metricPeriodLabel(descriptor: WidgetDescriptor, data: WidgetData): string | null {
+  const period = periodLabel(data.periodDurationMs);
+  if (!period) return null;
+  const family = brandOf(descriptor.providerId);
+  if (family === "claude" && !["Session", "Weekly"].includes(descriptor.metricLabel)) return data.title;
+  if (family === "codex" && /^Spark(?:\s|$)/.test(descriptor.metricLabel)) return `Spark ${period}`;
+  if (family === "antigravity") {
+    const scopes: Readonly<Record<string, string>> = { geminiPro: "Gemini", geminiWeekly: "Gemini", claude: "Claude/GPT", claudeWeekly: "Claude/GPT", argonWeekly: "Argon" };
+    const scope = scopes[descriptor.id.slice(descriptor.providerId.length + 1)];
+    if (scope) return `${scope} ${period}`;
+  }
+  return period;
+}
 
 /**
  * The strip's name for a limit window, so the five-hour and weekly readings stay apart: `5h` for

@@ -161,7 +161,7 @@ export function ProviderSection({ group, runtime, display, refreshIntervalMs, no
   );
 
   return (
-    <section className="uc-section" aria-label={title} style={seriesColor ? ({ "--uc-series-color": seriesColor } as CSSProperties) : undefined}>
+    <section className="uc-section" data-provider={providerBrand(group.provider)} aria-label={title} style={seriesColor ? ({ "--uc-series-color": seriesColor } as CSSProperties) : undefined}>
       <header
         className={termLines ? "uc-section-head has-term" : "uc-section-head"}
         onContextMenu={(event) => {

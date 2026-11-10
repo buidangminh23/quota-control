@@ -3,12 +3,6 @@
 //! credential `gemini:antigravity`, the macOS generic password, the Linux Secret Service item),
 //! read against Google's Cloud Code quota endpoints, which answer while the app is closed.
 //!
-//! Endpoints: `retrieveUserQuotaSummary` (the four pools: Gemini and third-party models, each with
-//! a 5-hour and a weekly window), falling back to `fetchAvailableModels` pooled per family on older
-//! accounts, `loadCodeAssist` for the plan, and Google's userinfo endpoint for the account's email
-//! (both looked up twice a day, best-effort). An expired access token is renewed in memory with
-//! the app's public client; Google keeps the refresh token valid, so the app stays signed in.
-//!
 //! Signing in from Quota Control opens Google's sign-in page for the app's own client and comes back
 //! to this computer the way the app's sign-in does (`http://localhost:<any port>/oauth-callback`).
 //! The app's own login names no account, so a sign-in of the same account gets a card of its own.
@@ -17,8 +11,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{Value, json};
 use uc_core::{
-    ErrorCategory, HttpRequest, MetricLine, Provider, ProviderLink, SessionStartSignal,
-    SimpleProviderError, WidgetDescriptor,
+    ErrorCategory, HttpRequest, MetricLine, Provider, ProviderLink, SimpleProviderError,
+    WidgetDescriptor,
 };
 
 use crate::service::{Connection, FetchContext, Login, Reading, Roots, Secret, Service};
@@ -40,6 +34,7 @@ const BASES: [&str; 2] = [
     "https://daily-cloudcode-pa.googleapis.com",
     "https://cloudcode-pa.googleapis.com",
 ];
+const USER_AGENT: &str = "antigravity/hub/2.30.0";
 
 /// The public OAuth client Antigravity signs in with.
 const CLIENT: Client = Client {
@@ -71,12 +66,42 @@ const SIGN_IN: CodeClient = CodeClient {
     body: TokenBody::Form,
 };
 
-/// The summary's pools, matched by exact bucket id: (bucket, descriptor suffix, title, period).
-const POOLS: [(&str, &str, &str, i64); 4] = [
-    ("gemini-5h", "geminiPro", "Session", 5 * lines::HOUR_MS),
-    ("gemini-weekly", "geminiWeekly", "Weekly", lines::WEEK_MS),
-    ("3p-5h", "claude", "Claude", 5 * lines::HOUR_MS),
-    ("3p-weekly", "claudeWeekly", "Claude Weekly", lines::WEEK_MS),
+const POOLS: [(&str, &str, &str, &str, i64); 5] = [
+    (
+        "gemini-weekly",
+        "geminiWeekly",
+        "Gemini Weekly",
+        "Gemini Models",
+        lines::WEEK_MS,
+    ),
+    (
+        "gemini-5h",
+        "geminiPro",
+        "Gemini 5h",
+        "Gemini Models",
+        5 * lines::HOUR_MS,
+    ),
+    (
+        "3p-weekly",
+        "claudeWeekly",
+        "Claude and GPT Weekly",
+        "Claude and GPT models",
+        lines::WEEK_MS,
+    ),
+    (
+        "3p-5h",
+        "claude",
+        "Claude and GPT 5h",
+        "Claude and GPT models",
+        5 * lines::HOUR_MS,
+    ),
+    (
+        "gemini-argon-wtu-weekly",
+        "argonWeekly",
+        "Gemini 4 Argon Weekly",
+        "Gemini 4 Argon",
+        lines::WEEK_MS,
+    ),
 ];
 
 /// Model ids older model lists report that are not quota pools.
@@ -136,15 +161,13 @@ impl Service for Antigravity {
     fn descriptors(&self, provider: &Provider) -> Vec<WidgetDescriptor> {
         POOLS
             .iter()
-            .map(|(_, suffix, title, _)| {
-                let signal = matches!(*suffix, "geminiPro" | "claude")
-                    .then_some(SessionStartSignal::ZeroUsage);
+            .map(|(_, suffix, title, _, _)| {
                 WidgetDescriptor::percent(
                     format!("{}.{suffix}", provider.id),
                     provider,
                     title,
                     None,
-                    signal,
+                    None,
                 )
                 .exporting_progress(suffix, "percent")
             })
@@ -158,47 +181,25 @@ impl Service for Antigravity {
             refresh_token: context.secret.str("/refresh_token"),
         };
         let mut token = oauth::access_token(context, APP, &CLIENT, saved, false).await?;
-        let summary = match cloud_code(
-            context,
-            "retrieveUserQuotaSummary",
-            &token,
-            "antigravity",
-            json!({}),
-        )
-        .await
+        let summary = match cloud_code(context, "retrieveUserQuotaSummary", &token, json!({})).await
         {
             Err(error) if error.category == ErrorCategory::AuthExpired => {
                 token = oauth::access_token(context, APP, &CLIENT, saved, true).await?;
-                cloud_code(
-                    context,
-                    "retrieveUserQuotaSummary",
-                    &token,
-                    "antigravity",
-                    json!({}),
-                )
-                .await?
+                cloud_code(context, "retrieveUserQuotaSummary", &token, json!({})).await?
             }
             result => result?,
         };
-        let summary_lines = summary.as_ref().and_then(summary_meters);
-        let models = match cloud_code(
-            context,
-            "fetchAvailableModels",
-            &token,
-            "antigravity",
-            json!({}),
-        )
-        .await
-        {
-            Ok(models) => models.unwrap_or(Value::Null),
-            Err(error) if summary_lines.is_some() => {
-                tracing::debug!(target: "antigravity", "model list unavailable: {}", error.message);
-                Value::Null
-            }
-            Err(error) => return Err(error),
+        let meters = if let Some(meters) = summary.as_ref().and_then(summary_meters) {
+            meters
+        } else {
+            let models = cloud_code(context, "fetchAvailableModels", &token, json!({}))
+                .await?
+                .unwrap_or(Value::Null);
+            model_meters(&models)
         };
-        let mut meters = summary_lines.unwrap_or_else(|| pooled_meters(&models));
-        meters.extend(model_meters(&models));
+        if meters.is_empty() {
+            return Err(http::decoding(APP));
+        }
         let plan = plan(context, &token).await;
         let email = email(context, &token).await;
         Ok(Reading::new(plan, meters).with_account(email))
@@ -211,14 +212,13 @@ async fn cloud_code(
     context: &FetchContext<'_>,
     method: &str,
     token: &str,
-    user_agent: &str,
     body: Value,
 ) -> Result<Option<Value>, SimpleProviderError> {
     for base in BASES {
         let request = HttpRequest::post(format!("{base}/v1internal:{method}"))
             .bearer(token)
             .header("Accept", "application/json")
-            .header("User-Agent", user_agent)
+            .header("User-Agent", user_agent())
             .json_body(&body);
         let Ok(response) = http::send(context.http, request, APP).await else {
             continue;
@@ -231,7 +231,9 @@ async fn cloud_code(
             }
             429 => return Err(http::status_error(&response, APP)),
             status if (200..300).contains(&status) => {
-                return Ok(Some(http::parse(&response, APP)?));
+                if let Ok(body) = http::parse(&response, APP) {
+                    return Ok(Some(body));
+                }
             }
             _ => continue,
         }
@@ -239,88 +241,90 @@ async fn cloud_code(
     Ok(None)
 }
 
-/// The four pool meters of a quota summary, or `None` when the answer holds no groups (older
-/// accounts), so the caller falls back to the model list.
+fn user_agent() -> String {
+    let os = match std::env::consts::OS {
+        "macos" => "darwin",
+        os => os,
+    };
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        arch => arch,
+    };
+    format!("{USER_AGENT} (aidev_client; os_type={os}; arch={arch})")
+}
+
 fn summary_meters(summary: &Value) -> Option<Vec<MetricLine>> {
-    let groups = summary
-        .pointer("/response/groups")
-        .or_else(|| summary.get("groups"))?
-        .as_array()?;
-    let buckets: Vec<&Value> = groups
-        .iter()
-        .filter_map(|group| group.get("buckets").and_then(Value::as_array))
+    let summary = summary.get("response").unwrap_or(summary);
+    let buckets: Vec<(Option<&str>, &Value)> = summary
+        .get("groups")
+        .and_then(Value::as_array)
+        .into_iter()
         .flatten()
+        .flat_map(|group| {
+            group
+                .get("buckets")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(move |bucket| (value::text(group, "/displayName"), bucket))
+        })
+        .chain(
+            summary
+                .get("buckets")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|bucket| (None, bucket)),
+        )
         .collect();
-    Some(
-        POOLS
-            .iter()
-            .filter_map(|(bucket_id, _, title, period)| {
-                let bucket = buckets
-                    .iter()
-                    .find(|bucket| value::text(bucket, "/bucketId") == Some(bucket_id))?;
-                let remaining = value::number(bucket, "/remainingFraction")?;
+    let meters: Vec<_> = POOLS
+        .iter()
+        .filter_map(|(bucket_id, _, title, group_name, period)| {
+            let window = |bucket: &Value| match value::text(bucket, "/window") {
+                Some("weekly") => Some(lines::WEEK_MS),
+                Some("5h") => Some(5 * lines::HOUR_MS),
+                _ => None,
+            };
+            let exact = buckets.iter().filter(|(_, bucket)| {
+                value::text(bucket, "/bucketId") == Some(bucket_id)
+                    && (bucket.get("window").is_none() || window(bucket) == Some(*period))
+            });
+            let grouped = buckets.iter().filter(|(group, bucket)| {
+                group.is_some_and(|group| group.trim().eq_ignore_ascii_case(group_name))
+                    && window(bucket) == Some(*period)
+                    && !POOLS.iter().any(|(known_id, _, _, _, _)| {
+                        value::text(bucket, "/bucketId") == Some(known_id)
+                    })
+            });
+            let meter = |(_, bucket): &(Option<&str>, &Value)| {
+                let remaining = remaining_fraction(bucket, "/remainingFraction")?;
                 Some(lines::percent(
                     title,
                     used_percent(remaining),
                     value::time(bucket, "/resetTime"),
                     Some(*period),
                 ))
-            })
-            .collect(),
-    )
+            };
+            if let Some(meter) = exact.filter_map(meter).next() {
+                return Some(meter);
+            }
+            let mut candidates = grouped.filter_map(meter);
+            let meter = candidates.next()?;
+            candidates.next().is_none().then_some(meter)
+        })
+        .collect();
+    (!meters.is_empty()).then_some(meters)
 }
 
-/// Whole percents, so a fresh window reads 0 and the meter can say it has not started.
+fn remaining_fraction(value: &Value, pointer: &str) -> Option<f64> {
+    value::number(value, pointer).filter(|remaining| (0.0..=1.0).contains(remaining))
+}
+
 fn used_percent(remaining: f64) -> f64 {
     ((1.0 - remaining.clamp(0.0, 1.0)) * 100.0).round()
 }
 
-/// Older accounts: pool the model list into a Gemini and a third-party 5-hour meter, each the
-/// model with the least left. A model without quota information counts as used up, as the IDE does.
-fn pooled_meters(models: &Value) -> Vec<MetricLine> {
-    let Some(entries) = models.get("models").and_then(Value::as_object) else {
-        return Vec::new();
-    };
-    let mut pools: [Option<(f64, Option<DateTime<Utc>>)>; 2] = [None, None];
-    for model in entries.values() {
-        if model.get("isInternal").and_then(Value::as_bool) == Some(true) {
-            continue;
-        }
-        if value::text(model, "/model").is_some_and(|id| IGNORED_MODELS.contains(&id)) {
-            continue;
-        }
-        let Some(label) =
-            value::text(model, "/displayName").or_else(|| value::text(model, "/label"))
-        else {
-            continue;
-        };
-        let label = label.split(" (").next().unwrap_or(label);
-        let index = usize::from(!label.to_lowercase().contains("gemini"));
-        let remaining = value::number(model, "/quotaInfo/remainingFraction")
-            .unwrap_or(0.0)
-            .clamp(0.0, 1.0);
-        let reset = value::time(model, "/quotaInfo/resetTime");
-        if pools[index].is_none_or(|(least, _)| remaining < least) {
-            pools[index] = Some((remaining, reset));
-        }
-    }
-    [("Session", pools[0]), ("Claude", pools[1])]
-        .into_iter()
-        .filter_map(|(title, pool)| {
-            pool.map(|(remaining, reset)| {
-                lines::percent(
-                    title,
-                    used_percent(remaining),
-                    reset,
-                    Some(5 * lines::HOUR_MS),
-                )
-            })
-        })
-        .collect()
-}
-
-/// One meter per model the account can use, in the IDE's model order (by label), after the pools.
-/// Internal and retired models and models without quota information are left out.
 fn model_meters(models: &Value) -> Vec<MetricLine> {
     let Some(entries) = models.get("models").and_then(Value::as_object) else {
         return Vec::new();
@@ -334,18 +338,21 @@ fn model_meters(models: &Value) -> Vec<MetricLine> {
         .filter_map(|model| {
             let label =
                 value::text(model, "/displayName").or_else(|| value::text(model, "/label"))?;
-            let remaining = value::number(model, "/quotaInfo/remainingFraction")?;
-            Some((
-                label.to_string(),
-                used_percent(remaining),
-                value::time(model, "/quotaInfo/resetTime"),
-            ))
+            let reset = value::time(model, "/quotaInfo/resetTime");
+            let remaining = if model.pointer("/quotaInfo/remainingFraction").is_some() {
+                remaining_fraction(model, "/quotaInfo/remainingFraction")?
+            } else if reset.is_some() {
+                0.0
+            } else {
+                return None;
+            };
+            Some((label.to_string(), used_percent(remaining), reset))
         })
         .collect();
     rows.sort_by_key(|row| row.0.to_lowercase());
     rows.dedup_by(|a, b| a.0 == b.0);
     rows.into_iter()
-        .filter(|(label, _, _)| !POOLS.iter().any(|(_, _, title, _)| title == label))
+        .filter(|(label, _, _)| !POOLS.iter().any(|(_, _, title, _, _)| title == label))
         .map(|(label, used, reset)| lines::percent(&label, used, reset, None))
         .collect()
 }
@@ -355,7 +362,7 @@ async fn plan(context: &FetchContext<'_>, token: &str) -> Option<String> {
     if let Some(memo) = context.memo.get("antigravity.plan", context.now).await {
         return memo.as_str().map(str::to_string);
     }
-    let body = cloud_code(context, "loadCodeAssist", token, "agy", json!({}))
+    let body = cloud_code(context, "loadCodeAssist", token, json!({}))
         .await
         .ok()
         .flatten()?;
@@ -532,13 +539,14 @@ mod tests {
     }
 
     const SUMMARY: &str = r#"{"groups":[
-        {"buckets":[
-            {"bucketId":"gemini-5h","remainingFraction":0.625,"resetTime":"2026-09-27T12:00:00Z"},
-            {"bucketId":"gemini-weekly","remainingFraction":0.9,"resetTime":"2026-10-02T00:00:00Z"}]},
-        {"buckets":[
-            {"bucketId":"3p-5h","remainingFraction":1},
-            {"bucketId":"3p-weekly","remainingFraction":0.2,"resetTime":"2026-10-01T00:00:00Z"},
-            {"bucketId":"surprise","remainingFraction":0.1}]}
+        {"displayName":"Gemini Models","buckets":[
+            {"bucketId":"gemini-weekly","displayName":"Weekly Limit Remaining","window":"weekly","remainingFraction":0.6878024,"resetTime":"2026-11-14T05:13:17Z"},
+            {"bucketId":"gemini-5h","displayName":"Five Hour Limit Remaining","window":"5h","remainingFraction":1,"resetTime":"2026-11-10T17:54:18Z"}]},
+        {"displayName":"Claude and GPT models","buckets":[
+            {"bucketId":"3p-weekly","displayName":"Weekly Limit Remaining","window":"weekly","remainingFraction":0,"resetTime":"2026-11-13T01:03:04Z"},
+            {"bucketId":"3p-5h","displayName":"Five Hour Limit Remaining","window":"5h","remainingFraction":1,"disabled":true,"resetTime":"2026-11-10T17:54:18Z"}]},
+        {"displayName":"Gemini 4 Argon","buckets":[
+            {"bucketId":"gemini-argon-wtu-weekly","displayName":"Gemini 4 Argon Weekly Limit","window":"weekly","remainingFraction":0.009153066,"resetTime":"2026-11-14T03:59:21Z"}]}
     ]}"#;
 
     fn meters(reading: &Reading) -> Vec<(String, f64, Option<DateTime<Utc>>)> {
@@ -552,21 +560,203 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn descriptors_preserve_ids_and_provider_reset_times() {
+        let descriptors = Antigravity.descriptors(&Provider::new("antigravity@account", APP));
+        assert_eq!(
+            descriptors
+                .iter()
+                .map(|descriptor| (descriptor.id.as_str(), descriptor.metric_label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("antigravity@account.geminiWeekly", "Gemini Weekly"),
+                ("antigravity@account.geminiPro", "Gemini 5h"),
+                ("antigravity@account.claudeWeekly", "Claude and GPT Weekly"),
+                ("antigravity@account.claude", "Claude and GPT 5h"),
+                ("antigravity@account.argonWeekly", "Gemini 4 Argon Weekly"),
+            ]
+        );
+        assert!(
+            descriptors
+                .iter()
+                .all(|descriptor| descriptor.template.session_start_signal.is_none())
+        );
+    }
+
+    #[test]
+    fn grouped_windows_survive_bucket_id_changes() {
+        let summary: Value = serde_json::from_str(SUMMARY).unwrap();
+        let expected = summary_meters(&summary).unwrap();
+        let mut changed = summary;
+        for group in changed["groups"].as_array_mut().unwrap() {
+            for bucket in group["buckets"].as_array_mut().unwrap() {
+                bucket["bucketId"] = json!(format!("renamed-{}", bucket["bucketId"]));
+            }
+        }
+        assert_eq!(
+            summary_meters(&json!({"response": changed})),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn known_bucket_ids_take_precedence_over_conflicting_group_metadata() {
+        let summary = json!({"groups": [{"displayName": "Gemini Models", "buckets": [
+            {"bucketId": "unknown-weekly", "window": "weekly", "remainingFraction": 0.2},
+            {"bucketId": "gemini-argon-wtu-weekly", "window": "weekly", "remainingFraction": 0.01},
+            {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 0.69}
+        ]}]});
+        let reading = Reading::new(None, summary_meters(&summary).unwrap());
+        assert_eq!(
+            meters(&reading),
+            vec![
+                ("Gemini Weekly".into(), 31.0, None),
+                ("Gemini 4 Argon Weekly".into(), 99.0, None),
+            ]
+        );
+        let only_argon = json!({"groups": [{"displayName": "Gemini Models", "buckets": [
+            {"bucketId": "gemini-argon-wtu-weekly", "window": "weekly", "remainingFraction": 0.01}
+        ]}]});
+        let reading = Reading::new(None, summary_meters(&only_argon).unwrap());
+        assert_eq!(
+            meters(&reading),
+            vec![("Gemini 4 Argon Weekly".into(), 99.0, None)]
+        );
+    }
+
+    #[test]
+    fn unrelated_buckets_and_missing_fractions_do_not_become_usage() {
+        for summary in [
+            json!(null),
+            json!({"groups": []}),
+            json!({"groups": {}}),
+            json!({"groups": [{"buckets": [
+                {"bucketId": "gemini-weekly", "remainingAmount": 50},
+                {"bucketId": "3p-weekly", "remainingFraction": null},
+                {"bucketId": "gemini-5h", "remainingFraction": -0.1},
+                {"bucketId": "3p-5h", "remainingFraction": 1.1},
+                {"bucketId": "gemini-argon-wtu-weekly", "remainingFraction": "bad"}
+            ]}]}),
+            json!({"groups": [{"displayName": "Other models", "buckets": [
+                {"bucketId": "unknown-weekly", "window": "weekly", "remainingFraction": 0}
+            ]}]}),
+            json!({"groups": [{"displayName": "Gemini Models", "buckets": [
+                {"bucketId": "unknown", "remainingFraction": 0},
+                {"bucketId": "unknown-monthly", "window": "monthly", "remainingFraction": 0}
+            ]}]}),
+            json!({"groups": [{"displayName": "Gemini Models", "buckets": [
+                {"bucketId": "unknown-a", "window": "weekly", "remainingFraction": 0.1},
+                {"bucketId": "unknown-b", "window": "weekly", "remainingFraction": 0.9}
+            ]}]}),
+        ] {
+            assert!(summary_meters(&summary).is_none(), "{summary}");
+        }
+    }
+
+    #[test]
+    fn known_legacy_buckets_keep_their_scope_without_inventing_resets() {
+        let summary = json!({"buckets": [
+            {"bucketId": "gemini-weekly", "remainingFraction": 0},
+            {"bucketId": "3p-5h", "remainingFraction": 1}
+        ]});
+        let reading = Reading::new(None, summary_meters(&summary).unwrap());
+        assert_eq!(
+            meters(&reading),
+            vec![
+                ("Gemini Weekly".into(), 100.0, None),
+                ("Claude and GPT 5h".into(), 0.0, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn model_fallback_preserves_exhausted_quotas_without_inventing_windows() {
+        let models = json!({"models": {
+            "claude": {"displayName": "Claude Sonnet", "quotaInfo": {"resetTime": "2026-11-13T01:03:04Z"}},
+            "argon": {"displayName": "Gemini 4 Argon", "quotaInfo": {"remainingFraction": 0.009153066, "resetTime": "2026-11-14T03:59:21Z"}},
+            "flash": {"displayName": "Gemini Flash", "quotaInfo": {"remainingFraction": 1}},
+            "absent": {"displayName": "Missing Quota"},
+            "empty": {"displayName": "Empty Quota", "quotaInfo": {}},
+            "malformed": {"displayName": "Invalid Quota", "quotaInfo": {"remainingFraction": null, "resetTime": "2026-11-13T01:03:04Z"}}
+        }});
+        let reading = Reading::new(None, model_meters(&models));
+        assert_eq!(
+            meters(&reading),
+            vec![
+                (
+                    "Claude Sonnet".into(),
+                    100.0,
+                    Some(Utc.with_ymd_and_hms(2026, 11, 13, 1, 3, 4).unwrap())
+                ),
+                (
+                    "Gemini 4 Argon".into(),
+                    99.0,
+                    Some(Utc.with_ymd_and_hms(2026, 11, 14, 3, 59, 21).unwrap())
+                ),
+                ("Gemini Flash".into(), 0.0, None),
+            ]
+        );
+        assert!(reading.lines.iter().all(|line| match line {
+            MetricLine::Progress(line) => line.period_duration_ms.is_none(),
+            _ => false,
+        }));
+    }
+
     #[tokio::test]
-    async fn reads_the_four_pools_and_the_plan() {
+    async fn malformed_and_empty_summaries_fall_back_to_reported_models() {
+        for summary in [
+            "{broken",
+            r#"{"groups":[]}"#,
+            r#"{"groups":[{"buckets":[]}]}"#,
+        ] {
+            let http = Scripted::new()
+                .on("POST", &format!("{}/v1internal:retrieveUserQuotaSummary", BASES[0]), 200, summary)
+                .on("POST", &format!("{}/v1internal:retrieveUserQuotaSummary", BASES[1]), 200, summary)
+                .on("POST", &format!("{}/v1internal:fetchAvailableModels", BASES[0]), 200,
+                    r#"{"models":{"argon":{"displayName":"Gemini 4 Argon","quotaInfo":{"remainingFraction":0.01,"resetTime":"2026-11-14T03:59:21Z"}}}}"#);
+            let scope = context_at(&http, secret(now() + Duration::minutes(30)), now());
+            let reading = Antigravity.fetch(&scope.context()).await.unwrap();
+            assert_eq!(
+                meters(&reading),
+                vec![(
+                    "Gemini 4 Argon".into(),
+                    99.0,
+                    Some(Utc.with_ymd_and_hms(2026, 11, 14, 3, 59, 21).unwrap()),
+                )]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn unreadable_sources_do_not_publish_an_empty_successful_reading() {
         let http = Scripted::new()
-            .on("POST", &format!("{}/v1internal:retrieveUserQuotaSummary", BASES[0]), 200, SUMMARY)
+            .on(
+                "POST",
+                &format!("{}/v1internal:retrieveUserQuotaSummary", BASES[0]),
+                200,
+                "{}",
+            )
             .on(
                 "POST",
                 &format!("{}/v1internal:fetchAvailableModels", BASES[0]),
                 200,
-                r#"{"models":{
-                    "gemini-3.8-flash-high":{"model":"M1","displayName":"Gemini 3.8 Flash (High)","quotaInfo":{"remainingFraction":0.5,"resetTime":"2026-09-27T15:00:00Z"}},
-                    "claude-opus":{"model":"M2","displayName":"Claude Opus 4.6 (Thinking)","quotaInfo":{"remainingFraction":1}},
-                    "internal":{"model":"M3","displayName":"Tab","isInternal":true,"quotaInfo":{"remainingFraction":1}},
-                    "no-quota":{"model":"M4","displayName":"Gemini Embedding"}
-                }}"#,
-            )
+                "{}",
+            );
+        let scope = context_at(&http, secret(now() + Duration::minutes(30)), now());
+        assert_eq!(
+            Antigravity
+                .fetch(&scope.context())
+                .await
+                .unwrap_err()
+                .category,
+            ErrorCategory::Decoding
+        );
+    }
+
+    #[tokio::test]
+    async fn reads_the_five_pools_and_the_plan() {
+        let http = Scripted::new()
+            .on("POST", &format!("{}/v1internal:retrieveUserQuotaSummary", BASES[0]), 200, SUMMARY)
             .on(
                 "POST",
                 &format!("{}/v1internal:loadCodeAssist", BASES[0]),
@@ -585,45 +775,67 @@ mod tests {
         assert_eq!(reading.account.as_deref(), Some("minh@example.com"));
         let rows = meters(&reading);
         assert_eq!(
-            rows[4..].to_vec(),
+            rows,
             vec![
-                ("Claude Opus 4.6 (Thinking)".into(), 0.0, None),
                 (
-                    "Gemini 3.8 Flash (High)".into(),
-                    50.0,
-                    Some(Utc.with_ymd_and_hms(2026, 9, 27, 15, 0, 0).unwrap())
+                    "Gemini Weekly".into(),
+                    31.0,
+                    Some(Utc.with_ymd_and_hms(2026, 11, 14, 5, 13, 17).unwrap())
+                ),
+                (
+                    "Gemini 5h".into(),
+                    0.0,
+                    Some(Utc.with_ymd_and_hms(2026, 11, 10, 17, 54, 18).unwrap())
+                ),
+                (
+                    "Claude and GPT Weekly".into(),
+                    100.0,
+                    Some(Utc.with_ymd_and_hms(2026, 11, 13, 1, 3, 4).unwrap())
+                ),
+                (
+                    "Claude and GPT 5h".into(),
+                    0.0,
+                    Some(Utc.with_ymd_and_hms(2026, 11, 10, 17, 54, 18).unwrap())
+                ),
+                (
+                    "Gemini 4 Argon Weekly".into(),
+                    99.0,
+                    Some(Utc.with_ymd_and_hms(2026, 11, 14, 3, 59, 21).unwrap())
                 ),
             ]
         );
         assert_eq!(
-            rows[..4].to_vec(),
+            reading.lines[..5]
+                .iter()
+                .map(|line| match line {
+                    MetricLine::Progress(line) => line.period_duration_ms,
+                    _ => unreachable!(),
+                })
+                .collect::<Vec<_>>(),
             vec![
-                (
-                    "Session".into(),
-                    38.0,
-                    Some(Utc.with_ymd_and_hms(2026, 9, 27, 12, 0, 0).unwrap())
-                ),
-                (
-                    "Weekly".into(),
-                    10.0,
-                    Some(Utc.with_ymd_and_hms(2026, 10, 2, 0, 0, 0).unwrap())
-                ),
-                ("Claude".into(), 0.0, None),
-                (
-                    "Claude Weekly".into(),
-                    80.0,
-                    Some(Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap())
-                ),
+                Some(lines::WEEK_MS),
+                Some(5 * lines::HOUR_MS),
+                Some(lines::WEEK_MS),
+                Some(5 * lines::HOUR_MS),
+                Some(lines::WEEK_MS),
             ]
         );
         let requests = http.requests();
+        assert!(
+            !requests
+                .iter()
+                .any(|request| request.url.ends_with(":fetchAvailableModels"))
+        );
         assert_eq!(header(&requests[0], "Authorization"), Some("Bearer saved"));
-        assert_eq!(header(&requests[0], "User-Agent"), Some("antigravity"));
+        assert_eq!(
+            header(&requests[0], "User-Agent"),
+            Some(user_agent().as_str())
+        );
         let load = requests
             .iter()
             .find(|request| request.url.ends_with(":loadCodeAssist"))
             .unwrap();
-        assert_eq!(header(load, "User-Agent"), Some("agy"));
+        assert_eq!(header(load, "User-Agent"), Some(user_agent().as_str()));
     }
 
     #[tokio::test]
@@ -650,8 +862,6 @@ mod tests {
         assert_eq!(
             meters(&reading),
             vec![
-                ("Session".into(), 50.0, None),
-                ("Claude".into(), 70.0, None),
                 ("Claude Sonnet 4.6 (Thinking)".into(), 70.0, None),
                 (
                     "Gemini 3.1 Pro (High)".into(),
@@ -661,6 +871,10 @@ mod tests {
                 ("Gemini 3.1 Pro (Low)".into(), 50.0, None),
             ]
         );
+        assert!(reading.lines.iter().all(|line| match line {
+            MetricLine::Progress(line) => line.period_duration_ms.is_none(),
+            _ => false,
+        }));
     }
 
     #[tokio::test]
@@ -692,7 +906,7 @@ mod tests {
             );
         let scope = context_at(&http, secret(now() + Duration::minutes(30)), now());
         let reading = Antigravity.fetch(&scope.context()).await.unwrap();
-        assert_eq!(reading.lines.len(), 4);
+        assert_eq!(reading.lines.len(), 5);
         assert_eq!(reading.plan, None);
         let requests = http.requests();
         assert_eq!(requests[1].url, oauth::GOOGLE_TOKEN_URL);

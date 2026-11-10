@@ -1,6 +1,7 @@
 import { fixtureCatalog, fixtureEngineState, fixtureSnapshots } from "@/lib/fixtures";
-import type { ProviderSnapshot } from "@/lib/types";
+import type { ProviderEntry, ProviderSnapshot } from "@/lib/types";
 import { stripText } from "@/strip/render";
+import { nativeStrip } from "@/strip/native";
 import { glanceGroups, pinnedGroups, reconcileLayout } from "./layout";
 import { barFill, buildStripContent, isStripEmpty, MAX_BARS, periodLabel, stripSummary, visualFraction } from "./menuBar";
 import { providerTitle } from "./providerText";
@@ -61,6 +62,75 @@ describe("taskbar strip content", () => {
     expect(strip.groups[2]!.metrics.map((metric) => metric.value)).toEqual(["—", "—"]);
     expect(isStripEmpty(content(DEFAULT_DISPLAY, {}))).toBe(false);
     expect(isStripEmpty(buildStripContent([], () => { throw new Error("No selected metrics"); }, () => ""))).toBe(true);
+  });
+
+  it.each(["vi", "en"] as const)("distinguishes the weekly limit from Fable when Claude has no session window in %s", (language) => {
+    const providerId = "claude@7c1e";
+    const snapshot = {
+      ...snapshots[providerId]!,
+      lines: [
+        { type: "progress" as const, label: "Weekly", used: 15, limit: 100, format: { kind: "percent" as const }, periodDurationMs: 604_800_000 },
+        { type: "progress" as const, label: "Fable", used: 12, limit: 100, format: { kind: "percent" as const }, periodDurationMs: 604_800_000 },
+      ],
+    };
+    const groups = glanceGroups("dashboard", [], layout, catalog, (id) => id === providerId);
+    const strip = buildStripContent(groups, (descriptor) => widgetDataFor(descriptor, snapshot, { ...DEFAULT_DISPLAY, language }), (provider) => providerTitle(provider, language));
+    expect(strip.groups[0]!.metrics.map(({ period, value }) => ({ period, value }))).toEqual([
+      { period: "week", value: "85%" },
+      { period: "Fable", value: "88%" },
+    ]);
+    expect(nativeStrip(strip, 36, 2)!.groups[0]!.rows).toEqual([
+      { label: "week", value: "85%" },
+      { label: "Fable", value: "88%" },
+    ]);
+  });
+
+  it.each(["Fable", "Sonnet"])("keeps the model name when %s is selected on its own", (label) => {
+    const providerId = "claude@7c1e";
+    const snapshot = {
+      ...snapshots[providerId]!,
+      lines: [{ type: "progress" as const, label, used: 12, limit: 100, format: { kind: "percent" as const }, periodDurationMs: 604_800_000 }],
+    };
+    const groups = glanceGroups("custom", [`${providerId}.${label.toLowerCase()}`], layout, catalog, () => true);
+    const strip = buildStripContent(groups, (descriptor) => widgetDataFor(descriptor, snapshot, DEFAULT_DISPLAY), (provider) => providerTitle(provider, "vi"));
+    expect(strip.groups[0]!.metrics).toEqual([expect.objectContaining({ period: label, value: "88%" })]);
+  });
+
+  it.each([["spark", "Spark", 18_000_000, "Spark 5h"], ["sparkWeekly", "Spark Weekly", 604_800_000, "Spark week"]] as const)("keeps the scope of the Codex %s window", (suffix, label, periodDurationMs, period) => {
+    const providerId = "codex@52d0";
+    const snapshot = {
+      ...snapshots[providerId]!,
+      lines: [{ type: "progress" as const, label, used: 20, limit: 100, format: { kind: "percent" as const }, periodDurationMs }],
+    };
+    const groups = glanceGroups("custom", [`${providerId}.${suffix}`], layout, catalog, () => true);
+    const strip = buildStripContent(groups, (descriptor) => widgetDataFor(descriptor, snapshot, DEFAULT_DISPLAY), (provider) => providerTitle(provider, "vi"));
+    expect(strip.groups[0]!.metrics).toEqual([expect.objectContaining({ period, value: "80%" })]);
+  });
+
+  it.each(["vi", "en"] as const)("keeps all Antigravity pools and their weekly or five-hour scope in %s", (language) => {
+    const providerId = "antigravity@test";
+    const pools = [
+      ["geminiWeekly", "Gemini Weekly", 31, 604_800_000, "Gemini week", "Gemini · Tuần"],
+      ["geminiPro", "Gemini 5h", 0, 18_000_000, "Gemini 5h", "Gemini · 5 giờ"],
+      ["claudeWeekly", "Claude and GPT Weekly", 100, 604_800_000, "Claude/GPT week", "Claude/GPT · Tuần"],
+      ["claude", "Claude and GPT 5h", 0, 18_000_000, "Claude/GPT 5h", "Claude/GPT · 5 giờ"],
+      ["argonWeekly", "Gemini 4 Argon Weekly", 99, 604_800_000, "Argon week", "Gemini 4 Argon · Tuần"],
+    ] as const;
+    const entry: ProviderEntry = {
+      provider: { id: providerId, displayName: "Antigravity", icon: "antigravity", links: [] },
+      descriptors: pools.map(([suffix, title]) => ({ id: `${providerId}.${suffix}`, providerId, metricLabel: title, template: { title, kind: "percent", limit: 100 }, pinnable: true, isSpendTile: false })),
+    };
+    const snapshot: ProviderSnapshot = {
+      providerID: providerId,
+      displayName: "Antigravity",
+      refreshedAt: "2026-11-10T12:00:00Z",
+      lines: pools.map(([, label, used, periodDurationMs]) => ({ type: "progress", label, used, limit: 100, format: { kind: "percent" }, periodDurationMs })),
+    };
+    const groups = glanceGroups("dashboard", [], reconcileLayout(null, [entry]), [entry], () => true);
+    const strip = buildStripContent(groups, (descriptor) => widgetDataFor(descriptor, snapshot, { ...DEFAULT_DISPLAY, language }), () => "Antigravity", 5);
+    expect(strip.groups[0]!.metrics.map(({ label, period, value }) => ({ label, period, value }))).toEqual(
+      pools.map(([, label, used, , period, translated]) => ({ label: language === "vi" ? translated : label, period, value: `${100 - used}%` })),
+    );
   });
 
   it.each(["rate_limited", "network", "auth_expired"])("keeps an account in place through a %s error and recovery", (error) => {

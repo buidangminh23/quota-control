@@ -18,7 +18,7 @@ import { usesTwentyFourHour, type TimeFormat } from "./format";
 import { COUNTDOWN_SPAN } from "./glanceResets";
 import { MOMENT_PLACEHOLDER, resetRowAvatars } from "./glanceResetRows";
 import { brandOf, cardsAsShown, isLocalHistoryCard, layoutFamily, type ProviderMetrics } from "./layout";
-import { periodLabel } from "./menuBar";
+import { metricPeriodLabel } from "./menuBar";
 import { boundedTrailingText, isFreshSessionWindow, meterSeverity, meterState, resetCountdownText, type MeterState } from "./meterState";
 import { SOURCE_COLORS } from "./palette";
 import { PLAN_TERM_SOON_DAYS, planTermEnd } from "./planTerm";
@@ -1114,7 +1114,7 @@ export function buildGlance(input: GlanceInput): GlanceDocument {
     descriptors.flatMap((descriptor) => {
       const data = input.dataFor(descriptor);
       if (!data.hasData) return [];
-      const period = periodLabel(data.periodDurationMs);
+      const period = metricPeriodLabel(descriptor, data);
       if (period) periods.set(descriptor.id, period);
       const metric = glanceMetric(descriptor.id, data, input.now);
       const redeem = providerId && input.redeemsResets ? glanceRedeem(providerId, data, input.now) : null;
@@ -1247,7 +1247,7 @@ function wings(
     const source = input.providerOf(choice.providerId);
     const data = input.dataFor(choice);
     if (!source || !data.hasData) return null;
-    return make(source, [withPeriod(glanceMetric(choice.id, data, input.now), periodLabel(data.periodDurationMs))]);
+    return make(source, [withPeriod(glanceMetric(choice.id, data, input.now), metricPeriodLabel(choice, data))]);
   });
   const used = new Set(picked.flatMap((wing) => (wing ? [`${wing.id}|${wing.metrics[0]!.id}`] : [])));
   const firsts = providers.flatMap((entry) => (entry.metrics[0] ? [{ entry, metric: entry.metrics[0] }] : []));

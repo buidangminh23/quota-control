@@ -211,6 +211,18 @@
   font-weight: 600;
 }
 
+.uc-section[data-provider="antigravity"] .uc-row-label {
+  flex-wrap: wrap;
+  row-gap: var(--uc-row-gap);
+}
+
+.uc-section[data-provider="antigravity"] .uc-row-title {
+  flex-shrink: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 /* The reset countdown at the end of the title line: it keeps its full width (its digits change every
    second near the reset), so a long title gives way instead. */
 .uc-row-countdown {
