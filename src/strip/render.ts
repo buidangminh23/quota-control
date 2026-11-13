@@ -4,7 +4,10 @@
  * marks with their values stacked two high (upstream `MenuBarTextStrip`). The taskbar style is
  * scaled to the Windows taskbar the way the system clock stacks time over date; the menu bar and
  * panel styles keep the same picture (colored marks, window names, stacked readings) at the macOS
- * menu bar's and the GNOME top bar's own sizes, so the three systems look alike.
+ * menu bar's and the GNOME top bar's own sizes, so the three systems look alike. Only the menu bar
+ * style places its rows on baselines measured from the font, in aligned columns (`layout.ts`), so
+ * both rows fit its 18-point image with their descenders and the item keeps its width; the taskbar
+ * and panel placements are unchanged.
  */
 import { colorArtUrl, PROVIDER_COLOR_ART } from "@/assets/providerColorArt";
 import { PROVIDER_MARKS } from "@/assets/providerMarks";
@@ -61,12 +64,11 @@ export const STRIP_METRICS: Readonly<Record<StripStyle, StripMetrics>> = {
     stackedSize: 12,
     stackedLineHeight: 14,
     markSide: 18,
-    markGap: 4,
-    groupGap: 12,
-    sidePadding: 8,
+    markGap: 5,
+    groupGap: 14,
+    sidePadding: 6,
     labelSize: 10,
-    labelGap: 4,
-    baselines: { rowGap: 4, edge: 4, minValue: "100%" },
+    labelGap: 3,
   },
   menuBar: {
     font: '-apple-system, "SF Pro Text", system-ui, sans-serif',
@@ -277,6 +279,7 @@ export async function renderTextStrip(
   return { png: await toPng(element), width, height };
 }
 
+/** The Windows taskbar and Linux panel placement: rows on the middle line, labels dropped onto the value's baseline. */
 function drawMiddleRows(
   context: CanvasRenderingContext2D,
   rows: readonly MeasuredRow[],
@@ -309,6 +312,7 @@ function drawMiddleRows(
   });
 }
 
+/** The macOS menu bar placement: every row on its measured alphabetic baseline, names left, values right. */
 function drawBaselineRows(
   context: CanvasRenderingContext2D,
   rows: readonly MeasuredRow[],
