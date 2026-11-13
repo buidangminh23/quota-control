@@ -73,7 +73,7 @@ export function nativeStrip(
   style: StripStyle = "menuBar",
 ): NativeStrip | null {
   const metrics = STRIP_METRICS[style];
-  if (!metrics.baselines || content.groups.length === 0) return null;
+  if (style !== "menuBar" || !metrics.baselines || content.groups.length === 0) return null;
   const named = metrics.labelSize !== null;
   return {
     version: 1,
