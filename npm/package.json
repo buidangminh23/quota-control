@@ -1,0 +1,34 @@
+{
+  "name": "@minhspark/quota-control",
+  "version": "0.1.0",
+  "description": "Install Quota Control, the AI usage limit tracker for the Windows/Linux tray and the macOS menu bar",
+  "type": "module",
+  "bin": {
+    "quota-control": "cli.mjs"
+  },
+  "files": [
+    "cli.mjs",
+    "lib.mjs",
+    "installer.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test lib.test.mjs"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "keywords": ["ai", "usage", "quota", "claude", "codex", "tray", "menu-bar"],
+  "author": "Bui Dang Minh",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/buidangminh23/quota-control.git",
+    "directory": "npm"
+  },
+  "homepage": "https://github.com/buidangminh23/quota-control#readme",
+  "bugs": {
+    "url": "https://github.com/buidangminh23/quota-control/issues"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "product": "Quota Control",
+  "releasesPage": "https://github.com/buidangminh23/quota-control/releases/latest",
+  "baseUrl": "https://github.com/buidangminh23/quota-control/releases/latest/download",
+  "checksums": "SHA256SUMS",
+  "macScript": "https://raw.githubusercontent.com/buidangminh23/quota-control/main/scripts/install-macos.sh",
+  "appImageName": "quota-control.AppImage",
+  "assets": {
+    "win32-x64": "^Quota-Control_[0-9][^_]*_x64-setup[.]exe$",
+    "linux-x64-deb": "^Quota-Control_[0-9][^_]*_amd64[.]deb$",
+    "linux-x64-appimage": "^Quota-Control_[0-9][^_]*_amd64[.]AppImage$",
+    "darwin-arm64": "^Quota-Control_[0-9][^_]*_aarch64[.]dmg$"
+  },
+  "samples": {
+    "win32-x64": "Quota-Control_0.3.53_x64-setup.exe",
+    "linux-x64-deb": "Quota-Control_0.3.53_amd64.deb",
+    "linux-x64-appimage": "Quota-Control_0.3.53_amd64.AppImage",
+    "darwin-arm64": "Quota-Control_0.3.53_aarch64.dmg"
+  }
+}

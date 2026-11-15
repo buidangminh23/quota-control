@@ -1,0 +1,41 @@
+name: npm
+
+on:
+  push:
+    tags: ["npm-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: npm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm test
+      - name: Check whether this version is already on npm
+        id: published
+        run: |
+          pkg="$(node -p "require('./package.json').name")"
+          ver="$(node -p "require('./package.json').version")"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME#npm-v}" != "$ver" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match npm/package.json ${ver}"
+            exit 1
+          fi
+          if npm view "$pkg@$ver" version > /dev/null 2>&1; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "$pkg@$ver is already on npm"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+      - run: npm publish --access public
+        if: steps.published.outputs.already == 'false'
