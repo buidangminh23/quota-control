@@ -2,6 +2,8 @@
 
 # Quota Control
 
+<p align="center"><a href="LICENSE"><img src="https://img.shields.io/github/license/buidangminh23/quota-control" height="20" alt="license" /></a></p>
+
 AI usage limits, reset countdowns and token history in your Windows/Linux system tray or macOS menu bar.
 
 ## Preview
