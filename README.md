@@ -2,7 +2,8 @@
 
 # Quota Control
 
-<p align="center"><a href="LICENSE"><img src="https://img.shields.io/github/license/buidangminh23/quota-control" height="20" alt="license" /></a></p>
+<p align="center"><a href="https://www.npmjs.com/package/@minhspark/quota-control"><img src="https://img.shields.io/npm/v/@minhspark/quota-control?logo=npm&amp;color=CB3837" height="20" alt="npm" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/buidangminh23/quota-control" height="20" alt="license" /></a></p>
 
 AI usage limits, reset countdowns and token history in your Windows/Linux system tray or macOS menu bar.
 
