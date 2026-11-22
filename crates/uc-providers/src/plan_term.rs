@@ -226,15 +226,16 @@ impl BillingPeriods {
         now: DateTime<Utc>,
     ) -> Option<PlanTerm> {
         let account_uuid = organization_uuid_value(account_uuid)?;
+        let plan = fresh_profile_plan?;
+        if plan.trim().eq_ignore_ascii_case("free") {
+            let _ = self.invalidate_for_at(provider, &account_uuid, now);
+            return None;
+        }
+        if !paid_plan_for(provider, plan) {
+            return None;
+        }
         let id = billing_id_for(provider, &account_uuid);
         let _lock = self.store.renewal_lock(&id).ok()?;
-        let Some(plan) = fresh_profile_plan.filter(|plan| paid_plan_for(provider, plan)) else {
-            if fresh_profile_plan.is_some() {
-                let _ = self.record_revocation(provider, &account_uuid, now);
-            }
-            let _ = self.remove(&id);
-            return None;
-        };
         let confirmations = self.confirmations(provider, &account_uuid).ok()?;
         if !confirmations.is_empty()
             && confirmations
@@ -730,7 +731,7 @@ fn timestamp(value: &Value) -> Option<DateTime<Utc>> {
 pub(crate) struct ProfileSubscription {
     pub(crate) plan: Option<String>,
     pub(crate) organization_uuid: Option<String>,
-    billing_eligible: bool,
+    inactive: bool,
     pub(crate) checked_at: DateTime<Utc>,
 }
 
@@ -742,11 +743,11 @@ impl ProfileSubscription {
     ) -> Option<PlanTerm> {
         let periods = periods?;
         let organization_uuid = self.organization_uuid.as_deref()?;
-        if !self.billing_eligible {
-            let _ = periods.invalidate(organization_uuid);
+        if self.checked_at > now || now - self.checked_at >= PROFILE_RECHECK {
             return None;
         }
-        if self.checked_at > now || now - self.checked_at >= PROFILE_RECHECK {
+        if self.inactive || self.plan.as_deref() == Some("Free") {
+            let _ = periods.invalidate_for_at("claude", organization_uuid, self.checked_at);
             return None;
         }
         periods.get(organization_uuid, self.plan.as_deref(), now)
@@ -774,20 +775,19 @@ fn subscription(profile: &Value, now: DateTime<Utc>) -> Result<ProfileSubscripti
         .get("uuid")
         .and_then(Value::as_str)
         .and_then(organization_uuid_value);
-    let billing_eligible = plan.as_deref().is_some_and(recognized_paid_plan)
-        && !organization
-            .get("subscription_status")
-            .and_then(Value::as_str)
-            .is_some_and(|status| {
-                matches!(
-                    status.trim().to_ascii_lowercase().as_str(),
-                    "inactive" | "canceled" | "cancelled" | "expired"
-                )
-            });
+    let inactive = organization
+        .get("subscription_status")
+        .and_then(Value::as_str)
+        .is_some_and(|status| {
+            matches!(
+                status.trim().to_ascii_lowercase().as_str(),
+                "inactive" | "canceled" | "cancelled" | "expired"
+            )
+        });
     Ok(ProfileSubscription {
         plan,
         organization_uuid,
-        billing_eligible,
+        inactive,
         checked_at: now,
     })
 }
@@ -1046,6 +1046,46 @@ mod tests {
         assert_eq!(refreshed.plan.as_deref(), Some("Max"));
         assert_eq!(refreshed.checked_at, later);
         assert_eq!(refreshed.confirmed_term(Some(&periods), later), Some(term));
+    }
+
+    #[test]
+    fn incomplete_plan_reads_preserve_the_original_billing_confirmation_for_a_later_match() {
+        let directory = tempfile::tempdir().unwrap();
+        let periods = BillingPeriods::new(directory.path());
+        let account = "00000000-0000-4000-8000-000000000001";
+        let later = now() + chrono::Duration::minutes(10);
+        let end = now() + chrono::Duration::days(24);
+        let original = Some(PlanTerm::Stated {
+            ends_at: end,
+            checked_at: Some(now()),
+        });
+        for (provider, plan) in [("claude", "Pro"), ("codex", "Plus")] {
+            periods
+                .save_from(provider, account, plan, Some(end), now(), "browser")
+                .unwrap();
+            for incomplete in [None, Some("Unknown"), Some("")] {
+                assert_eq!(periods.get_for(provider, account, incomplete, later), None);
+                assert_eq!(
+                    periods.get_for(provider, account, Some(plan), later),
+                    original
+                );
+            }
+        }
+        for plan in [Value::Null, json!("claude_unknown")] {
+            let profile = json!({"organization":{"uuid":account, "organization_type":plan}});
+            let subscription = subscription(&profile, later).unwrap();
+            assert_eq!(subscription.confirmed_term(Some(&periods), later), None);
+            assert_eq!(periods.peek_for("claude", account, later), original);
+        }
+        let profile = json!({"organization":{"uuid":account, "subscription_status":"inactive"}});
+        assert_eq!(
+            subscription(&profile, later)
+                .unwrap()
+                .confirmed_term(Some(&periods), later),
+            None
+        );
+        assert_eq!(periods.peek_for("claude", account, later), None);
+        assert_eq!(periods.peek_for("codex", account, later), original);
     }
 
     #[test]
@@ -1425,12 +1465,18 @@ mod tests {
                 .save_from(provider, account, plan, None, later, "browser")
                 .unwrap();
             assert_eq!(periods.peek_for(provider, account, later), None);
-            for live_plan in [Some("Free"), Some("Different paid plan"), None] {
+            for (index, live_plan) in ["Team", "Free"].into_iter().enumerate() {
+                let observed = later + chrono::Duration::seconds(2 * index as i64 + 1);
                 periods
-                    .save_from(provider, account, plan, Some(end), now(), "browser")
+                    .save_from(provider, account, plan, Some(end), observed, "browser")
                     .unwrap();
-                assert_eq!(periods.get_for(provider, account, live_plan, later), None);
-                assert_eq!(periods.peek_for(provider, account, later), None);
+                assert!(periods.peek_for(provider, account, observed).is_some());
+                let next = observed + chrono::Duration::seconds(1);
+                assert_eq!(
+                    periods.get_for(provider, account, Some(live_plan), next),
+                    None
+                );
+                assert_eq!(periods.peek_for(provider, account, next), None);
             }
             periods
                 .save_from(provider, account, plan, Some(end), now(), "browser")

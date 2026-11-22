@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -237,6 +237,11 @@ pub struct ImportResult {
     pub report: ImportReport,
     pub settings: Value,
     pub layout: Value,
+}
+
+pub struct BillingChanges {
+    pub revision: u64,
+    pub accounts: HashMap<String, Option<DateTime<Utc>>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -575,6 +580,43 @@ impl DeviceSyncStore {
             .collect())
     }
 
+    fn billing_changes_since(
+        &self,
+        revision: u64,
+        billing: &BillingPeriods,
+        now: DateTime<Utc>,
+    ) -> Result<BillingChanges, String> {
+        let _guard = self.lock()?;
+        let state = self.load()?;
+        let mut changes = BillingChanges {
+            revision: state.revision,
+            accounts: HashMap::new(),
+        };
+        if state
+            .billing_updates
+            .values()
+            .all(|updated| *updated <= revision)
+        {
+            return Ok(changes);
+        }
+        let evidence = billing
+            .sync_evidence(now)
+            .map_err(|_| "Cannot read billing evidence")?;
+        for (id, updated) in state.billing_updates {
+            if updated > revision
+                && let Some(account) = state.local_accounts.get(&id)
+                && let Some(term) = evidence.iter().find(|term| {
+                    term.provider == account.provider && term.account_uuid == account.account_uuid
+                })
+            {
+                changes
+                    .accounts
+                    .insert(id, term.ends_at.filter(|end| *end > now));
+            }
+        }
+        Ok(changes)
+    }
+
     pub fn pending(&self, local: &LocalState) -> Result<Vec<AccountMetadata>, String> {
         let _guard = self.lock()?;
         Ok(pending(&self.load()?, local))
@@ -734,6 +776,14 @@ pub fn status_revision() -> Result<u64, String> {
 
 pub fn billing_updates_since(revision: u64) -> Result<Vec<String>, String> {
     DeviceSyncStore::default_store().billing_updates_since(revision)
+}
+
+pub fn billing_changes_since(revision: u64) -> Result<BillingChanges, String> {
+    DeviceSyncStore::default_store().billing_changes_since(
+        revision,
+        &BillingPeriods::default_store(),
+        Utc::now(),
+    )
 }
 
 pub fn pending_accounts() -> Result<Vec<AccountMetadata>, String> {
@@ -1481,6 +1531,19 @@ mod tests {
             b_store.billing_updates_since(0).unwrap(),
             vec![expected_id.clone()]
         );
+        let changes = b_store.billing_changes_since(0, &b_billing, now).unwrap();
+        assert_eq!(changes.revision, result.report.revision);
+        assert_eq!(
+            changes.accounts,
+            HashMap::from([(expected_id.clone(), Some(now + Duration::days(5)))])
+        );
+        let expired = b_store
+            .billing_changes_since(0, &b_billing, now + Duration::days(5))
+            .unwrap();
+        assert_eq!(
+            expired.accounts,
+            HashMap::from([(expected_id.clone(), None)])
+        );
         let initial_revision = result.report.revision;
         a_local.settings["language"] = json!("vi");
         let preferences = a_store.export(&a_local, &a_billing, now).unwrap();
@@ -1509,6 +1572,14 @@ mod tests {
         use_result(&mut b_local, &result);
         assert_eq!(result.report.billing_applied, 1);
         assert_eq!(result.report.billing_pending, 1);
+        let changes = b_store
+            .billing_changes_since(preference_revision, &b_billing, now)
+            .unwrap();
+        assert_eq!(changes.revision, result.report.revision);
+        assert_eq!(
+            changes.accounts,
+            HashMap::from([(expected_id.clone(), None)])
+        );
         assert_eq!(
             b_store.billing_updates_since(preference_revision).unwrap(),
             vec![expected_id]

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -12,6 +12,8 @@ use url::Url;
 
 use crate::chat_store::{ChatSession, ChatStore};
 use crate::service::safe_error;
+
+type BillingChanges = HashMap<String, Option<chrono::DateTime<Utc>>>;
 
 #[derive(Default)]
 pub struct ChatWindows {
@@ -276,9 +278,9 @@ async fn connect_account_billing(app: &AppHandle, account_id: &str) -> Result<bo
             billing_read_without_subscription(&reads, provider, &account_uuid);
         let changed = store_chrome_billing(&periods, provider, reads, observed_at)?;
         let engine = app.state::<crate::service::BackendService>().engine();
-        if changed {
-            refresh_billing_provider(&engine, provider).await;
-        } else {
+        let updates = local_billing_changes(&accounts, &engine, provider, &changed).await;
+        refresh_changed_billing_accounts(&engine, &updates).await;
+        if !updates.contains_key(account_id) {
             refresh_billing_account(&engine, account_id).await;
         }
         if without_subscription
@@ -385,27 +387,37 @@ async fn refresh_billing_account(engine: &uc_engine::Engine, account_id: &str) {
     .await;
 }
 
-pub(crate) async fn refresh_billing_provider(engine: &uc_engine::Engine, provider: &str) {
-    let ids: Vec<_> = engine
-        .provider_ids()
-        .into_iter()
-        .filter(|id| billing_provider(id) == Some(provider))
-        .collect();
-    refresh_synced_billing_accounts(engine, &ids).await;
+async fn local_billing_changes(
+    accounts: &crate::account_commands::Accounts,
+    engine: &uc_engine::Engine,
+    provider: &str,
+    changes: &BillingChanges,
+) -> BillingChanges {
+    let mut updates = HashMap::new();
+    for id in engine.provider_ids() {
+        if billing_provider(&id) == Some(provider)
+            && let Ok(uuid) = accounts.billing_account_uuid(&id).await
+            && let Some(end) = changes.get(&uuid)
+        {
+            updates.insert(id, *end);
+        }
+    }
+    updates
 }
 
-pub(crate) async fn refresh_synced_billing_accounts(engine: &uc_engine::Engine, ids: &[String]) {
-    let mut ids: Vec<_> = ids
-        .iter()
-        .map(String::as_str)
-        .filter(|id| billing_provider(id).is_some() && engine.runtime(id).is_some())
-        .collect();
-    ids.sort_unstable();
-    ids.dedup();
-    for id in &ids {
-        engine.invalidate_plan_term(id);
+pub(crate) async fn refresh_changed_billing_accounts(
+    engine: &uc_engine::Engine,
+    updates: &BillingChanges,
+) {
+    let mut pending = Vec::new();
+    for (id, end) in updates {
+        if billing_provider(id).is_none() || engine.runtime(id).is_none() {
+            continue;
+        }
+        engine.invalidate_plan_term_unless_confirmed(id, *end);
+        pending.push(refresh_billing_account(engine, id));
     }
-    futures::future::join_all(ids.iter().map(|id| refresh_billing_account(engine, id))).await;
+    futures::future::join_all(pending).await;
 }
 
 #[derive(Deserialize)]
@@ -622,7 +634,8 @@ for (const org of organizations) {{
 const capabilities = Array.isArray(org.capabilities) ? org.capabilities : [];
 if (!capabilities.includes('chat')) continue;
 if (typeof org.uuid !== 'string' || !/^[0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}}$/i.test(org.uuid)) continue;
-const planType = capabilities.find(value => ['claude_max', 'claude_pro', 'claude_team'].includes(value)) || 'claude_free';
+const planType = capabilities.find(value => ['claude_max', 'claude_pro', 'claude_team'].includes(value)) ?? org.organization_type ?? capabilities.find(value => value === 'claude_free');
+if (!['claude_max', 'claude_pro', 'claude_team', 'claude_free'].includes(planType)) continue;
 const tier = typeof org.rate_limit_tier === 'string' ? org.rate_limit_tier : null;
 if (planType === 'claude_free') {{ rows.push({{uuid: org.uuid, planType, tier, status: 200, details: {{status: 'inactive'}}}}); continue; }}
 stage = 'subscription_http';
@@ -676,7 +689,10 @@ async fn evaluate_billing(
     serde_json::from_str(&result).map_err(|_| "Billing response is invalid".into())
 }
 
-async fn read_session_billing(app: &AppHandle, session: &ChatSession) -> Result<bool, String> {
+async fn read_session_billing(
+    app: &AppHandle,
+    session: &ChatSession,
+) -> Result<BillingChanges, String> {
     let (window, temporary) = {
         let windows = app.state::<ChatWindows>();
         let _operation = windows.operations.lock().await;
@@ -714,7 +730,7 @@ async fn collect_session_billing(
     app: &AppHandle,
     session: &ChatSession,
     window: &WebviewWindow,
-) -> Result<bool, String> {
+) -> Result<BillingChanges, String> {
     let key = format!("__ucBilling{}", uuid::Uuid::new_v4().simple());
     let deadline = tokio::time::Instant::now() + Duration::from_secs(25);
     while !billing_origin(&session.provider, &window.url().map_err(safe_error)?)
@@ -763,7 +779,7 @@ fn store_billing_read(
     session: &ChatSession,
     read: BillingRead,
     now: chrono::DateTime<Utc>,
-) -> Result<bool, String> {
+) -> Result<BillingChanges, String> {
     let (changed, organizations) = store_source_billing(
         periods,
         &session.provider,
@@ -781,7 +797,7 @@ fn store_source_billing(
     source: &str,
     read: BillingRead,
     now: chrono::DateTime<Utc>,
-) -> Result<(bool, Vec<String>), String> {
+) -> Result<(BillingChanges, Vec<String>), String> {
     let mut unique_accounts = HashSet::new();
     if !matches!(provider, "claude" | "codex")
         || read.organizations.len() > 32
@@ -796,12 +812,13 @@ fn store_source_billing(
     if read.state != "ready" {
         return Err("The subscription billing request did not complete".into());
     }
-    let mut changed = false;
+    let mut changed = HashMap::new();
     let mut organizations = Vec::new();
     for org in read.organizations {
         let uuid = uuid::Uuid::parse_str(&org.uuid).unwrap().to_string();
         organizations.push(uuid.clone());
         let before = periods.peek_for(provider, &uuid, now);
+        let mut revoked = false;
         if org.status == 200 {
             let plan = uc_providers::BillingPeriods::plan_for(
                 provider,
@@ -824,7 +841,7 @@ fn store_source_billing(
                 periods
                     .invalidate_for(provider, &uuid)
                     .map_err(safe_error)?;
-                changed = true;
+                revoked = true;
             } else if let (Some(plan), Some(end)) = (plan, end) {
                 periods
                     .save_from(provider, &uuid, &plan, Some(end), now, source)
@@ -832,7 +849,13 @@ fn store_source_billing(
             }
         }
         let after = periods.peek_for(provider, &uuid, now);
-        changed |= before != after;
+        if revoked || before != after {
+            let end = match after {
+                Some(uc_core::PlanTerm::Stated { ends_at, .. }) => Some(ends_at),
+                _ => None,
+            };
+            changed.insert(uuid, end);
+        }
     }
     Ok((changed, organizations))
 }
@@ -853,7 +876,7 @@ pub async fn run_billing_reader(app: AppHandle) {
                 Vec::new()
             }
         };
-        let mut changed = HashSet::new();
+        let mut changed: HashMap<String, BillingChanges> = HashMap::new();
         let periods = uc_providers::BillingPeriods::default_store();
         let account_ids = app
             .state::<crate::service::BackendService>()
@@ -867,14 +890,17 @@ pub async fn run_billing_reader(app: AppHandle) {
                 Ok(reads) => {
                     report_browser_billing(&app, provider, &account_ids, &reads).await;
                     match store_chrome_billing(&periods, provider, reads, Utc::now()) {
-                        Ok(true) => {
+                        Ok(updates) if !updates.is_empty() => {
                             tracing::info!(
                                 provider,
                                 "Billing refreshed from the existing browser login"
                             );
-                            changed.insert(provider.to_string());
+                            changed
+                                .entry(provider.to_string())
+                                .or_default()
+                                .extend(updates);
                         }
-                        Ok(false) => {}
+                        Ok(_) => {}
                         Err(error) => {
                             tracing::debug!(%error, provider, "Browser billing could not be saved")
                         }
@@ -888,10 +914,13 @@ pub async fn run_billing_reader(app: AppHandle) {
             .filter(|session| matches!(session.provider.as_str(), "claude" | "codex"))
         {
             match read_session_billing(&app, &session).await {
-                Ok(true) => {
-                    changed.insert(session.provider.clone());
+                Ok(updates) if !updates.is_empty() => {
+                    changed
+                        .entry(session.provider.clone())
+                        .or_default()
+                        .extend(updates);
                 }
-                Ok(false) => {}
+                Ok(_) => {}
                 Err(error) => {
                     tracing::debug!(%error, "Billing is unavailable for a saved web session")
                 }
@@ -899,8 +928,10 @@ pub async fn run_billing_reader(app: AppHandle) {
         }
         if !changed.is_empty() {
             let engine = app.state::<crate::service::BackendService>().engine();
-            for provider in changed {
-                refresh_billing_provider(&engine, &provider).await;
+            let accounts = app.state::<crate::account_commands::Accounts>();
+            for (provider, changes) in changed {
+                let updates = local_billing_changes(&accounts, &engine, &provider, &changes).await;
+                refresh_changed_billing_accounts(&engine, &updates).await;
             }
         }
         let engine = app.state::<crate::service::BackendService>().engine();
@@ -1435,7 +1466,7 @@ fn store_chrome_billing(
     provider: &str,
     reads: Vec<BillingRead>,
     now: chrono::DateTime<Utc>,
-) -> Result<bool, String> {
+) -> Result<BillingChanges, String> {
     if reads.len() != 1 {
         return Err("Billing account metadata is invalid".into());
     }
@@ -1781,7 +1812,11 @@ mod tests {
                     "status":"active","next_charge_at":end.to_rfc3339()}}]
         }))
         .unwrap();
-        assert!(store_billing_read(&periods, &store, &session, read, now).unwrap());
+        assert!(
+            !store_billing_read(&periods, &store, &session, read, now)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             periods.get(org, Some("Max 20x"), now),
             Some(uc_core::PlanTerm::Stated {
@@ -1839,13 +1874,21 @@ mod tests {
             "status":"active","next_charge_at":(now + chrono::Duration::days(24)).to_rfc3339()
         }}]}))
         .unwrap();
-        assert!(store_chrome_billing(&periods, "claude", vec![read], now).unwrap());
+        assert!(
+            !store_chrome_billing(&periods, "claude", vec![read], now)
+                .unwrap()
+                .is_empty()
+        );
         assert!(periods.browser_enabled());
         assert_eq!(periods.browser_organizations(), [org]);
         let removed =
             serde_json::from_value(serde_json::json!({"state":"ready","organizations":[]}))
                 .unwrap();
-        assert!(!store_chrome_billing(&periods, "claude", vec![removed], now).unwrap());
+        assert!(
+            store_chrome_billing(&periods, "claude", vec![removed], now)
+                .unwrap()
+                .is_empty()
+        );
         assert!(periods.get(org, Some("Max"), now).is_some());
         assert!(periods.browser_organizations().is_empty());
     }
@@ -1928,7 +1971,7 @@ mod tests {
                 "Pro 5x"
             };
             assert!(
-                store_billing_read(
+                !store_billing_read(
                     &periods,
                     &store,
                     &session,
@@ -1936,16 +1979,18 @@ mod tests {
                     now - chrono::Duration::minutes(1)
                 )
                 .unwrap()
+                .is_empty()
             );
             let session = store.get(&session.id).unwrap();
             assert!(
-                store_chrome_billing(
+                !store_chrome_billing(
                     &periods,
                     provider,
                     vec![paid_read(provider, account, end)],
                     now
                 )
                 .unwrap()
+                .is_empty()
             );
             let term = Some(uc_core::PlanTerm::Stated {
                 ends_at: end,
@@ -1965,19 +2010,24 @@ mod tests {
             assert!(periods.browser_enabled_for(provider));
             assert_eq!(periods.browser_accounts(provider), [account]);
             assert!(
-                !store_chrome_billing(
+                store_chrome_billing(
                     &periods,
                     provider,
                     vec![paid_read(provider, account, end)],
                     now
                 )
                 .unwrap()
+                .is_empty()
             );
             assert_eq!(periods.get_for(provider, account, Some(plan), now), term);
             let free = serde_json::from_value(serde_json::json!({"state":"ready","organizations":[{
                 "uuid":account,"planType":"free","tier":null,"status":200,"details":{"status":"inactive","expires_at":end.to_rfc3339()}
             }]})).unwrap();
-            assert!(store_chrome_billing(&periods, provider, vec![free], now).unwrap());
+            assert!(
+                !store_chrome_billing(&periods, provider, vec![free], now)
+                    .unwrap()
+                    .is_empty()
+            );
             assert_eq!(periods.peek_for(provider, account, now), None);
         }
     }
@@ -2003,7 +2053,11 @@ mod tests {
                 let mut read = paid_read(provider, account, end);
                 read.organizations[0].status = status;
                 read.organizations[0].details = None;
-                assert!(!store_chrome_billing(&periods, provider, vec![read], now).unwrap());
+                assert!(
+                    store_chrome_billing(&periods, provider, vec![read], now)
+                        .unwrap()
+                        .is_empty()
+                );
                 assert_eq!(periods.peek_for(provider, account, now), before);
             }
             for details in [
@@ -2013,18 +2067,30 @@ mod tests {
             ] {
                 let mut read = paid_read(provider, account, end);
                 read.organizations[0].details = Some(details);
-                assert!(!store_chrome_billing(&periods, provider, vec![read], now).unwrap());
+                assert!(
+                    store_chrome_billing(&periods, provider, vec![read], now)
+                        .unwrap()
+                        .is_empty()
+                );
                 assert_eq!(periods.peek_for(provider, account, now), before);
             }
             let mut read = paid_read(provider, account, end);
             read.organizations[0].plan_type = String::new();
-            assert!(!store_chrome_billing(&periods, provider, vec![read], now).unwrap());
+            assert!(
+                store_chrome_billing(&periods, provider, vec![read], now)
+                    .unwrap()
+                    .is_empty()
+            );
             assert_eq!(periods.peek_for(provider, account, now), before);
             assert_eq!(periods.peek_for(provider, other, now), None);
             assert_eq!(periods.peek_for(provider, account, end), None);
             let mut read = paid_read(provider, account, end);
             read.organizations[0].details = Some(serde_json::json!({"status":"cancelled"}));
-            assert!(store_chrome_billing(&periods, provider, vec![read], now).unwrap());
+            assert!(
+                !store_chrome_billing(&periods, provider, vec![read], now)
+                    .unwrap()
+                    .is_empty()
+            );
             assert_eq!(periods.peek_for(provider, account, now), None);
         }
     }
@@ -2054,13 +2120,14 @@ mod tests {
             .unwrap();
             assert!(periods.peek_for(provider, account, now).is_some());
             assert!(
-                store_chrome_billing(
+                !store_chrome_billing(
                     &periods,
                     provider,
                     vec![paid_read(provider, account, now)],
                     now + chrono::Duration::seconds(1),
                 )
                 .unwrap()
+                .is_empty()
             );
             assert_eq!(periods.peek_for(provider, account, now), None);
         }
@@ -2610,7 +2677,7 @@ mod tests {
         let first = "00000000-0000-4000-8000-000000000001";
         let second = "00000000-0000-4000-8000-000000000002";
         let now = Utc::now();
-        store_chrome_billing(
+        let changes = store_chrome_billing(
             &periods,
             "codex",
             vec![paid_read("codex", first, now + chrono::Duration::days(7))],
@@ -2637,27 +2704,35 @@ mod tests {
             ),
             config,
         );
-        refresh_billing_provider(&engine, "codex").await;
+        assert_eq!(changes.keys().collect::<Vec<_>>(), [first]);
+        let updates = HashMap::from([(format!("codex@{first}"), changes[first])]);
+        refresh_changed_billing_accounts(&engine, &updates).await;
         assert!(
             engine.snapshots()[&format!("codex@{first}")]
                 .plan_term
                 .is_some()
         );
-        assert!(
-            engine.snapshots()[&format!("codex@{second}")]
-                .plan_term
-                .is_none()
-        );
-        assert!(
-            store_chrome_billing(
-                &periods,
-                "codex",
-                vec![paid_read("codex", second, now + chrono::Duration::days(14))],
-                now,
-            )
-            .unwrap()
-        );
-        refresh_billing_provider(&engine, "codex").await;
+        assert!(!engine.snapshots().contains_key(&format!("codex@{second}")));
+        let first_id = format!("codex@{first}");
+        let mut events = engine.subscribe();
+        refresh_changed_billing_accounts(&engine, &updates).await;
+        let mut observed_refresh = false;
+        while let Ok(event) = events.try_recv() {
+            let card = &event.providers[&first_id];
+            observed_refresh |= card.refreshing;
+            assert!(card.snapshot.as_ref().unwrap().plan_term.is_some());
+        }
+        assert!(observed_refresh);
+        let changes = store_chrome_billing(
+            &periods,
+            "codex",
+            vec![paid_read("codex", second, now + chrono::Duration::days(14))],
+            now,
+        )
+        .unwrap();
+        assert_eq!(changes.keys().collect::<Vec<_>>(), [second]);
+        let updates = HashMap::from([(format!("codex@{second}"), changes[second])]);
+        refresh_changed_billing_accounts(&engine, &updates).await;
         assert!(
             engine.snapshots()[&format!("codex@{first}")]
                 .plan_term
@@ -2720,7 +2795,7 @@ mod tests {
             periods.invalidate_for("codex", account).unwrap();
         }
 
-        refresh_synced_billing_accounts(&engine, &[]).await;
+        refresh_changed_billing_accounts(&engine, &HashMap::new()).await;
         for provider in &providers {
             assert_eq!(provider.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
             assert!(
@@ -2731,15 +2806,14 @@ mod tests {
         }
 
         let changed = format!("codex@{first}");
-        refresh_synced_billing_accounts(
+        refresh_changed_billing_accounts(
             &engine,
-            &[
-                changed.clone(),
-                changed.clone(),
-                format!("other@{first}"),
-                "codex@unknown".into(),
-                "codex@".into(),
-            ],
+            &HashMap::from([
+                (changed.clone(), None),
+                (format!("other@{first}"), None),
+                ("codex@unknown".into(), None),
+                ("codex@".into(), None),
+            ]),
         )
         .await;
         assert!(engine.snapshots()[&changed].plan_term.is_none());

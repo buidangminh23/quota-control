@@ -451,11 +451,27 @@ impl Engine {
     }
 
     pub fn invalidate_plan_term(&self, provider_id: &str) -> bool {
+        self.invalidate_plan_term_unless_confirmed(provider_id, None)
+    }
+
+    pub fn invalidate_plan_term_unless_confirmed(
+        &self,
+        provider_id: &str,
+        confirmed_end: Option<DateTime<Utc>>,
+    ) -> bool {
         if !self.by_id.contains_key(provider_id) {
             return false;
         }
         let changed = {
             let mut inner = self.inner.lock();
+            if let Some(end) = confirmed_end
+                && end > (self.clock)()
+                && let Some(PlanTerm::Stated { ends_at, .. }) =
+                    inner.snapshots.get(provider_id).and_then(|s| s.plan_term.as_ref())
+                && *ends_at == end
+            {
+                return false;
+            }
             let generation = inner
                 .plan_term_generation
                 .entry(provider_id.to_owned())

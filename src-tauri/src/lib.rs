@@ -828,22 +828,17 @@ async fn run_device_sync_updates(app: AppHandle) {
     let mut revision = uc_providers::device_sync::status_revision().unwrap_or_default();
     loop {
         tokio::time::sleep(Duration::from_secs(2)).await;
-        let Ok(Ok(next)) =
-            tauri::async_runtime::spawn_blocking(uc_providers::device_sync::status_revision).await
-        else {
-            continue;
-        };
-        if next == revision {
-            continue;
-        }
-        let Ok(Ok(billing_accounts)) = tauri::async_runtime::spawn_blocking(move || {
-            uc_providers::device_sync::billing_updates_since(revision)
+        let Ok(Ok(changes)) = tauri::async_runtime::spawn_blocking(move || {
+            uc_providers::device_sync::billing_changes_since(revision)
         })
         .await
         else {
             continue;
         };
-        revision = next;
+        if changes.revision == revision {
+            continue;
+        }
+        revision = changes.revision;
         let service = app.state::<BackendService>();
         if let Err(error) = service.apply_saved_provider_selection() {
             tracing::warn!(%error, "Synchronized provider selection could not be applied");
@@ -851,7 +846,7 @@ async fn run_device_sync_updates(app: AppHandle) {
         let engine = service.engine();
         let _ = app.emit_to("popup", "documents-changed", ());
         let _ = app.emit_to("popup", "catalog-changed", engine.catalog());
-        chat_commands::refresh_synced_billing_accounts(&engine, &billing_accounts).await;
+        chat_commands::refresh_changed_billing_accounts(&engine, &changes.accounts).await;
     }
 }
 
