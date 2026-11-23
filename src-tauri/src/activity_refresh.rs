@@ -27,6 +27,14 @@ use crate::service::BackendService;
 const TICK: Duration = Duration::from_secs(1);
 /// The most log entries one look visits.
 const BUDGET: usize = 50_000;
+/// How often every log folder is walked. Between walks a look only reads the logs written lately,
+/// so a log that keeps growing is seen within a [`TICK`] and a new one within this. One walk of
+/// 6,200 entries every second cost 2 to 3 % of a core while nothing was used (23/11/2026).
+const WALK_EVERY: Duration = Duration::from_secs(15);
+/// A log written this long before the last walk is looked at between walks.
+const RECENT: Duration = Duration::from_secs(30 * 60);
+/// The most logs looked at between walks, each through the open file.
+const RECENT_LOGS: usize = 16;
 /// The shortest time between two readings of a brand's history on this computer while its logs
 /// grow.
 const LOCAL_GAP: Duration = Duration::from_secs(30);
@@ -179,6 +187,9 @@ struct Watch {
     roots: Vec<PathBuf>,
     depth: usize,
     newest: Option<SystemTime>,
+    /// The logs written lately, as of the last walk, and when that walk was.
+    recent: Vec<PathBuf>,
+    walked: Option<std::time::Instant>,
     accounts: Reader,
     history: Reader,
     /// A reading of the accounts was held back at the last look.
@@ -195,6 +206,8 @@ impl Watch {
             roots,
             depth,
             newest: None,
+            recent: Vec::new(),
+            walked: None,
             accounts: Reader {
                 pending: false,
                 read_at,
@@ -211,11 +224,28 @@ impl Watch {
 
     /// Look at the logs; true when they changed since the last look.
     fn look(&mut self) -> bool {
-        let newest = self
-            .roots
-            .iter()
-            .filter_map(|root| newest_log(root, self.depth))
-            .max();
+        let walk = self.walked.is_none_or(|at| at.elapsed() >= WALK_EVERY);
+        let newest = if walk {
+            self.walked = Some(std::time::Instant::now());
+            let mut logs = Vec::new();
+            for root in &self.roots {
+                let mut budget = BUDGET;
+                visit(root, self.depth, &mut budget, &mut logs);
+            }
+            let newest = logs.iter().map(|(_, modified)| *modified).max();
+            self.recent = recent_logs(logs, newest);
+            newest
+        } else {
+            self.recent
+                .iter()
+                .filter_map(|path| {
+                    std::fs::File::open(path)
+                        .and_then(|file| file.metadata())
+                        .and_then(|metadata| metadata.modified())
+                        .ok()
+                })
+                .max()
+        };
         let changed = newest.is_some() && self.newest.is_some() && newest > self.newest;
         if newest > self.newest {
             self.newest = newest;
@@ -487,14 +517,29 @@ async fn read_cards(
 }
 
 /// The newest modification time of a `.jsonl` log under `root`, down to `depth` folders.
+#[cfg(test)]
 fn newest_log(root: &Path, depth: usize) -> Option<SystemTime> {
     let mut budget = BUDGET;
-    let mut newest = None;
-    visit(root, depth, &mut budget, &mut newest);
-    newest
+    let mut logs = Vec::new();
+    visit(root, depth, &mut budget, &mut logs);
+    logs.into_iter().map(|(_, modified)| modified).max()
 }
 
-fn visit(dir: &Path, depth: usize, budget: &mut usize, newest: &mut Option<SystemTime>) {
+/// The logs of a walk written within [`RECENT`] of the newest, newest first, at most
+/// [`RECENT_LOGS`].
+fn recent_logs(mut logs: Vec<(PathBuf, SystemTime)>, newest: Option<SystemTime>) -> Vec<PathBuf> {
+    let Some(newest) = newest else {
+        return Vec::new();
+    };
+    let since = newest.checked_sub(RECENT).unwrap_or(SystemTime::UNIX_EPOCH);
+    logs.retain(|(_, modified)| *modified >= since);
+    logs.sort_by_key(|log| std::cmp::Reverse(log.1));
+    logs.truncate(RECENT_LOGS);
+    logs.into_iter().map(|(path, _)| path).collect()
+}
+
+/// Every `.jsonl` log under `dir`, down to `depth` folders, with its modification time.
+fn visit(dir: &Path, depth: usize, budget: &mut usize, logs: &mut Vec<(PathBuf, SystemTime)>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -512,15 +557,14 @@ fn visit(dir: &Path, depth: usize, budget: &mut usize, newest: &mut Option<Syste
         let path = entry.path();
         if kind.is_dir() {
             if depth > 0 {
-                visit(&path, depth - 1, budget, newest);
+                visit(&path, depth - 1, budget, logs);
             }
         } else if path
             .extension()
             .is_some_and(|extension| extension == "jsonl")
             && let Ok(modified) = entry.metadata().and_then(|metadata| metadata.modified())
-            && newest.is_none_or(|known| modified > known)
         {
-            *newest = Some(modified);
+            logs.push((path, modified));
         }
     }
 }
