@@ -543,6 +543,20 @@ pub(crate) fn refresh_lock(id: &str) -> Arc<tokio::sync::Mutex<()>> {
     locks.entry(id.to_owned()).or_default().clone()
 }
 
+/// The renewal answers that refused a refresh token outright, by account store and account: a
+/// digest of the token and the error. The same token is not sent again; signing in again saves a new one. An expired Claude
+/// session was otherwise sent to the login service at every reading (23/11/2026).
+type RefusedRenewals = HashMap<(PathBuf, String), ([u8; 32], SimpleProviderError)>;
+
+fn refused_renewals() -> &'static Mutex<RefusedRenewals> {
+    static REFUSED: OnceLock<Mutex<RefusedRenewals>> = OnceLock::new();
+    REFUSED.get_or_init(Default::default)
+}
+
+fn token_digest(token: &str) -> [u8; 32] {
+    Sha256::digest(token.as_bytes()).into()
+}
+
 pub(crate) fn refresh_url(kind: ProviderKind) -> &'static str {
     match kind {
         ProviderKind::Claude => "https://platform.claude.com/v1/oauth/token",
@@ -633,6 +647,17 @@ async fn ready_credentials_inner(
                 "This account needs to be connected again.",
             )
         })?;
+    let digest = token_digest(refresh);
+    let refusal_key = (store.directory().to_path_buf(), record.id.clone());
+    if let Some(error) = refused_renewals()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(&refusal_key)
+        .filter(|(refused, _)| *refused == digest)
+        .map(|(_, error)| error.clone())
+    {
+        return Err(error);
+    }
     let reason = if rejected_token == Some(credentials.access_token.as_str()) {
         "usage_rejected"
     } else {
@@ -659,6 +684,12 @@ async fn ready_credentials_inner(
         let error = renewal_error(response.status, &response.body);
         tracing::warn!(target: "account_session", account = %record.id,
             status = response.status, reason = %error.message, "renewal_rejected");
+        if matches!(response.status, 400 | 401 | 403) {
+            refused_renewals()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert(refusal_key, (digest, error.clone()));
+        }
         return Err(error);
     }
     let refreshed: Value = response

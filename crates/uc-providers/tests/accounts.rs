@@ -524,6 +524,56 @@ async fn renewal_failures_report_safe_recovery_without_changing_credentials() {
     }
 }
 
+struct CountedRefusal {
+    posts: Mutex<usize>,
+}
+
+#[async_trait]
+impl HttpClient for CountedRefusal {
+    async fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        assert_eq!(request.method, "POST");
+        *self.posts.lock().unwrap() += 1;
+        Ok(HttpResponse {
+            status: 400,
+            headers: HashMap::new(),
+            body: serde_json::to_vec(
+                &json!({"error":"invalid_grant","error_description":"Refresh token expired"}),
+            )
+            .unwrap(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_refused_refresh_token_is_not_sent_again_until_the_account_signs_in_again() {
+    let (_dir, store) = store();
+    let record = store
+        .import(
+            "claude",
+            "Managed",
+            "account-a|org-a",
+            &claude_doc(1),
+            CredentialMode::ManagedOauth,
+        )
+        .unwrap();
+    let http = Arc::new(CountedRefusal {
+        posts: Mutex::new(0),
+    });
+    let provider = runtimes_with_client(store.clone(), http.clone())
+        .unwrap()
+        .remove(0);
+    for _ in 0..3 {
+        let snapshot = provider.refresh(RefreshContext::manual()).await;
+        assert_eq!(snapshot.error_category, Some(ErrorCategory::AuthExpired));
+    }
+    assert_eq!(*http.posts.lock().unwrap(), 1);
+    let mut signed_in = claude_doc(1);
+    signed_in["claudeAiOauth"]["refreshToken"] = json!("fixture-refresh-new");
+    store.update_credentials(&record.id, &signed_in).unwrap();
+    provider.refresh(RefreshContext::manual()).await;
+    assert_eq!(*http.posts.lock().unwrap(), 2);
+}
+
 #[tokio::test]
 async fn importing_distinct_accounts_and_reimporting_preserves_rows_and_cli_file() {
     let (dir, store) = store();
