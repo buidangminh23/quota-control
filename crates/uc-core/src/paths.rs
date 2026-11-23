@@ -76,8 +76,19 @@ pub fn log_dir() -> PathBuf {
     }
 }
 
+pub const LOG_FILE_PREFIX: &str = "UsageControl";
+pub const LOG_FILE_SUFFIX: &str = "log";
+pub const LOG_FILES_KEPT: usize = 7;
+
 pub fn log_file() -> PathBuf {
-    log_dir().join("UsageControl.log")
+    log_dir().join(log_file_name(chrono::Utc::now().date_naive()))
+}
+
+fn log_file_name(day: chrono::NaiveDate) -> String {
+    format!(
+        "{LOG_FILE_PREFIX}.{}.{LOG_FILE_SUFFIX}",
+        day.format("%Y-%m-%d")
+    )
 }
 
 /// Where Settings puts the `usagectl` command so terminals find it.
@@ -232,6 +243,12 @@ mod tests {
         assert_eq!(bytes.len(), 65_536);
         assert!(bytes.iter().all(|value| *value == bytes[0]));
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn log_file_name_matches_the_daily_appender() {
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 11, 3).unwrap();
+        assert_eq!(log_file_name(day), "UsageControl.2026-11-03.log");
     }
 
     #[test]

@@ -26,6 +26,8 @@ mod system;
 mod taskbar_strip;
 mod updates;
 mod usage_commands;
+#[cfg(windows)]
+mod webview_cache;
 
 use tauri::menu::{ContextMenu, Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -67,7 +69,12 @@ pub fn run() -> anyhow::Result<()> {
         return cli_install::unregister().map_err(anyhow::Error::msg);
     }
     std::fs::create_dir_all(uc_core::paths::log_dir())?;
-    let appender = tracing_appender::rolling::never(uc_core::paths::log_dir(), "UsageControl.log");
+    let appender = tracing_appender::rolling::Builder::new()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix(uc_core::paths::LOG_FILE_PREFIX)
+        .filename_suffix(uc_core::paths::LOG_FILE_SUFFIX)
+        .max_log_files(uc_core::paths::LOG_FILES_KEPT)
+        .build(uc_core::paths::log_dir())?;
     let (writer, guard) = tracing_appender::non_blocking(appender);
     *LOG_GUARD.lock() = Some(guard);
     tracing_subscriber::fmt()
@@ -82,6 +89,13 @@ pub fn run() -> anyhow::Result<()> {
         tracing::info!(target: "updates", "the update to {version} is still installing; this launch steps aside");
         flush_log();
         return Ok(());
+    }
+    #[cfg(windows)]
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        webview_cache::trim_after_update(
+            &std::path::Path::new(&local).join("com.buidangminh.usagecontrol"),
+            env!("CARGO_PKG_VERSION"),
+        );
     }
 
     tauri::Builder::default()
