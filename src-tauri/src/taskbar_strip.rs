@@ -794,6 +794,11 @@ mod platform {
     const SLOT_RECOVERY_GRACE: Duration = Duration::from_secs(10);
     /// Maximum age of a cached notification-area layout from the current display generation.
     const LAYOUT_GRACE: Duration = Duration::from_secs(10);
+    /// How often the notification area is read again while nothing about it or the strip changed.
+    /// Reading it through UI Automation every second cost the app and Explorer a steady share of a
+    /// core (23/11/2026); a change is followed every second for [`LAYOUT_ACTIVE`].
+    const LAYOUT_REFRESH: Duration = Duration::from_secs(5);
+    const LAYOUT_ACTIVE: Duration = Duration::from_secs(20);
     /// Passes in a row without the widened button before the strip leaves it, so a button being laid
     /// out again never makes the strip jump out and back.
     const SLOT_EXIT_PASSES: u8 = 2;
@@ -1116,6 +1121,18 @@ mod platform {
         apps: Option<RECT>,
     }
 
+    impl Layout {
+        fn same(&self, other: &Self) -> bool {
+            fn edges(rect: &RECT) -> (i32, i32, i32, i32) {
+                (rect.left, rect.top, rect.right, rect.bottom)
+            }
+            edges(&self.tray) == edges(&other.tray)
+                && self.frame.as_ref().map(edges) == other.frame.as_ref().map(edges)
+                && self.slot.as_ref().map(edges) == other.slot.as_ref().map(edges)
+                && self.apps.as_ref().map(edges) == other.apps.as_ref().map(edges)
+        }
+    }
+
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct LayoutKey {
         taskbar: isize,
@@ -1254,6 +1271,8 @@ mod platform {
         /// How far the island reaches above and below the tray buttons, as last read from a frame
         /// centered on them.
         reach: Option<(i32, i32)>,
+        /// Until when the notification area is read every second, after a change.
+        active_until: Option<Instant>,
     }
 
     impl Islands {
@@ -1265,7 +1284,24 @@ mod platform {
                 sample: None,
                 last: None,
                 reach: None,
+                active_until: None,
             }
+        }
+
+        /// Follow the notification area every second for a while.
+        fn stir(&mut self) {
+            self.active_until = Some(Instant::now() + LAYOUT_ACTIVE);
+        }
+
+        /// Whether a pass should ask for a new reading of the notification area.
+        fn due(&self, popup_open: bool) -> bool {
+            popup_open
+                || self
+                    .active_until
+                    .is_some_and(|until| Instant::now() < until)
+                || self
+                    .last
+                    .is_none_or(|(_, read, _)| read.elapsed() >= LAYOUT_REFRESH)
         }
 
         /// Take the next clean color reading as the island's fill, after a theme or display change.
@@ -1285,6 +1321,7 @@ mod platform {
         }
 
         fn taskbar_changed(&mut self, restarted: bool) {
+            self.stir();
             if restarted {
                 self.forget();
             } else {
@@ -1299,10 +1336,17 @@ mod platform {
                 self.key = Some(key);
                 self.last = None;
                 self.reach = None;
+                self.stir();
             }
             if let Some(result) = self.reader.poll(key, request || changed)
                 && let Some(layout) = result.layout
             {
+                if self
+                    .last
+                    .is_none_or(|(previous, _, _)| !previous.same(&layout))
+                {
+                    self.stir();
+                }
                 self.last = Some((layout, result.read, result.key));
             }
             self.last
@@ -1658,6 +1702,7 @@ mod platform {
             if let Some(bitmap) = update
                 && self.replace_bitmap(bitmap)
             {
+                self.islands.stir();
                 self.sync(true);
             }
         }
@@ -1757,6 +1802,7 @@ mod platform {
             let padding = (FRAME_PADDING_POINTS * scale).round() as u32;
             let popup_open = self.shared.popup.load(Ordering::Acquire);
             let previous_key = self.islands.key;
+            let request_layout = request_layout && self.islands.due(popup_open);
             let layout = self.islands.layout(taskbar, request_layout);
             if self.islands.key != previous_key {
                 if previous_key.is_some() {
@@ -1918,6 +1964,9 @@ mod platform {
             }
             update_tooltip(window, &bitmap.tooltip);
             let tray = self.tray_for(wanted, fresh);
+            if self.tray != tray || wanted.is_some() && self.slot.bounds.is_none() {
+                self.islands.stir();
+            }
             self.cover(tray);
         }
 
@@ -2460,6 +2509,7 @@ mod platform {
                     sample: None,
                     last: None,
                     reach: None,
+                    active_until: None,
                 },
                 painted: false,
                 paint_failed: false,
@@ -2528,6 +2578,7 @@ mod platform {
                 sample: None,
                 last: None,
                 reach: None,
+                active_until: None,
             };
             islands.reader.mailbox.lock().unwrap().result = Some(LayoutResult {
                 key,
@@ -2676,6 +2727,7 @@ mod platform {
                 sample: None,
                 last: Some((layout(), Instant::now(), key)),
                 reach: None,
+                active_until: None,
             };
             let mut resized = taskbar();
             resized.notify_left -= 400;
@@ -2808,6 +2860,7 @@ mod platform {
                 sample: None,
                 last: Some((layout(), Instant::now(), key)),
                 reach: None,
+                active_until: None,
             };
             assert!(islands.layout(&taskbar(), true).is_some());
             islands.taskbar_changed(true);
@@ -2830,6 +2883,7 @@ mod platform {
                 }),
                 last: Some((layout(), read, key)),
                 reach: Some((4, 4)),
+                active_until: None,
             };
             for _ in 0..100 {
                 islands.taskbar_changed(false);
@@ -2876,6 +2930,7 @@ mod platform {
                     sample: None,
                     last: Some((layout(), Instant::now(), key)),
                     reach: Some((4, 4)),
+                    active_until: None,
                 };
                 islands.taskbar_changed(false);
                 assert!(islands.layout(&changed, true).is_none());
@@ -2895,6 +2950,7 @@ mod platform {
                 sample: None,
                 last: Some((layout(), Instant::now() - LAYOUT_GRACE, key)),
                 reach: None,
+                active_until: None,
             };
             islands.taskbar_changed(false);
             assert!(islands.layout(&taskbar(), true).is_none());
