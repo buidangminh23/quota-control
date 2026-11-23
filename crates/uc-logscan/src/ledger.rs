@@ -129,6 +129,23 @@ pub struct UsageLedger {
     connection: Mutex<Connection>,
     import_lock: Mutex<()>,
     importing: AtomicBool,
+    /// The working folders of every event and the repository aliases they give, as of the last
+    /// pass over every event. A later import whose events bring no new folder derives only them.
+    folders: Mutex<Option<Folders>>,
+}
+
+type Aliases = std::collections::BTreeMap<String, std::collections::BTreeSet<String>>;
+
+struct Folders {
+    seen: std::collections::HashSet<String>,
+    aliases: Aliases,
+}
+
+/// What a saved checkpoint needs to match for its log to be left unopened.
+struct Seen {
+    length: u64,
+    modified: String,
+    line_limit: usize,
 }
 
 struct Checkpoint {
@@ -146,6 +163,10 @@ struct ImportPass<'a, F> {
     report: ImportReport,
     callback: &'a mut F,
     last_notification: Instant,
+    /// The complete checkpoints saved before this pass, by log path.
+    seen: std::collections::HashMap<String, Seen>,
+    /// The events this pass wrote: source, key and working folder.
+    written: Vec<(String, String, String)>,
 }
 
 impl UsageLedger {
@@ -217,6 +238,7 @@ impl UsageLedger {
             connection: Mutex::new(connection),
             import_lock: Mutex::new(()),
             importing: AtomicBool::new(false),
+            folders: Mutex::new(None),
         })
     }
 
@@ -325,8 +347,11 @@ impl UsageLedger {
                 report: ImportReport::default(),
                 callback: &mut callback,
                 last_notification: Instant::now(),
+                seen: std::collections::HashMap::new(),
+                written: Vec::new(),
             };
             for scanner in scanners {
+                pass.seen = self.complete_checkpoints(scanner.source)?;
                 for root in &scanner.options.roots {
                     if unsafe_path(root) {
                         pass.report.skipped_files += 1;
@@ -335,7 +360,7 @@ impl UsageLedger {
                     self.walk(root, 0, scanner, &mut pass)?;
                 }
             }
-            self.refresh_derivations(pass.report.events_written > 0)?;
+            self.refresh_derivations(&pass.written)?;
             self.connection()?.execute(
                 "INSERT INTO ledger_metadata(key,value) VALUES('updatedAt',?1)
                  ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -350,7 +375,31 @@ impl UsageLedger {
         outcome
     }
 
-    fn refresh_derivations(&self, imported: bool) -> Result<()> {
+    fn complete_checkpoints(
+        &self,
+        source: LogSource,
+    ) -> Result<std::collections::HashMap<String, Seen>> {
+        let connection = self.connection()?;
+        let mut select = connection.prepare(
+            "SELECT path,length,modified,line_limit FROM file_checkpoints WHERE source=?1 AND complete",
+        )?;
+        let rows = select.query_map([source_name(source)], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                Seen {
+                    length: row.get::<_, i64>(1)? as u64,
+                    modified: row.get(2)?,
+                    line_limit: row.get::<_, i64>(3)? as usize,
+                },
+            ))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Price the events and file them under their project. After a pricing change every event is
+    /// gone over; after an import only the events it wrote, unless one of them was made in a
+    /// folder no earlier event was, which can change the project of earlier events.
+    fn refresh_derivations(&self, written: &[(String, String, String)]) -> Result<()> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         let version = format!("{}:{DERIVATION_VERSION}", uc_pricing::PRICING_VERSION);
@@ -362,70 +411,51 @@ impl UsageLedger {
             )
             .optional()?;
         let reprice = saved.as_deref() != Some(&version);
-        if !reprice && !imported {
+        if !reprice && written.is_empty() {
             return Ok(());
         }
-        let mut aliases: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
-            std::collections::BTreeMap::new();
-        {
-            let mut select = transaction.prepare("SELECT DISTINCT json_extract(details,'$.cwd') FROM usage_events WHERE details IS NOT NULL")?;
-            let paths = select.query_map([], |row| row.get::<_, String>(0))?;
-            for path in paths {
-                if let Some((alias, canonical)) = crate::project::repository_alias(&path?) {
-                    aliases.entry(alias).or_default().insert(canonical);
+        let mut folders = self
+            .folders
+            .lock()
+            .map_err(|_| anyhow::anyhow!("The usage folder cache failed"))?;
+        let known = if reprice {
+            None
+        } else {
+            folders
+                .as_ref()
+                .filter(|folders| written.iter().all(|(_, _, cwd)| folders.seen.contains(cwd)))
+        };
+        if let Some(known) = known {
+            let mut select = transaction.prepare_cached(
+                "SELECT source,event_key,model,output,cached,details,cost,project FROM usage_events WHERE source=?1 AND event_key=?2 AND details IS NOT NULL",
+            )?;
+            for (source, key, _) in written {
+                let mut rows = select.query(params![source, key])?;
+                derive_rows(&transaction, &mut rows, false, &known.aliases)?;
+            }
+        } else {
+            *folders = None;
+            let mut seen = std::collections::HashSet::new();
+            let mut aliases = Aliases::new();
+            {
+                let mut select = transaction.prepare("SELECT DISTINCT json_extract(details,'$.cwd') FROM usage_events WHERE details IS NOT NULL")?;
+                let paths = select.query_map([], |row| row.get::<_, Option<String>>(0))?;
+                for path in paths {
+                    let Some(path) = path? else { continue };
+                    if let Some((alias, canonical)) = crate::project::repository_alias(&path) {
+                        aliases.entry(alias).or_default().insert(canonical);
+                    }
+                    seen.insert(path);
                 }
             }
-        }
-        {
-            let mut select = transaction.prepare(
-                "SELECT source,event_key,model,output,cached,details,cost,project FROM usage_events WHERE details IS NOT NULL",
-            )?;
-            let mut rows = select.query([])?;
-            let mut update = transaction.prepare(
-                "UPDATE usage_events SET cost=?1,project=?2,derivation_version=?3,details=?6 WHERE source=?4 AND event_key=?5",
-            )?;
-            let mut projects = std::collections::HashMap::new();
-            while let Some(row) = rows.next()? {
-                let mut details: EventDetails = serde_json::from_str(&row.get::<_, String>(5)?)?;
-                let old_cost: Option<f64> = row.get(6)?;
-                let cost = if reprice {
-                    details.cost(&row.get::<_, String>(2)?, row.get(3)?, row.get(4)?)
-                } else {
-                    old_cost
-                };
-                let project = projects
-                    .entry((details.cwd.clone(), details.repository.clone()))
-                    .or_insert_with(|| {
-                        let resolved =
-                            crate::project::resolve(&details.cwd, Some(&details.repository));
-                        if crate::project::local_root(&details.cwd).is_some()
-                            || resolved != crate::project::resolve(&details.cwd, None)
-                        {
-                            return resolved;
-                        }
-                        aliases
-                            .get(&resolved)
-                            .filter(|names| names.len() == 1)
-                            .and_then(|names| names.first())
-                            .cloned()
-                            .unwrap_or(resolved)
-                    });
-                if old_cost == cost
-                    && row.get::<_, String>(7)? == *project
-                    && details.repository == *project
-                {
-                    continue;
-                }
-                details.repository = project.clone();
-                update.execute(params![
-                    cost,
-                    project.as_str(),
-                    DERIVATION_VERSION,
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    serde_json::to_string(&details)?
-                ])?;
+            {
+                let mut select = transaction.prepare(
+                    "SELECT source,event_key,model,output,cached,details,cost,project FROM usage_events WHERE details IS NOT NULL",
+                )?;
+                let mut rows = select.query([])?;
+                derive_rows(&transaction, &mut rows, reprice, &aliases)?;
             }
+            *folders = Some(Folders { seen, aliases });
         }
         transaction.execute(
             "INSERT INTO ledger_metadata(key,value) VALUES('derivationVersion',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [version],
@@ -477,6 +507,7 @@ impl UsageLedger {
             && path
                 .extension()
                 .is_some_and(|extension| extension == "jsonl")
+            && !unchanged(&pass.seen, path, scanner)
             && let Err(error) = self.import_file(path, scanner, pass)
         {
             if error.downcast_ref::<std::io::Error>().is_some() {
@@ -627,7 +658,7 @@ impl UsageLedger {
             for event in events.iter() {
                 let details = EventDetails::from_event(event);
                 let cost = details.cost(&event.model, event.tokens.output, event.tokens.cache_read);
-                written += insert.execute(params![
+                let changed = insert.execute(params![
                     source_name(scanner.source),
                     event.key,
                     event.timestamp.timestamp_millis(),
@@ -647,6 +678,14 @@ impl UsageLedger {
                     serde_json::to_string(&details)?,
                     DERIVATION_VERSION
                 ])?;
+                if changed > 0 {
+                    pass.written.push((
+                        source_name(scanner.source).to_string(),
+                        event.key.clone(),
+                        details.cwd.clone(),
+                    ));
+                }
+                written += changed;
             }
         }
         transaction.execute(
@@ -685,6 +724,81 @@ fn source_name(source: LogSource) -> &'static str {
         LogSource::Claude => "claude",
         LogSource::Codex => "codex",
     }
+}
+
+/// Whether `path` is a log a complete checkpoint already covers, as it stands, read from the open
+/// file as [`UsageLedger::import_file`] reads it, so a log is only left alone when importing it
+/// would find nothing new.
+fn unchanged(
+    seen: &std::collections::HashMap<String, Seen>,
+    path: &Path,
+    scanner: &LogScanner,
+) -> bool {
+    let Some(entry) = seen.get(path.to_string_lossy().as_ref()) else {
+        return false;
+    };
+    let Ok(metadata) = File::open(path).and_then(|file| file.metadata()) else {
+        return false;
+    };
+    let modified = modified(&metadata);
+    !modified.is_empty()
+        && entry.length == metadata.len()
+        && entry.modified == modified
+        && entry.line_limit == scanner.options.max_line_bytes.clamp(1, 4 * 1024 * 1024)
+}
+
+/// Price and file under their project the events `rows` reads, updating those that changed.
+fn derive_rows(
+    transaction: &rusqlite::Transaction<'_>,
+    rows: &mut rusqlite::Rows<'_>,
+    reprice: bool,
+    aliases: &Aliases,
+) -> Result<()> {
+    let mut update = transaction.prepare_cached(
+        "UPDATE usage_events SET cost=?1,project=?2,derivation_version=?3,details=?6 WHERE source=?4 AND event_key=?5",
+    )?;
+    let mut projects = std::collections::HashMap::new();
+    while let Some(row) = rows.next()? {
+        let mut details: EventDetails = serde_json::from_str(&row.get::<_, String>(5)?)?;
+        let old_cost: Option<f64> = row.get(6)?;
+        let cost = if reprice {
+            details.cost(&row.get::<_, String>(2)?, row.get(3)?, row.get(4)?)
+        } else {
+            old_cost
+        };
+        let project = projects
+            .entry((details.cwd.clone(), details.repository.clone()))
+            .or_insert_with(|| {
+                let resolved = crate::project::resolve(&details.cwd, Some(&details.repository));
+                if crate::project::local_root(&details.cwd).is_some()
+                    || resolved != crate::project::resolve(&details.cwd, None)
+                {
+                    return resolved;
+                }
+                aliases
+                    .get(&resolved)
+                    .filter(|names| names.len() == 1)
+                    .and_then(|names| names.first())
+                    .cloned()
+                    .unwrap_or(resolved)
+            });
+        if old_cost == cost
+            && row.get::<_, String>(7)? == *project
+            && details.repository == *project
+        {
+            continue;
+        }
+        details.repository = project.clone();
+        update.execute(params![
+            cost,
+            project.as_str(),
+            DERIVATION_VERSION,
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            serde_json::to_string(&details)?
+        ])?;
+    }
+    Ok(())
 }
 
 fn modified(metadata: &Metadata) -> String {
