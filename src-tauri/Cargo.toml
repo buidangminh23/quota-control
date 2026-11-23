@@ -59,6 +59,8 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-updater = { version = "2.12", default-features = false, features = ["rustls-tls", "system-proxy"] }
 
 [target.'cfg(windows)'.dependencies]
+webview2-com = "0.38"
+webview2-windows-core = { package = "windows-core", version = "0.61" }
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_System_Com",

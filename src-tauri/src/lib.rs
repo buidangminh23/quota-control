@@ -520,6 +520,8 @@ fn show_popup_at(app: &AppHandle, anchor: Option<PhysicalRect<i32, u32>>) -> Res
     if let Some(strip) = app.try_state::<taskbar_strip::TaskbarStrip>() {
         strip.set_popup_visible(true);
     }
+    #[cfg(windows)]
+    webview_cache::set_memory_target(&window, false);
     set_popup_window_visible(&window, true)?;
     window.set_focus().map_err(safe_error)?;
     window.emit("popup-visibility", true).map_err(safe_error)?;
@@ -537,6 +539,8 @@ fn hide_popup(app: &AppHandle) -> Result<(), String> {
         .get_webview_window("popup")
         .ok_or("Popup is unavailable")?;
     set_popup_window_visible(&window, false)?;
+    #[cfg(windows)]
+    webview_cache::set_memory_target(&window, true);
     if let Some(updates) = app.try_state::<updates::Updates>() {
         updates.popup_seen();
     }

@@ -1,5 +1,31 @@
 use std::path::Path;
 
+/// Ask WebView2 to keep the popup's memory low while it is hidden (`low`) or to use what it needs
+/// while it shows. A hidden popup keeps its scripts running, so the taskbar strip still renders.
+pub fn set_memory_target<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>, low: bool) {
+    let result = window.with_webview(move |webview| {
+        use webview2_com::Microsoft::Web::WebView2::Win32::{
+            COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+            COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL, ICoreWebView2_19,
+        };
+        use webview2_windows_core::Interface;
+        let level = if low {
+            COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
+        } else {
+            COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
+        };
+        let applied = unsafe { webview.controller().CoreWebView2() }
+            .and_then(|core| core.cast::<ICoreWebView2_19>())
+            .and_then(|core| unsafe { core.SetMemoryUsageTargetLevel(level) });
+        if let Err(error) = applied {
+            tracing::debug!("webview memory target unchanged: {error}");
+        }
+    });
+    if let Err(error) = result {
+        tracing::debug!("webview memory target unchanged: {error}");
+    }
+}
+
 const MARKER: &str = ".webview-cache-version";
 const DISPOSABLE: [&str; 2] = ["Code Cache", "Cache"];
 
