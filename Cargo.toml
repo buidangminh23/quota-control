@@ -8,7 +8,7 @@ edition = "2024"
 license = "MIT"
 repository = "https://github.com/buidangminh23/quota-control"
 authors = ["Bui Dang Minh"]
-rust-version = "1.90"
+rust-version = "1.95"
 
 [workspace.dependencies]
 uc-core = { path = "crates/uc-core" }
@@ -27,10 +27,10 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 dirs = "7"
 futures = "0.3"
 memchr = "2"
-parking_lot = "0.12"
+parking_lot = "0.13"
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "socks", "gzip", "brotli", "http2", "charset", "query", "form"] }
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"

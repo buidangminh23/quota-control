@@ -30,12 +30,12 @@ chrono.workspace = true
 futures.workspace = true
 iana-time-zone = "0.1"
 parking_lot.workspace = true
-quick-xml = "0.41"
+quick-xml = "0.42"
 semver = "1"
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"
@@ -59,7 +59,7 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-updater = { version = "2.12", default-features = false, features = ["rustls-tls", "system-proxy"] }
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = [
+windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_System_Com",
     "Win32_UI_Accessibility",

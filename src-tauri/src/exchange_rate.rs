@@ -143,12 +143,12 @@ fn parse_rate(bytes: &[u8]) -> Option<(f64, String)> {
         let event = reader.read_event().ok()?;
         let opening = matches!(event, Event::Start(_));
         match event {
-            Event::Start(element) if element.name().as_ref() == b"DateTime" => {
+            Event::Start(element) if element.name().as_ref() == "DateTime" => {
                 if published.is_some() || depth != 1 {
                     return None;
                 }
                 let text = reader.read_text(element.name()).ok()?;
-                let text = text.decode().ok()?;
+                let text = text.xml10_content();
                 let date =
                     NaiveDateTime::parse_from_str(text.trim(), "%m/%d/%Y %I:%M:%S %p").ok()?;
                 published = Some(
@@ -159,7 +159,7 @@ fn parse_rate(bytes: &[u8]) -> Option<(f64, String)> {
                 );
             }
             Event::Start(element) | Event::Empty(element)
-                if element.name().as_ref() == b"Exrate" =>
+                if element.name().as_ref() == "Exrate" =>
             {
                 if depth != 1 {
                     return None;
@@ -172,24 +172,18 @@ fn parse_rate(bytes: &[u8]) -> Option<(f64, String)> {
                 for attribute in element.attributes() {
                     let attribute = attribute.ok()?;
                     match attribute.key.as_ref() {
-                        b"CurrencyCode" => {
+                        "CurrencyCode" => {
                             code = Some(
                                 attribute
-                                    .decoded_and_normalized_value(
-                                        XmlVersion::Explicit1_0,
-                                        reader.decoder(),
-                                    )
+                                    .normalized_value(XmlVersion::Explicit1_0)
                                     .ok()?
                                     .into_owned(),
                             );
                         }
-                        b"Sell" => {
+                        "Sell" => {
                             sell = Some(
                                 attribute
-                                    .decoded_and_normalized_value(
-                                        XmlVersion::Explicit1_0,
-                                        reader.decoder(),
-                                    )
+                                    .normalized_value(XmlVersion::Explicit1_0)
                                     .ok()?
                                     .into_owned(),
                             );
@@ -210,7 +204,7 @@ fn parse_rate(bytes: &[u8]) -> Option<(f64, String)> {
             }
             Event::Start(element) => {
                 if depth == 0 {
-                    if root_seen || element.name().as_ref() != b"ExrateList" {
+                    if root_seen || element.name().as_ref() != "ExrateList" {
                         return None;
                     }
                     root_seen = true;

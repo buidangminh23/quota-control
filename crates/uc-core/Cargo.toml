@@ -9,11 +9,9 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-anyhow.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
 dirs.workspace = true
-parking_lot.workspace = true
 regex.workspace = true
 reqwest.workspace = true
 serde.workspace = true
