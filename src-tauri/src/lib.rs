@@ -15,7 +15,7 @@ mod ipc_guard;
 mod limit_resets;
 #[cfg(target_os = "macos")]
 mod macos;
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "linux")))]
 mod popup_resize_test;
 #[cfg(all(test, windows))]
 mod popup_visibility_test;
@@ -97,6 +97,9 @@ pub fn run() -> anyhow::Result<()> {
             env!("CARGO_PKG_VERSION"),
         );
     }
+
+    #[cfg(target_os = "linux")]
+    gdk::set_allowed_backends("x11,wayland");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
@@ -513,6 +516,8 @@ fn show_popup_at(app: &AppHandle, anchor: Option<PhysicalRect<i32, u32>>) -> Res
     let window = app
         .get_webview_window("popup")
         .ok_or("Popup is unavailable")?;
+    #[cfg(target_os = "linux")]
+    let anchor = anchor.or_else(|| linux_panel_anchor(&window));
     *app.state::<PopupAnchor>().0.lock() = anchor;
     position_popup(app)?;
     #[cfg(target_os = "macos")]
@@ -613,6 +618,65 @@ fn rect_center(rect: PhysicalRect<i32, u32>) -> PhysicalPosition<i32> {
     )
 }
 
+pub(crate) fn popup_work_area(monitor: &tauri::Monitor) -> PhysicalRect<i32, u32> {
+    let area = *monitor.work_area();
+    #[cfg(target_os = "linux")]
+    let area = linux_popup_work_area(area, monitor.scale_factor());
+    area
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_popup_work_area(mut area: PhysicalRect<i32, u32>, scale: f64) -> PhysicalRect<i32, u32> {
+    area.size.height = area.size.height.min(
+        ((f64::from(area.size.height) * 0.8 + 16.0 * scale).min(816.0 * scale)).floor() as u32,
+    );
+    area
+}
+
+#[cfg(target_os = "linux")]
+fn linux_panel_anchor(window: &tauri::WebviewWindow) -> Option<PhysicalRect<i32, u32>> {
+    let pointer = window.cursor_position().ok();
+    let monitor = pointer
+        .and_then(|pointer| {
+            linux_monitor_at_point(
+                window,
+                PhysicalPosition::new(pointer.x as i32, pointer.y as i32),
+            )
+        })
+        .or_else(|| window.current_monitor().ok().flatten())
+        .or_else(|| window.primary_monitor().ok().flatten())?;
+    let area = popup_work_area(&monitor);
+    Some(PhysicalRect {
+        position: PhysicalPosition::new(
+            pointer.map_or(area.position.x + area.size.width as i32, |point| {
+                point.x.round() as i32
+            }),
+            area.position.y,
+        ),
+        size: PhysicalSize::new(0, 0),
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn linux_monitor_at_point(
+    window: &tauri::WebviewWindow,
+    point: PhysicalPosition<i32>,
+) -> Option<tauri::Monitor> {
+    window
+        .available_monitors()
+        .ok()?
+        .into_iter()
+        .find(|monitor| {
+            contains(
+                PhysicalRect {
+                    position: *monitor.position(),
+                    size: *monitor.size(),
+                },
+                point,
+            )
+        })
+}
+
 /// Center the popup on its anchor (falling back to the tray icon), opening away from the screen
 /// edge the anchor sits on and staying inside that monitor's work area.
 #[cfg(not(target_os = "macos"))]
@@ -632,22 +696,22 @@ fn position_popup(app: &AppHandle) -> Result<(), String> {
     });
     let monitor = if let Some(rect) = anchor {
         let center = rect_center(rect);
-        window
+        #[cfg(target_os = "linux")]
+        let monitor = linux_monitor_at_point(&window, center);
+        #[cfg(not(target_os = "linux"))]
+        let monitor = window
             .monitor_from_point(f64::from(center.x), f64::from(center.y))
-            .map_err(safe_error)?
+            .map_err(safe_error)?;
+        monitor
     } else {
         window.current_monitor().map_err(safe_error)?
     }
     .or(window.primary_monitor().map_err(safe_error)?);
     if let Some(monitor) = monitor {
+        let area = popup_work_area(&monitor);
         let outer = window.outer_size().map_err(safe_error)?;
         let inner = window.inner_size().map_err(safe_error)?;
-        let fitted = popup_fitted_inner_size(
-            inner,
-            outer,
-            monitor.work_area().size,
-            monitor.scale_factor(),
-        );
+        let fitted = popup_fitted_inner_size(inner, outer, area.size, monitor.scale_factor());
         if fitted != inner {
             window.set_size(fitted).map_err(safe_error)?;
         }
@@ -659,7 +723,7 @@ fn position_popup(app: &AppHandle) -> Result<(), String> {
                 .height
                 .saturating_add(outer.height.saturating_sub(inner.height)),
         );
-        let origin = popup_origin(anchor, *monitor.work_area(), size);
+        let origin = popup_origin(anchor, area, size);
         if window.outer_position().map_err(safe_error)? != origin {
             window.set_position(origin).map_err(safe_error)?;
         }
@@ -991,6 +1055,30 @@ mod tests {
         let top_area = rect(0, 56, 1920, 1024);
         let origin = popup_origin(Some(rect(1469, 0, 125, 56)), top_area, POPUP);
         assert_eq!((origin.x, origin.y), (1363, 64));
+    }
+
+    #[test]
+    fn linux_dropdown_reserves_space_below_its_scrollable_content() {
+        for scale in [1.0, 1.25, 2.0] {
+            for height in [600, 961, 1400] {
+                let area = linux_popup_work_area(rect(-1920, 40, 1920, height), scale);
+                let requested = popup_requested_inner_size(
+                    2000.0,
+                    PhysicalSize::new(320, 400),
+                    PhysicalSize::new(320, 400),
+                    Some(area.size),
+                    scale,
+                );
+                let anchor = rect(-400, 40, 0, 0);
+                let origin = popup_origin(Some(anchor), area, requested);
+                assert_eq!(origin.y, 48);
+                assert!(origin.y + (requested.height as i32) < 40 + height as i32);
+                assert!(f64::from(requested.height) <= 800.0 * scale);
+                assert!(f64::from(requested.height) <= f64::from(height) * 0.8);
+                assert!(origin.x >= -1920);
+                assert!(origin.x + requested.width as i32 <= 0);
+            }
+        }
     }
 
     #[test]

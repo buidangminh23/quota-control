@@ -69,12 +69,22 @@ fn probe(app: &AppHandle, state: &ProbeState) -> Result<ProbeReport, String> {
             .current_monitor()
             .map_err(|error| error.to_string())?
             .ok_or("The test popup has no monitor")?;
-        let area = monitor.work_area().size;
+        let area = crate::popup_work_area(&monitor).size;
+        #[cfg(target_os = "linux")]
+        {
+            *app.state::<PopupAnchor>().0.lock() = Some(tauri::PhysicalRect {
+                position: tauri::PhysicalPosition::new(
+                    monitor.position().x + monitor.size().width as i32 * 3 / 4,
+                    monitor.work_area().position.y,
+                ),
+                size: PhysicalSize::new(0, 0),
+            });
+        }
         let frame = PhysicalSize::new(
             outer.width.saturating_sub(inner.width),
             outer.height.saturating_sub(inner.height),
         );
-        if frame.height == 0 {
+        if cfg!(windows) && frame.height == 0 {
             return Err("The test popup has no native frame height to exercise".into());
         }
         let margin = (16.0 * scale).ceil() as u32;
@@ -130,6 +140,22 @@ fn probe(app: &AppHandle, state: &ProbeState) -> Result<ProbeReport, String> {
             "Expected final size {expected:?}, observed {settled:?}"
         ));
     }
+    #[cfg(target_os = "linux")]
+    on_main(app, |app| {
+        let window = app
+            .get_webview_window("popup")
+            .ok_or("Missing test popup")?;
+        let anchor = app
+            .state::<PopupAnchor>()
+            .0
+            .lock()
+            .ok_or("Missing panel anchor")?;
+        let origin = window.outer_position().map_err(|error| error.to_string())?;
+        if origin.y != anchor.position.y + super::POPUP_GAP {
+            return Err(format!("Popup did not stay below panel: {origin:?}"));
+        }
+        Ok(())
+    })?;
     Ok(ProbeReport {
         settled,
         frame_height,
@@ -139,7 +165,7 @@ fn probe(app: &AppHandle, state: &ProbeState) -> Result<ProbeReport, String> {
 }
 
 #[test]
-#[ignore = "Requires Windows WebView2 and a desktop session; creates an isolated hidden popup"]
+#[ignore = "Requires a desktop session; creates an isolated hidden popup"]
 fn repeated_tall_popup_requests_keep_native_size_stable() {
     let profile = tempfile::Builder::new()
         .prefix("quota-control-popup-resize-")
@@ -179,7 +205,7 @@ fn repeated_tall_popup_requests_keep_native_size_stable() {
             .decorations(false)
             .skip_taskbar(true)
             .always_on_top(true)
-            .visible(false)
+            .visible(cfg!(target_os = "linux"))
             .data_directory(data_directory.clone())
             .build();
             let window = match window {
@@ -214,7 +240,7 @@ fn repeated_tall_popup_requests_keep_native_size_stable() {
     let report = result.expect("The native popup probe failed");
     println!("{report:?}");
     assert_eq!(code, 0, "The isolated native app did not exit cleanly");
-    assert!(report.frame_height > 0);
+    assert!(!cfg!(windows) || report.frame_height > 0);
     assert_eq!(report.repeated_requests, REPEATED_REQUESTS);
     assert!(
         report.resize_events.is_empty(),

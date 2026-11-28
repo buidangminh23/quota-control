@@ -80,7 +80,7 @@ pub fn resize_popup(app: AppHandle, height: f64) -> Result<(), String> {
     let work_area = window
         .current_monitor()
         .map_err(safe_error)?
-        .map(|monitor| monitor.work_area().size);
+        .map(|monitor| crate::popup_work_area(&monitor).size);
     #[cfg(not(target_os = "macos"))]
     {
         let inner = window.inner_size().map_err(safe_error)?;

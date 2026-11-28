@@ -3472,6 +3472,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "gdk",
  "iana-time-zone",
  "ksni",
  "libc",
