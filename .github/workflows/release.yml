@@ -69,11 +69,20 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf xvfb xauth dbus-x11
       - run: pnpm install --frozen-lockfile
       - name: Check the tag against the app version
         if: startsWith(github.ref, 'refs/tags/')
         run: node scripts/release.mjs version --tag "${{ github.ref_name }}"
+      - name: Test the Linux release and popup placement
+        if: runner.os == 'Linux'
+        run: |
+          pnpm test
+          pnpm build
+          cargo test --workspace --release
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GDK_BACKEND=x11 cargo test --release -p quota-control --lib popup_resize_test::repeated_tall_popup_requests_keep_native_size_stable -- --ignored --exact --test-threads=1 --nocapture
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1024x768x24' env GDK_BACKEND=x11 cargo test --release -p quota-control --lib popup_resize_test::repeated_tall_popup_requests_keep_native_size_stable -- --ignored --exact --test-threads=1 --nocapture
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GDK_BACKEND=x11 GDK_SCALE=2 cargo test --release -p quota-control --lib popup_resize_test::repeated_tall_popup_requests_keep_native_size_stable -- --ignored --exact --test-threads=1 --nocapture
       - name: Build installers
         shell: bash
         env:
